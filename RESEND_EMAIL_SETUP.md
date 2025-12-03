@@ -111,3 +111,5 @@ The best solution is **Option 1** - configure Supabase to use Resend SMTP. This 
 
 See instructions above for setting up Resend SMTP in Supabase.
 
+
+

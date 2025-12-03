@@ -85,3 +85,5 @@ curl -X PATCH "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
 - Try incognito/private window
 - Check you clicked "Save" button
 
+
+

@@ -1,43 +1,37 @@
 // Main board layout with sidebar structure
-import { createClient } from '@/lib/supabase/server'
-import { redirect } from 'next/navigation'
 import AppSidebar from '@/components/app-sidebar'
+import { SidebarContextProvider } from '@/components/sidebar-context'
+
+// Safe async function that never throws
+async function getSafeUser() {
+  try {
+    const { createClient } = await import('@/lib/supabase/server')
+    const supabase = await createClient()
+    const result = await supabase.auth.getUser()
+    return result?.data?.user || null
+  } catch {
+    return null
+  }
+}
 
 export default async function BoardLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
-  let user = null
-  try {
-    const supabase = await createClient()
-    // Add timeout protection to prevent hanging
-    const getUserPromise = supabase.auth.getUser()
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Auth timeout')), 5000)
-    )
-    
-    const result = await Promise.race([getUserPromise, timeoutPromise])
-    user = result.data?.user || null
-  } catch (error) {
-    // If auth check fails or times out, redirect to login
-    console.warn('Auth check failed in board layout:', error)
-    redirect('/login')
-  }
+  // Always render the layout - handle all errors gracefully
+  // Get user safely - if it fails, just render without sidebar
+  const user = await getSafeUser()
 
-  // Middleware already handles redirect, but we need user for the sidebar
-  // If no user, middleware will redirect, so this is just for type safety
-  if (!user) {
-    // This shouldn't happen due to middleware, but handle gracefully
-    return null
-  }
-
+  // Always render - never throw errors
   return (
-    <div className="h-screen flex flex-col">
-      <div className="flex-1 flex overflow-hidden">
-        <AppSidebar user={user} />
-        <main className="flex-1 overflow-auto">{children}</main>
+    <SidebarContextProvider>
+      <div className="h-screen flex flex-col">
+        <div className="flex-1 flex overflow-hidden">
+          {user ? <AppSidebar user={user} /> : <div className="w-0" />}
+          <main className="flex-1 overflow-auto">{children}</main>
+        </div>
       </div>
-    </div>
+    </SidebarContextProvider>
   )
 }

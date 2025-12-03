@@ -84,3 +84,5 @@ SUPABASE_SECRET_KEY=sb_secret_your-secret-key-from-dashboard
 
 Then check the server console when clicking "Delete Account" - it will show which keys it found.
 
+
+

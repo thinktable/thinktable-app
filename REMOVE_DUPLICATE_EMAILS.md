@@ -49,3 +49,5 @@ Now you'll only receive **one email** from Supabase (sent through Resend SMTP):
    - Update Supabase SMTP sender email to `noreply@yourdomain.com`
    - That's it!
 
+
+

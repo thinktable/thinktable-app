@@ -37,3 +37,5 @@ After running the script:
 2. Check your inbox
 3. You should see the beautiful gradient email! ✨
 
+
+

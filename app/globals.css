@@ -27,25 +27,25 @@
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
+    --background: 0 0% 6%; /* Very dark background like ChatGPT (#0f0f0f) */
+    --foreground: 0 0% 98%; /* Almost white text */
+    --card: 0 0% 9%; /* Slightly lighter than background */
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 6%;
+    --secondary: 0 0% 15%; /* Dark gray for secondary elements */
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 65%; /* Medium gray for muted text */
+    --accent: 0 0% 15%;
+    --accent-foreground: 0 0% 98%;
     --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 20%; /* Subtle borders */
+    --input: 0 0% 15%; /* Input backgrounds */
+    --ring: 0 0% 40%; /* Focus rings */
   }
 }
 
@@ -90,12 +90,35 @@
   }
   
   /* Ensure mark tags (highlights) are visible - applies everywhere including map panels */
-  mark,
-  mark[data-type="highlight"],
-  .ProseMirror mark {
+  /* Only apply yellow to marks that don't have a specific color attribute */
+  mark:not([data-color]):not([style*="background-color"]),
+  mark[data-type="highlight"]:not([data-color]):not([style*="background-color"]),
+  .ProseMirror mark:not([data-color]):not([style*="background-color"]) {
     background-color: #fef08a !important;
     color: inherit !important;
     padding: 2px 0;
+  }
+
+  /* Blue highlight for comments - slightly darker than selected tab background (blue-100) */
+  /* Use blue-100 (#dbeafe) - slightly darker than blue-50 for better visibility */
+  /* Match any format TipTap might use for the blue color */
+  .ProseMirror mark[data-color="#dbeafe"],
+  .ProseMirror mark[data-color="rgb(219, 234, 254)"],
+  .ProseMirror mark[data-color*="dbeafe"],
+  .ProseMirror mark[data-color*="219, 234, 254"],
+  .ProseMirror mark[data-color*="219,234,254"],
+  .ProseMirror mark[style*="background-color: rgb(219, 234, 254)"],
+  .ProseMirror mark[style*="background-color:rgb(219, 234, 254)"],
+  .ProseMirror mark[style*="background-color:rgb(219,234,254)"],
+  .ProseMirror mark[style*="#dbeafe"],
+  .ProseMirror mark[style*="rgb(219,234,254)"],
+  /* Also match if TipTap uses inline style directly */
+  mark[style*="background-color: rgb(219, 234, 254)"],
+  mark[style*="background-color:rgb(219, 234, 254)"],
+  mark[style*="#dbeafe"],
+  mark[data-color="#dbeafe"],
+  mark[data-color*="dbeafe"] {
+    background-color: #dbeafe !important; /* blue-100 - slightly darker than blue-50 */
   }
 
   /* Strikethrough text styling - grey color to indicate removal from context */
@@ -159,10 +182,16 @@ span[data-added="true"] {
     font-size: 0.875rem; /* 14px - ChatGPT chat text size */
   }
 
-  /* Paragraphs - proper spacing */
+  /* Dark mode prose text */
+  .dark .prose {
+    color: #e5e7eb; /* gray-200 - very light text for dark mode */
+  }
+
+  /* Paragraphs - proper spacing with extra space between ideas (Claude-style) */
   .prose p {
-    margin-top: 1.25em;
-    margin-bottom: 1.25em;
+    margin-top: 1.5em;
+    margin-bottom: 1.5em;
+    line-height: 1.75;
   }
 
   .prose p:first-child {
@@ -171,6 +200,11 @@ span[data-added="true"] {
 
   .prose p:last-child {
     margin-bottom: 0;
+  }
+
+  /* Extra spacing for paragraphs that look like section breaks or major ideas */
+  .prose p[style*="margin-bottom: 1em"] {
+    margin-bottom: 1.75em !important;
   }
 
   /* Headings */
@@ -192,6 +226,11 @@ span[data-added="true"] {
 
   .prose h3 {
     font-size: 1.25rem; /* 20px */
+  }
+
+  /* Dark mode headings */
+  .dark .prose h1, .dark .prose h2, .dark .prose h3, .dark .prose h4, .dark .prose h5, .dark .prose h6 {
+    color: #f3f4f6; /* gray-100 - very light for dark mode */
   }
 
   /* Code blocks - ChatGPT style with dark background */
@@ -225,6 +264,12 @@ span[data-added="true"] {
     font-size: 0.875em;
     font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', 'Source Code Pro', monospace;
     font-weight: 500;
+  }
+
+  /* Dark mode inline code */
+  .dark .prose code:not(pre code) {
+    background-color: #374151; /* gray-700 - darker background for dark mode */
+    color: #fca5a5; /* rose-300 - lighter rose for dark mode */
   }
 
   /* Lists */
@@ -308,10 +353,24 @@ span[data-added="true"] {
     color: #1d4ed8; /* blue-700 */
   }
 
+  /* Dark mode links */
+  .dark .prose a {
+    color: #60a5fa; /* blue-400 - lighter blue for dark mode */
+  }
+
+  .dark .prose a:hover {
+    color: #93c5fd; /* blue-300 - even lighter on hover */
+  }
+
   /* Strong/Bold */
   .prose strong {
     font-weight: 600;
     color: #111827; /* gray-900 */
+  }
+
+  /* Dark mode strong/bold */
+  .dark .prose strong {
+    color: #f9fafb; /* gray-50 - almost white for dark mode */
   }
 
   /* Emphasis/Italic */
@@ -399,5 +458,104 @@ span[data-added="true"] {
   /* Ensure top positioning works for multiple handles */
   .react-flow__handle.custom-handle {
     top: var(--handle-top, 50%) !important;
+  }
+
+  /* Custom minimap size - reduced from 200px to 179px width, maintaining aspect ratio */
+  .minimap-custom-size {
+    width: 179px !important; /* Reduced from 200px by 21px */
+    height: 134px !important; /* Reduced proportionally: 150px * (179/200) = 134.25px ≈ 134px */
+    overflow: hidden !important; /* Ensure content stays within bounds */
+    border: 1px solid rgb(239, 246, 255) !important; /* Light blue border matching selected board tab (bg-blue-50) */
+    background-color: white !important; /* Light mode background */
+  }
+
+  /* Dark mode minimap */
+  .dark .minimap-custom-size {
+    border: 1px solid rgb(55, 65, 81) !important; /* gray-700 border for dark mode */
+    background-color: #171717 !important; /* Dark background matching sidebar */
+  }
+
+  /* Ensure minimap viewport indicator (grey border/mask) stays within bounds */
+  .minimap-custom-size .react-flow__minimap-mask {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 179px !important;
+    max-height: 134px !important;
+  }
+
+  /* Dark mode minimap mask fill */
+  .dark .minimap-custom-size .react-flow__minimap-mask {
+    fill: rgba(96, 165, 250, 0.25) !important; /* Blue-400 with opacity for dark mode */
+  }
+
+  /* Ensure minimap SVG and viewport indicator are properly scaled */
+  .minimap-custom-size svg {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 179px !important;
+    max-height: 134px !important;
+    background-color: white !important; /* Light mode background */
+  }
+
+  /* Dark mode minimap SVG background */
+  .dark .minimap-custom-size svg {
+    background-color: #171717 !important; /* Dark background matching sidebar */
+  }
+
+  /* Ensure viewport indicator rectangle stays within minimap bounds */
+  .minimap-custom-size .react-flow__minimap-mask rect {
+    /* The mask rect should be constrained by the parent SVG */
+    stroke: rgb(191, 219, 254) !important; /* Blue-200 border - darker than blue-50 for better visibility */
+    stroke-width: 2px !important; /* Make border visible */
+  }
+
+  /* Dark mode minimap mask */
+  .dark .minimap-custom-size .react-flow__minimap-mask rect {
+    stroke: rgb(96, 165, 250) !important; /* Blue-400 border for dark mode */
+    stroke-width: 2px !important;
+  }
+
+  /* Minimap node dots - larger size and color states */
+  .minimap-custom-size .react-flow__minimap-node {
+    r: 4px !important; /* Slightly larger (default is ~3px) */
+    transition: fill 0.2s ease;
+  }
+
+  /* Panel connection handle dots (top and bottom of panels) */
+  .react-flow__handle.handle-dot {
+    width: 8px !important; /* Slightly larger */
+    height: 8px !important;
+    border-radius: 50% !important;
+    transition: background-color 0.2s ease;
+    z-index: 20 !important; /* Ensure handles appear above prompt area (z-10) */
+  }
+
+  /* Default state - light grey */
+  .react-flow__handle.handle-dot-default {
+    background-color: #e5e7eb !important; /* Light grey */
+  }
+
+  /* Selected state - darker grey */
+  .react-flow__handle.handle-dot-selected {
+    background-color: #9ca3af !important; /* Darker grey when selected */
+  }
+
+  /* Hover state - black (overrides both default and selected) */
+  .react-flow__handle.handle-dot:hover {
+    background-color: #000000 !important; /* Black on hover */
+  }
+
+  /* Ensure connection line is visible during drag */
+  .react-flow__connectionline {
+    z-index: 1000 !important;
+    pointer-events: none !important;
+    opacity: 1 !important;
+    display: block !important;
+  }
+
+  .react-flow__connectionline-path {
+    stroke: #b1b1b7 !important;
+    stroke-width: 2 !important;
+    opacity: 1 !important;
   }
 }

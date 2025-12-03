@@ -2,7 +2,9 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { BoardFlow } from '@/components/board-flow'
-import { ChatInput } from '@/components/chat-input'
+import { InputAreaWithStickyPrompt } from '@/components/input-area-with-sticky-prompt'
+import { EditorProvider } from '@/components/editor-context'
+import { ReactFlowContextProvider } from '@/components/react-flow-context'
 
 export default async function ConversationPage({
   params,
@@ -32,17 +34,17 @@ export default async function ConversationPage({
   }
 
   return (
-    <div className="h-full relative">
-      {/* React Flow board */}
-      <BoardFlow conversationId={conversationId} />
-      
-      {/* Input box overlay at bottom */}
-      <div className="absolute bottom-0 left-0 right-0 flex justify-center p-4 pointer-events-none z-10">
-        <div className="w-full max-w-3xl pointer-events-auto">
-          <ChatInput conversationId={conversationId} />
+    <EditorProvider>
+      <ReactFlowContextProvider>
+        <div className="h-full relative">
+          {/* React Flow board */}
+          <BoardFlow conversationId={conversationId} />
+          
+          {/* Input box overlay at bottom with sticky prompt panel */}
+          <InputAreaWithStickyPrompt conversationId={conversationId} />
         </div>
-      </div>
-    </div>
+      </ReactFlowContextProvider>
+    </EditorProvider>
   )
 }
 

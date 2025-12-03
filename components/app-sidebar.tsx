@@ -9,7 +9,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import Image from 'next/image'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { Plus, Search, MoreVertical, Trash2, ChevronLeft, ChevronRight, SquarePen } from 'lucide-react'
+import { Plus, Search, MoreVertical, Trash2, ChevronLeft, ChevronRight, SquarePen, Pencil, ChevronDown, FolderPlus } from 'lucide-react'
 import { SettingsPanel } from '@/components/settings-panel'
 import { cn } from '@/lib/utils'
 import {
@@ -17,6 +17,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import {
   Dialog,
@@ -26,6 +28,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { useSidebarContext } from './sidebar-context'
 
 interface AppSidebarProps {
   user: User
@@ -68,8 +71,14 @@ export default function AppSidebar({ user }: AppSidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false) // Sidebar collapse state
   const [showDeleteBoardDialog, setShowDeleteBoardDialog] = useState(false)
   const [conversationToDelete, setConversationToDelete] = useState<{ id: string; title: string } | null>(null)
+  const [showRenameDialog, setShowRenameDialog] = useState(false)
+  const [conversationToRename, setConversationToRename] = useState<{ id: string; title: string } | null>(null)
+  const [renameInput, setRenameInput] = useState('')
+  const [isRenaming, setIsRenaming] = useState(false)
+  const [isBoardsExpanded, setIsBoardsExpanded] = useState(true) // Boards section expanded/collapsed state
   const supabase = createClient()
   const queryClient = useQueryClient()
+  const { isMobileMode, isSidebarOpen, closeSidebar } = useSidebarContext()
 
   // Fetch conversations/boards
   const { data: conversations = [], refetch } = useQuery({
@@ -78,16 +87,88 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     refetchOnWindowFocus: true,
   })
 
-  // Listen for conversation creation events to refetch
+  // Set up Supabase Realtime subscription for conversation updates (most reliable)
+  useEffect(() => {
+    const channel = supabase
+      .channel('conversations-updates')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'conversations',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          console.log('🔄 Sidebar: Conversation updated via Realtime:', payload.new?.title)
+          // Immediately invalidate and refetch
+          queryClient.invalidateQueries({ queryKey: ['conversations'] })
+          refetch()
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'conversations',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          console.log('🔄 Sidebar: New conversation created via Realtime:', payload.new?.title)
+          // Immediately invalidate and refetch
+          queryClient.invalidateQueries({ queryKey: ['conversations'] })
+          refetch()
+        }
+      )
+      .subscribe((status) => {
+        console.log('📡 Realtime subscription status:', status)
+      })
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [user.id, refetch, queryClient, supabase])
+
+  // Listen for conversation creation/update events to refetch (fallback)
   useEffect(() => {
     const handleConversationCreated = () => {
+      console.log('🔄 Sidebar: conversation-created event received')
+      console.log('🔄 Sidebar: Invalidating and refetching conversations')
+      // Multiple attempts to ensure we get the latest data
+      setTimeout(() => {
+        console.log('🔄 Sidebar: First refetch attempt (200ms)')
+        queryClient.invalidateQueries({ queryKey: ['conversations'] })
+        refetch().then((result) => {
+          console.log('🔄 Sidebar: First refetch result:', result.data?.length, 'conversations')
+        })
+      }, 200)
+      setTimeout(() => {
+        console.log('🔄 Sidebar: Second refetch attempt (400ms)')
+        queryClient.invalidateQueries({ queryKey: ['conversations'] })
+        refetch().then((result) => {
+          console.log('🔄 Sidebar: Second refetch result:', result.data?.length, 'conversations')
+        })
+      }, 400)
+    }
+    const handleConversationUpdated = () => {
+      console.log('🔄 Sidebar: conversation-updated event received - refetching immediately')
+      // Immediately invalidate and refetch
+      queryClient.invalidateQueries({ queryKey: ['conversations'] })
       refetch()
+      // Additional refetch after short delay
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['conversations'] })
+        refetch()
+      }, 100)
     }
     window.addEventListener('conversation-created', handleConversationCreated)
+    window.addEventListener('conversation-updated', handleConversationUpdated)
     return () => {
       window.removeEventListener('conversation-created', handleConversationCreated)
+      window.removeEventListener('conversation-updated', handleConversationUpdated)
     }
-  }, [refetch])
+  }, [refetch, queryClient])
 
   const handleDeleteAccount = async () => {
     setIsDeleting(true)
@@ -169,15 +250,82 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     setConversationToDelete({ id: conversation.id, title: conversation.title })
     setShowDeleteBoardDialog(true)
   }
+  
+  // Open rename dialog
+  const openRenameDialog = (conversation: Conversation) => {
+    setConversationToRename({ id: conversation.id, title: conversation.title })
+    setRenameInput(conversation.title)
+    setShowRenameDialog(true)
+  }
+  
+  // Handle rename conversation/board
+  const handleRenameConversation = async () => {
+    if (!conversationToRename || !renameInput.trim()) return
+
+    setIsRenaming(true)
+    
+    try {
+      // Update conversation title and mark as manually renamed in metadata
+      const { error } = await supabase
+        .from('conversations')
+        .update({
+          title: renameInput.trim(),
+          metadata: { manuallyRenamed: true }, // Track that this was manually renamed
+        })
+        .eq('id', conversationToRename.id)
+        .eq('user_id', user.id) // Ensure user owns this conversation
+
+      if (error) {
+        throw new Error(error.message || 'Failed to rename board')
+      }
+
+      // Invalidate queries to refresh the list
+      await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      
+      // Trigger sidebar refresh
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('conversation-updated'))
+      }
+      
+      // Also refetch immediately
+      refetch()
+      
+      setShowRenameDialog(false)
+      setConversationToRename(null)
+      setRenameInput('')
+    } catch (error: any) {
+      console.error('Failed to rename conversation:', error)
+      alert(error.message || 'Failed to rename board. Please try again.')
+    } finally {
+      setIsRenaming(false)
+    }
+  }
+
+  // In mobile mode without sidebar open, don't render anything
+  if (isMobileMode && !isSidebarOpen) {
+    return null
+  }
 
   return (
-    <div className={`bg-white border-r border-gray-200 flex flex-col transition-all duration-300 ${
-      isCollapsed ? 'w-16' : 'w-64'
-    }`}>
-      {/* Logo / Expand Button Area */}
-      <div className="relative h-16 flex items-center">
+    <>
+      {/* Backdrop overlay when sidebar is open in mobile mode */}
+      {isMobileMode && isSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/20 z-40 transition-opacity"
+          onClick={closeSidebar}
+        />
+      )}
+      
+      <div className={cn(
+        'bg-white dark:bg-[#171717] border-r border-gray-200 dark:border-[#2f2f2f] flex flex-col transition-all duration-300',
+        isCollapsed ? 'w-16' : 'w-64',
+        // In mobile mode, show as fixed overlay
+        isMobileMode && isSidebarOpen && 'fixed left-0 top-0 bottom-0 z-50 shadow-xl'
+      )}>
+        {/* Logo / Expand Button Area - height matches top bar (52px) */}
+        <div className="relative h-[52px] flex items-center">
         {/* Logo - fixed position, same distance from left edge in both states */}
-        <div className="absolute top-0 left-0 h-16 pl-4 pt-0 flex items-center">
+        <div className="absolute top-0 left-0 h-[52px] pl-4 pt-0 flex items-center">
           {isCollapsed ? (
             // Collapsed: Show expand button on hover (ChatGPT style)
             <button
@@ -220,72 +368,139 @@ export default function AppSidebar({ user }: AppSidebarProps) {
         
         {/* Collapse button - positioned absolutely on the right when expanded */}
         {!isCollapsed && (
-          <div className="absolute top-0 right-0 h-16 pr-4 pt-0 flex items-center justify-center">
+          <div className="absolute top-0 right-0 h-[52px] pr-4 pt-0 flex items-center justify-center">
             <Button
               variant="ghost"
               size="icon"
               className="h-8 w-8 flex items-center justify-center group"
-              onClick={() => setIsCollapsed(true)}
-              title="Collapse sidebar"
+              onClick={() => {
+                // In mobile mode, close the overlay completely
+                // In normal mode, just collapse the sidebar
+                if (isMobileMode) {
+                  closeSidebar()
+                } else {
+                  setIsCollapsed(true)
+                }
+              }}
+              title={isMobileMode ? "Close sidebar" : "Collapse sidebar"}
             >
-              <ChevronLeft className="h-6 w-6 text-gray-500 group-hover:text-gray-900 transition-colors" />
+              <ChevronLeft className="h-6 w-6 text-gray-500 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 transition-colors" />
             </Button>
           </div>
         )}
       </div>
 
-      {/* New Board Button - hidden when collapsed */}
-      {!isCollapsed && (
-        <div className="px-4 pb-2">
-          <Button
-            variant="ghost"
-            className="w-full justify-start gap-3 h-auto py-2 px-3 hover:bg-gray-100"
-            onClick={() => {
-              // Create new board - navigate to /board which will create one on first message
-              router.push('/board')
-            }}
-          >
-            <SquarePen className="h-4 w-4 text-gray-900" />
-            <span className="text-sm font-medium text-gray-900">New board</span>
-          </Button>
-        </div>
-      )}
+      {/* Divider between logo area and search/new section */}
+      <div className="mx-4 h-px bg-gray-200 dark:bg-[#2f2f2f]" />
 
-      {/* Search Bar - hidden when collapsed */}
-      {!isCollapsed && (
-        <div className="px-4 pb-4">
+      {/* Search Bar and New/Add Dropdown */}
+      {!isCollapsed ? (
+        <div className="px-4 pt-2 pb-4">
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Search className="absolute left-1 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
               <Input
                 type="text"
                 placeholder="Search boards..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9 h-8 text-sm rounded-lg"
+                className="pl-7 h-8 text-sm rounded-lg border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
               />
             </div>
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-8 w-8 rounded-lg bg-transparent border border-input hover:bg-transparent group"
-              onClick={() => {
-                // Create new board - navigate to /board which will create one on first message
-                router.push('/board')
-              }}
-              title="New board"
-            >
-              <Plus className="h-5 w-5 text-gray-500 group-hover:text-gray-900 transition-colors" />
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8 rounded-lg bg-transparent border-0 hover:bg-gray-100 dark:hover:bg-gray-800 group"
+                  title="New"
+                >
+                  <Plus className="h-5 w-5 text-gray-500 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 transition-colors" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuItem
+                  onClick={() => {
+                    // Create new board - navigate to /board which will create one on first message
+                    router.push('/board')
+                  }}
+                >
+                  <SquarePen className="h-4 w-4 mr-2" />
+                  New board
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    // TODO: Implement new project functionality
+                    console.log('New project clicked')
+                  }}
+                >
+                  <FolderPlus className="h-4 w-4 mr-2" />
+                  New project
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
+        </div>
+      ) : (
+        // Collapsed: Show centered Plus button - same vertical position as expanded state
+        <div className="px-4 pt-2 pb-4 flex justify-center">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8 rounded-lg bg-transparent border-0 hover:bg-gray-100 group"
+                title="New"
+              >
+                <Plus className="h-5 w-5 text-gray-500 group-hover:text-gray-900 transition-colors" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-40">
+              <DropdownMenuItem
+                onClick={() => {
+                  // Create new board - navigate to /board which will create one on first message
+                  router.push('/board')
+                }}
+              >
+                <SquarePen className="h-4 w-4 mr-2" />
+                New board
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => {
+                  // TODO: Implement new project functionality
+                  console.log('New project clicked')
+                }}
+              >
+                <FolderPlus className="h-4 w-4 mr-2" />
+                New project
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       )}
 
       {/* Boards/Conversations List - hidden when collapsed */}
       {!isCollapsed && (
-        <nav className="flex-1 p-4 overflow-y-auto">
-        {filteredConversations.length > 0 ? (
-          <ul className="space-y-1">
+        <nav className="flex-1 px-4 pb-4 overflow-y-auto">
+          {/* Boards Header */}
+          <div 
+            className="flex items-center gap-1 pl-1 py-2 text-xs font-medium text-gray-500 hover:text-gray-700 cursor-pointer group transition-colors"
+            onClick={() => setIsBoardsExpanded(!isBoardsExpanded)}
+          >
+            <span>Boards</span>
+            <ChevronDown 
+              className={cn(
+                'h-3 w-3 opacity-0 group-hover:opacity-100 transition-all duration-200',
+                !isBoardsExpanded && 'opacity-100 -rotate-90'
+              )}
+            />
+          </div>
+          
+          {/* Boards List - collapsible */}
+          {isBoardsExpanded && (
+            <>
+            {filteredConversations.length > 0 ? (
+              <ul className="space-y-1">
             {filteredConversations.map((conversation) => {
               const isActive = pathname === `/board/${conversation.id}`
               const isDeleting = deletingConversationId === conversation.id
@@ -293,12 +508,12 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                 <li key={conversation.id}>
                   <div className={`flex items-center gap-2 px-4 h-8 rounded-lg transition-colors text-sm group ${
                     isActive
-                      ? 'bg-blue-50'
-                      : 'hover:bg-gray-50'
+                      ? 'bg-blue-50 dark:bg-[#2a2a3a]'
+                      : 'hover:bg-gray-50 dark:hover:bg-[#1f1f1f]'
                   }`}>
                     <Link
                       href={`/board/${conversation.id}`}
-                      className="flex items-center gap-2 flex-1 min-w-0 text-gray-700"
+                      className="flex items-center gap-2 flex-1 min-w-0 text-gray-700 dark:text-gray-300"
                     >
                       <span className="truncate flex-1">{conversation.title}</span>
                     </Link>
@@ -309,7 +524,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                           variant="ghost"
                           size="icon"
                           className={`h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity ${
-                            isActive ? 'text-blue-600 hover:text-blue-700' : 'text-gray-500 hover:text-gray-700'
+                            isActive ? 'text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300' : 'text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200'
                           }`}
                           onClick={(e) => e.stopPropagation()}
                         >
@@ -317,6 +532,16 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-40">
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openRenameDialog(conversation)
+                          }}
+                          disabled={isRenaming}
+                        >
+                          <Pencil className="h-4 w-4 mr-2" />
+                          Rename
+                        </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={(e) => {
                             e.stopPropagation()
@@ -334,13 +559,15 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                 </li>
               )
             })}
-          </ul>
-        ) : (
-          <div className="px-4 py-8 text-center text-sm text-gray-500">
-            {searchQuery ? 'No boards found' : 'No boards yet. Start a chat!'}
-          </div>
-        )}
-      </nav>
+              </ul>
+            ) : (
+              <div className="px-4 py-8 text-center text-sm text-gray-500">
+                {searchQuery ? 'No boards found' : 'No boards yet. Start a chat!'}
+              </div>
+            )}
+            </>
+          )}
+        </nav>
       )}
 
       {/* Profile Section - fixed at bottom */}
@@ -359,28 +586,28 @@ export default function AppSidebar({ user }: AppSidebarProps) {
           {isCollapsed ? (
             <button
               onClick={() => setSettingsOpen(true)}
-              className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center hover:bg-blue-200 transition-colors"
+              className="w-8 h-8 rounded-full bg-blue-100 dark:bg-[#2a2a3a] flex items-center justify-center hover:bg-blue-200 dark:hover:bg-[#353545] transition-colors"
               title="Settings"
             >
-              <span className="text-blue-600 font-semibold text-xs">
+              <span className="text-blue-600 dark:text-blue-300 font-semibold text-sm">
                 {user.email?.charAt(0).toUpperCase() || 'U'}
               </span>
             </button>
           ) : (
             <button
               onClick={() => setSettingsOpen(true)}
-              className="w-full flex items-center gap-3 px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors"
+              className="w-full flex items-center gap-3 pl-1 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#1f1f1f] transition-colors"
             >
-              <div className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
-                <span className="text-blue-600 font-semibold text-xs">
+              <div className="w-8 h-8 bg-blue-100 dark:bg-[#2a2a3a] rounded-full flex items-center justify-center flex-shrink-0">
+                <span className="text-blue-600 dark:text-blue-300 font-semibold text-sm">
                   {user.email?.charAt(0).toUpperCase() || 'U'}
                 </span>
               </div>
               <div className="flex-1 min-w-0 text-left">
-                <p className="text-sm font-medium text-gray-900 truncate">
+                <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
                   {user.email}
                 </p>
-                <p className="text-xs text-gray-500">Free Plan</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Free Plan</p>
               </div>
             </button>
           )}
@@ -400,6 +627,53 @@ export default function AppSidebar({ user }: AppSidebarProps) {
         showDeleteConfirm={showDeleteConfirm}
         onShowDeleteConfirm={setShowDeleteConfirm}
       />
+
+      {/* Rename Board Dialog */}
+      <Dialog open={showRenameDialog} onOpenChange={setShowRenameDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-semibold">Rename board</DialogTitle>
+            <DialogDescription className="text-sm text-gray-600 pt-2">
+              Enter a new name for this board.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="pt-4">
+            <Input
+              value={renameInput}
+              onChange={(e) => setRenameInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && renameInput.trim() && !isRenaming) {
+                  handleRenameConversation()
+                }
+              }}
+              placeholder="Board name"
+              className="w-full"
+              autoFocus
+            />
+          </div>
+          <DialogFooter className="flex-row justify-end gap-2 pt-4">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowRenameDialog(false)
+                setConversationToRename(null)
+                setRenameInput('')
+              }}
+              className="px-4 py-2"
+              disabled={isRenaming}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleRenameConversation}
+              disabled={!renameInput.trim() || isRenaming}
+              className="px-4 py-2"
+            >
+              {isRenaming ? 'Renaming...' : 'Rename'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete Board Confirmation Dialog */}
       <Dialog open={showDeleteBoardDialog} onOpenChange={setShowDeleteBoardDialog}>
@@ -436,6 +710,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
         </DialogContent>
       </Dialog>
     </div>
+    </>
   )
 }
 

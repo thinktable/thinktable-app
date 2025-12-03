@@ -33,3 +33,5 @@ Current migrations:
 3. Commit migrations to git
 4. Apply migrations to production
 
+
+

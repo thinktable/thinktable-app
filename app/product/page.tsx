@@ -441,7 +441,7 @@ export default function ProductPage() {
             Coming Soon: React Flow Pro Features
           </h2>
           <p className="text-xl text-gray-600 mb-8">
-            We're integrating advanced React Flow capabilities to make your mind maps even more powerful.
+            We&apos;re integrating advanced React Flow capabilities to make your mind maps even more powerful.
           </p>
           <div className="grid md:grid-cols-3 gap-6 text-left">
             <div className="p-6 bg-blue-50 rounded-lg">
@@ -496,4 +496,6 @@ export default function ProductPage() {
     </div>
   );
 }
+
+
 
