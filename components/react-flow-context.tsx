@@ -78,7 +78,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
         if (savedLayoutMode && ['auto', 'tree', 'cluster', 'none'].includes(savedLayoutMode)) {
           setLayoutMode(savedLayoutMode)
           setIsDeterministicMapping(savedLayoutMode !== 'none')
-        }
+      }
         const savedLineStyle = localStorage.getItem('thinkable-line-style') as 'solid' | 'dotted' | null
         if (savedLineStyle && ['solid', 'dotted'].includes(savedLineStyle)) {
           setLineStyle(savedLineStyle)
@@ -401,7 +401,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
     const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
     const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
     localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, arrowDirection }))
-    
+
     // Also save to old key for backward compatibility
     localStorage.setItem('thinkable-arrow-direction', arrowDirection)
     
@@ -470,7 +470,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
             console.error('Error updating profile arrow direction:', updateError)
           } else {
             console.log(`✅ Saved arrow direction "${arrowDirection}" to default board (/board)`)
-          }
+    }
         }
       } catch (error) {
         console.error('Error saving arrow direction to Supabase:', error)
@@ -518,8 +518,8 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
             layoutMode,
             lineStyle,
             arrowDirection,
-          }
-          
+      }
+      
           // Copy to new board's conversation metadata
           const { data: conversation, error: fetchError } = await supabase
             .from('conversations')
@@ -547,8 +547,8 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
             console.error('Error copying preferences to new board:', updateError)
           } else {
             console.log(`✅ Copied /board preferences to new board ${newConversationId}:`, currentPrefs)
-          }
-          
+      }
+      
           // Also copy to localStorage for instant loading
           const defaultStorageKey = 'thinkable-prefs-default'
           const defaultPrefsStr = localStorage.getItem(defaultStorageKey)

@@ -27,6 +27,7 @@ import {
 
 interface ChatInputProps {
   conversationId?: string // Optional - if provided, sends to existing conversation
+  projectId?: string // Optional - if provided, creates new board in this project
   onHeightChange?: (height: number) => void // Callback to notify parent of height changes
 }
 
@@ -53,6 +54,9 @@ export function ChatInput({ conversationId, projectId, onHeightChange }: ChatInp
     const textarea = textareaRef.current
     if (!textarea) return
 
+    // Track the last click target to determine if we should refocus
+    let lastClickTarget: HTMLElement | null = null
+
     const refocusTextarea = () => {
       if (textarea && document.activeElement !== textarea) {
         // Check if user is selecting text - if so, don't refocus
@@ -70,6 +74,50 @@ export function ChatInput({ conversationId, projectId, onHeightChange }: ChatInp
 
     const handleDocumentClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement
+      lastClickTarget = target // Store the click target
+      
+      // Clear text selection if clicking away from selected text
+      const selection = window.getSelection()
+      if (selection && selection.toString().length > 0) {
+        // Check if click is within the selection or on an interactive element
+        const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null
+        let clickInSelection = false
+        
+        if (range) {
+          // Check if click target is within the selection's container
+          const selectionContainer = range.commonAncestorContainer
+          const clickInContainer = selectionContainer.nodeType === Node.TEXT_NODE
+            ? selectionContainer.parentElement?.contains(target)
+            : (selectionContainer as Element)?.contains(target)
+          
+          // Also check if click is within the selection's bounding rectangle
+          const rect = range.getBoundingClientRect()
+          const clickInBounds = event.clientX >= rect.left && 
+                               event.clientX <= rect.right &&
+                               event.clientY >= rect.top && 
+                               event.clientY <= rect.bottom
+          
+          clickInSelection = clickInContainer || clickInBounds
+        }
+        
+        // Don't clear selection if:
+        // - Clicking within the selected text
+        // - Clicking on buttons, dropdowns, or other interactive elements
+        // - Clicking on contenteditable elements (TipTap editors) - allow editing
+        const isInteractive = target.closest('button') || 
+                             target.closest('[role="menu"]') ||
+                             target.closest('[role="menuitem"]') ||
+                             target.closest('.dropdown-menu')
+        
+        // Don't clear if clicking on contenteditable (user might be editing)
+        const isOnContentEditable = target.closest('[contenteditable="true"]') ||
+                                   target.closest('.ProseMirror')
+        
+        // Clear selection if clicking away (not in selection and not on interactive element or contenteditable)
+        if (!clickInSelection && !isInteractive && !isOnContentEditable) {
+          selection.removeAllRanges()
+        }
+      }
       
       // Don't refocus if clicking on:
       // - The textarea itself or form
@@ -91,24 +139,44 @@ export function ChatInput({ conversationId, projectId, onHeightChange }: ChatInp
       const isOnPanel = target.closest('.react-flow__node')
       const isOnContentEditable = target.closest('[contenteditable="true"]')
       
-      // Always refocus after a delay, even when clicking on panels or contenteditable
-      // This ensures the cursor stays in the input box
+      // Don't refocus if clicking on panels or contenteditable - allow user to edit panel content
       // BUT don't refocus if clicking on comment inputs
-      if (!isInteractive) {
-        // Longer delay for panels/contenteditable to allow text selection to complete
-        const delay = (isOnPanel || isOnContentEditable) ? 150 : 10
-        setTimeout(refocusTextarea, delay)
+      if (!isInteractive && !isOnPanel && !isOnContentEditable) {
+        // Short delay to allow other interactions to complete
+        setTimeout(refocusTextarea, 10)
       }
     }
 
     // Handle mouseup events (after selection) - refocus if not selecting text
-    const handleMouseUp = () => {
+    // BUT don't refocus if clicking on panels or contenteditable elements
+    const handleMouseUp = (event: MouseEvent) => {
+      const target = event.target as HTMLElement
+      const isOnPanel = target.closest('.react-flow__node')
+      const isOnContentEditable = target.closest('[contenteditable="true"]')
+      
+      // Don't refocus if clicking on panels or contenteditable - allow user to edit panel content
+      if (!isOnPanel && !isOnContentEditable) {
       setTimeout(refocusTextarea, 100)
+      }
     }
     
     // Handle when React Flow nodes are selected - refocus after selection
+    // BUT don't refocus if user clicked on a panel or contenteditable element
     const handleNodeSelect = () => {
+      // Check if the last click was on a panel or contenteditable
+      const wasClickOnPanel = lastClickTarget?.closest('.react-flow__node')
+      const wasClickOnContentEditable = lastClickTarget?.closest('[contenteditable="true"]')
+      
+      // Also check current active element as fallback
+      const activeElement = document.activeElement as HTMLElement
+      const isOnContentEditable = activeElement?.isContentEditable || 
+                                   activeElement?.closest('[contenteditable="true"]')
+      const isOnPanel = activeElement?.closest('.react-flow__node')
+      
+      // Don't refocus if user clicked on or is currently editing panel content
+      if (!wasClickOnPanel && !wasClickOnContentEditable && !isOnContentEditable && !isOnPanel) {
       setTimeout(refocusTextarea, 100)
+      }
     }
     
     // Listen for React Flow node selection events

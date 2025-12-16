@@ -9,7 +9,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import Image from 'next/image'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { Plus, Search, MoreVertical, Trash2, ChevronLeft, ChevronRight, SquarePen, Pencil, ChevronDown, FolderPlus, File, Folder, FolderOpen, Loader2 } from 'lucide-react'
+import { Plus, Search, MoreVertical, MoreHorizontal, Trash2, ChevronLeft, ChevronRight, SquarePen, Pencil, ChevronDown, FolderPlus, File, Folder, FolderOpen, Loader2, Share2, UserPlus, Archive, CornerUpLeft } from 'lucide-react'
 import { SettingsPanel } from '@/components/settings-panel'
 import { cn } from '@/lib/utils'
 import {
@@ -19,6 +19,9 @@ import {
   DropdownMenuTrigger,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu'
 import {
   Dialog,
@@ -73,6 +76,11 @@ function SortableBoardItem({
   dragOverPosition,
   activeId,
   filteredConversations,
+  projects,
+  supabase,
+  queryClient,
+  refetch,
+  project,
 }: {
   conversation: Conversation
   isActive: boolean
@@ -86,6 +94,11 @@ function SortableBoardItem({
   dragOverPosition: 'above' | 'below' | 'top' | 'bottom' | null
   activeId: string | null
   filteredConversations: Conversation[]
+  projects: Project[]
+  supabase: ReturnType<typeof createClient>
+  queryClient: ReturnType<typeof useQueryClient>
+  refetch: () => void
+  project?: Project // Optional project if this board is under a project
 }) {
   const {
     attributes,
@@ -151,8 +164,8 @@ function SortableBoardItem({
             <Button
               variant="ghost"
               size="icon"
-              className={`h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity ${
-                isActive ? 'text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300' : 'text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200'
+              className={`h-8 w-6 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-transparent ${
+                isActive ? 'text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-900' : 'text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200'
               }`}
               onClick={(e) => {
                 e.stopPropagation()
@@ -163,10 +176,22 @@ function SortableBoardItem({
                 e.stopPropagation()
               }}
             >
-              <MoreVertical className="h-4 w-4" />
+              <MoreHorizontal className="h-8 w-4" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-40">
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation()
+                // Share functionality - copy board URL to clipboard
+                const boardUrl = `${window.location.origin}/board/${conversation.id}`
+                navigator.clipboard.writeText(boardUrl)
+                // TODO: Show toast notification
+              }}
+            >
+              <Share2 className="h-4 w-4 mr-2" />
+              Share
+            </DropdownMenuItem>
             <DropdownMenuItem
               onClick={(e) => {
                 e.stopPropagation()
@@ -176,6 +201,167 @@ function SortableBoardItem({
             >
               <Pencil className="h-4 w-4 mr-2" />
               Rename
+            </DropdownMenuItem>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger
+                onClick={(e) => {
+                  e.stopPropagation()
+                }}
+              >
+                <Folder className="h-4 w-4 mr-2" />
+                Move to project
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {projects.length > 0 ? (
+                  projects.map((project) => (
+                    <DropdownMenuItem
+                      key={project.id}
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        try {
+                          const { data: conversationData, error: fetchError } = await supabase
+                            .from('conversations')
+                            .select('metadata')
+                            .eq('id', conversation.id)
+                            .single()
+                          
+                          if (fetchError) throw new Error(fetchError.message || 'Failed to fetch conversation')
+                          
+                          const existingMetadata = (conversationData?.metadata as Record<string, any>) || {}
+                          const updatedMetadata = { ...existingMetadata, project_id: project.id }
+                          
+                          const { error } = await supabase
+                            .from('conversations')
+                            .update({ metadata: updatedMetadata })
+                            .eq('id', conversation.id)
+                          
+                          if (error) {
+                            console.error('Error moving board to project:', error)
+                            alert('Failed to move board to project. Please try again.')
+                          } else {
+                            // Optimistic update
+                            queryClient.setQueryData(['conversations'], (oldData: Conversation[] | undefined) => {
+                              if (!oldData) return oldData
+                              return oldData.map((conv) => 
+                                conv.id === conversation.id ? { ...conv, metadata: updatedMetadata } : conv
+                              )
+                            })
+                            
+                            // Refetch
+                            queryClient.invalidateQueries({ queryKey: ['conversations'] })
+                            refetch()
+                          }
+                        } catch (error: any) {
+                          console.error('Error moving board to project:', error)
+                          alert('Failed to move board to project. Please try again.')
+                        }
+                      }}
+                    >
+                      {project.name}
+                    </DropdownMenuItem>
+                  ))
+                ) : (
+                  <DropdownMenuItem disabled>
+                    No projects available
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            {project && (
+              <DropdownMenuItem
+                onClick={async (e) => {
+                  e.stopPropagation()
+                  try {
+                    const { data: conversationData, error: fetchError } = await supabase
+                      .from('conversations')
+                      .select('metadata')
+                      .eq('id', conversation.id)
+                      .single()
+                    
+                    if (fetchError) throw new Error(fetchError.message || 'Failed to fetch conversation')
+                    
+                    const existingMetadata = (conversationData?.metadata as Record<string, any>) || {}
+                    const updatedMetadata = { ...existingMetadata }
+                    // Remove project_id from metadata
+                    delete updatedMetadata.project_id
+                    
+                    const { error } = await supabase
+                      .from('conversations')
+                      .update({ metadata: updatedMetadata })
+                      .eq('id', conversation.id)
+                    
+                    if (error) {
+                      console.error('Error removing board from project:', error)
+                      alert('Failed to remove board from project. Please try again.')
+                    } else {
+                      // Optimistic update
+                      queryClient.setQueryData(['conversations'], (oldData: Conversation[] | undefined) => {
+                        if (!oldData) return oldData
+                        return oldData.map((conv) => 
+                          conv.id === conversation.id ? { ...conv, metadata: updatedMetadata } : conv
+                        )
+                      })
+                      
+                      // Refetch
+                      queryClient.invalidateQueries({ queryKey: ['conversations'] })
+                      refetch()
+                    }
+                  } catch (error: any) {
+                    console.error('Error removing board from project:', error)
+                    alert('Failed to remove board from project. Please try again.')
+                  }
+                }}
+              >
+                <CornerUpLeft className="h-4 w-4 mr-2" />
+                Remove from {project.name}
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator className="mx-2 my-1" />
+            <DropdownMenuItem
+              onClick={async (e) => {
+                e.stopPropagation()
+                // Archive functionality - TODO: Implement archive (add archived flag to metadata)
+                try {
+                  const { data: conversationData, error: fetchError } = await supabase
+                    .from('conversations')
+                    .select('metadata')
+                    .eq('id', conversation.id)
+                    .single()
+                  
+                  if (fetchError) throw new Error(fetchError.message || 'Failed to fetch conversation')
+                  
+                  const existingMetadata = (conversationData?.metadata as Record<string, any>) || {}
+                  const updatedMetadata = { ...existingMetadata, archived: true }
+                  
+                  const { error } = await supabase
+                    .from('conversations')
+                    .update({ metadata: updatedMetadata })
+                    .eq('id', conversation.id)
+                  
+                  if (error) {
+                    console.error('Error archiving board:', error)
+                    alert('Failed to archive board. Please try again.')
+                  } else {
+                    // Optimistic update
+                    queryClient.setQueryData(['conversations'], (oldData: Conversation[] | undefined) => {
+                      if (!oldData) return oldData
+                      return oldData.map((conv) => 
+                        conv.id === conversation.id ? { ...conv, metadata: updatedMetadata } : conv
+                      )
+                    })
+                    
+                    // Refetch
+                    queryClient.invalidateQueries({ queryKey: ['conversations'] })
+                    refetch()
+                  }
+                } catch (error: any) {
+                  console.error('Error archiving board:', error)
+                  alert('Failed to archive board. Please try again.')
+                }
+              }}
+            >
+              <Archive className="h-4 w-4 mr-2" />
+              Archive
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={(e) => {
@@ -227,6 +413,9 @@ function DroppableProjectItem({
   activeId,
   filteredConversations,
   projects,
+  supabase,
+  queryClient,
+  refetch,
 }: {
   project: Project
   isActive: boolean
@@ -248,6 +437,9 @@ function DroppableProjectItem({
   activeId: string | null
   filteredConversations: Conversation[]
   projects: Project[]
+  supabase: ReturnType<typeof createClient>
+  queryClient: ReturnType<typeof useQueryClient>
+  refetch: () => void
 }) {
   const { setNodeRef } = useDroppable({
     id: `project-${project.id}`, // Prefix with 'project-' to identify as project drop target
@@ -319,19 +511,31 @@ function DroppableProjectItem({
             <Button
               variant="ghost"
               size="icon"
-              className={cn(
-                'h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0',
-                isActive ? 'text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300' : 'text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200'
-              )}
-              onClick={(e) => {
-                e.stopPropagation()
-                e.preventDefault()
-              }}
-            >
-              <MoreVertical className="h-4 w-4" />
+                className={cn(
+                  'h-8 w-6 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 hover:bg-transparent',
+                  isActive ? 'text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-900' : 'text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200'
+                )}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
+                }}
+              >
+                <MoreHorizontal className="h-8 w-4" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-40">
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation()
+                // Share functionality - copy project URL to clipboard
+                const projectUrl = `${window.location.origin}/project/${project.id}`
+                navigator.clipboard.writeText(projectUrl)
+                // TODO: Show toast notification
+              }}
+            >
+              <Share2 className="h-4 w-4 mr-2" />
+              Share
+            </DropdownMenuItem>
             <DropdownMenuItem
               onClick={(e) => {
                 e.stopPropagation()
@@ -340,8 +544,9 @@ function DroppableProjectItem({
               disabled={isRenamingProject}
             >
               <Pencil className="h-4 w-4 mr-2" />
-              Rename
+              Rename project
             </DropdownMenuItem>
+            <DropdownMenuSeparator className="mx-2 my-1" />
             <DropdownMenuItem
               onClick={(e) => {
                 e.stopPropagation()
@@ -351,7 +556,7 @@ function DroppableProjectItem({
               className="text-red-600 focus:text-red-600 focus:bg-red-50"
             >
               <Trash2 className="h-4 w-4 mr-2" />
-              {deletingProjectId === project.id ? 'Deleting...' : 'Delete'}
+              {deletingProjectId === project.id ? 'Deleting...' : 'Delete project'}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -377,6 +582,11 @@ function DroppableProjectItem({
                 dragOverPosition={dragOverPosition}
                 activeId={activeId}
                 filteredConversations={filteredConversations}
+                projects={projects}
+                supabase={supabase}
+                queryClient={queryClient}
+                refetch={refetch}
+                project={project}
               />
             )
           })}
@@ -722,7 +932,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
           .eq('id', boardId)
           .eq('user_id', user.id)
           .single()
-        
+    
         if (fetchError) throw new Error(fetchError.message || 'Failed to fetch conversation')
         
         const existingMetadata = (conversation?.metadata as Record<string, any>) || {}
@@ -1607,14 +1817,14 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                   <SquarePen className="h-4 w-4 mr-2" />
                   New board
                 </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
+                <DropdownMenuItem
+                  onClick={() => {
                   setShowCreateProjectDialog(true)
-                }}
-              >
-                <FolderPlus className="h-4 w-4 mr-2" />
-                New project
-              </DropdownMenuItem>
+                  }}
+                >
+                  <FolderPlus className="h-4 w-4 mr-2" />
+                  New project
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -1658,7 +1868,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
 
       {/* Boards/Conversations List - hidden when collapsed */}
       {!isCollapsed && (
-        <nav className="flex-1 px-4 pb-4 overflow-y-auto">
+        <nav className="flex-1 px-4 pb-4 overflow-y-auto [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-gray-400/50 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:hover:bg-gray-400/70 dark:[&::-webkit-scrollbar-thumb]:bg-gray-500/50 dark:[&::-webkit-scrollbar-thumb]:hover:bg-gray-500/70 [&::-webkit-scrollbar]:bg-transparent">
           <DndContext
             sensors={sensors}
             collisionDetection={(args) => {
@@ -1677,19 +1887,19 @@ export default function AppSidebar({ user }: AppSidebarProps) {
             {/* Projects Header - only show if projects exist */}
             {projects.length > 0 && (
               <>
-                <div 
-                  className="flex items-center gap-1 pl-1 py-2 text-xs font-medium text-gray-500 hover:text-gray-700 cursor-pointer group transition-colors"
+          <div 
+            className="flex items-center gap-1 pl-1 py-2 text-xs font-medium text-gray-500 hover:text-gray-700 cursor-pointer group transition-colors"
                   onClick={() => setIsProjectsExpanded(!isProjectsExpanded)}
-                >
+          >
                   <span>Projects</span>
-                  <ChevronDown 
-                    className={cn(
-                      'h-3 w-3 opacity-0 group-hover:opacity-100 transition-all duration-200',
+            <ChevronDown 
+              className={cn(
+                'h-3 w-3 opacity-0 group-hover:opacity-100 transition-all duration-200',
                       !isProjectsExpanded && 'opacity-100 -rotate-90'
-                    )}
-                  />
-                </div>
-                
+              )}
+            />
+          </div>
+          
                 {/* Projects List - collapsible */}
                 {isProjectsExpanded && (
                   <SortableContext
@@ -1740,6 +1950,9 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                             activeId={activeId}
                             filteredConversations={filteredConversations}
                             projects={projects}
+                            supabase={supabase}
+                            queryClient={queryClient}
+                            refetch={refetch}
                           />
                         )
                       })}
@@ -1757,14 +1970,14 @@ export default function AppSidebar({ user }: AppSidebarProps) {
             />
             
             {/* Boards List - collapsible, boards are sortable/reorderable */}
-            {isBoardsExpanded && (
+          {isBoardsExpanded && (
               <BoardsListWrapper>
-                {filteredConversations.length > 0 ? (
-                  <SortableContext
-                    items={filteredConversations.map((c) => c.id)}
-                    strategy={verticalListSortingStrategy}
-                  >
-                    <ul className="space-y-1">
+            {filteredConversations.length > 0 ? (
+                <SortableContext
+                  items={filteredConversations.map((c) => c.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <ul className="space-y-1">
                     {filteredConversations.map((conversation) => {
                       const isActive = pathname === `/board/${conversation.id}`
                       const isDeleting = deletingConversationId === conversation.id
@@ -1781,13 +1994,17 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                           openDeleteDialog={openDeleteDialog}
                           dragOverId={dragOverId}
                           dragOverPosition={dragOverPosition}
-                          activeId={activeId}
-                          filteredConversations={filteredConversations}
-                        />
+                activeId={activeId}
+                filteredConversations={filteredConversations}
+                projects={projects}
+                supabase={supabase}
+                queryClient={queryClient}
+                refetch={refetch}
+              />
                       )
                     })}
-                    </ul>
-                  </SortableContext>
+                  </ul>
+                </SortableContext>
                 ) : (
                   <div className="px-4 py-8 text-center text-sm text-gray-500">
                     {searchQuery ? 'No boards found' : 'No boards yet. Start a chat!'}
@@ -1795,16 +2012,16 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                 )}
               </BoardsListWrapper>
             )}
-            <DragOverlay>
-              {activeId ? (
-                <div className="flex items-center gap-2 px-4 h-8 rounded-lg bg-blue-50 dark:bg-[#2a2a3a] text-sm shadow-lg opacity-90 cursor-grabbing">
-                  <span className="truncate flex-1 text-gray-700 dark:text-gray-300">
-                    {filteredConversations.find((c) => c.id === activeId)?.title || ''}
-                  </span>
-                </div>
-              ) : null}
-            </DragOverlay>
-          </DndContext>
+                <DragOverlay>
+                  {activeId ? (
+                    <div className="flex items-center gap-2 px-4 h-8 rounded-lg bg-blue-50 dark:bg-[#2a2a3a] text-sm shadow-lg opacity-90 cursor-grabbing">
+                      <span className="truncate flex-1 text-gray-700 dark:text-gray-300">
+                        {filteredConversations.find((c) => c.id === activeId)?.title || ''}
+                      </span>
+                    </div>
+                  ) : null}
+                </DragOverlay>
+              </DndContext>
         </nav>
       )}
 

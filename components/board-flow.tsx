@@ -232,13 +232,13 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
       setViewMode(savedViewMode)
     }
     
-    const savedScrollMode = localStorage.getItem('thinkable-scroll-mode')
-    if (savedScrollMode === 'true') {
-      setIsScrollMode(true)
+      const savedScrollMode = localStorage.getItem('thinkable-scroll-mode')
+      if (savedScrollMode === 'true') {
+        setIsScrollMode(true)
     } else if (savedScrollMode === 'false') {
-      setIsScrollMode(false)
-    }
-    
+        setIsScrollMode(false)
+      }
+      
     const savedMinimapHidden = localStorage.getItem('thinkable-minimap-hidden')
     if (savedMinimapHidden === 'true') {
       setIsMinimapHidden(true)
@@ -357,10 +357,10 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
     }
     
     // Load from localStorage first (instant)
-    const savedViewMode = localStorage.getItem('thinkable-view-mode') as 'linear' | 'canvas' | null
+      const savedViewMode = localStorage.getItem('thinkable-view-mode') as 'linear' | 'canvas' | null
     if (savedViewMode && ['linear', 'canvas'].includes(savedViewMode)) {
-      setViewMode(savedViewMode)
-    }
+        setViewMode(savedViewMode)
+      }
     
     const savedScrollMode = localStorage.getItem('thinkable-scroll-mode')
     if (savedScrollMode === 'true') {
@@ -574,6 +574,11 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
   const [isAtBottom, setIsAtBottom] = useState(true) // Track if scrolled to bottom in linear mode
   const [minimapBottom, setMinimapBottom] = useState<number>(17) // Default position 2px higher
   const [minimapRight, setMinimapRight] = useState<number>(15) // Dynamic right position to align with prompt box when jumped (default: 15px)
+  const [minimapHoverLeft, setMinimapHoverLeft] = useState<number>(0) // Left position for hover zone to align with minimap left edge
+  const [minimapPillCenter, setMinimapPillCenter] = useState<number>(0) // Center position for pill to center on minimap
+  const [minimapPillBottom, setMinimapPillBottom] = useState<number>(8) // Bottom position for pill to center on minimap bottom edge
+  const [minimapHoverBottom, setMinimapHoverBottom] = useState<number>(0) // Bottom position for hover area when jumped
+  const [minimapHoverHeight, setMinimapHoverHeight] = useState<number>(28) // Height for hover area
   const [isMinimapHidden, setIsMinimapHidden] = useState(false) // Track if minimap is hidden
   const [clickedEdge, setClickedEdge] = useState<Edge | null>(null) // Track clicked edge for popup
   const [edgePopupPosition, setEdgePopupPosition] = useState({ x: 0, y: 0 }) // Position for edge popup
@@ -581,7 +586,14 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
   const [nodePopupPosition, setNodePopupPosition] = useState({ x: 0, y: 0 }) // Position for node popup
   const [isMinimapManuallyHidden, setIsMinimapManuallyHidden] = useState(false) // Track if minimap was manually hidden (vs auto-hidden)
   const [isMinimapHovering, setIsMinimapHovering] = useState(false) // Track if mouse is hovering over minimap area
+  const [isPillHoverAreaHovering, setIsPillHoverAreaHovering] = useState(false) // Track if mouse is hovering over pill hover area specifically
+  // Minimap visibility mode: 'shown' | 'hidden' | 'hover'
+  // Initialize with default to avoid hydration mismatch, then load from localStorage in useEffect
+  const [minimapMode, setMinimapMode] = useState<'shown' | 'hidden' | 'hover'>('hover')
+  const [minimapContextMenuPosition, setMinimapContextMenuPosition] = useState<{ x: number; y: number } | null>(null)
   const [isBottomGapHovering, setIsBottomGapHovering] = useState(false) // Track if hovering over bottom gap (shared with prompt pill)
+  const isMinimapHoveringRef = useRef(false) // Ref to track hover state for reliable checking in timeouts
+  const minimapHideTimeoutRef = useRef<NodeJS.Timeout | null>(null) // Track hide timeout for minimap
   const wasAboveThresholdRef = useRef(true) // Track if we were above auto-hide threshold
   const wasAutoHiddenRef = useRef(false) // Track if minimap was auto-hidden (vs manually hidden while shrunken)
   const fitViewInProgressRef = useRef(false) // Track when fitView is in progress to prevent onMove interference
@@ -682,8 +694,8 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
     if (typeof window === 'undefined') return
     
     // Save to localStorage immediately (lightweight, instant)
-    localStorage.setItem('thinkable-view-mode', viewMode)
-    localStorage.setItem('thinkable-scroll-mode', String(isScrollMode))
+      localStorage.setItem('thinkable-view-mode', viewMode)
+      localStorage.setItem('thinkable-scroll-mode', String(isScrollMode))
     
     // Save to Supabase in background (for cross-device sync)
     const saveToSupabase = async () => {
@@ -723,37 +735,120 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
     
     // Save to localStorage immediately
     localStorage.setItem('thinkable-minimap-hidden', String(isMinimapHidden))
+  }, [isMinimapHidden])
+  
+  // Sync minimap visibility with mode
+  useEffect(() => {
+    // Save mode to localStorage
+    localStorage.setItem('thinkable-minimap-mode', minimapMode)
     
-    // Save to Supabase in background (for cross-device sync)
-    const saveToSupabase = async () => {
-      try {
-        const supabase = createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-        if (user) {
-          // Get existing metadata to merge
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('metadata')
-            .eq('id', user.id)
-            .single()
-          
-          const existingMetadata = profile?.metadata || {}
-          
-          // Update metadata with minimap visibility
-          await supabase
-            .from('profiles')
-            .update({
-              metadata: { ...existingMetadata, isMinimapHidden },
-            })
-            .eq('id', user.id)
-        }
-      } catch (error) {
-        console.error('Error saving minimap visibility to Supabase:', error)
+    // Apply mode
+    if (minimapMode === 'shown') {
+      // Always show
+      setIsMinimapHidden(false)
+      setIsMinimapManuallyHidden(false)
+      wasAutoHiddenRef.current = false
+    } else if (minimapMode === 'hidden') {
+      // Always hide
+      setIsMinimapHidden(true)
+      setIsMinimapManuallyHidden(true)
+      wasAutoHiddenRef.current = false
+    } else {
+      // Hover mode - reset to default hover behavior (minimap hidden, shown on hover)
+      setIsMinimapHidden(true)
+      setIsMinimapManuallyHidden(false)
+      wasAutoHiddenRef.current = false
+    }
+  }, [minimapMode])
+
+  // Load minimap mode from localStorage on mount (after hydration)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('thinkable-minimap-mode')
+      if (saved === 'shown' || saved === 'hidden' || saved === 'hover') {
+        setMinimapMode(saved)
+      }
+    }
+  }, [])
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    isMinimapHoveringRef.current = isMinimapHovering
+  }, [isMinimapHovering])
+
+  // Function to check if minimap should be hidden (called when leaving any related area)
+  const checkAndHideMinimap = useCallback((relatedTarget?: HTMLElement | null) => {
+    // Don't hide if mode is 'shown' or 'hidden' (only hide in 'hover' mode)
+    if (minimapMode !== 'hover') {
+      return
+    }
+
+    // Clear any existing hide timeout
+    if (minimapHideTimeoutRef.current) {
+      clearTimeout(minimapHideTimeoutRef.current)
+      minimapHideTimeoutRef.current = null
+    }
+    
+    // Check if relatedTarget is still in any related area
+    if (relatedTarget && relatedTarget instanceof HTMLElement) {
+      const minimapElement = relatedTarget.closest('[data-minimap-context]')
+      const toggleElement = relatedTarget.closest('[data-minimap-toggle-context]')
+      const pillElement = relatedTarget.closest('[data-minimap-pill-context]')
+      const hoverZoneElement = relatedTarget.closest('[style*="zIndex: 9"]') // Hover zones have z-index 9
+      
+      // If moving to another related area, don't hide
+      if (minimapElement || toggleElement || pillElement || hoverZoneElement) {
+        return
       }
     }
     
-    saveToSupabase()
-  }, [isMinimapHidden])
+    // Small delay to allow transition between areas
+    minimapHideTimeoutRef.current = setTimeout(() => {
+      // Re-check ref at timeout execution time
+      const isInAnyArea = isMinimapHoveringRef.current
+      
+      // If minimap is shown and we're not in any related area, hide it
+      if (!isMinimapHidden && !isInAnyArea && minimapMode === 'hover') {
+        setIsMinimapHidden(true)
+        setIsMinimapManuallyHidden(false)
+        wasAutoHiddenRef.current = false
+      }
+    }, 200) // Slight delay to allow moving between areas
+  }, [minimapMode, isMinimapHidden])
+
+  // Close context menu when clicking outside
+  useEffect(() => {
+    if (!minimapContextMenuPosition) return
+
+    const handleClick = () => {
+      setMinimapContextMenuPosition(null)
+    }
+
+    const handleContextMenu = (e: MouseEvent) => {
+      // Close if right-clicking elsewhere
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-minimap-context]') && !target.closest('[data-minimap-pill-context]') && !target.closest('[data-minimap-toggle-context]')) {
+        setMinimapContextMenuPosition(null)
+      }
+    }
+
+    document.addEventListener('click', handleClick)
+    document.addEventListener('contextmenu', handleContextMenu)
+    
+    return () => {
+      document.removeEventListener('click', handleClick)
+      document.removeEventListener('contextmenu', handleContextMenu)
+    }
+  }, [minimapContextMenuPosition])
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (minimapHideTimeoutRef.current) {
+        clearTimeout(minimapHideTimeoutRef.current)
+      }
+    }
+  }, [])
 
   // Fetch messages if conversationId is provided
   const { data: messages = [], refetch: refetchMessages } = useQuery({
@@ -875,6 +970,183 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
     }
   }, [isMinimapHidden]) // Re-run when minimap visibility changes to ensure toggle position updates
 
+  // Calculate hover zone left position to align with minimap left edge
+  useEffect(() => {
+    const calculateHoverLeft = () => {
+      const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
+      // Try both selectors to find minimap
+      const minimapElement = document.querySelector('.minimap-custom-size') as HTMLElement || 
+                             document.querySelector('.react-flow__minimap') as HTMLElement
+      
+      if (!reactFlowElement) return
+      
+      // Get React Flow rect first (needed for all calculations)
+      const reactFlowRect = reactFlowElement.getBoundingClientRect()
+      
+      // Calculate center position relative to board flow inner (React Flow container)
+      // Toggle is positioned at: right: minimapRight + 16px
+      // Toggle is same width as minimap (179px)
+      // Account for any padding on React Flow container
+      const reactFlowWidth = reactFlowElement.clientWidth
+      const reactFlowPaddingLeft = parseFloat(getComputedStyle(reactFlowElement).paddingLeft) || 0
+      const reactFlowPaddingRight = parseFloat(getComputedStyle(reactFlowElement).paddingRight) || 0
+      const minimapWidth = 179
+      const toggleRightOffset = 16 // Toggle has 16px offset from minimap right position
+      // Toggle right edge is: reactFlowWidth - (minimapRight + 16) - paddingRight
+      // Toggle left edge is: toggle right - 179
+      // Toggle center is: toggle left + 179/2
+      const toggleRight = reactFlowWidth - minimapRight - toggleRightOffset - reactFlowPaddingRight
+      const toggleLeft = toggleRight - minimapWidth
+      const centerPosition = toggleLeft + minimapWidth / 2 + reactFlowPaddingLeft
+      setMinimapPillCenter(centerPosition)
+      
+      // Get actual minimap position if available, otherwise calculate
+      if (minimapElement) {
+        const minimapRect = minimapElement.getBoundingClientRect()
+        // Calculate left position relative to React Flow container
+        // Use the actual minimap's left edge position - move much farther left
+        // Check for SVG or content element inside minimap for more accurate position
+        const minimapSvg = minimapElement.querySelector('svg') as HTMLElement
+        const contentRect = minimapSvg ? minimapSvg.getBoundingClientRect() : minimapRect
+        const leftPosition = contentRect.left - reactFlowRect.left
+        setMinimapHoverLeft(leftPosition)
+        // Calculate center position for pill using actual minimap SVG/content center
+        // Use the SVG element inside the minimap for the true visual center
+        // (Note: centerPosition already calculated above, but update with actual position when minimap is visible)
+        if (minimapSvg) {
+          const svgRect = minimapSvg.getBoundingClientRect()
+          const svgCenterX = svgRect.left + svgRect.width / 2
+          const centerPosition = svgCenterX - reactFlowRect.left
+          setMinimapPillCenter(centerPosition)
+          // Calculate bottom position - center of pill height on prompt box top edge when jumped, otherwise use default
+          // Check if minimap has jumped (minimapBottom state is 79 when jumped, 17 when default)
+          const reactFlowBottom = reactFlowRect.bottom
+          if (minimapBottom === 79) {
+            // Minimap has jumped - center pill on prompt box top edge instead of minimap bottom edge
+            const chatInputElement = document.querySelector('textarea[placeholder*="Type"], textarea[placeholder*="message"]') as HTMLElement
+            const promptBoxContainer = chatInputElement?.closest('[class*="pointer-events-auto"]') as HTMLElement
+            if (promptBoxContainer) {
+              const promptBoxRect = promptBoxContainer.getBoundingClientRect()
+              const promptBoxTop = promptBoxRect.top
+              // Pill is 6px tall, so center is 3px from bottom - position so center aligns with prompt box top edge
+              // bottom = distance from reactFlow bottom to (prompt box top - 3px) = reactFlowBottom - promptBoxTop - 3
+              const pillBottom = reactFlowBottom - promptBoxTop - 3
+              setMinimapPillBottom(pillBottom)
+              // Calculate hover area position - starts at minimap bottom, extends downward
+              const minimapBottomEdge = minimapRect.bottom
+              // Position hover area starting at minimap bottom - top edge at minimap bottom
+              // bottom CSS value: distance from ReactFlow bottom to minimap bottom
+              const hoverAreaBottomFromReactFlow = reactFlowBottom - minimapBottomEdge
+              // Height: distance from minimap bottom to just above prompt box
+              const hoverAreaHeight = minimapBottomEdge - promptBoxTop
+              setMinimapHoverBottom(hoverAreaBottomFromReactFlow)
+              setMinimapHoverHeight(hoverAreaHeight)
+            } else {
+              // Fallback to minimap bottom edge if prompt box not found
+              const minimapBottomEdge = minimapRect.bottom
+              const pillBottom = reactFlowBottom - minimapBottomEdge - 3
+              setMinimapPillBottom(pillBottom)
+              setMinimapHoverBottom(0)
+              setMinimapHoverHeight(28)
+            }
+          } else {
+            // Default position when not jumped
+            setMinimapPillBottom(8)
+            setMinimapHoverBottom(0)
+            setMinimapHoverHeight(28)
+          }
+        } else {
+          // Fallback to container center if SVG not found
+          // (Note: centerPosition already calculated above, but update with actual position when minimap is visible)
+          const minimapCenterX = minimapRect.left + minimapRect.width / 2
+          const centerPosition = minimapCenterX - reactFlowRect.left
+          setMinimapPillCenter(centerPosition)
+          // Calculate bottom position - center of pill height on prompt box top edge when jumped, otherwise use default
+          const reactFlowBottom = reactFlowRect.bottom
+          if (minimapBottom === 79) {
+            // Minimap has jumped - center pill on prompt box top edge instead of minimap bottom edge
+            const chatInputElement = document.querySelector('textarea[placeholder*="Type"], textarea[placeholder*="message"]') as HTMLElement
+            const promptBoxContainer = chatInputElement?.closest('[class*="pointer-events-auto"]') as HTMLElement
+            if (promptBoxContainer) {
+              const promptBoxRect = promptBoxContainer.getBoundingClientRect()
+              const promptBoxTop = promptBoxRect.top
+              // Pill is 6px tall, so center is 3px from bottom - position so center aligns with prompt box top edge
+              // bottom = distance from reactFlow bottom to (prompt box top - 3px) = reactFlowBottom - promptBoxTop - 3
+              const pillBottom = reactFlowBottom - promptBoxTop - 3
+              setMinimapPillBottom(pillBottom)
+            } else {
+              // Fallback to minimap bottom edge if prompt box not found
+              const minimapBottomEdge = minimapRect.bottom
+              const pillBottom = reactFlowBottom - minimapBottomEdge - 3
+              setMinimapPillBottom(pillBottom)
+            }
+          } else {
+            // Default position when not jumped
+            setMinimapPillBottom(8)
+          }
+        }
+      } else {
+        // Fallback calculation - calculate from container width
+        // (Note: centerPosition already calculated above, stays the same)
+        const reactFlowWidth = reactFlowElement.clientWidth
+        const minimapWidth = 179
+        // Calculate left position: container width - right offset - minimap width
+        const leftPosition = reactFlowWidth - minimapRight - minimapWidth
+        setMinimapHoverLeft(leftPosition)
+        // When minimap is hidden, calculate bottom position
+        // If minimap was jumped (minimapBottom === 79), center pill on prompt box top edge
+        const reactFlowBottom = reactFlowRect.bottom
+        if (minimapBottom === 79) {
+          // Minimap was jumped - center pill on prompt box top edge
+          const chatInputElement = document.querySelector('textarea[placeholder*="Type"], textarea[placeholder*="message"]') as HTMLElement
+          const promptBoxContainer = chatInputElement?.closest('[class*="pointer-events-auto"]') as HTMLElement
+          if (promptBoxContainer) {
+            const promptBoxRect = promptBoxContainer.getBoundingClientRect()
+            const promptBoxTop = promptBoxRect.top
+            // Pill is 6px tall, so center is 3px from bottom - position so center aligns with prompt box top edge
+            // bottom = distance from reactFlow bottom to (prompt box top - 3px) = reactFlowBottom - promptBoxTop - 3
+            const pillBottom = reactFlowBottom - promptBoxTop - 3
+            setMinimapPillBottom(pillBottom)
+            // Calculate hover area position - between minimap bottom and prompt box top
+            // When minimap is hidden, use toggle position (minimapBottom - 12 + 15 from reactFlow bottom)
+            const toggleBottomFromReactFlowBottom = minimapBottom - 12 + 15
+            const toggleBottom = reactFlowBottom - toggleBottomFromReactFlowBottom
+            const hoverAreaTop = promptBoxTop // Hover area top is at prompt box top
+            const hoverAreaBottom = toggleBottom // Hover area bottom is at toggle bottom
+            const hoverAreaHeight = hoverAreaTop - hoverAreaBottom
+            const hoverAreaBottomFromReactFlow = reactFlowBottom - hoverAreaBottom
+            setMinimapHoverBottom(hoverAreaBottomFromReactFlow)
+            setMinimapHoverHeight(hoverAreaHeight)
+          } else {
+            // Fallback: calculate where toggle bottom edge would be
+            const toggleBottomFromReactFlowBottom = minimapBottom - 12 + 15
+            const toggleBottom = reactFlowBottom - toggleBottomFromReactFlowBottom
+            const pillBottom = reactFlowBottom - toggleBottom - 3
+            setMinimapPillBottom(pillBottom)
+            setMinimapHoverBottom(0)
+            setMinimapHoverHeight(28)
+          }
+        } else {
+          // Default position when not jumped
+          setMinimapPillBottom(8)
+          setMinimapHoverBottom(0)
+          setMinimapHoverHeight(28)
+        }
+      }
+    }
+
+    calculateHoverLeft()
+    window.addEventListener('resize', calculateHoverLeft)
+    
+    // Also check periodically to catch minimap position changes
+    const interval = setInterval(calculateHoverLeft, 100)
+    
+    return () => {
+      window.removeEventListener('resize', calculateHoverLeft)
+      clearInterval(interval)
+    }
+  }, [minimapRight, isMinimapHidden, minimapBottom])
+
   // Auto-hide minimap when window shrinks below threshold, auto-show when expanded (if not manually closed while expanded)
   // Also triggers mobile mode for sidebar (sidebar hides, toggle moves to top bar)
   useEffect(() => {
@@ -940,6 +1212,11 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
         // Only process if the click is on the minimap element or its children
         const target = e.target as HTMLElement
         if (!minimapElement || !minimapElement.contains(target)) return
+        
+        // Don't process right-clicks (button 2) - allow context menu to work
+        if (e.button === 2) {
+          return
+        }
         
         // Clear any existing timeout
         if (clickTimeoutId) {
@@ -1022,6 +1299,12 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
       }
 
       const handleMouseUp = (e: MouseEvent) => {
+        // Don't process right-clicks (button 2) - allow context menu to work
+        if (e.button === 2) {
+          minimapDragStartRef.current = null
+          return
+        }
+        
         // Clear the fallback timeout since mouseup fired
         if (clickTimeoutId) {
           clearTimeout(clickTimeoutId)
@@ -4152,59 +4435,188 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
       >
         <Background variant={BackgroundVariant.Dots} />
         {!isMinimapHidden && (
-          <MiniMap 
-            position="bottom-right"
-            nodeColor={(node) => {
-              // Light grey by default, dark grey when selected
-              return node.selected ? '#9ca3af' : '#e5e7eb' // Dark grey if selected, light grey otherwise
+          <div
+            data-minimap-context
+            onContextMenu={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
             }}
-            maskColor={resolvedTheme === 'dark'
-              ? 'rgba(96, 165, 250, 0.25)' // Dark mode: lighter blue overlay (blue-400 with higher opacity for better visibility)
-              : 'rgba(202, 216, 237, 0.3)'} // Light mode: light blue overlay matching selected board tab (blue-50 with transparency)
-            pannable={true} // Allow panning (horizontal movement restricted via onMove in linear mode)
-            zoomable={true}
-            className="minimap-custom-size"
+            onMouseEnter={() => {
+              // Keep minimap visible when hovering over it in hover mode
+              setIsMinimapHovering(true)
+              isMinimapHoveringRef.current = true
+              // Cancel any pending hide timeout
+              if (minimapHideTimeoutRef.current) {
+                clearTimeout(minimapHideTimeoutRef.current)
+                minimapHideTimeoutRef.current = null
+              }
+            }}
+            onMouseLeave={(e) => {
+              // Check if minimap should hide after leaving minimap
+              setIsMinimapHovering(false)
+              isMinimapHoveringRef.current = false
+              checkAndHideMinimap(e.relatedTarget as HTMLElement)
+            }}
+          >
+            <MiniMap 
+              position="bottom-right"
+              nodeColor={(node) => {
+                // Light grey by default, dark grey when selected
+                return node.selected ? '#9ca3af' : '#e5e7eb' // Dark grey if selected, light grey otherwise
+              }}
+              maskColor={resolvedTheme === 'dark'
+                ? 'rgba(96, 165, 250, 0.25)' // Dark mode: lighter blue overlay (blue-400 with higher opacity for better visibility)
+                : 'rgba(202, 216, 237, 0.3)'} // Light mode: light blue overlay matching selected board tab (blue-50 with transparency)
+              pannable={true} // Allow panning (horizontal movement restricted via onMove in linear mode)
+              zoomable={true}
+              className="minimap-custom-size shadow-sm"
+              style={{
+                borderTopLeftRadius: '0px',
+                borderTopRightRadius: '0px',
+                borderBottomLeftRadius: '8px',
+                borderBottomRightRadius: '8px',
+                overflow: 'hidden',
+                cursor: 'pointer', // Indicate clickability
+                bottom: `${minimapBottom - 12}px`, // 5px from bottom when at default (1px lower)
+                right: `${minimapRight}px`, // Right position - aligns with prompt box when jumped, defaults to 15px
+              }}
+            />
+          </div>
+        )}
+        
+        {/* Hover zone for minimap collapse pill - limited to minimap width (179px) */}
+        {/* Show hover zone even when minimap is hidden, so pill can be shown on hover */}
+        {!isMinimapHidden && (
+          <div
+            className="absolute pointer-events-auto"
             style={{
-              borderTopLeftRadius: '0px',
-              borderTopRightRadius: '0px',
-              borderBottomLeftRadius: '8px',
-              borderBottomRightRadius: '8px',
-              overflow: 'hidden',
-              cursor: 'pointer', // Indicate clickability
-              bottom: `${minimapBottom - 12}px`, // 5px from bottom when at default (1px lower)
-              right: `${minimapRight}px`, // Right position - aligns with prompt box when jumped, defaults to 15px
+              bottom: minimapBottom === 79 ? `${minimapHoverBottom}px` : '0px', // Between minimap and prompt box when jumped, otherwise at bottom
+              left: `${minimapHoverLeft}px`, // Align with minimap left edge
+              width: '179px', // Minimap width
+              height: minimapBottom === 79 ? `${minimapHoverHeight}px` : '28px', // Space between minimap and prompt box when jumped, otherwise default height
+              zIndex: 9, // Below pill but above other elements
+            }}
+            onMouseEnter={() => {
+              // Track pill hover area specifically
+              setIsPillHoverAreaHovering(true)
+              setIsMinimapHovering(true)
+              isMinimapHoveringRef.current = true
+              // Cancel any pending hide timeout
+              if (minimapHideTimeoutRef.current) {
+                clearTimeout(minimapHideTimeoutRef.current)
+                minimapHideTimeoutRef.current = null
+              }
+            }}
+            onMouseLeave={(e) => {
+              setIsPillHoverAreaHovering(false)
+              setIsMinimapHovering(false)
+              isMinimapHoveringRef.current = false
+              // Check if minimap should hide after leaving hover area
+              checkAndHideMinimap(e.relatedTarget as HTMLElement)
+            }}
+          />
+        )}
+        {/* Hover zone when minimap is hidden - same area as when minimap is shown */}
+        {isMinimapHidden && (
+          <div
+            className="absolute pointer-events-auto"
+            style={{
+              bottom: '0px', // Extended lower for easier hovering
+              left: `${minimapHoverLeft}px`, // Align with minimap/toggle left edge
+              width: '179px', // Minimap/toggle width
+              height: `${minimapPillBottom + 20}px`, // Height extends from bottom to above pill
+              zIndex: 9, // Below pill but above other elements
+            }}
+            onMouseEnter={() => {
+              // Track pill hover area specifically
+              setIsPillHoverAreaHovering(true)
+              setIsMinimapHovering(true)
+              isMinimapHoveringRef.current = true
+              // Cancel any pending hide timeout
+              if (minimapHideTimeoutRef.current) {
+                clearTimeout(minimapHideTimeoutRef.current)
+                minimapHideTimeoutRef.current = null
+              }
+            }}
+            onMouseLeave={(e) => {
+              setIsPillHoverAreaHovering(false)
+              setIsMinimapHovering(false)
+              isMinimapHoveringRef.current = false
+              // Check if minimap should hide after leaving hover area
+              checkAndHideMinimap(e.relatedTarget as HTMLElement)
             }}
           />
         )}
         
-        {/* Minimap toggle pill - horizontal below minimap, like top bar and prompt box */}
-          <div
-            onClick={() => {
-              const newHiddenState = !isMinimapHidden
-              setIsMinimapHidden(newHiddenState)
-              // Track manual hide/show
-              if (newHiddenState) {
-                setIsMinimapManuallyHidden(true)
-                wasAutoHiddenRef.current = false
-              } else {
-                setIsMinimapManuallyHidden(false)
-                wasAutoHiddenRef.current = false
+      </ReactFlow>
+      
+      {/* Minimap toggle pill - horizontal below minimap, like top bar and prompt box */}
+      {/* Moved outside ReactFlow to ensure proper z-index stacking above toggle */}
+      <div
+        data-minimap-pill-context
+        onContextMenu={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
+        }}
+        onClick={() => {
+          // Toggle between 'shown' and 'hover' modes
+          if (minimapMode === 'shown') {
+            setMinimapMode('hover')
+          } else if (minimapMode === 'hover') {
+            setMinimapMode('shown')
+          } else {
+            // If mode is 'hidden', switch to 'shown' and immediately show minimap
+            setMinimapMode('shown')
+            setIsMinimapHidden(false)
+            setIsMinimapManuallyHidden(false)
+            wasAutoHiddenRef.current = false
+          }
+        }}
+            onMouseEnter={() => {
+              // Track pill hover area specifically
+              setIsPillHoverAreaHovering(true)
+              setIsMinimapHovering(true)
+              isMinimapHoveringRef.current = true
+              // Cancel any pending hide timeout
+              if (minimapHideTimeoutRef.current) {
+                clearTimeout(minimapHideTimeoutRef.current)
+                minimapHideTimeoutRef.current = null
+              }
+              // Only pill hover shows the minimap in hover mode
+              if (isMinimapHidden && minimapMode === 'hover') {
+                setTimeout(() => {
+                  if (isMinimapHidden && minimapMode === 'hover') {
+                    setIsMinimapHidden(false)
+                    setIsMinimapManuallyHidden(false)
+                    wasAutoHiddenRef.current = false
+                  }
+                }, 100) // 100ms delay - quick response
               }
             }}
-            onMouseEnter={() => setIsMinimapHovering(true)}
-            onMouseLeave={() => setIsMinimapHovering(false)}
-            className={cn(
-              'absolute z-10 w-12 h-1.5 rounded-full cursor-pointer transition-all duration-200 bg-gray-300 hover:bg-gray-400',
-              (isMinimapHovering || isMinimapHidden || isBottomGapHovering) ? 'opacity-100' : 'opacity-0'
-            )}
-            style={{
-              bottom: `${(minimapBottom - 12) - 4}px`, // Positioned just below minimap bottom edge (minimap bottom is at minimapBottom - 12, pill is 4px below that)
-              right: `${minimapRight + (179 - 48) / 2}px`, // Center horizontally under minimap (179px minimap width, 48px pill width)
+            onMouseLeave={(e) => {
+              setIsPillHoverAreaHovering(false)
+              setIsMinimapHovering(false)
+              isMinimapHoveringRef.current = false
+              // Check if minimap should hide after leaving pill
+              checkAndHideMinimap(e.relatedTarget as HTMLElement)
             }}
-            title={isMinimapHidden ? 'Show minimap' : 'Hide minimap'}
-          />
-        
-      </ReactFlow>
+        className={cn(
+          'absolute w-12 h-1.5 rounded-full cursor-pointer transition-all duration-200 bg-gray-300',
+          // Show pill only when hovering over pill hover area (not minimap or toggle)
+          isPillHoverAreaHovering ? 'opacity-100' : 'opacity-0'
+        )}
+        style={{
+          // Center pill vertically on minimap bottom edge (dynamically calculated)
+          bottom: `${minimapPillBottom}px`,
+          // Center pill horizontally on minimap
+          left: `${minimapPillCenter}px`,
+          transform: 'translateX(-50%)', // Center the pill on the calculated center position
+          zIndex: 50, // Higher than toggle's z-10 to ensure pill appears above
+        }}
+        title={isMinimapHidden ? 'Show minimap' : 'Hide minimap'}
+      />
       
         {/* Node popup - shows delete and condense options */}
         {rightClickedNode && reactFlowInstance && (
@@ -4385,19 +4797,44 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
       
       {/* Linear/Canvas toggle with Nav dropdown above minimap */}
         <div 
+          data-minimap-toggle-context
+          onContextMenu={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
+          }}
+          onMouseEnter={() => {
+            // Only track hover, don't show minimap (only pill hover shows it)
+            setIsMinimapHovering(true)
+            isMinimapHoveringRef.current = true
+            // Cancel any pending hide timeout
+            if (minimapHideTimeoutRef.current) {
+              clearTimeout(minimapHideTimeoutRef.current)
+              minimapHideTimeoutRef.current = null
+            }
+          }}
+          onMouseLeave={(e) => {
+            // Check if minimap should hide after leaving toggle
+            setIsMinimapHovering(false)
+            isMinimapHoveringRef.current = false
+            checkAndHideMinimap(e.relatedTarget as HTMLElement)
+          }}
           className="absolute z-10"
           style={{
             // Position toggle above minimap
             // Both positions use minimapBottom which already accounts for the jump when prompt box gets close
             bottom: isMinimapHidden 
-              ? `${minimapBottom - 12 + 8}px` // At minimap position when hidden + small offset
+              ? `${minimapBottom - 12 + 15}px` // At minimap position when hidden + small offset (3px higher when collapsed)
               : `${minimapBottom - 12 + 134 + 8}px`, // Above minimap (134px height + 8px gap)
             // Right-align with minimap (which aligns with prompt box when jumped), moved left 16px
             right: `${minimapRight + 16}px`, // Match minimap right position + 16px left offset (moved 1px left)
           }}
         >
         <div 
-          className="bg-blue-50 dark:bg-[#2a2a3a] rounded-lg p-1 flex items-center gap-1 relative"
+          className={cn(
+            "bg-blue-50 dark:bg-[#2a2a3a] rounded-lg p-1 flex items-center gap-1 relative",
+            isMinimapHidden && "shadow-sm"
+          )}
         >
           <Button
             variant="ghost"
@@ -4563,6 +5000,70 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
         </div>
       </div>
 
+      {/* Context menu for minimap control */}
+      {minimapContextMenuPosition && (
+        <div
+          className="fixed z-50 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] py-1 min-w-[180px]"
+          style={{
+            left: `${minimapContextMenuPosition.x}px`,
+            top: `${minimapContextMenuPosition.y}px`,
+            transform: 'translate(-100%, -100%)', // Position top-left of cursor
+            marginTop: '-4px', // Small gap from cursor
+            marginLeft: '-4px', // Small gap from cursor
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-[#2f2f2f]">
+            Minimap control
+          </div>
+          <div className="py-1">
+            <button
+              onClick={() => {
+                setMinimapMode('shown')
+                setMinimapContextMenuPosition(null)
+              }}
+              className="w-full text-left px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2a3a] flex items-center gap-2"
+            >
+              {minimapMode === 'shown' && (
+                <span className="w-1.5 h-1.5 rounded-full bg-gray-700 dark:bg-gray-300" />
+              )}
+              {minimapMode !== 'shown' && <span className="w-1.5 h-1.5" />}
+              <span>Shown</span>
+            </button>
+            <button
+              onClick={() => {
+                setMinimapMode('hidden')
+                // Immediately hide the minimap (mode sync will handle this, but ensure it's hidden)
+                setIsMinimapHidden(true)
+                setIsMinimapManuallyHidden(true)
+                wasAutoHiddenRef.current = false
+                setMinimapContextMenuPosition(null)
+              }}
+              className="w-full text-left px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2a3a] flex items-center gap-2"
+            >
+              {minimapMode === 'hidden' && (
+                <span className="w-1.5 h-1.5 rounded-full bg-gray-700 dark:bg-gray-300" />
+              )}
+              {minimapMode !== 'hidden' && <span className="w-1.5 h-1.5" />}
+              <span>Hidden</span>
+            </button>
+            <button
+              onClick={() => {
+                setMinimapMode('hover')
+                setMinimapContextMenuPosition(null)
+              }}
+              className="w-full text-left px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2a3a] flex items-center gap-2"
+            >
+              {minimapMode === 'hover' && (
+                <span className="w-1.5 h-1.5 rounded-full bg-gray-700 dark:bg-gray-300" />
+              )}
+              {minimapMode !== 'hover' && <span className="w-1.5 h-1.5" />}
+              <span>Show on hover</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Return to bottom button - only show in linear mode when not at bottom */}
       {/* Aligned to prompt box center with same gap as minimap when jumped (16px) */}
       {viewMode === 'linear' && messages.length > 0 && !isAtBottom && (
@@ -4579,4 +5080,5 @@ export function BoardFlow({ conversationId }: { conversationId?: string }) {
     </ReactFlowProvider>
   )
 }
+
 

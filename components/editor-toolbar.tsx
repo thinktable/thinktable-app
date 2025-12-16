@@ -625,9 +625,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     'h-7 px-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0',
                     !reactFlowInstance && 'opacity-50 cursor-not-allowed'
                   )}
+                  style={{ minWidth: '48px' }} // Fixed width to prevent jitter when zoom numbers change
                 >
                   <span 
-                    className="text-sm cursor-text"
+                    className="text-sm cursor-text inline-block text-center"
+                    style={{ width: '32px' }} // Fixed width for zoom number text
                     onClick={(e) => {
                       e.preventDefault()
                       e.stopPropagation()

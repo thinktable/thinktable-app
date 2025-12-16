@@ -34,6 +34,7 @@ interface Message {
   role: 'user' | 'assistant'
   content: string
   created_at: string
+  metadata?: Record<string, any> // Optional metadata field
 }
 
 interface Comment {
@@ -387,10 +388,14 @@ function TipTapContent({
 
   if (!editor) return null
 
+  // Extract 'inline' from className if present to apply inline-block display
+  const isInline = className?.includes('inline')
+  const otherClasses = className?.replace(/\binline\b/g, '').trim()
+  
   return (
     <div 
       ref={containerRef} 
-      className={cn('relative cursor-text', className)}
+      className={cn('relative cursor-text', isInline && 'inline-block', otherClasses)}
       onMouseDown={(e) => e.stopPropagation()}
     >
       {/* BubbleMenu for highlighter only - keeps existing TipTap popup */}
@@ -434,148 +439,6 @@ function TipTapContent({
   )
 }
 
-// More menu button for prompt - appears inline with text at the end
-function PromptMoreMenuButton({
-  editor,
-  promptContent,
-  onDelete,
-  isDeleting,
-}: {
-  editor: any
-  promptContent: string
-  onDelete: () => void
-  isDeleting: boolean
-}) {
-  const [buttonPosition, setButtonPosition] = useState({ top: 0, left: 0 })
-  const [isVisible, setIsVisible] = useState(false)
-  const promptSectionRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    if (!editor) return
-
-    const updateButtonPosition = () => {
-      try {
-        // Get the document size to find the last character position
-        const docSize = editor.state.doc.content.size
-        if (docSize === 0) {
-          setIsVisible(false)
-          return
-        }
-
-        // Find the prompt section container
-        const promptSection = editor.view.dom.closest('.p-4.bg-gray-50') as HTMLDivElement
-        if (!promptSection) {
-          setIsVisible(false)
-          return
-        }
-
-        promptSectionRef.current = promptSection
-        const sectionRect = promptSection.getBoundingClientRect()
-        
-        // Get coordinates at the end of the document (after the last character)
-        // Use the end position where cursor would be - this gives us the exact end of text
-        const coords = editor.view.coordsAtPos(docSize)
-        
-        if (!coords) {
-          setIsVisible(false)
-          return
-        }
-        
-        // Calculate position relative to section
-        // Center vertically with the text line - use the middle of the line height
-        const lineCenterY = (coords.top + coords.bottom) / 2
-        const buttonHeight = 24 // h-6 = 24px
-        // Position button so its center aligns with the line center
-        const top = lineCenterY - sectionRect.top - (buttonHeight / 2)
-        
-        // Position horizontally just to the right of the last character
-        // Use the right edge of the coordinates (end of text) - this is the exact end position
-        // coords.right gives us the pixel position of where the cursor would be after the last char
-        const left = coords.right - sectionRect.left + 4 // 4px gap after text
-        
-        setButtonPosition({ top, left })
-        setIsVisible(true)
-      } catch (error) {
-        console.error('Error updating prompt more menu position:', error)
-        setIsVisible(false)
-      }
-    }
-
-    // Update position on content changes
-    const handleUpdate = () => {
-      requestAnimationFrame(updateButtonPosition)
-    }
-
-    editor.on('update', handleUpdate)
-    editor.on('selectionUpdate', handleUpdate)
-    editor.on('focus', handleUpdate) // Update when editor gains focus
-    editor.on('blur', handleUpdate) // Update when editor loses focus
-    
-    // Initial update
-    updateButtonPosition()
-
-    // Also update on window resize and scroll
-    window.addEventListener('resize', handleUpdate)
-    window.addEventListener('scroll', handleUpdate, true)
-
-    return () => {
-      editor.off('update', handleUpdate)
-      editor.off('selectionUpdate', handleUpdate)
-      editor.off('focus', handleUpdate)
-      editor.off('blur', handleUpdate)
-      window.removeEventListener('resize', handleUpdate)
-      window.removeEventListener('scroll', handleUpdate, true)
-    }
-  }, [editor])
-
-  if (!isVisible || !promptSectionRef.current) return null
-
-  return (
-    <div
-      className="absolute z-10 opacity-0 group-hover:opacity-100 transition-opacity inline-block"
-      style={{
-        top: `${buttonPosition.top}px`,
-        left: `${buttonPosition.left}px`,
-      }}
-    >
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-            size="icon"
-            className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <MoreVertical className="h-3 w-3 text-gray-600 dark:text-gray-300" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-40">
-          <DropdownMenuItem
-            onClick={(e) => {
-              e.stopPropagation()
-              navigator.clipboard.writeText(promptContent)
-            }}
-          >
-            <Copy className="h-4 w-4 mr-2" />
-            Copy prompt
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={(e) => {
-              e.stopPropagation()
-              onDelete()
-            }}
-            disabled={isDeleting}
-            className="text-red-600 focus:text-red-600 focus:bg-red-50"
-          >
-            <Trash2 className="h-4 w-4 mr-2" />
-            {isDeleting ? 'Deleting...' : 'Delete'}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
-  )
-}
-
 // Response panel buttons when collapsed - positioned at bottom-left of prompt panel (same as response panel)
 function ResponseButtonsWhenCollapsed({
   promptContent,
@@ -608,10 +471,10 @@ function ResponseButtonsWhenCollapsed({
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+            className="h-8 w-8 rounded hover:bg-white dark:hover:bg-white"
             onClick={(e) => e.stopPropagation()}
           >
-            <MoreVertical className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+            <MoreHorizontal className="h-4 w-4 text-gray-600 dark:text-gray-300" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-40">
@@ -1663,8 +1526,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     } else {
       // For regular panels, sync from promptMessage
       if (promptMessage && promptMessage.content !== promptContent && !promptHasChanges) {
-        setPromptContent(promptMessage.content)
-      }
+      setPromptContent(promptMessage.content)
+    }
     }
   }, [isProjectBoard, isProjectBoard ? data.boardTitle : promptMessage?.content, promptContent, promptHasChanges, data])
 
@@ -1703,13 +1566,13 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     } else {
       // For regular panels, update message in database
       if (promptMessage) {
-        const { error } = await supabase
-          .from('messages')
-          .update({ content: newContent })
-          .eq('id', promptMessage.id)
+    const { error } = await supabase
+      .from('messages')
+      .update({ content: newContent })
+      .eq('id', promptMessage.id)
 
-        if (error) {
-          console.error('Error updating prompt:', error)
+    if (error) {
+      console.error('Error updating prompt:', error)
         }
       }
     }
@@ -1733,16 +1596,16 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       }
     } else {
       if (promptMessage) {
-        setPromptContent(promptMessage.content)
-        setPromptHasChanges(false)
-        
-        const { error } = await supabase
-          .from('messages')
-          .update({ content: promptMessage.content })
-          .eq('id', promptMessage.id)
+    setPromptContent(promptMessage.content)
+    setPromptHasChanges(false)
+    
+    const { error } = await supabase
+      .from('messages')
+      .update({ content: promptMessage.content })
+      .eq('id', promptMessage.id)
 
-        if (error) {
-          console.error('Error reverting prompt:', error)
+    if (error) {
+      console.error('Error reverting prompt:', error)
         }
       }
     }
@@ -1814,27 +1677,27 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         // For regular panels, delete messages
         if (!promptMessage) return
         
-        const messageIds = [promptMessage.id]
-        if (responseMessage) {
-          messageIds.push(responseMessage.id)
-        }
+      const messageIds = [promptMessage.id]
+      if (responseMessage) {
+        messageIds.push(responseMessage.id)
+      }
 
-        const { error } = await supabase
-          .from('messages')
-          .delete()
-          .in('id', messageIds)
+      const { error } = await supabase
+        .from('messages')
+        .delete()
+        .in('id', messageIds)
 
-        if (error) {
-          throw new Error(error.message || 'Failed to delete panel')
-        }
+      if (error) {
+        throw new Error(error.message || 'Failed to delete panel')
+      }
 
-        // Invalidate queries to refresh the board
-        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
-        
-        // Trigger refetch
-        setTimeout(() => {
-          queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
-        }, 200)
+      // Invalidate queries to refresh the board
+      await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+      
+      // Trigger refetch
+      setTimeout(() => {
+        queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
+      }, 200)
       }
     } catch (error: any) {
       console.error('Failed to delete panel:', error)
@@ -1842,6 +1705,27 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     } finally {
       setIsDeleting(false)
     }
+  }
+
+  // Determine if this is a component panel (empty prompt content) - check once at top level
+  // Component panels should only show white editable area, no grey area, no loading spinner
+  // UNLESS it's a flashcard - flashcards show grey area even if empty content
+  const promptContentValue = promptMessage?.content || ''
+  const isComponentPanel = promptContentValue.trim().length === 0
+  const isFlashcard = promptMessage?.metadata?.isFlashcard === true
+  // Show grey area if: has content OR is a flashcard (even if empty)
+  const shouldShowGreyArea = promptContentValue.trim().length > 0 || isFlashcard
+  
+  // Debug logging for flashcard conversion
+  if (isComponentPanel && promptMessage?.id) {
+    console.log('🔍 Component panel check:', {
+      panelId: id,
+      messageId: promptMessage.id,
+      hasContent: promptContentValue.trim().length > 0,
+      isFlashcard,
+      metadata: promptMessage.metadata,
+      shouldShowGreyArea
+    })
   }
 
   return (
@@ -1873,58 +1757,153 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         }}
       />
       
-      {/* Prompt section at top */}
-      {/* Rounded top corners always, rounded bottom corners only when response is collapsed */}
+      {/* Prompt section at top - grey area */}
+      {/* Show grey area if: has content OR is a flashcard (even if empty content) */}
+      {/* Flashcards get grey area even if they're component panels */}
+      {shouldShowGreyArea && (
       <div 
         className={cn(
           "p-4 bg-gray-50 dark:bg-[#1f1f1f] relative z-10 overflow-visible group",
           // Always show rounded top corners
           "rounded-t-xl",
           // Only round bottom corners when response is collapsed (square when expanded)
-          isResponseCollapsed && "rounded-b-xl",
+          // For flashcards, also round bottom when white area is collapsed
+          (isResponseCollapsed && ((isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
+            (!isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
+            (isFlashcard && isComponentPanel))) && "rounded-b-xl",
           // Always show bottom shadow to layer above response area
           "shadow-sm",
           // Show bottom border when response is expanded (not collapsed)
+          // For flashcards, show border when white area is expanded
           !isResponseCollapsed && "border-b border-gray-200 dark:border-[#2f2f2f]",
           // Add bottom padding when response is collapsed to account for buttons below text
-          isResponseCollapsed && ((isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
-            (!isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim())) && "pb-16"
+          // For flashcards, add padding when white area is collapsed
+          isResponseCollapsed && (((isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
+            (!isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim())) ||
+            (isFlashcard && isComponentPanel)) && "pb-16"
         )}
       >
-          <TipTapContent 
-          content={promptContent}
-          className="text-gray-900 dark:text-gray-100"
-          originalContent={isProjectBoard ? data.boardTitle : (promptMessage?.content || '')}
-          onContentChange={handlePromptChange}
-          onHasChangesChange={setPromptHasChanges}
-          onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
-          comments={comments.filter(c => c.section === 'prompt')}
-          editorRef={promptEditorRef}
-          onCommentHover={(commentId) => {
-            if (commentId) {
-              // Only auto-select if comments are already visible
-              // Comments should be shown by clicking on commented text, not by cursor movement
-              if (showComments) {
-                setSelectedCommentId(commentId)
-              } else {
-                // If comments are hidden, clear selection
-                setSelectedCommentId(null)
-              }
-            } else {
-              // Cursor moved away from commented text - don't deselect automatically
-              // Only deselect on click away or toggle button
-            }
-          }}
-          onCommentClick={(commentId) => {
-            // When commented text is clicked, show comments and select the comment
-            if (commentId) {
-              setShowComments(true)
-              setSelectedCommentId(commentId)
-            }
-          }}
-          onAddReaction={handleAddReaction}
-          section="prompt"
-        />
+        {/* For project boards, show board title with open board button inline */}
+        {isProjectBoard ? (
+          <div className="inline-flex items-center gap-1.5">
+            <TipTapContent 
+              content={promptContent}
+              className="text-gray-900 dark:text-gray-100 inline"
+              originalContent={data.boardTitle}
+              onContentChange={handlePromptChange}
+              onHasChangesChange={setPromptHasChanges}
+              onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
+              comments={comments.filter(c => c.section === 'prompt')}
+              editorRef={promptEditorRef}
+              onCommentHover={(commentId) => {
+                if (commentId) {
+                  if (showComments) {
+                    setSelectedCommentId(commentId)
+                  } else {
+                    setSelectedCommentId(null)
+                  }
+                }
+              }}
+              onCommentClick={(commentId) => {
+                if (commentId) {
+                  setShowComments(true)
+                  setSelectedCommentId(commentId)
+                }
+              }}
+              onAddReaction={handleAddReaction}
+              section="prompt"
+            />
+            {/* Open board button - appears inline after title text */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 flex-shrink-0 hover:bg-transparent"
+              onClick={(e) => {
+                e.stopPropagation()
+                router.push(`/board/${data.boardId}`)
+              }}
+              title="Open board"
+            >
+              <ChevronRight className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+            </Button>
+          </div>
+        ) : (
+          <div className="inline-flex items-center gap-1.5">
+            <TipTapContent 
+              content={promptContent}
+              className="text-gray-900 dark:text-gray-100 inline"
+              originalContent={promptMessage?.content || ''}
+              onContentChange={handlePromptChange}
+              onHasChangesChange={setPromptHasChanges}
+              onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
+              comments={comments.filter(c => c.section === 'prompt')}
+              editorRef={promptEditorRef}
+              onCommentHover={(commentId) => {
+                if (commentId) {
+                  // Only auto-select if comments are already visible
+                  // Comments should be shown by clicking on commented text, not by cursor movement
+                  if (showComments) {
+                    setSelectedCommentId(commentId)
+                  } else {
+                    // If comments are hidden, clear selection
+                    setSelectedCommentId(null)
+                  }
+                } else {
+                  // Cursor moved away from commented text - don't deselect automatically
+                  // Only deselect on click away or toggle button
+                }
+              }}
+              onCommentClick={(commentId) => {
+                // When commented text is clicked, show comments and select the comment
+                if (commentId) {
+                  setShowComments(true)
+                  setSelectedCommentId(commentId)
+                }
+              }}
+              onAddReaction={handleAddReaction}
+              section="prompt"
+            />
+            {/* More menu button - appears inline after text, shows on hover */}
+            {showPromptMoreMenu && !isResponseCollapsed && !isProjectBoard && shouldShowGreyArea && (
+              <div className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <MoreHorizontal className="h-3 w-3 text-gray-600 dark:text-gray-300" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-40">
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        navigator.clipboard.writeText(promptContent)
+                      }}
+                    >
+                      <Copy className="h-4 w-4 mr-2" />
+                      Copy prompt
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleDeletePanel()
+                      }}
+                      disabled={isDeleting}
+                      className="text-red-600 focus:text-red-600 focus:bg-red-50"
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      {isDeleting ? 'Deleting...' : 'Delete'}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            )}
+          </div>
+        )}
         {promptHasChanges && (
           <div className="mt-2 flex justify-end">
             <Button
@@ -1938,25 +1917,17 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             </Button>
           </div>
         )}
-        
-        {/* More menu button - vertical ellipsis, appears on hover inline with text at end */}
-        {/* Inline more menu button - only show when response is expanded and after delay to prevent flash */}
-        {/* Only show for history panels (regular chat panels), not for project board panels */}
-        {showPromptMoreMenu && !isResponseCollapsed && !isProjectBoard && (
-          <PromptMoreMenuButton
-            editor={promptEditorRef.current}
-            promptContent={promptContent}
-            onDelete={handleDeletePanel}
-            isDeleting={isDeleting}
-          />
-        )}
           
         {/* Collapse/Expand caret button and response panel buttons - shown in prompt area when response is collapsed, same position as response panel */}
-          {isResponseCollapsed && ((isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
-            (!isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim())) && (
+        {/* Show for regular panels with response OR flashcards (flashcards can collapse white area) */}
+        {isResponseCollapsed && (
+          ((isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
+           (!isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim())) ||
+          (isFlashcard && isComponentPanel) // Flashcards can collapse even if no response
+        ) && (
           <ResponseButtonsWhenCollapsed
             promptContent={promptContent}
-            responseContent={responseContent}
+            responseContent={responseContent || ''} // For flashcards, responseContent is empty but we still show buttons
             onDelete={handleDeletePanel}
             isDeleting={isDeleting}
             onExpand={() => handleCollapseChange(false)}
@@ -1967,11 +1938,124 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           />
         )}
       </div>
+      )}
 
       {/* Response section below - always show when there's a prompt */}
+      {/* For component panels (empty prompt), show white editable area only (no grey prompt, no loading spinner) */}
       {/* For project boards, show recent user message; for regular panels, show response message */}
-      {((isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
-        (!isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim())) ? (
+      {/* Use the top-level isComponentPanel check for consistency */}
+      {(() => {
+        
+        // For flashcards (component panels with flashcard flag), show collapsible white area (like response area)
+        if (isFlashcard && isComponentPanel) {
+          return (
+            <div 
+              className={cn(
+                "p-4 bg-white dark:bg-[#171717] rounded-b-xl pb-12 relative transition-all duration-200 overflow-visible",
+                isResponseCollapsed && "h-0 p-0 opacity-0" // Collapsible like response area
+              )}
+              style={{ lineHeight: '1.7' }}
+            >
+              <TipTapContent 
+                content={promptContent || ''}
+                className="text-gray-700 dark:text-gray-100"
+                originalContent={promptContentValue || ''}
+                onContentChange={handlePromptChange}
+                onHasChangesChange={setPromptHasChanges}
+                onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
+                comments={comments.filter(c => c.section === 'prompt')}
+                editorRef={promptEditorRef}
+                onCommentHover={(commentId) => {
+                  if (commentId) {
+                    if (showComments) {
+                      setSelectedCommentId(commentId)
+                    } else {
+                      setSelectedCommentId(null)
+                    }
+                  }
+                }}
+                onCommentClick={(commentId) => {
+                  if (commentId) {
+                    setShowComments(true)
+                    setSelectedCommentId(commentId)
+                  }
+                }}
+                onAddReaction={handleAddReaction}
+                section="prompt"
+              />
+              {promptHasChanges && (
+                <div className="mt-2 flex justify-end">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handlePromptRevert}
+                    className="text-xs h-7"
+                  >
+                    <RotateCcw className="h-3 w-3 mr-1" />
+                    Revert to original
+                  </Button>
+                </div>
+              )}
+            </div>
+          )
+        }
+        
+        // For regular component panels (not flashcards), show editable white area only (no grey prompt area, no loading spinner)
+        // Component panels are just white text panels - no grey, no loading
+        if (isComponentPanel && !isFlashcard) {
+          return (
+            <div 
+              className="p-4 bg-white dark:bg-[#171717] rounded-xl pb-12 relative transition-all duration-200 overflow-visible"
+              style={{ lineHeight: '1.7' }}
+            >
+              <TipTapContent 
+                content={promptContent || ''}
+                className="text-gray-700 dark:text-gray-100"
+                originalContent={promptMessage?.content || ''}
+                onContentChange={handlePromptChange}
+                onHasChangesChange={setPromptHasChanges}
+                onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
+                comments={comments.filter(c => c.section === 'prompt')}
+                editorRef={promptEditorRef}
+                onCommentHover={(commentId) => {
+                  if (commentId) {
+                    if (showComments) {
+                      setSelectedCommentId(commentId)
+                    } else {
+                      setSelectedCommentId(null)
+                    }
+                  }
+                }}
+                onCommentClick={(commentId) => {
+                  if (commentId) {
+                    setShowComments(true)
+                    setSelectedCommentId(commentId)
+                  }
+                }}
+                onAddReaction={handleAddReaction}
+                section="prompt"
+              />
+              {promptHasChanges && (
+                <div className="mt-2 flex justify-end">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handlePromptRevert}
+                    className="text-xs h-7"
+                  >
+                    <RotateCcw className="h-3 w-3 mr-1" />
+                    Revert to original
+                  </Button>
+                </div>
+              )}
+            </div>
+          )
+        }
+        
+        // For regular panels with response content (NOT component panels)
+        if ((isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
+            (!isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim())) {
+          return (
         <div 
           className={cn(
             "p-4 bg-white dark:bg-[#171717] rounded-b-xl pb-12 relative transition-all duration-200 overflow-visible",
@@ -1984,8 +2068,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             content={responseContent || responseMessage.content || ''}
             className="text-gray-700 dark:text-gray-100"
             originalContent={responseMessage.content || ''}
-            onContentChange={isProjectBoard ? undefined : handleResponseChange} // Project boards: read-only
-            onHasChangesChange={isProjectBoard ? undefined : setResponseHasChanges} // Project boards: read-only
+                onContentChange={isProjectBoard ? undefined : handleResponseChange} // Project boards: read-only
+                onHasChangesChange={isProjectBoard ? undefined : setResponseHasChanges} // Project boards: read-only
             onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'response')}
             comments={comments.filter(c => c.section === 'response')}
             editorRef={responseEditorRef}
@@ -2028,18 +2112,81 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             </div>
           )}
         </div>
-      ) : (
+          )
+        }
+        
         // Loading state - show spinner while waiting for AI response
+        // ONLY for regular panels (NOT component panels - they already returned above)
         // Show when: no responseMessage, or responseMessage exists but has no content yet
+        // Component panels never reach here because they return early above
+        // IMPORTANT: Also check if this is a component panel here as a safety check
+        // Use the top-level isComponentPanel variable for consistency
+        // UNLESS it's a flashcard - flashcards show grey area even if empty
+        if (isComponentPanel && !isFlashcard) {
+          // This is a component panel - show white editable area (should have been caught above, but safety check)
+          return (
+            <div 
+              className="p-4 bg-white dark:bg-[#171717] rounded-xl pb-12 relative transition-all duration-200 overflow-visible"
+              style={{ lineHeight: '1.7' }}
+            >
+              <TipTapContent 
+                content={promptContent || ''}
+                className="text-gray-700 dark:text-gray-100"
+                originalContent={promptContentValue || ''}
+                onContentChange={handlePromptChange}
+                onHasChangesChange={setPromptHasChanges}
+                onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
+                comments={comments.filter(c => c.section === 'prompt')}
+                editorRef={promptEditorRef}
+                onCommentHover={(commentId) => {
+                  if (commentId) {
+                    if (showComments) {
+                      setSelectedCommentId(commentId)
+                    } else {
+                      setSelectedCommentId(null)
+                    }
+                  }
+                }}
+                onCommentClick={(commentId) => {
+                  if (commentId) {
+                    setShowComments(true)
+                    setSelectedCommentId(commentId)
+                  }
+                }}
+                onAddReaction={handleAddReaction}
+                section="prompt"
+              />
+              {promptHasChanges && (
+                <div className="mt-2 flex justify-end">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handlePromptRevert}
+                    className="text-xs h-7"
+                  >
+                    <RotateCcw className="h-3 w-3 mr-1" />
+                    Revert to original
+                  </Button>
+                </div>
+              )}
+            </div>
+          )
+        }
+        
+        // Regular panel loading state (NOT component panel)
+        return (
         <div className="p-4 bg-white dark:bg-[#171717] rounded-b-xl flex items-center justify-center min-h-[100px]">
           <Loader2 className="h-6 w-6 text-gray-400 dark:text-gray-500 animate-spin" />
         </div>
-      )}
+        )
+      })()}
 
       {/* Bottom action buttons - More menu at bottom left - only show when response is loaded and not collapsed */}
       {/* For project boards, show if recent message exists; for regular panels, show if response exists */}
+      {/* For flashcards, show more menu when white area is expanded (flashcards don't have response but have collapsible white area) */}
       {((isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
-        (!isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim())) && !isResponseCollapsed && (
+        (!isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
+        (isFlashcard && isComponentPanel)) && !isResponseCollapsed && (
         <div className="absolute bottom-2 left-2 flex items-center gap-2 z-10">
           {/* More menu button - vertical ellipsis - show for all panels (history panels and project history panels) */}
           <DropdownMenu>
@@ -2047,10 +2194,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 rounded hover:bg-gray-50 dark:hover:bg-gray-700"
+                className="h-8 w-8 rounded hover:bg-transparent"
                 onClick={(e) => e.stopPropagation()}
               >
-                <MoreVertical className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+                <MoreHorizontal className="h-4 w-4 text-gray-600 dark:text-gray-300" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-40">
@@ -2089,23 +2236,6 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          
-          {/* Forward icon button - only for project board panels, positioned to the right of more menu */}
-          {isProjectBoard && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 rounded hover:bg-gray-50 dark:hover:bg-gray-700"
-              onClick={(e) => {
-                e.stopPropagation()
-                // Navigate to the board
-                router.push(`/board/${data.boardId}`)
-              }}
-              title="Open board"
-            >
-              <ChevronRight className="h-4 w-4 text-gray-600 dark:text-gray-300" />
-            </Button>
-          )}
           
           {/* Collapse caret button - shown in response area when expanded */}
           <Button
@@ -2394,7 +2524,7 @@ function CommentPanel({
                   className="h-6 w-6 flex-shrink-0"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <MoreVertical className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+                  <MoreHorizontal className="h-4 w-4 text-gray-600 dark:text-gray-300" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">

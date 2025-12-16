@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
 
     // Use structured output to generate a concise board name (ChatGPT-style naming)
     // Use more capable model and explicit instructions to avoid using prompt text directly
-    const completion = await openai.beta.chat.completions.parse({
+    const completion = await openai.chat.completions.create({
       model: 'gpt-4o', // Use more capable model for better instruction following
       messages: [
         {
@@ -122,12 +122,12 @@ Title (2-4 words, Title Case, noun phrase only):`,
 
     // Extract title from structured output (most reliable method)
     const message = completion.choices[0]?.message
-    const parsed = message?.parsed
+    const parsed = message?.content ? JSON.parse(message.content) : null
     
     // Try to get title from parsed structured output
     let title = parsed?.title?.trim()
     
-    // Fallback: if parsed is not available, try to parse from content (shouldn't happen with strict mode)
+    // Fallback: if parsed is not available, try to parse from content
     if (!title && message?.content) {
       try {
         const contentParsed = JSON.parse(message.content)
@@ -152,9 +152,9 @@ Title (2-4 words, Title Case, noun phrase only):`,
     
     // Check if title contains most of the prompt words (too similar)
     // For short prompts, be more strict - if title has 3+ words matching prompt, it's too similar
-    const promptWords = promptLower.split(/\s+/).filter(w => w.length > 1)
+    const promptWords = promptLower.split(/\s+/).filter((w: string) => w.length > 1)
     const titleWords = titleLower.split(/\s+/)
-    const matchingWords = promptWords.filter(pw => titleWords.some(tw => tw === pw || tw.includes(pw) || pw.includes(tw)))
+    const matchingWords = promptWords.filter((pw: string) => titleWords.some((tw: string) => tw === pw || tw.includes(pw) || pw.includes(tw)))
     const wordMatchRatio = promptWords.length > 0 ? matchingWords.length / promptWords.length : 0
     const isTooSimilar = exactMatch || (promptWords.length > 0 && (matchingWords.length >= Math.min(3, promptWords.length) || wordMatchRatio >= 0.6))
     

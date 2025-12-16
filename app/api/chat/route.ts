@@ -66,8 +66,8 @@ export async function POST(request: NextRequest) {
     if (deterministicMapping && messages) {
       // Get all user message IDs (these are the prompt messages that create panels)
       existingPanelMessageIds = messages
-        .filter(m => m.role === 'user')
-        .map(m => m.id)
+        .filter((m: any) => m.role === 'user')
+        .map((m: any) => m.id)
       console.log(`[${requestId}] Found ${existingPanelMessageIds.length} existing panels (user messages) for linking`)
     }
 
@@ -435,7 +435,7 @@ REMEMBER: Structure makes information scannable. Format based on intent. Always 
         content: systemPrompt,
       },
       // Include conversation history for context
-      ...(messages || []).map((msg) => ({
+      ...(messages || []).map((msg: any) => ({
         role: msg.role as 'user' | 'assistant',
         content: msg.content,
       })),
@@ -565,16 +565,17 @@ REMEMBER: Structure makes information scannable. Format based on intent. Always 
                 return
               }
               
+              const messageAny = message as any
               console.log(`[${requestId}] Message object keys:`, Object.keys(message))
-              console.log(`[${requestId}] Message has parsed:`, !!message.parsed)
-              console.log(`[${requestId}] Message has refusal:`, !!message.refusal)
+              console.log(`[${requestId}] Message has parsed:`, !!messageAny.parsed)
+              console.log(`[${requestId}] Message has refusal:`, !!messageAny.refusal)
               console.log(`[${requestId}] Message has content:`, !!message.content)
               
               // Send message structure to client
-              controller.enqueue(`data: ${JSON.stringify({ debug: 'Message structure', messageKeys: Object.keys(message), hasParsed: !!message.parsed, hasRefusal: !!message.refusal, hasContent: !!message.content })}\n\n`)
+              controller.enqueue(`data: ${JSON.stringify({ debug: 'Message structure', messageKeys: Object.keys(message), hasParsed: !!messageAny.parsed, hasRefusal: !!messageAny.refusal, hasContent: !!message.content })}\n\n`)
               
               // Check for refusal first
-              if (message.refusal) {
+              if (messageAny.refusal) {
                 console.error(`[${requestId}] Model refused the request:`, message.refusal)
                 controller.enqueue(`data: ${JSON.stringify({ error: 'Model refused request: ' + message.refusal })}\n\n`)
                 controller.enqueue('data: [DONE]\n\n')
@@ -584,7 +585,6 @@ REMEMBER: Structure makes information scannable. Format based on intent. Always 
               
               // Access parsed data - with structured output, the AI returns parsed data directly in message.parsed
               // We should NOT try to parse content - the AI handles that via the JSON schema
-              const messageAny = message as any
               let parsedData: any = null
               
               // Send debug about message structure

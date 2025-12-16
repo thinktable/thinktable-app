@@ -1180,7 +1180,7 @@ function ProjectFlowInner({ projectId }: { projectId?: string }) {
               : 'rgba(202, 216, 237, 0.3)'} // Light mode: light blue overlay matching selected board tab (blue-50 with transparency)
             pannable={true} // Allow panning (horizontal movement restricted via onMove in linear mode)
             zoomable={true}
-            className="minimap-custom-size"
+            className="minimap-custom-size shadow-sm"
             style={{
               borderTopLeftRadius: '0px',
               borderTopRightRadius: '0px',
@@ -1236,7 +1236,10 @@ function ProjectFlowInner({ projectId }: { projectId?: string }) {
         }}
       >
         <div 
-          className="bg-blue-50 dark:bg-[#2a2a3a] rounded-lg p-1 flex items-center gap-1 relative"
+          className={cn(
+            "bg-blue-50 dark:bg-[#2a2a3a] rounded-lg p-1 flex items-center gap-1 relative",
+            isMinimapHidden && "shadow-sm"
+          )}
         >
           <Button
             variant="ghost"
