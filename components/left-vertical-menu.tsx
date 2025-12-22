@@ -2,9 +2,15 @@
 
 // Left vertical menu - calendar and quiz buttons with collapse pill on sidebar right edge
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Calendar, HelpCircle } from 'lucide-react'
+import { Calendar, HelpCircle, WalletCards, Shuffle } from 'lucide-react'
 import { Button } from './ui/button'
 import { cn } from '@/lib/utils'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog'
 
 interface LeftVerticalMenuProps {
   studySetId?: string
@@ -12,16 +18,24 @@ interface LeftVerticalMenuProps {
 }
 
 export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMenuProps) {
+  const [isMounted, setIsMounted] = useState(false) // Track if component has mounted (to prevent hydration mismatch)
   const [isHidden, setIsHidden] = useState(false) // Track if menu is hidden
   const [isHovering, setIsHovering] = useState(false) // Track if mouse is hovering over pill
   const [isHoveringMenu, setIsHoveringMenu] = useState(false) // Track if mouse is hovering over menu
   const [isHoveringPill, setIsHoveringPill] = useState(false) // Track if mouse is hovering over pill
   const [menuMode, setMenuMode] = useState<'shown' | 'hidden' | 'hover'>('hover') // Menu visibility mode
+  const [selectedMode, setSelectedMode] = useState<'quiz' | 'flashcard' | null>(null) // Track which mode is selected (quiz or flashcard toggle)
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false) // Track if calendar dialog is open
   const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null) // Track hide timeout
   const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null) // Track hover timeout
   const isHoveringRef = useRef(false) // Ref to track hover state for reliable checking
   const menuRef = useRef<HTMLDivElement | null>(null) // Ref to menu element
   const pillRef = useRef<HTMLDivElement | null>(null) // Ref to pill element
+
+  // Mark component as mounted after first render (client-side only)
+  useEffect(() => {
+    setIsMounted(true)
+  }, [])
 
   // Load menu mode from localStorage on mount
   useEffect(() => {
@@ -100,26 +114,23 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
     isHoveringRef.current = isHovering || isHoveringMenu || isHoveringPill
   }, [isHovering, isHoveringMenu, isHoveringPill])
 
-  // Calculate sidebar width to position menu - get actual sidebar right edge position
+  // Calculate sidebar width to position menu - get actual sidebar right edge position relative to viewport (for fixed positioning)
   const [sidebarRightEdge, setSidebarRightEdge] = useState(256) // Default expanded sidebar width (w-64 = 256px)
   
   useEffect(() => {
+    // Only update after mount to prevent hydration mismatch
+    if (!isMounted) return
+    
     const updateSidebarRightEdge = () => {
-      // Find the actual sidebar element and get its right edge position
+      // Find the actual sidebar element and get its right edge position relative to viewport (for fixed positioning)
       const sidebarElement = document.querySelector('[class*="w-16"], [class*="w-64"]') as HTMLElement
       if (sidebarElement) {
         const rect = sidebarElement.getBoundingClientRect()
-        const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
-        if (reactFlowElement) {
-          const reactFlowRect = reactFlowElement.getBoundingClientRect()
-          // Calculate sidebar right edge relative to React Flow container
-          const rightEdge = rect.right - reactFlowRect.left
-          setSidebarRightEdge(rightEdge)
-        } else {
-          // Fallback: use class-based calculation
-          const isExpanded = sidebarElement.classList.contains('w-64')
-          setSidebarRightEdge(isExpanded ? 256 : 64)
-        }
+        // Use viewport-relative position (rect.right) for fixed positioning
+        setSidebarRightEdge(rect.right)
+      } else {
+        // Fallback: use class-based calculation (assume expanded by default)
+        setSidebarRightEdge(256)
       }
     }
 
@@ -153,31 +164,56 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
       if (sidebarObserver) sidebarObserver.disconnect()
       if (resizeObserver) resizeObserver.disconnect()
     }
-  }, [])
+  }, [isMounted])
 
-  // Handle calendar button click
+  // Handle calendar button click - open calendar dialog
   const handleCalendarClick = () => {
-    // TODO: Implement calendar functionality
-    console.log('Calendar clicked')
+    setIsCalendarOpen(true)
   }
 
-  // Handle quiz button click
+  // Handle quiz button click - toggle with flashcard
   const handleQuizClick = () => {
+    if (selectedMode === 'quiz') {
+      setSelectedMode(null) // Deselect if already selected
+    } else {
+      setSelectedMode('quiz') // Select quiz, deselect flashcard
+    }
     // TODO: Implement quiz functionality
-    console.log('Quiz clicked')
+    console.log('Quiz clicked, mode:', selectedMode === 'quiz' ? 'deselected' : 'selected')
   }
 
-  const menuWidth = 52 // Same as input box height
-  const menuItemSize = 40 // Size of each button
-  const menuGap = 8 // Gap between buttons
-  const menuTop = 64 // Position below top bar (top bar is 52px + 12px gap)
-  const menuTotalHeight = menuItemSize * 2 + menuGap // Total height of menu (2 buttons + gap)
+  // Handle flashcard button click - toggle with quiz
+  const handleFlashcardClick = () => {
+    if (selectedMode === 'flashcard') {
+      setSelectedMode(null) // Deselect if already selected
+    } else {
+      setSelectedMode('flashcard') // Select flashcard, deselect quiz
+    }
+    // TODO: Implement flashcard functionality
+    console.log('Flashcard clicked, mode:', selectedMode === 'flashcard' ? 'deselected' : 'selected')
+  }
+
+  // Handle shuffle button click - just a button, no toggle
+  const handleShuffleClick = () => {
+    // TODO: Implement shuffle functionality
+    console.log('Shuffle clicked')
+  }
+
+  const menuItemSize = 32 // Size of each circular button (w-8 h-8 = 32px, smaller than edit menu buttons)
+  const menuGap = 4 // Gap between items (same as edit menu gap: gap-0.5 = 4px, applies to all flex children)
+  const dividerHeight = 1 // Height of divider line
+  // Total height: 4 buttons + 2 dividers + 5 gaps (between 6 items: button, divider, button, button, divider, button)
+  const menuTotalHeight = (menuItemSize * 4) + (dividerHeight * 2) + (menuGap * 5)
   const pillHeight = 48 // Pill height matches edit menu pill width (w-12 = 48px)
   
   // Calculate pill position to center it vertically in the window
-  const [windowHeight, setWindowHeight] = useState(typeof window !== 'undefined' ? window.innerHeight : 800)
+  // Initialize with consistent value to prevent hydration mismatch
+  const [windowHeight, setWindowHeight] = useState(800) // Default value, updated after mount
   
   useEffect(() => {
+    // Only update after mount to prevent hydration mismatch
+    if (!isMounted) return
+    
     const updateWindowHeight = () => {
       setWindowHeight(window.innerHeight)
     }
@@ -188,10 +224,11 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
     return () => {
       window.removeEventListener('resize', updateWindowHeight)
     }
-  }, [])
+  }, [isMounted])
   
   // Center pill vertically in window: (window height / 2) - (pill height / 2)
-  const pillTop = (windowHeight / 2) - (pillHeight / 2)
+  // Use consistent calculation that matches server-side initial render
+  const pillTop = isMounted ? (windowHeight / 2) - (pillHeight / 2) : 376 // Default to match server-side initial value
 
   return (
     <>
@@ -200,13 +237,12 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
         ref={menuRef}
         data-left-menu-context
         className={cn(
-          'absolute z-20 transition-opacity duration-200 flex flex-col gap-2',
+          'fixed z-[60] transition-opacity duration-200 flex flex-col gap-0.5 px-1 py-1 rounded-full bg-blue-50 dark:bg-[#2a2a3a] shadow-sm',
           isHidden ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'
         )}
         style={{
-          left: `${sidebarRightEdge}px`, // Position at sidebar right edge
-          top: `${menuTop}px`, // Position below top bar
-          width: `${menuWidth}px`,
+          left: `${sidebarRightEdge + 12}px`, // Position with 12px gap from sidebar right edge (viewport-relative for fixed positioning)
+          top: `${pillTop + (pillHeight / 2) - (menuTotalHeight / 2)}px`, // Center menu vertically with pill (viewport-relative)
         }}
         onMouseEnter={() => {
           setIsHoveringMenu(true)
@@ -223,32 +259,72 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
           checkAndHideMenu(e.relatedTarget as HTMLElement)
         }}
       >
-        {/* Calendar button */}
+        {/* Calendar button - circular white like edit menu */}
         <Button
           variant="ghost"
           size="icon"
           onClick={handleCalendarClick}
           className={cn(
-            'w-10 h-10 rounded-lg bg-white dark:bg-[#1f1f1f] border border-gray-200 dark:border-[#2f2f2f] hover:bg-gray-50 dark:hover:bg-[#2a2a2a] transition-colors',
+            'w-8 h-8 rounded-full bg-transparent text-gray-700 dark:text-gray-300 hover:bg-white dark:hover:bg-white transition-all duration-200',
             'flex items-center justify-center'
           )}
           title="Calendar"
         >
-          <Calendar className="h-5 w-5 text-gray-700 dark:text-gray-300" />
+          <Calendar className="h-4 w-4" />
         </Button>
 
-        {/* Quiz button */}
+        {/* Divider above flashcard button */}
+        <div className="h-px bg-gray-300 dark:bg-gray-600 mx-2" />
+
+        {/* Flashcard button - toggle with quiz, shows white background when selected */}
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={handleFlashcardClick}
+          className={cn(
+            'w-8 h-8 rounded-full text-gray-700 dark:text-gray-300 transition-all duration-200',
+            'flex items-center justify-center',
+            selectedMode === 'flashcard'
+              ? 'bg-white dark:bg-white' // White background when selected
+              : 'bg-transparent hover:bg-white dark:hover:bg-white' // Transparent with white on hover when not selected
+          )}
+          title="Flashcard"
+        >
+          <WalletCards className="h-4 w-4" />
+        </Button>
+
+        {/* Quiz button - toggle with flashcard, shows white background when selected */}
         <Button
           variant="ghost"
           size="icon"
           onClick={handleQuizClick}
           className={cn(
-            'w-10 h-10 rounded-lg bg-white dark:bg-[#1f1f1f] border border-gray-200 dark:border-[#2f2f2f] hover:bg-gray-50 dark:hover:bg-[#2a2a2a] transition-colors',
-            'flex items-center justify-center'
+            'w-8 h-8 rounded-full text-gray-700 dark:text-gray-300 transition-all duration-200',
+            'flex items-center justify-center',
+            selectedMode === 'quiz'
+              ? 'bg-white dark:bg-white' // White background when selected
+              : 'bg-transparent hover:bg-white dark:hover:bg-white' // Transparent with white on hover when not selected
           )}
           title="Quiz"
         >
-          <HelpCircle className="h-5 w-5 text-gray-700 dark:text-gray-300" />
+          <HelpCircle className="h-4 w-4" />
+        </Button>
+
+        {/* Divider above shuffle button */}
+        <div className="h-px bg-gray-300 dark:bg-gray-600 mx-2" />
+
+        {/* Shuffle button - circular white like edit menu */}
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={handleShuffleClick}
+          className={cn(
+            'w-8 h-8 rounded-full bg-transparent text-gray-700 dark:text-gray-300 hover:bg-white dark:hover:bg-white transition-all duration-200',
+            'flex items-center justify-center'
+          )}
+          title="Shuffle"
+        >
+          <Shuffle className="h-4 w-4" />
         </Button>
       </div>
 
@@ -296,28 +372,28 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
           checkAndHideMenu(e.relatedTarget as HTMLElement)
         }}
         className={cn(
-          'absolute z-30 w-1.5 rounded-full cursor-pointer transition-all duration-200 bg-gray-300 dark:bg-gray-600 hover:bg-gray-400 dark:hover:bg-gray-500',
+          'fixed z-[60] w-1.5 rounded-full cursor-pointer transition-all duration-200 bg-gray-300 dark:bg-gray-600 hover:bg-gray-400 dark:hover:bg-gray-500',
           // Show pill when hovering on it, or always show if menu is hidden (so user can restore it)
           (isHoveringPill || isHidden) ? 'opacity-100' : 'opacity-0'
         )}
         style={{
-          left: `${sidebarRightEdge}px`, // Position at sidebar right edge (exact edge position)
-          top: `${pillTop}px`, // Center pill vertically in window
+          left: `${sidebarRightEdge}px`, // Position at sidebar right edge (viewport-relative for fixed positioning)
+          top: `${pillTop}px`, // Center pill vertically in window (viewport-relative)
           height: `${pillHeight}px`, // Height to span both buttons + gap (matches menu height = 88px)
           transform: 'translateX(-50%)', // Center the pill horizontally on the sidebar edge (pill width is 1.5px, so this centers it perfectly on the edge)
         }}
         title={isHidden ? 'Show menu' : 'Hide menu'}
       />
 
-      {/* Hover zone on sidebar right edge - triggers menu visibility, centered on edge */}
+      {/* Hover zone between sidebar and menu - triggers menu visibility, centered vertically with pill */}
       <div
-        className="absolute pointer-events-auto"
+        className="fixed pointer-events-auto"
         style={{
-          left: `${sidebarRightEdge}px`, // Start at sidebar right edge
-          top: `${pillTop}px`, // Match pill vertical position
-          width: '20px', // Hover zone width (extends 20px to the right of sidebar edge)
+          left: `${sidebarRightEdge}px`, // Start at sidebar right edge (viewport-relative for fixed positioning)
+          top: `${pillTop}px`, // Match pill vertical position (viewport-relative)
+          width: `${12 + menuItemSize + 8}px`, // Hover zone width (extends from sidebar edge through gap to menu)
           height: `${pillHeight}px`, // Match pill height
-          zIndex: 15, // Below pill to allow clicks through
+          zIndex: 55, // Above sidebar (z-50) but below pill (z-60) to allow clicks through
         }}
         onMouseEnter={() => {
           setIsHovering(true)
@@ -347,6 +423,21 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
           checkAndHideMenu(e.relatedTarget as HTMLElement)
         }}
       />
+
+      {/* Calendar Dialog */}
+      <Dialog open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Calendar</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            {/* TODO: Implement full calendar component */}
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Calendar view coming soon
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
