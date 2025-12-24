@@ -1,0 +1,698 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 0 0% 6%; /* Very dark background like ChatGPT (#0f0f0f) */
+    --foreground: 0 0% 98%; /* Almost white text */
+    --card: 0 0% 9%; /* Slightly lighter than background */
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 6%;
+    --secondary: 0 0% 15%; /* Dark gray for secondary elements */
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 65%; /* Medium gray for muted text */
+    --accent: 0 0% 15%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 20%; /* Subtle borders */
+    --input: 0 0% 15%; /* Input backgrounds */
+    --ring: 0 0% 40%; /* Focus rings */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px; /* ChatGPT uses 14px for body text */
+    line-height: 1.5;
+  }
+}
+
+/* Smooth transitions for resizable panels */
+@layer utilities {
+  /* Force transitions when animating - override any inline styles from react-resizable-panels */
+  [data-animating="true"] [data-panel-id="chat-panel"],
+  [data-animating="true"] [data-panel-id="map-panel"] {
+    transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+  }
+  
+  /* Apply transitions to panels when they have the transition style attribute */
+  [data-panel-id="chat-panel"][style*="transition"],
+  [data-panel-id="map-panel"][style*="transition"] {
+    transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+  }
+  
+  /* Fallback: apply transitions to all panels in horizontal groups (but only when not dragging) */
+  [data-panel-group-direction="horizontal"] > [data-panel-id]:not([data-resize-handle-state="dragging"]) {
+    transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+  }
+  
+  [data-panel-group-direction="vertical"] > [data-panel-id]:not([data-resize-handle-state="dragging"]) {
+    transition: height 300ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+  }
+  
+  /* Hide scrollbar for webkit browsers (Chrome, Safari) */
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  
+  /* Ensure mark tags (highlights) are visible - applies everywhere including map panels */
+  /* Only apply yellow to marks that don't have a specific color attribute */
+  mark:not([data-color]):not([style*="background-color"]),
+  mark[data-type="highlight"]:not([data-color]):not([style*="background-color"]),
+  .ProseMirror mark:not([data-color]):not([style*="background-color"]) {
+    background-color: #fef08a !important;
+    color: inherit !important;
+    padding: 2px 0;
+  }
+
+  /* Blue highlight for comments - slightly darker than selected tab background (blue-100) */
+  /* Use blue-100 (#dbeafe) - slightly darker than blue-50 for better visibility */
+  /* Match any format TipTap might use for the blue color */
+  .ProseMirror mark[data-color="#dbeafe"],
+  .ProseMirror mark[data-color="rgb(219, 234, 254)"],
+  .ProseMirror mark[data-color*="dbeafe"],
+  .ProseMirror mark[data-color*="219, 234, 254"],
+  .ProseMirror mark[data-color*="219,234,254"],
+  .ProseMirror mark[style*="background-color: rgb(219, 234, 254)"],
+  .ProseMirror mark[style*="background-color:rgb(219, 234, 254)"],
+  .ProseMirror mark[style*="background-color:rgb(219,234,254)"],
+  .ProseMirror mark[style*="#dbeafe"],
+  .ProseMirror mark[style*="rgb(219,234,254)"],
+  /* Also match if TipTap uses inline style directly */
+  mark[style*="background-color: rgb(219, 234, 254)"],
+  mark[style*="background-color:rgb(219, 234, 254)"],
+  mark[style*="#dbeafe"],
+  mark[data-color="#dbeafe"],
+  mark[data-color*="dbeafe"] {
+    background-color: #dbeafe !important; /* blue-100 - slightly darker than blue-50 */
+  }
+
+  /* Strikethrough text styling - grey color to indicate removal from context */
+  s, del, [data-type="strike"] {
+    text-decoration: line-through;
+    color: #9ca3af; /* grey-400 */
+    background-color: transparent;
+  }
+
+/* Grey text for deletions in diff visualization (not strikethrough, still in context) */
+/* Lighter grey for better visibility - deleted text from map edits stays in HTML but is styled grey */
+.diff-deletion {
+  background-color: #e5e7eb; /* grey-200 - light grey background for trashed text */
+  color: inherit; /* Keep original text color */
+  text-decoration: none; /* No strikethrough */
+}
+
+/* Pink text for delete test - using strikethrough grey color */
+.pink-text {
+  background-color: transparent !important; /* No background */
+  color: #9ca3af !important; /* grey-400 - same as strikethrough */
+}
+
+/* Grey text for deleted text - same approach as pink text */
+.grey-text {
+  background-color: #e5e7eb !important; /* grey-200 - light grey background for trashed text */
+  color: inherit !important; /* Keep original text color */
+}
+
+/* Shimmer animation for loading text */
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.4) 50%,
+    transparent 100%
+  );
+  background-size: 1000px 100%;
+  animation: shimmer 2s infinite;
+}
+
+.dark .shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.1) 50%,
+    transparent 100%
+  );
+  background-size: 1000px 100%;
+  animation: shimmer 2s infinite;
+}
+
+/* Code tags used for tracking original content - should be invisible */
+code[data-original="true"] {
+  background-color: transparent !important;
+  color: inherit !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  padding: 0 !important;
+  border: none !important;
+  display: inline !important;
+}
+
+/* Span tags used for tracking added content - should be invisible */
+span[data-added="true"] {
+  background-color: transparent !important;
+  color: inherit !important;
+  display: inline !important;
+}
+
+  /* Underlined blue text for additions in diff visualization */
+  u.diff-addition,
+  .diff-addition {
+    text-decoration: underline;
+    color: #3b82f6; /* blue-500 */
+    background-color: transparent;
+  }
+  
+  /* ChatGPT-style AI response formatting */
+  /* Main prose container for AI responses */
+  .prose {
+    color: #374151; /* gray-700 - readable text color */
+    line-height: 1.75; /* Comfortable line spacing like ChatGPT */
+    font-size: 0.875rem; /* 14px - ChatGPT chat text size */
+  }
+
+  /* Dark mode prose text */
+  .dark .prose {
+    color: #e5e7eb; /* gray-200 - very light text for dark mode */
+  }
+
+  /* Paragraphs - proper spacing with extra space between ideas (Claude-style) */
+  .prose p {
+    margin-top: 1.5em;
+    margin-bottom: 1.5em;
+    line-height: 1.75;
+  }
+
+  .prose p:first-child {
+    margin-top: 0;
+  }
+
+  .prose p:last-child {
+    margin-bottom: 0;
+  }
+
+  /* Extra spacing for paragraphs that look like section breaks or major ideas */
+  .prose p[style*="margin-bottom: 1em"] {
+    margin-bottom: 1.75em !important;
+  }
+
+  /* Headings */
+  .prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+    font-weight: 600;
+    margin-top: 1.5em;
+    margin-bottom: 0.75em;
+    line-height: 1.3;
+    color: #111827; /* gray-900 */
+  }
+
+  .prose h1 {
+    font-size: 1.875rem; /* 30px */
+  }
+
+  .prose h2 {
+    font-size: 1.5rem; /* 24px */
+  }
+
+  .prose h3 {
+    font-size: 1.25rem; /* 20px */
+  }
+
+  /* Dark mode headings */
+  .dark .prose h1, .dark .prose h2, .dark .prose h3, .dark .prose h4, .dark .prose h5, .dark .prose h6 {
+    color: #f3f4f6; /* gray-100 - very light for dark mode */
+  }
+
+  /* Code blocks - ChatGPT style with dark background */
+  .prose pre {
+    background-color: #1e293b; /* slate-800 - dark background */
+    color: #e2e8f0; /* slate-200 - light text */
+    border-radius: 0.5rem;
+    padding: 1rem;
+    margin: 1.25em 0;
+    overflow-x: auto;
+    font-size: 0.875rem; /* 14px */
+    line-height: 1.6;
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', 'Source Code Pro', monospace;
+  }
+
+  .prose pre code {
+    background-color: transparent;
+    color: inherit;
+    padding: 0;
+    border-radius: 0;
+    font-size: inherit;
+    font-family: inherit;
+  }
+
+  /* Inline code - light background */
+  .prose code:not(pre code) {
+    background-color: #f1f5f9; /* slate-100 */
+    color: #e11d48; /* rose-600 */
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    font-size: 0.875em;
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', 'Source Code Pro', monospace;
+    font-weight: 500;
+  }
+
+  /* Dark mode inline code */
+  .dark .prose code:not(pre code) {
+    background-color: #374151; /* gray-700 - darker background for dark mode */
+    color: #fca5a5; /* rose-300 - lighter rose for dark mode */
+  }
+
+  /* Lists */
+  .prose ul, .prose ol {
+    margin: 1.25em 0;
+    padding-left: 1.625rem;
+  }
+
+  .prose ul {
+    list-style-type: disc;
+  }
+
+  .prose ol {
+    list-style-type: decimal;
+  }
+
+  .prose li {
+    margin: 0.5em 0;
+    line-height: 1.75;
+  }
+
+  .prose li p {
+    margin-top: 0.75em;
+    margin-bottom: 0.75em;
+  }
+
+  /* Nested lists */
+  .prose ul ul, .prose ol ol, .prose ul ol, .prose ol ul {
+    margin: 0.5em 0;
+  }
+
+  /* Blockquotes */
+  .prose blockquote {
+    border-left: 4px solid #e5e7eb; /* gray-200 */
+    padding-left: 1rem;
+    margin: 1.25em 0;
+    color: #6b7280; /* gray-500 */
+    font-style: italic;
+  }
+
+  /* Tables */
+  .prose table {
+    width: 100%;
+    margin: 1.25em 0;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+  }
+
+  .prose table th,
+  .prose table td {
+    border: 1px solid #e5e7eb; /* gray-200 */
+    padding: 0.75rem;
+    text-align: left;
+  }
+
+  .prose table th {
+    background-color: #f9fafb; /* gray-50 */
+    font-weight: 600;
+    color: #111827; /* gray-900 */
+  }
+
+  .prose table tr:nth-child(even) {
+    background-color: #f9fafb; /* gray-50 */
+  }
+
+  /* Horizontal rules */
+  .prose hr {
+    border: none;
+    border-top: 1px solid #e5e7eb; /* gray-200 */
+    margin: 2em 0;
+  }
+
+  /* Links */
+  .prose a {
+    color: #2563eb; /* blue-600 */
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .prose a:hover {
+    color: #1d4ed8; /* blue-700 */
+  }
+
+  /* Dark mode links */
+  .dark .prose a {
+    color: #60a5fa; /* blue-400 - lighter blue for dark mode */
+  }
+
+  .dark .prose a:hover {
+    color: #93c5fd; /* blue-300 - even lighter on hover */
+  }
+
+  /* Strong/Bold */
+  .prose strong {
+    font-weight: 600;
+    color: #111827; /* gray-900 */
+  }
+
+  /* Dark mode strong/bold */
+  .dark .prose strong {
+    color: #f9fafb; /* gray-50 - almost white for dark mode */
+  }
+
+  /* Emphasis/Italic */
+  .prose em {
+    font-style: italic;
+  }
+
+  /* Images */
+  .prose img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 0.5rem;
+    margin: 1.25em 0;
+  }
+
+         /* Ensure TipTap ProseMirror content is selectable */
+         .ProseMirror {
+           user-select: text !important;
+           -webkit-user-select: text !important;
+           -moz-user-select: text !important;
+           -ms-user-select: text !important;
+           cursor: text !important; /* Show I-bar cursor when hovering over text */
+           caret-color: currentColor !important; /* Ensure cursor color matches text */
+         }
+         
+         /* Show text cursor for ProseMirror editor */
+         .ProseMirror p,
+         .ProseMirror h1,
+         .ProseMirror h2,
+         .ProseMirror h3,
+         .ProseMirror li,
+         .ProseMirror span {
+           cursor: text !important;
+         }
+         
+         /* Ensure cursor is visible when editor is focused */
+         .ProseMirror:focus {
+           outline: none !important;
+         }
+         
+         /* Ensure placeholder text is visible */
+         .ProseMirror p.is-editor-empty:first-child::before {
+           content: attr(data-placeholder);
+           float: left;
+           color: #9ca3af; /* gray-400 */
+           pointer-events: none;
+           height: 0;
+         }
+         
+         .dark .ProseMirror p.is-editor-empty:first-child::before {
+           color: #6b7280; /* gray-500 for dark mode */
+         }
+  
+  /* Ensure TipTap editor content wrapper is selectable */
+  [data-tiptap-editor] {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+  }
+  
+  /* Grid toggle button styling - match Controls button exactly */
+  .react-flow__controls-button[title*="grid"] {
+    border: none;
+    background: #fefefe;
+    border-bottom: 1px solid #eee;
+    box-sizing: content-box;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+  }
+  
+  .react-flow__controls-button[title*="grid"]:hover {
+    background: #f4f4f4;
+  }
+  
+  /* React Flow handle positioning for multiple handles */
+  .react-flow__handle {
+    position: absolute !important;
+  }
+  
+  /* Custom handle positioning - override React Flow defaults */
+  .react-flow__handle-left,
+  .react-flow__handle-right {
+    transform: translateY(-50%) !important;
+  }
+  
+  /* Custom positioned handles - use data attributes for specific positioning */
+  .react-flow__handle[data-custom-position] {
+    position: absolute !important;
+  }
+  
+  .react-flow__handle[data-position-left] {
+    left: 0 !important;
+    transform: translate(-50%, -50%) !important;
+  }
+  
+  .react-flow__handle[data-position-right] {
+    right: 0 !important;
+    transform: translate(50%, -50%) !important;
+  }
+  
+  /* Ensure top positioning works for multiple handles */
+  .react-flow__handle.custom-handle {
+    top: var(--handle-top, 50%) !important;
+  }
+
+  /* Custom minimap size - reduced from 200px to 179px width, maintaining aspect ratio */
+  .minimap-custom-size {
+    width: 179px !important; /* Reduced from 200px by 21px */
+    height: 134px !important; /* Reduced proportionally: 150px * (179/200) = 134.25px ≈ 134px */
+    overflow: hidden !important; /* Ensure content stays within bounds */
+    border: 1px solid rgb(239, 246, 255) !important; /* Light blue border matching selected board tab (bg-blue-50) */
+    background-color: white !important; /* Light mode background */
+  }
+
+  /* Dark mode minimap */
+  .dark .minimap-custom-size {
+    border: 1px solid rgb(55, 65, 81) !important; /* gray-700 border for dark mode */
+    background-color: #171717 !important; /* Dark background matching sidebar */
+  }
+
+  /* Ensure minimap viewport indicator (grey border/mask) stays within bounds */
+  .minimap-custom-size .react-flow__minimap-mask {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 179px !important;
+    max-height: 134px !important;
+  }
+
+  /* Dark mode minimap mask fill */
+  .dark .minimap-custom-size .react-flow__minimap-mask {
+    fill: rgba(96, 165, 250, 0.25) !important; /* Blue-400 with opacity for dark mode */
+  }
+
+  /* Ensure minimap SVG and viewport indicator are properly scaled */
+  .minimap-custom-size svg {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 179px !important;
+    max-height: 134px !important;
+    background-color: white !important; /* Light mode background */
+  }
+
+  /* Dark mode minimap SVG background */
+  .dark .minimap-custom-size svg {
+    background-color: #171717 !important; /* Dark background matching sidebar */
+  }
+
+  /* Ensure viewport indicator rectangle stays within minimap bounds */
+  .minimap-custom-size .react-flow__minimap-mask rect {
+    /* The mask rect should be constrained by the parent SVG */
+    stroke: rgb(191, 219, 254) !important; /* Blue-200 border - darker than blue-50 for better visibility */
+    stroke-width: 2px !important; /* Make border visible */
+  }
+
+  /* Dark mode minimap mask */
+  .dark .minimap-custom-size .react-flow__minimap-mask rect {
+    stroke: rgb(96, 165, 250) !important; /* Blue-400 border for dark mode */
+    stroke-width: 2px !important;
+  }
+
+  /* Minimap node dots - larger size and color states */
+  .minimap-custom-size .react-flow__minimap-node {
+    r: 4px !important; /* Slightly larger (default is ~3px) */
+    transition: fill 0.2s ease;
+  }
+
+  /* Panel connection handle dots (top and bottom of panels) */
+  .react-flow__handle.handle-dot {
+    width: 8px !important; /* Slightly larger */
+    height: 8px !important;
+    border-radius: 50% !important;
+    transition: background-color 0.2s ease;
+    z-index: 20 !important; /* Ensure handles appear above prompt area (z-10) */
+  }
+
+  /* Default state - light grey (fallback only, inline styles take precedence) */
+  .react-flow__handle.handle-dot-default {
+    background-color: #e5e7eb; /* Light grey - fallback only */
+  }
+
+  /* Selected state - darker grey (fallback only, inline styles take precedence) */
+  .react-flow__handle.handle-dot-selected {
+    background-color: #9ca3af; /* Darker grey when selected - fallback only */
+  }
+
+  /* Hover state - black (overrides both default and selected) */
+  .react-flow__handle.handle-dot:hover {
+    background-color: #000000 !important; /* Black on hover */
+  }
+
+  /* Ensure connection line is visible during drag */
+  .react-flow__connectionline {
+    z-index: 1000 !important;
+    pointer-events: none !important;
+    opacity: 1 !important;
+    display: block !important;
+  }
+
+  .react-flow__connectionline-path {
+    stroke: #b1b1b7 !important;
+    stroke-width: 2 !important;
+    opacity: 1 !important;
+  }
+
+  /* Allow React Flow nodes to overflow so comment pill isn't clipped */
+  .react-flow__node {
+    overflow: visible !important;
+  }
+
+  /* Animated flowing dotted edges - dashes flow along the path like Supabase schema visualizer */
+  .react-flow__edge-path[style*="animation"] {
+    animation: flow-dash 1.5s linear infinite !important;
+  }
+
+  @keyframes flow-dash {
+    0% {
+      stroke-dashoffset: 0;
+    }
+    100% {
+      stroke-dashoffset: -10; /* Move by pattern length (5px dash + 5px gap = 10px) */
+    }
+  }
+
+
+  /* Ensure TipTap BubbleMenu (highlight popup) appears above prompt panel (z-10) */
+  .tiptap-bubble-menu,
+  [data-tiptap-bubble-menu],
+  .ProseMirror + div[style*="position: absolute"],
+  /* Target the BubbleMenu container that TipTap creates */
+  div[data-bubble-menu] {
+    z-index: 20 !important;
+  }
+
+  /* Constrain emoji picker height - let the package handle its own scrolling */
+  .emoji-picker-wrapper {
+    height: 400px !important;
+    max-height: 400px !important;
+    /* Don't override overflow - let emoji-mart handle it */
+    pointer-events: auto !important;
+    position: relative !important;
+  }
+
+  /* Let emoji-mart component handle its own scrolling and structure */
+  .emoji-picker-wrapper em-emoji-picker,
+  .emoji-picker-wrapper [class*="emoji-mart"],
+  em-emoji-picker {
+    max-height: 400px !important;
+    height: 400px !important;
+    /* Don't override anything - let emoji-mart handle its own structure */
+  }
+
+  /* Sidebar scrollbar styling - pill only, transparent track */
+  /* Webkit browsers (Chrome, Safari, Edge) */
+  nav[class*="overflow-y-auto"]::-webkit-scrollbar {
+    width: 8px; /* Thin scrollbar */
+  }
+
+  nav[class*="overflow-y-auto"]::-webkit-scrollbar-track {
+    background: transparent; /* Transparent track */
+  }
+
+  nav[class*="overflow-y-auto"]::-webkit-scrollbar-thumb {
+    background-color: rgba(156, 163, 175, 0.5); /* gray-400/50 */
+    border-radius: 9999px; /* Fully rounded pill */
+    border: none; /* No border */
+  }
+
+  nav[class*="overflow-y-auto"]::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(156, 163, 175, 0.7); /* gray-400/70 on hover */
+  }
+
+  /* Dark mode scrollbar */
+  .dark nav[class*="overflow-y-auto"]::-webkit-scrollbar-thumb {
+    background-color: rgba(107, 114, 128, 0.5); /* gray-500/50 */
+  }
+
+  .dark nav[class*="overflow-y-auto"]::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(107, 114, 128, 0.7); /* gray-500/70 on hover */
+  }
+
+  /* Firefox scrollbar styling */
+  nav[class*="overflow-y-auto"] {
+    scrollbar-width: thin; /* Thin scrollbar */
+    scrollbar-color: rgba(156, 163, 175, 0.5) transparent; /* gray-400/50 thumb, transparent track */
+  }
+
+  .dark nav[class*="overflow-y-auto"] {
+    scrollbar-color: rgba(107, 114, 128, 0.5) transparent; /* gray-500/50 thumb, transparent track */
+  }
+}
