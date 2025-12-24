@@ -13,7 +13,7 @@ import TextAlign from '@tiptap/extension-text-align'
 import Placeholder from '@tiptap/extension-placeholder'
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
-import { Highlighter, RotateCcw, MoreHorizontal, MoreVertical, Trash2, Copy, Loader2, ChevronDown, ChevronUp, MessageSquare, X, Smile, PenSquare, Bookmark, SquarePen, ChevronRight } from 'lucide-react'
+import { Highlighter, RotateCcw, MoreHorizontal, MoreVertical, Trash2, Copy, Loader2, ChevronDown, ChevronUp, MessageSquare, X, Smile, PenSquare, Bookmark, SquarePen, ChevronRight, Plus } from 'lucide-react'
 
 // Helper to check if content is effectively empty (handling HTML tags)
 const isContentEmpty = (content: string | undefined | null) => {
@@ -58,7 +58,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { createClient } from '@/lib/supabase/client'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { useEditorContext } from './editor-context'
 import { useReactFlowContext } from './react-flow-context'
@@ -544,6 +544,378 @@ function TipTapContent({
   )
 }
 
+// Fetch study sets from user metadata
+async function fetchStudySets(): Promise<Array<{ id: string; name: string }>> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return []
+
+  try {
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('metadata')
+      .eq('id', user.id)
+      .single()
+
+    if (error) {
+      console.error('Error fetching study sets:', error)
+      return []
+    }
+
+    const studySets = (profile?.metadata as Record<string, any>)?.studySets || []
+    return Array.isArray(studySets) ? studySets : []
+  } catch (error) {
+    console.error('Error fetching study sets:', error)
+    return []
+  }
+}
+
+// Tag boxes component - displays study set tags for a flashcard
+function TagBoxes({ responseMessageId }: { responseMessageId: string }) {
+  const supabase = createClient()
+  const [taggedStudySetIds, setTaggedStudySetIds] = useState<string[]>([])
+  const [studySetNames, setStudySetNames] = useState<Map<string, string>>(new Map())
+
+  // Fetch current study set IDs from message metadata
+  const fetchTaggedStudySets = useCallback(async () => {
+    if (!responseMessageId) return
+
+    try {
+      const { data: message, error } = await supabase
+        .from('messages')
+        .select('metadata')
+        .eq('id', responseMessageId)
+        .single()
+
+      if (error) {
+        console.error('Error fetching message metadata:', error)
+        return
+      }
+
+      const metadata = (message?.metadata as Record<string, any>) || {}
+      const studySetIds = (metadata.studySetIds || []) as string[]
+      setTaggedStudySetIds(studySetIds)
+    } catch (error) {
+      console.error('Error fetching tagged study sets:', error)
+    }
+  }, [responseMessageId, supabase])
+
+  useEffect(() => {
+    fetchTaggedStudySets()
+
+    // Subscribe to message updates to refresh tags
+    const channel = supabase
+      .channel(`tag-boxes-${responseMessageId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'messages',
+          filter: `id=eq.${responseMessageId}`,
+        },
+        () => {
+          fetchTaggedStudySets()
+        }
+      )
+      .subscribe()
+
+    // Listen for custom event when flashcard is tagged
+    const handleTagged = (event: CustomEvent) => {
+      if (event.detail?.messageId === responseMessageId) {
+        fetchTaggedStudySets()
+      }
+    }
+    window.addEventListener('flashcard-tagged', handleTagged as EventListener)
+
+    return () => {
+      supabase.removeChannel(channel)
+      window.removeEventListener('flashcard-tagged', handleTagged as EventListener)
+    }
+  }, [responseMessageId, supabase, fetchTaggedStudySets])
+
+  // Fetch study set names for the tagged IDs
+  useEffect(() => {
+    const fetchStudySetNames = async () => {
+      if (taggedStudySetIds.length === 0) {
+        setStudySetNames(new Map())
+        return
+      }
+
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return
+
+        const { data: profile, error } = await supabase
+          .from('profiles')
+          .select('metadata')
+          .eq('id', user.id)
+          .single()
+
+        if (error) {
+          console.error('Error fetching profile:', error)
+          return
+        }
+
+        const studySets = ((profile?.metadata as Record<string, any>)?.studySets || []) as Array<{ id: string; name: string }>
+        const namesMap = new Map<string, string>()
+        
+        taggedStudySetIds.forEach((id) => {
+          const studySet = studySets.find((s) => s.id === id)
+          if (studySet) {
+            namesMap.set(id, studySet.name)
+          }
+        })
+
+        setStudySetNames(namesMap)
+      } catch (error) {
+        console.error('Error fetching study set names:', error)
+      }
+    }
+
+    fetchStudySetNames()
+  }, [taggedStudySetIds, supabase])
+
+  if (taggedStudySetIds.length === 0) return null
+
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      {taggedStudySetIds.map((studySetId) => {
+        const name = studySetNames.get(studySetId)
+        if (!name) return null // Don't show if name not found yet
+
+        return (
+          <div
+            key={studySetId}
+            className="px-2 py-0.5 text-xs rounded-md bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800"
+          >
+            {name}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// Tag button component - reusable for both collapsed and expanded states
+function TagButton({ responseMessageId }: { responseMessageId: string }) {
+  const queryClient = useQueryClient()
+  const supabase = createClient()
+  const [newStudySetName, setNewStudySetName] = useState('')
+  const [isCreatingStudySet, setIsCreatingStudySet] = useState(false)
+  const [showNewStudySetInput, setShowNewStudySetInput] = useState(false)
+
+  // Fetch study sets for the dropdown
+  const { data: studySets = [] } = useQuery({
+    queryKey: ['studySets'],
+    queryFn: fetchStudySets,
+  })
+
+  // Handle tagging flashcard to study set
+  const handleTagToStudySet = async (studySetId: string) => {
+    if (!responseMessageId) return
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('User not authenticated')
+
+      // Get current message metadata
+      const { data: message, error: fetchError } = await supabase
+        .from('messages')
+        .select('metadata')
+        .eq('id', responseMessageId)
+        .single()
+
+      if (fetchError) throw new Error(fetchError.message || 'Failed to fetch message')
+
+      const existingMetadata = (message?.metadata as Record<string, any>) || {}
+      const studySetIds = (existingMetadata.studySetIds || []) as string[]
+
+      // Add study set ID if not already present
+      if (!studySetIds.includes(studySetId)) {
+        const updatedStudySetIds = [...studySetIds, studySetId]
+
+        // Update message metadata
+        const { error } = await supabase
+          .from('messages')
+          .update({
+            metadata: { ...existingMetadata, studySetIds: updatedStudySetIds },
+          })
+          .eq('id', responseMessageId)
+
+        if (error) throw new Error(error.message || 'Failed to tag flashcard')
+
+        // Invalidate queries to refresh study set views
+        await queryClient.invalidateQueries({ queryKey: ['flashcards-for-study-set'] })
+        await queryClient.invalidateQueries({ queryKey: ['studySets'] })
+        
+        // Trigger a custom event to refresh tag boxes
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('flashcard-tagged', { detail: { messageId: responseMessageId } }))
+        }
+      }
+    } catch (error: any) {
+      console.error('Failed to tag flashcard:', error)
+      alert(error.message || 'Failed to tag flashcard. Please try again.')
+    }
+  }
+
+  // Handle creating new study set
+  const handleCreateStudySet = async () => {
+    if (!newStudySetName.trim() || isCreatingStudySet) return
+
+    setIsCreatingStudySet(true)
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('User not authenticated')
+
+      // Get current profile metadata
+      const { data: profile, error: fetchError } = await supabase
+        .from('profiles')
+        .select('metadata')
+        .eq('id', user.id)
+        .single()
+
+      if (fetchError) throw new Error(fetchError.message || 'Failed to fetch profile')
+
+      const existingMetadata = (profile?.metadata as Record<string, any>) || {}
+      const studySets = (existingMetadata.studySets || []) as Array<{ id: string; name: string }>
+
+      // Create new study set
+      const newStudySetId = crypto.randomUUID()
+      const newStudySet = { id: newStudySetId, name: newStudySetName.trim() }
+      const updatedStudySets = [...studySets, newStudySet]
+
+      // Update profile metadata
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          metadata: { ...existingMetadata, studySets: updatedStudySets },
+        })
+        .eq('id', user.id)
+
+      if (error) throw new Error(error.message || 'Failed to create study set')
+
+      // Invalidate queries to refresh the list
+      await queryClient.invalidateQueries({ queryKey: ['studySets'] })
+
+      // Tag the flashcard to the new study set
+      if (responseMessageId) {
+        await handleTagToStudySet(newStudySetId)
+      }
+
+      // Reset form
+      setNewStudySetName('')
+      setShowNewStudySetInput(false)
+      
+      // Trigger a custom event to refresh tag boxes
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('flashcard-tagged', { detail: { messageId: responseMessageId } }))
+      }
+    } catch (error: any) {
+      console.error('Failed to create study set:', error)
+      alert(error.message || 'Failed to create study set. Please try again.')
+    } finally {
+      setIsCreatingStudySet(false)
+    }
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+          onClick={(e) => e.stopPropagation()}
+          title="Tag to study set"
+        >
+          <Plus className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-48">
+        {/* New set button at the top */}
+        {!showNewStudySetInput ? (
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation()
+              setShowNewStudySetInput(true)
+            }}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            New set
+          </DropdownMenuItem>
+        ) : (
+          <div className="px-2 py-1.5">
+            <input
+              type="text"
+              value={newStudySetName}
+              onChange={(e) => setNewStudySetName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newStudySetName.trim() && !isCreatingStudySet) {
+                  handleCreateStudySet()
+                } else if (e.key === 'Escape') {
+                  setShowNewStudySetInput(false)
+                  setNewStudySetName('')
+                }
+              }}
+              placeholder="Study set name"
+              className="w-full px-2 py-1 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+              autoFocus
+              onClick={(e) => e.stopPropagation()}
+            />
+            <div className="flex gap-1 mt-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleCreateStudySet()
+                }}
+                disabled={!newStudySetName.trim() || isCreatingStudySet}
+              >
+                {isCreatingStudySet ? 'Creating...' : 'Create'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setShowNewStudySetInput(false)
+                  setNewStudySetName('')
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+        {studySets.length > 0 && (
+          <>
+            {showNewStudySetInput && (
+              <div className="h-px bg-gray-200 dark:bg-gray-700 my-1 mx-1" />
+            )}
+            {studySets.map((studySet) => (
+              <DropdownMenuItem
+                key={studySet.id}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleTagToStudySet(studySet.id)
+                }}
+              >
+                {studySet.name}
+              </DropdownMenuItem>
+            ))}
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 // Response panel buttons when collapsed - positioned at bottom-left of prompt panel (same as response panel)
 function ResponseButtonsWhenCollapsed({
   promptContent,
@@ -555,6 +927,8 @@ function ResponseButtonsWhenCollapsed({
   isBookmarked,
   isProjectBoard,
   boardId,
+  isFlashcard,
+  responseMessageId,
 }: {
   promptContent: string
   responseContent: string
@@ -565,6 +939,8 @@ function ResponseButtonsWhenCollapsed({
   isBookmarked: boolean
   isProjectBoard?: boolean
   boardId?: string
+  isFlashcard?: boolean
+  responseMessageId?: string
 }) {
   const router = useRouter()
   const [isVisible, setIsVisible] = useState(false)
@@ -660,6 +1036,14 @@ function ResponseButtonsWhenCollapsed({
       >
         <ChevronDown className="h-4 w-4 text-gray-600 dark:text-gray-300" />
       </Button>
+
+      {/* Tag button - only for flashcards, positioned to the right of karot */}
+      {isFlashcard && responseMessageId && (
+        <>
+          <TagButton responseMessageId={responseMessageId} />
+          <TagBoxes responseMessageId={responseMessageId} />
+        </>
+      )}
 
       {/* Forward icon button - only for project boards, positioned to the right of karot */}
       {isProjectBoard && boardId && (
@@ -2333,6 +2717,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                         isBookmarked={isBookmarked}
                         isProjectBoard={isProjectBoard}
                         boardId={isProjectBoard ? data.boardId : undefined}
+                        isFlashcard={isFlashcard}
+                        responseMessageId={responseMessage?.id}
                       />
                     )}
                 </div>
@@ -2572,6 +2958,14 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             >
               <ChevronUp className="h-4 w-4 text-gray-600 dark:text-gray-300" />
             </Button>
+
+            {/* Tag button - only for flashcards, positioned to the right of karot */}
+            {isFlashcard && responseMessage?.id && (
+              <>
+                <TagButton responseMessageId={responseMessage.id} />
+                <TagBoxes responseMessageId={responseMessage.id} />
+              </>
+            )}
           </div>
         )}
 

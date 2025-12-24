@@ -4889,7 +4889,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
                 bottom: `${minimapBottom - 12}px`, // 5px from bottom when at default (1px lower)
                 right: `${minimapRight}px`, // Right position - aligns with prompt box when jumped, defaults to 15px
                 width: 179,
-                height: 100,
+                height: 160, // Increased height to match CSS for better vertical visibility
               }}
               nodeColor={(node) => {
                 // Light grey by default, dark grey when selected
@@ -5246,7 +5246,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
           // Both positions use minimapBottom which already accounts for the jump when prompt box gets close
           bottom: isMinimapHidden
             ? `${minimapBottom - 12 + 15}px` // At minimap position when hidden + small offset (3px higher when collapsed)
-            : `${minimapBottom - 12 + 134 + 8}px`, // Above minimap (134px height + 8px gap)
+            : `${minimapBottom - 12 + 160 + 4}px`, // Above minimap (160px height + 4px gap, reduced from 8px)
           // Right-align with minimap (which aligns with prompt box when jumped), moved left 16px
           right: `${minimapRight + 16}px`, // Match minimap right position + 16px left offset (moved 1px left)
         }}

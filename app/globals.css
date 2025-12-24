@@ -514,7 +514,7 @@ span[data-added="true"] {
   /* Custom minimap size - reduced from 200px to 179px width, maintaining aspect ratio */
   .minimap-custom-size {
     width: 179px !important; /* Reduced from 200px by 21px */
-    height: 134px !important; /* Reduced proportionally: 150px * (179/200) = 134.25px ≈ 134px */
+    height: 160px !important; /* Increased height for better vertical visibility */
     overflow: hidden !important; /* Ensure content stays within bounds */
     border: 1px solid rgb(239, 246, 255) !important; /* Light blue border matching selected board tab (bg-blue-50) */
     background-color: white !important; /* Light mode background */
@@ -531,7 +531,7 @@ span[data-added="true"] {
     width: 100% !important;
     height: 100% !important;
     max-width: 179px !important;
-    max-height: 134px !important;
+    max-height: 160px !important;
   }
 
   /* Dark mode minimap mask fill */
@@ -544,7 +544,7 @@ span[data-added="true"] {
     width: 100% !important;
     height: 100% !important;
     max-width: 179px !important;
-    max-height: 134px !important;
+    max-height: 160px !important;
     background-color: white !important; /* Light mode background */
   }
 

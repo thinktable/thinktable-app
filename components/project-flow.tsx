@@ -1273,14 +1273,14 @@ function ProjectFlowInner({ projectId }: { projectId?: string }) {
           // Both positions use minimapBottom which already accounts for the jump when prompt box gets close
           bottom: isMinimapHidden
             ? `${minimapBottom - 12 + 8}px` // At minimap position when hidden + small offset
-            : `${minimapBottom - 12 + 134 + 8}px`, // Above minimap (134px height + 8px gap)
+            : `${minimapBottom - 12 + 160 + 4}px`, // Above minimap (160px height + 4px gap, reduced from 8px)
           // Right-align with minimap (which aligns with prompt box when jumped), moved left 16px
           right: `${minimapRight + 16}px`, // Match minimap right position + 16px left offset (moved 1px left)
         }}
       >
         <div
           className={cn(
-            "bg-blue-50 dark:bg-[#2a2a3a] rounded-lg p-1 flex items-center gap-1 relative",
+            "bg-blue-50 dark:bg-[#2a2a3a] rounded-lg px-1 py-0.5 flex items-center gap-1 relative",
             isMinimapHidden && "shadow-sm"
           )}
         >
