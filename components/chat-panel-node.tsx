@@ -186,7 +186,8 @@ function TipTapContent({
   onAddReaction,
   section,
   isFlashcard,
-  placeholder
+  placeholder,
+  isPanelSelected
 }: {
   content: string
   className?: string
@@ -202,6 +203,7 @@ function TipTapContent({
   section?: 'prompt' | 'response'
   isFlashcard?: boolean
   placeholder?: string
+  isPanelSelected?: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { setActiveEditor } = useEditorContext()
@@ -476,15 +478,17 @@ function TipTapContent({
   }, [containerRef])
 
   // Focus editor when container is clicked to ensure cursor is visible
+  // If panel is selected, allow single click to place I-bar; otherwise require double click
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation()
     if (editor) {
-      // For flashcards, require double click to focus editor (place I-bar cursor)
-      if (isFlashcard && e.detail < 2) {
-        // Single click - don't focus, let the panel handle expansion
+      // If panel is not selected and it's a single click, allow propagation so panel can be selected
+      if (!isPanelSelected && e.detail < 2) {
+        // Single click on unselected panel - don't focus, don't stop propagation (let panel be selected)
         return
       }
-      // Focus editor on click to show cursor
+      // Stop propagation when focusing editor (selected panel single click, or double click)
+      e.stopPropagation()
+      // Focus editor on click (single if selected, double if not selected) to show cursor
       setTimeout(() => {
         if (!editor.isDestroyed) {
           editor.commands.focus()
@@ -509,7 +513,7 @@ function TipTapContent({
         }
       }, 0)
     }
-  }, [editor, isFlashcard])
+  }, [editor, isPanelSelected])
 
   if (!editor) return null
 
@@ -521,24 +525,27 @@ function TipTapContent({
     <div
       ref={containerRef}
       className={cn('relative', isFlashcard ? 'cursor-pointer' : 'cursor-text', isInline && 'inline-block', otherClasses)}
-      onMouseDown={handleContainerClick}
       onClick={(e) => {
-        // For flashcards, require double click to edit
-        if (isFlashcard && e.detail < 2) {
-          // Single click - don't handle, let the panel handle expansion
+        // If panel is not selected and it's a single click, don't handle - let React Flow select the panel
+        if (!isPanelSelected && e.detail < 2) {
+          // Don't call handleContainerClick, don't stop propagation - let click bubble to React Flow
           return
         }
+        // Otherwise, handle the click (selected panel single click, or double click)
         handleContainerClick(e)
       }}
       onDoubleClick={(e) => {
-        // For flashcards, double click focuses the editor
-        if (isFlashcard && editor) {
+        // Double click focuses the editor (for unselected panels) - handleContainerClick already handles this via e.detail check
+        // This handler ensures double click works even if onClick didn't fire
+        if (!isPanelSelected && editor) {
           e.stopPropagation()
           setTimeout(() => {
-            editor.commands.focus()
-            const isEmpty = !editor.getHTML() || editor.getHTML() === '<p></p>' || editor.getHTML() === '<p><br></p>'
-            if (isEmpty) {
-              editor.commands.setTextSelection(0)
+            if (!editor.isDestroyed) {
+              editor.commands.focus()
+              const isEmpty = !editor.getHTML() || editor.getHTML() === '<p></p>' || editor.getHTML() === '<p><br></p>'
+              if (isEmpty) {
+                editor.commands.setTextSelection(0)
+              }
             }
           }, 0)
         }
@@ -998,7 +1005,7 @@ function ResponseButtonsWhenCollapsed({
   return (
     <div className={cn(
       "absolute bottom-2 left-4 flex items-center gap-2 z-10 transition-opacity duration-500",
-      isVisible ? "opacity-100" : "opacity-0"
+      isVisible ? "opacity-0 group-hover:opacity-100" : "opacity-0"
     )}>
       {/* More menu button - moved from response panel when collapsed - show for all panels */}
       <DropdownMenu>
@@ -1006,10 +1013,10 @@ function ResponseButtonsWhenCollapsed({
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 rounded hover:bg-white dark:hover:bg-white"
+            className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
             onClick={(e) => e.stopPropagation()}
           >
-            <MoreHorizontal className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+            <MoreHorizontal className="h-3 w-3 text-gray-600 dark:text-gray-300" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-40">
@@ -1042,14 +1049,14 @@ function ResponseButtonsWhenCollapsed({
       <Button
         variant="ghost"
         size="icon"
-        className="h-8 w-8 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+        className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
         onClick={(e) => {
           e.stopPropagation()
           onExpand()
         }}
         title="Show response"
       >
-        <ChevronDown className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+        <ChevronDown className="h-3 w-3 text-gray-600 dark:text-gray-300" />
       </Button>
 
       {/* Tag button - only for flashcards, positioned to the right of karot */}
@@ -1065,7 +1072,7 @@ function ResponseButtonsWhenCollapsed({
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+          className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
           onClick={(e) => {
             e.stopPropagation()
             // Navigate to the board
@@ -1073,7 +1080,7 @@ function ResponseButtonsWhenCollapsed({
           }}
           title="Open board"
         >
-          <ChevronRight className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+          <ChevronRight className="h-3 w-3 text-gray-600 dark:text-gray-300" />
         </Button>
       )}
     </div>
@@ -2724,8 +2731,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const promptContentValue = promptMessage?.content || ''
   const isComponentPanel = promptContentValue.trim().length === 0
   // const isFlashcard = promptMessage?.metadata?.isFlashcard === true // Already defined at top
-  // Show grey area if: has content OR is a flashcard (even if empty)
-  const shouldShowGreyArea = promptContentValue.trim().length > 0 || isFlashcard
+  // Show grey area if: has content OR is a flashcard (even if empty) OR has response message (to show nested on response load, even if content is empty during streaming)
+  const shouldShowGreyArea = promptContentValue.trim().length > 0 || isFlashcard || !!responseMessage
   
   // Auto-focus note editor when first created (empty component panel that's not a flashcard)
   useEffect(() => {
@@ -2761,7 +2768,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       ref={panelRef}
       data-panel-container="true" // Data attribute to help find panel container for comment popup
       className={cn(
-        'rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible backdrop-blur-sm', // Transparent with backdrop blur for map panels - increased corner radius
+        'group rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible backdrop-blur-sm', // Transparent with backdrop blur for map panels - increased corner radius, group class for hover detection
         // Always show blue border when selected, otherwise use custom border color or default theme-based color
         selected ? 'border-blue-500 dark:border-blue-400' : (data.borderColor ? '' : 'border-gray-200 dark:border-[#2f2f2f]'),
         isBookmarked
@@ -2928,6 +2935,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 onAddReaction={handleAddReaction}
                 section="prompt"
                 isFlashcard={isFlashcard}
+                isPanelSelected={selected}
               />
               {promptHasChanges && !isFlashcard && (
                 <div className="mt-2 flex justify-end">
@@ -2951,7 +2959,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         if (isComponentPanel && !isFlashcard) {
           return (
             <div
-              className="p-1 backdrop-blur-sm rounded-2xl pb-12 relative transition-all duration-500 overflow-visible" // Transparent for map panels - background set via inline style, 4px padding, increased corner radius, slower collapse/expand animation
+              className="p-1 backdrop-blur-sm rounded-2xl pb-10 relative transition-all duration-500 overflow-visible" // Transparent for map panels - background set via inline style, 4px padding, increased corner radius, slower collapse/expand animation, pb-10 to match response panel gap
               style={{
                 lineHeight: '1.7',
                 // Use calculated response area background color - same as panel background
@@ -2987,36 +2995,24 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                   onAddReaction={handleAddReaction}
                   section="prompt"
                   placeholder=""
+                  isPanelSelected={selected}
                 />
               </div>
-              {promptHasChanges && (
-                <div className="mt-2 flex justify-end">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={handlePromptRevert}
-                    className="text-xs h-7"
-                  >
-                    <RotateCcw className="h-3 w-3 mr-1" />
-                    Revert to original
-                  </Button>
-                </div>
-              )}
               
               {/* Copy and more menu buttons at bottom - similar to response panel */}
-              <div className="absolute bottom-2 left-[10px] flex items-center gap-2 z-10">
+              <div className="absolute bottom-2 left-[10px] flex items-center gap-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
                 {/* Copy note button */}
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 rounded hover:bg-gray-50 dark:hover:bg-gray-700"
+                  className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
                   onClick={(e) => {
                     e.stopPropagation()
                     navigator.clipboard.writeText(promptContent || '')
                   }}
                   title="Copy note"
                 >
-                  <Copy className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+                  <Copy className="h-3 w-3 text-gray-600 dark:text-gray-300" />
                 </Button>
 
                 {/* More menu button */}
@@ -3025,10 +3021,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8 rounded hover:bg-transparent"
+                      className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <MoreHorizontal className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+                      <MoreHorizontal className="h-3 w-3 text-gray-600 dark:text-gray-300" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" className="w-40">
@@ -3062,8 +3058,9 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         // For regular panels with response content (NOT component panels)
         // Also include flashcards - they should render like regular prompt+response panels even when empty
         // Flashcards with response message should always render nested prompt+response structure
-        if ((isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
-          (!isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
+        // Show nested structure when responseMessage exists (even if content is empty during streaming) - prompt panel should show nested on response load
+        if ((isProjectBoard && responseMessage) ||
+          (!isProjectBoard && responseMessage) ||
           (isFlashcard && responseMessage)) {
           return (
             <div
@@ -3071,8 +3068,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 "p-1 backdrop-blur-sm rounded-2xl relative transition-all duration-500 overflow-visible", // Transparent for map panels - background set via inline style, rounded-2xl for all corners, p-1 padding (4px) for background and content spacing, slower collapse/expand animation
                 // When collapsed, response content is hidden but container remains for prompt expansion
                 isResponseCollapsed && "overflow-hidden",
-                // Add bottom padding for buttons area when not collapsed
-                !isResponseCollapsed && "pb-12"
+                // Add bottom padding for buttons area when not collapsed - 8px gap (bottom-2) + button height (24px) + gap above buttons
+                !isResponseCollapsed && "pb-10"
               )}
               style={{
                 lineHeight: '1.7',
@@ -3084,7 +3081,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               {shouldShowGreyArea && (
                 <div
                   className={cn(
-                    "relative z-10 overflow-visible group transition-all duration-500 ease-in-out cursor-text", // Transparent grey area - background set via inline style, slower collapse/expand animation with synchronized easing
+                    "relative z-10 overflow-visible group/prompt transition-all duration-500 ease-in-out cursor-text", // Transparent grey area - background set via inline style, slower collapse/expand animation with synchronized easing, named group for prompt panel hover
                     // When expanded: no margin - prompt area is inside response padding (p-1 = 4px), so it starts at response padding position
                     // When collapsed: negative margin (-m-1 = -4px) to extend beyond response padding and fill entire response area
                     isResponseCollapsed ? "-m-1 rounded-2xl" : "m-0 rounded-xl",
@@ -3103,20 +3100,21 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                     backgroundColor: promptAreaBackgroundColor,
                   }}
                   onClick={(e) => {
-                    // For flashcards, require double click to focus editor
-                    if (isFlashcard && e.detail < 2) {
-                      return // Single click - don't focus, let panel handle expansion
+                    // If panel is selected, allow single click to focus; otherwise require double click
+                    if (!selected && e.detail < 2) {
+                      return // Single click on unselected panel - don't focus
                     }
-                    // Focus the editor when clicking anywhere in the grey area
-                    // Check if we're not clicking on a button or interactive element
-                    const target = e.target as HTMLElement
-                    if (!target.closest('button') && !target.closest('a')) {
-                      promptEditorRef.current?.commands.focus()
+                    // If panel is selected, single click focuses the editor
+                    if (selected && promptEditorRef.current) {
+                      const target = e.target as HTMLElement
+                      if (!target.closest('button') && !target.closest('a')) {
+                        promptEditorRef.current?.commands.focus()
+                      }
                     }
                   }}
                   onDoubleClick={(e) => {
-                    // For flashcards, double click focuses the editor
-                    if (isFlashcard && promptEditorRef.current) {
+                    // Double click focuses the editor (for unselected panels)
+                    if (!selected && promptEditorRef.current) {
                       e.stopPropagation()
                       setTimeout(() => {
                         promptEditorRef.current?.commands.focus()
@@ -3157,6 +3155,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                         }}
                         onAddReaction={handleAddReaction}
                         section="prompt"
+                        isPanelSelected={selected}
                       />
                       {/* Open board button - appears inline after title text */}
                       <Button
@@ -3208,10 +3207,11 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                         onAddReaction={handleAddReaction}
                         section="prompt"
                         isFlashcard={isFlashcard}
+                        isPanelSelected={selected}
                       />
                       {/* Copy button - appears inline after text, shows on hover - only show if there is text in prompt/question */}
                       {showPromptMoreMenu && !isResponseCollapsed && !isProjectBoard && shouldShowGreyArea && !isContentEmpty(promptContent) && (
-                        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                        <div className="opacity-0 group-hover/prompt:opacity-100 transition-opacity flex-shrink-0">
                           <Button
                             variant="ghost"
                             size="icon"
@@ -3271,8 +3271,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               {/* Separate div for response text with 8px padding to align with prompt text */}
               <div
                 className={cn(
-                  // Add top margin when prompt area is visible to create gap between prompt and response (8px gap)
-                  shouldShowGreyArea && !isResponseCollapsed && "mt-2",
+                  // Add top margin when prompt area is visible to create gap between prompt and response (increased gap)
+                  shouldShowGreyArea && !isResponseCollapsed && "mt-4",
                   // Collapse response content with top as anchor (smooth transition)
                   "transition-all duration-500 ease-in-out overflow-hidden",
                   isResponseCollapsed && "opacity-0"
@@ -3282,7 +3282,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                   maxHeight: isResponseCollapsed ? '0px' : '2000px',
                 }}
               >
-                {/* Separate div for response text with 12px horizontal padding to align with prompt text (4px more than before), 0px bottom padding */}
+                {/* Separate div for response text with 12px horizontal padding to align with prompt text (4px more than before), 8px bottom padding to match gap between buttons and panel bottom */}
                 <div className="px-3 pb-0 group">
                   <div className="inline-flex items-center gap-1">
                     <TipTapContent
@@ -3320,45 +3320,16 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                       onAddReaction={handleAddReaction}
                       section="response"
                       isFlashcard={isFlashcard}
+                      isPanelSelected={selected}
                     />
-                    {/* Copy button - appears inline after text, shows on hover - only show if there is text in response/answer */}
-                    {!isResponseCollapsed && !isProjectBoard && !isContentEmpty(responseContent || responseMessage.content || '') && (
-                      <div className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            navigator.clipboard.writeText(responseContent || responseMessage.content || '')
-                          }}
-                          title={isFlashcard ? "Copy answer" : "Copy response"}
-                        >
-                          <Copy className="h-3 w-3 text-gray-600 dark:text-gray-300" />
-                        </Button>
-                      </div>
-                    )}
                   </div>
-                  {responseHasChanges && !isFlashcard && (
-                    <div className="mt-2 ml-3 flex justify-end">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleResponseRevert}
-                        className="text-xs h-7"
-                      >
-                        <RotateCcw className="h-3 w-3 mr-1" />
-                        Revert to original
-                      </Button>
-                    </div>
-                  )}
                 </div>
               </div>
             </div>
           )
         }
 
-        // Loading state - show spinner while waiting for AI response
+        // Loading state - show nested structure with prompt panel and loading spinner in response area
         // ONLY for regular panels (NOT component panels - they already returned above)
         // Show when: no responseMessage, or responseMessage exists but has no content yet
         // Component panels never reach here because they return early above
@@ -3403,6 +3374,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 onAddReaction={handleAddReaction}
                 section="prompt"
                 isFlashcard={isFlashcard}
+                isPanelSelected={selected}
               />
               {promptHasChanges && (
                 <div className="mt-2 flex justify-end">
@@ -3421,16 +3393,202 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           )
         }
 
-        // Regular panel loading state (NOT component panel)
+        // Regular panel loading state (NOT component panel) - show nested structure with prompt panel and loading spinner
+        // Prompt panel should show nested on response load, even during loading
+        // No bottom padding during loading - buttons space only appears after response loads
         return (
           <div
-            className="p-1 backdrop-blur-sm rounded-2xl flex items-center justify-center min-h-[100px]"
+            className={cn(
+              "p-1 backdrop-blur-sm rounded-2xl relative transition-all duration-500 overflow-visible" // Transparent for map panels - background set via inline style, rounded-2xl for all corners, p-1 padding (4px) for background and content spacing, slower collapse/expand animation
+            )}
             style={{
+              lineHeight: '1.7',
               // Use calculated response area background color - same as panel background
               backgroundColor: responseAreaBackgroundColor,
             }}
           >
-            <Loader2 className="h-6 w-6 text-gray-400 dark:text-gray-500 animate-spin" />
+            {/* Prompt section - nested inside response area, affected by response panel padding */}
+            {shouldShowGreyArea && (
+              <div
+                className={cn(
+                  "relative z-10 overflow-visible group transition-all duration-500 ease-in-out cursor-text", // Transparent grey area - background set via inline style, slower collapse/expand animation with synchronized easing
+                  // When expanded: no margin - prompt area is inside response padding (p-1 = 4px), so it starts at response padding position
+                  // When collapsed: negative margin (-m-1 = -4px) to extend beyond response padding and fill entire response area
+                  isResponseCollapsed ? "-m-1 rounded-2xl" : "m-0 rounded-xl",
+                  // Shadow to layer above response content
+                  "shadow-sm",
+                  // 12px padding (px-3) for prompt text - aligns with response text which also has 12px padding (4px more than before)
+                  // When collapsed, use full padding to fill space while keeping text in place
+                  isResponseCollapsed ? "p-4" : "px-3 py-4",
+                )}
+                style={{
+                  // Use calculated prompt area background color - darker than panel background
+                  backgroundColor: promptAreaBackgroundColor,
+                }}
+                onClick={(e) => {
+                  // If panel is selected, allow single click to focus; otherwise require double click
+                  if (!selected && e.detail < 2) {
+                    return // Single click on unselected panel - don't focus
+                  }
+                  // If panel is selected, single click focuses the editor
+                  if (selected && promptEditorRef.current) {
+                    const target = e.target as HTMLElement
+                    if (!target.closest('button') && !target.closest('a')) {
+                      promptEditorRef.current?.commands.focus()
+                    }
+                  }
+                }}
+                onDoubleClick={(e) => {
+                  // Double click focuses the editor (for unselected panels)
+                  if (!selected && promptEditorRef.current) {
+                    e.stopPropagation()
+                    setTimeout(() => {
+                      promptEditorRef.current?.commands.focus()
+                      const isEmpty = !promptEditorRef.current?.getHTML() || promptEditorRef.current?.getHTML() === '<p></p>' || promptEditorRef.current?.getHTML() === '<p><br></p>'
+                      if (isEmpty) {
+                        promptEditorRef.current?.commands.setTextSelection(0)
+                      }
+                    }, 0)
+                  }
+                }}
+              >
+                {/* For project boards, show board title with open board button inline */}
+                {isProjectBoard ? (
+                  <div className="inline-flex items-center gap-1.5">
+                    <TipTapContent
+                      content={promptContent}
+                      className="text-gray-900 dark:text-gray-100 inline"
+                      originalContent={data.boardTitle}
+                      onContentChange={handlePromptChange}
+                      onHasChangesChange={setPromptHasChanges}
+                      onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
+                      comments={comments.filter(c => c.section === 'prompt')}
+                      editorRef={promptEditorRef}
+                      onCommentHover={(commentId) => {
+                        if (commentId) {
+                          if (showComments) {
+                            setSelectedCommentId(commentId)
+                          } else {
+                            setSelectedCommentId(null)
+                          }
+                        }
+                      }}
+                      onCommentClick={(commentId) => {
+                        if (commentId) {
+                          setShowComments(true)
+                          setSelectedCommentId(commentId)
+                        }
+                      }}
+                      onAddReaction={handleAddReaction}
+                      section="prompt"
+                      isPanelSelected={selected}
+                    />
+                    {/* Open board button - appears inline after title text */}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 flex-shrink-0 hover:bg-transparent"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        router.push(`/board/${data.boardId}`)
+                      }}
+                      title="Open board"
+                    >
+                      <ChevronRight className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="inline-flex items-center gap-1.5">
+                    <TipTapContent
+                      content={promptContent}
+                      className="text-gray-900 dark:text-gray-100 inline"
+                      originalContent={promptMessage?.content || ''}
+                      onContentChange={handlePromptChange}
+                      onHasChangesChange={setPromptHasChanges}
+                      onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
+                      comments={comments.filter(c => c.section === 'prompt')}
+                      editorRef={promptEditorRef}
+                      onCommentHover={(commentId) => {
+                        if (commentId) {
+                          // Only auto-select if comments are already visible
+                          // Comments should be shown by clicking on commented text, not by cursor movement
+                          if (showComments) {
+                            setSelectedCommentId(commentId)
+                          } else {
+                            // If comments are hidden, clear selection
+                            setSelectedCommentId(null)
+                          }
+                        } else {
+                          // Cursor moved away from commented text - don't deselect automatically
+                          // Only deselect on click away or toggle button
+                        }
+                      }}
+                      onCommentClick={(commentId) => {
+                        // When commented text is clicked, show comments and select the comment
+                        if (commentId) {
+                          setShowComments(true)
+                          setSelectedCommentId(commentId)
+                        }
+                      }}
+                      onAddReaction={handleAddReaction}
+                      section="prompt"
+                      isFlashcard={isFlashcard}
+                      isPanelSelected={selected}
+                    />
+                    {/* Copy button - appears inline after text, shows on hover - only show if there is text in prompt/question */}
+                    {showPromptMoreMenu && !isResponseCollapsed && !isProjectBoard && shouldShowGreyArea && !isContentEmpty(promptContent) && (
+                      <div className="opacity-0 group-hover/prompt:opacity-100 transition-opacity flex-shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            navigator.clipboard.writeText(promptContent)
+                          }}
+                          title={isFlashcard ? "Copy question" : "Copy prompt"}
+                        >
+                          <Copy className="h-3 w-3 text-gray-600 dark:text-gray-300" />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {promptHasChanges && !isFlashcard && (
+                  <div className="mt-2 flex justify-end">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handlePromptRevert}
+                      className="text-xs h-7"
+                    >
+                      <RotateCcw className="h-3 w-3 mr-1" />
+                      Revert to original
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Response content area - show loading spinner when no response yet */}
+            <div
+              className={cn(
+                // Add top margin when prompt area is visible to create gap between prompt and response (increased gap)
+                shouldShowGreyArea && !isResponseCollapsed && "mt-4",
+                // Collapse response content with top as anchor (smooth transition)
+                "transition-all duration-500 ease-in-out overflow-hidden",
+                isResponseCollapsed && "opacity-0"
+              )}
+              style={{
+                // Use max-height for smooth collapse from top anchor (large value allows any content height)
+                maxHeight: isResponseCollapsed ? '0px' : '2000px',
+              }}
+            >
+              {/* Loading spinner in response area */}
+              <div className="px-3 pb-0 flex items-center justify-center min-h-[100px]">
+                <Loader2 className="h-6 w-6 text-gray-400 dark:text-gray-500 animate-spin" />
+              </div>
+            </div>
           </div>
         )
       })()}
@@ -3441,17 +3599,32 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       {((isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
         (!isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
         (isFlashcard && responseMessage)) && !isResponseCollapsed && (
-          <div className="absolute bottom-2 left-4 flex items-center gap-2 z-10">
+          <div className="absolute bottom-2 left-4 flex items-center gap-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+            {/* Copy button - copy response content */}
+            {!isProjectBoard && !isContentEmpty(responseContent || responseMessage.content || '') && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  navigator.clipboard.writeText(responseContent || responseMessage.content || '')
+                }}
+                title={isFlashcard ? "Copy answer" : "Copy response"}
+              >
+                <Copy className="h-3 w-3 text-gray-600 dark:text-gray-300" />
+              </Button>
+            )}
             {/* More menu button - vertical ellipsis - show for all panels (history panels and project history panels) */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 rounded hover:bg-transparent"
+                  className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <MoreHorizontal className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+                  <MoreHorizontal className="h-3 w-3 text-gray-600 dark:text-gray-300" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-40">
@@ -3484,15 +3657,31 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8 rounded hover:bg-gray-50 dark:hover:bg-gray-700"
+              className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
               onClick={(e) => {
                 e.stopPropagation()
                 handleCollapseChange(true)
               }}
               title="Hide response"
             >
-              <ChevronUp className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+              <ChevronUp className="h-3 w-3 text-gray-600 dark:text-gray-300" />
             </Button>
+
+            {/* Revert to original button - shown when response has changes */}
+            {responseHasChanges && !isFlashcard && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleResponseRevert()
+                }}
+                title="Revert to original"
+              >
+                <RotateCcw className="h-3 w-3 text-gray-600 dark:text-gray-300" />
+              </Button>
+            )}
 
             {/* Tag button - only for flashcards, positioned to the right of karot */}
             {isFlashcard && responseMessage?.id && (
