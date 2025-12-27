@@ -188,7 +188,8 @@ function TipTapContent({
   isFlashcard,
   placeholder,
   isPanelSelected,
-  isLoading
+  isLoading,
+  onCommentPopupVisibilityChange
 }: {
   content: string
   className?: string
@@ -206,6 +207,7 @@ function TipTapContent({
   placeholder?: string
   isPanelSelected?: boolean
   isLoading?: boolean
+  onCommentPopupVisibilityChange?: (isVisible: boolean) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { setActiveEditor } = useEditorContext()
@@ -549,7 +551,7 @@ function TipTapContent({
   return (
     <div
       ref={containerRef}
-      className={cn('relative', isFlashcard ? 'cursor-pointer' : 'cursor-text', isInline && 'inline-block', otherClasses)}
+      className={cn('relative overflow-visible', isFlashcard ? 'cursor-pointer' : 'cursor-text', isInline && 'inline-block', otherClasses)}
       onClick={(e) => {
         // If panel is not selected and it's a single click, don't handle - let React Flow select the panel
         if (!isPanelSelected && e.detail < 2) {
@@ -586,7 +588,7 @@ function TipTapContent({
         options={{
           placement: 'top',
           offset: [0, 8] as [number, number],
-          zIndex: 20, // Ensure it's above prompt panel (z-10)
+          zIndex: 1000, // High z-index to ensure it's above prompt panel and not clipped
         } as any}
       >
         <div className="bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2 flex items-center gap-1 z-20 relative">
@@ -610,6 +612,7 @@ function TipTapContent({
           onComment={onComment}
           onAddReaction={onAddReaction}
           section={section}
+          onVisibilityChange={onCommentPopupVisibilityChange}
         />
       )}
       <EditorContent editor={editor} />
@@ -1119,17 +1122,20 @@ function CommentButtonPopup({
   onComment,
   onAddReaction,
   section,
+  onVisibilityChange,
 }: {
   editor: any
   containerRef: React.RefObject<HTMLDivElement>
   onComment: (selectedText: string, from: number, to: number) => void
   onAddReaction?: (selectedText: string, from: number, to: number, emoji: string, section: 'prompt' | 'response') => void
   section?: 'prompt' | 'response'
+  onVisibilityChange?: (isVisible: boolean) => void
 }) {
   const [showPopup, setShowPopup] = useState(false)
-  const [popupPosition, setPopupPosition] = useState({ top: 0, right: 0 })
+  const [popupPosition, setPopupPosition] = useState({ top: 0, left: 0 })
   const [zoom, setZoom] = useState(1)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false) // Track if emoji picker is open
+  const [savedSelection, setSavedSelection] = useState<{ from: number; to: number } | null>(null) // Store selection to preserve it
   const popupRef = useRef<HTMLDivElement>(null)
   const emojiPickerRef = useRef<HTMLDivElement>(null) // Ref for emoji picker popup
   const panelContainerRef = useRef<HTMLElement | null>(null)
@@ -1148,14 +1154,29 @@ function CommentButtonPopup({
       // Check if there's a valid selection (don't require focus - show popup whenever text is selected)
       const { from, to } = editor.state.selection
 
-      // Check if there's a valid selection
-      if (from === to) {
+      // Check if there's a valid selection - must have non-zero length
+      if (from === to || from >= to) {
         setShowPopup(false)
         return
       }
 
       const selectedText = editor.state.doc.textBetween(from, to).trim()
-      if (!selectedText) {
+      // Ensure there's actual text content (not just whitespace or empty)
+      if (!selectedText || selectedText.length === 0) {
+        setShowPopup(false)
+        return
+      }
+      
+      // Also verify with native selection to ensure consistency
+      const nativeSelection = window.getSelection()
+      if (!nativeSelection || nativeSelection.rangeCount === 0) {
+        setShowPopup(false)
+        return
+      }
+      
+      const nativeRange = nativeSelection.getRangeAt(0)
+      const nativeSelectedText = nativeRange.toString().trim()
+      if (!nativeSelectedText || nativeSelectedText.length === 0) {
         setShowPopup(false)
         return
       }
@@ -1206,7 +1227,7 @@ function CommentButtonPopup({
       // Use TipTap's coordinate system for accurate text positioning
       const coords = editor.view.coordsAtPos(from)
 
-      // Also get the native selection for fallback
+      // Also get the native selection for positioning (already validated above)
       const selection = window.getSelection()
       if (!selection || selection.rangeCount === 0) {
         setShowPopup(false)
@@ -1214,41 +1235,83 @@ function CommentButtonPopup({
       }
 
       const range = selection.getRangeAt(0)
+      // Additional check: ensure range has valid dimensions
       const rangeRect = range.getBoundingClientRect()
+      if (rangeRect.width === 0 && rangeRect.height === 0) {
+        setShowPopup(false)
+        return
+      }
 
       // Get panel's viewport position
       const panelRect = panelElement.getBoundingClientRect()
-
-      // Try using TipTap's coords which are designed for text positioning
-      // coords.top gives us the exact top of the text line
-      let selectionTopRelativeToPanel = coords.top - panelRect.top
-
-      // Also calculate using range rect as a sanity check
-      const rangeTopRelativeToPanel = rangeRect.top - panelRect.top
-
-      // Use TipTap's coords as primary (more accurate for text), but verify with range
-      // If they're very different, there might be an issue
-      const difference = Math.abs(selectionTopRelativeToPanel - rangeTopRelativeToPanel)
-      if (difference > 5) {
-        // If there's a significant difference, use the range rect (visual position)
-        selectionTopRelativeToPanel = rangeTopRelativeToPanel
+      
+      // Get TipTapContent container's position relative to panel
+      // The popup will be positioned relative to containerRef, so we need to account for its offset
+      const containerRect = containerRef.current?.getBoundingClientRect()
+      if (!containerRect) {
+        setShowPopup(false)
+        return
       }
 
-      // Round to avoid sub-pixel issues
-      selectionTopRelativeToPanel = Math.round(selectionTopRelativeToPanel)
+      // Calculate selection center for vertical centering
+      // Use range rect for accurate selection bounds (includes height)
+      const rangeTopRelativeToPanel = rangeRect.top - panelRect.top
+      const rangeBottomRelativeToPanel = rangeRect.bottom - panelRect.top
+      const selectionHeight = rangeRect.height
+      
+      // Calculate center of selection (top + height/2) relative to panel
+      const selectionCenterRelativeToPanel = rangeTopRelativeToPanel + (selectionHeight / 2)
+      
+      // Convert to position relative to TipTapContent container (where popup will be rendered)
+      const containerTopRelativeToPanel = containerRect.top - panelRect.top
+      const selectionCenterRelativeToContainer = selectionCenterRelativeToPanel - containerTopRelativeToPanel
 
-      // Horizontal position: from panel's right edge (already working, so keep as is)
-      const horizontalOffset = 40 // 40px to the right of panel's right edge
+      // Round to avoid sub-pixel issues
+      const selectionCenterRounded = Math.round(selectionCenterRelativeToContainer)
+
+      // Horizontal position: align with panel's right edge
+      // Get panel's width from its style attribute (this is in panel's local coordinate system, before transform)
+      // The panel's width is set via inline style, so it's in the panel's coordinate system
+      const panelStyleWidth = panelElement.style.width
+      const panelWidth = panelStyleWidth ? parseFloat(panelStyleWidth) : panelElement.offsetWidth
+      
+      // Get container's left position relative to panel in panel's local coordinate system
+      // Since both panel and container are in the same transformed coordinate system,
+      // we can use offsetLeft to get the container's position relative to the panel
+      // But offsetLeft might not work if there are intermediate containers, so we calculate from viewport coords
+      // Convert viewport coordinates to panel's local coordinate system by dividing by zoom
+      const zoom = reactFlowInstance?.getViewport().zoom ?? 1
+      const containerLeftRelativeToPanel = (containerRect.left - panelRect.left) / zoom
+      
+      // Calculate panel's right edge relative to container in panel's local coordinate system
+      // panelWidth is the panel's width in its local coordinate system
+      // containerLeftRelativeToPanel is the container's offset from panel's left edge (in local coords)
+      // So: panelWidth - containerLeftRelativeToPanel = distance from container's left to panel's right edge
+      const panelRightRelativeToContainer = panelWidth - containerLeftRelativeToPanel
+      const horizontalOffset = 12 // 12px gap to the left of panel's right edge
 
       // Store panel element reference for rendering
       panelContainerRef.current = panelElement
 
-      // Position popup top-aligned with selected text, relative to panel
+      // Position popup centered vertically with selected text, aligned with panel's right edge
       // Round the position to ensure pixel-perfect alignment
       setPopupPosition({
-        top: selectionTopRelativeToPanel, // Vertical: top-aligned with selection (rounded)
-        right: -horizontalOffset, // Horizontal: relative to panel right edge
+        top: selectionCenterRounded, // Vertical: center of selection (rounded, relative to container)
+        left: panelRightRelativeToContainer - horizontalOffset, // Horizontal: aligned with panel's right edge (relative to container)
       })
+      
+      // Save the selection to preserve it when popup appears
+      setSavedSelection({ from, to })
+      
+      // Restore selection if it was lost (preserve text selection when popup appears)
+      requestAnimationFrame(() => {
+        const currentSelection = editor.state.selection
+        if (currentSelection.from === currentSelection.to) {
+          // Selection was lost, restore it
+          editor.commands.setTextSelection({ from, to })
+        }
+      })
+      
       setShowPopup(true)
     }
 
@@ -1315,7 +1378,41 @@ function CommentButtonPopup({
         reactFlowElement.removeEventListener('touchmove', handleViewportChange)
       }
     }
-  }, [editor, containerRef, reactFlowInstance, showPopup, showEmojiPicker])
+  }, [editor, containerRef, reactFlowInstance, showPopup, showEmojiPicker, onVisibilityChange])
+
+  // Notify parent when popup visibility changes
+  useEffect(() => {
+    onVisibilityChange?.(showPopup)
+  }, [showPopup, onVisibilityChange])
+
+  // Preserve selection when popup is visible
+  useEffect(() => {
+    if (!showPopup || !savedSelection) return
+
+    // Periodically check and restore selection if it was lost
+    const checkSelection = () => {
+      const currentSelection = editor.state.selection
+      // If selection was lost (collapsed to a single point), restore it
+      if (currentSelection.from === currentSelection.to && savedSelection.from !== savedSelection.to) {
+        editor.commands.setTextSelection({ from: savedSelection.from, to: savedSelection.to })
+      }
+    }
+
+    // Check selection periodically while popup is open
+    const interval = setInterval(checkSelection, 100)
+    
+    // Also check on selection changes
+    const handleSelectionUpdate = () => {
+      requestAnimationFrame(checkSelection)
+    }
+    
+    editor.on('selectionUpdate', handleSelectionUpdate)
+
+    return () => {
+      clearInterval(interval)
+      editor.off('selectionUpdate', handleSelectionUpdate)
+    }
+  }, [showPopup, savedSelection, editor])
 
   // Hide popup when clicking outside
   useEffect(() => {
@@ -1337,6 +1434,7 @@ function CommentButtonPopup({
       if (!isInPopup && !isInEditor && !isInEmojiPicker) {
         setShowPopup(false)
         setShowEmojiPicker(false)
+        setSavedSelection(null) // Clear saved selection when popup closes
       }
     }
 
@@ -1566,13 +1664,17 @@ function CommentButtonPopup({
   const handleCommentClick = () => {
     if (!editor) return
 
-    const { from, to } = editor.state.selection
+    // Use saved selection if current selection is lost
+    const { from, to } = savedSelection && editor.state.selection.from === editor.state.selection.to
+      ? savedSelection
+      : editor.state.selection
     const selectedText = editor.state.doc.textBetween(from, to)
     if (selectedText.trim()) {
       onComment(selectedText, from, to)
       // Clear selection after commenting
       editor.chain().blur().run()
       setShowPopup(false)
+      setSavedSelection(null) // Clear saved selection
     }
   }
 
@@ -1587,7 +1689,10 @@ function CommentButtonPopup({
 
     if (!editor) return
 
-    const { from, to } = editor.state.selection
+    // Use saved selection if current selection is lost
+    const { from, to } = savedSelection && editor.state.selection.from === editor.state.selection.to
+      ? savedSelection
+      : editor.state.selection
     const selectedText = editor.state.doc.textBetween(from, to).trim()
 
     if (selectedText && onAddReaction && section) {
@@ -1596,6 +1701,7 @@ function CommentButtonPopup({
       editor.chain().blur().run()
       setShowPopup(false)
       setShowEmojiPicker(false)
+      setSavedSelection(null) // Clear saved selection
     }
   }
 
@@ -1606,33 +1712,35 @@ function CommentButtonPopup({
 
   if (!showPopup || !panelContainerRef.current) return null
 
-  // Render directly inside panel container (not via portal) so it's in the same stacking context as panel
-  // Panel is at z-0, minimap is at z-1, so pill will be below minimap but above panel content
-  // No need to scale the pill - React Flow's transform on the panel will scale it automatically
+  // Render inside panel container so it scales with zoom (like panels do)
+  // Position relative to panel container, not viewport
   const relativeTop = popupPosition.top
-  const relativeRight = popupPosition.right
+  const relativeLeft = popupPosition.left
 
+  // Render directly inside panel container (not via portal) so it's in the same stacking context as panel
+  // This allows it to scale with React Flow's transform on the panel
   return (
     <div
       ref={popupRef}
-      className="absolute pointer-events-auto z-[100]"
+      className="absolute pointer-events-auto z-[1000]"
       style={{
         top: `${relativeTop}px`,
-        right: `${relativeRight}px`, // Positioned relative to panel's right edge
-        // No transform needed - panel's transform will scale this automatically
+        left: `${relativeLeft}px`,
+        transform: 'translateY(-50%)', // Center vertically with selected text
       }}
     >
       {/* Vertical pill container with three buttons: comment, emoji, suggest edit */}
-      <div className="bg-white dark:bg-[#1f1f1f] rounded-full shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2 flex flex-col gap-1">
+      {/* Match flashcard handle width (w-6 = 24px) and styling */}
+      <div className="bg-white dark:bg-[#1f1f1f] rounded-full shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-0.5 flex flex-col gap-0.5 w-6 items-center justify-center">
         {/* Comment button - top */}
         <Button
           variant="ghost"
           size="sm"
           onClick={handleCommentClick}
-          className="h-8 w-8 p-0 rounded-full"
+          className="h-6 w-6 p-0 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
           title="Add comment"
         >
-          <MessageSquare className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+          <MessageSquare className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
         </Button>
 
         {/* Emoji button - middle */}
@@ -1641,10 +1749,10 @@ function CommentButtonPopup({
             variant="ghost"
             size="sm"
             onClick={handleEmojiClick}
-            className="h-8 w-8 p-0 rounded-full"
+            className="h-6 w-6 p-0 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
             title="Add emoji"
           >
-            <Smile className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+            <Smile className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
           </Button>
 
           {/* Emoji picker popup - appears to the right of the button */}
@@ -1716,10 +1824,10 @@ function CommentButtonPopup({
           variant="ghost"
           size="sm"
           onClick={handleSuggestEditClick}
-          className="h-8 w-8 p-0 rounded-full"
+          className="h-6 w-6 p-0 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
           title="Suggest edit"
         >
-          <PenSquare className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+          <PenSquare className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
         </Button>
       </div>
     </div>
@@ -1901,6 +2009,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const [newCommentText, setNewCommentText] = useState('') // New comment input text
   const [emojiReactions, setEmojiReactions] = useState<EmojiReaction[]>([]) // Store all emoji reactions for this panel
   const [isBookmarked, setIsBookmarked] = useState(false) // Track if panel is bookmarked
+  const [hasCommentPopupVisible, setHasCommentPopupVisible] = useState(false) // Track if comment popup is visible (to hide right handle)
   const panelRef = useRef<HTMLDivElement>(null) // Ref to panel container for positioning comment box
   const commentPanelsRef = useRef<HTMLDivElement>(null) // Ref to comment panels container for click-away detection
   const promptEditorRef = useRef<any>(null) // Ref to prompt editor instance
@@ -3101,6 +3210,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 isFlashcard={isFlashcard}
                 isPanelSelected={selected}
                 isLoading={isLoading}
+                onCommentPopupVisibilityChange={setHasCommentPopupVisible}
               />
             </div>
           )
@@ -3310,6 +3420,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                         section="prompt"
                         isPanelSelected={selected}
                         isLoading={isLoading}
+                        onCommentPopupVisibilityChange={setHasCommentPopupVisible}
                       />
                       {/* Open board button - appears inline after title text */}
                       <Button
@@ -3363,6 +3474,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                         isFlashcard={isFlashcard}
                         isPanelSelected={selected}
                         isLoading={isLoading}
+                        onCommentPopupVisibilityChange={setHasCommentPopupVisible}
                       />
                       {/* Copy button - positioned at end of text content, shows on hover - only show if there is text in prompt/question */}
                       {showPromptMoreMenu && !isResponseCollapsed && !isProjectBoard && shouldShowGreyArea && !isContentEmpty(promptContent) && (
@@ -3407,16 +3519,18 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                   // Add top margin when prompt area is visible to create gap between prompt and response (increased gap)
                   shouldShowGreyArea && !isResponseCollapsed && "mt-4",
                   // Collapse response content with top as anchor (smooth transition)
-                  "transition-all duration-500 ease-in-out overflow-hidden",
-                  isResponseCollapsed && "opacity-0"
+                  // Use overflow-visible to allow BubbleMenu to escape, but wrap content for collapse animation
+                  "transition-all duration-500 ease-in-out",
+                  isResponseCollapsed && "opacity-0 overflow-hidden"
                 )}
                 style={{
                   // Use max-height for smooth collapse from top anchor (large value allows any content height)
-                  maxHeight: isResponseCollapsed ? '0px' : '2000px',
+                  // Only apply max-height when collapsed to allow popups to escape
+                  maxHeight: isResponseCollapsed ? '0px' : 'none',
                 }}
               >
                 {/* Separate div for response text with 12px horizontal padding to align with prompt text (4px more than before), 8px bottom padding to match gap between buttons and panel bottom */}
-                <div className="px-3 pb-0 group">
+                <div className="px-3 pb-0 group overflow-visible">
                   <div className="inline-flex items-center gap-1">
                     <TipTapContent
                       key={`response-${responseMessage.id}`} // Force re-render when message ID changes
@@ -3454,6 +3568,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                       section="response"
                       isFlashcard={isFlashcard}
                       isPanelSelected={selected}
+                      onCommentPopupVisibilityChange={setHasCommentPopupVisible}
                     />
                   </div>
                 </div>
@@ -3509,6 +3624,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 isFlashcard={isFlashcard}
                 isPanelSelected={selected}
                 isLoading={isLoading}
+                onCommentPopupVisibilityChange={setHasCommentPopupVisible}
               />
             </div>
           )
@@ -3604,6 +3720,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                       section="prompt"
                       isPanelSelected={selected}
                       isLoading={isLoading}
+                      onCommentPopupVisibilityChange={setHasCommentPopupVisible}
                     />
                     {/* Open board button - appears inline after title text */}
                     <Button
@@ -3657,6 +3774,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                       isFlashcard={isFlashcard}
                       isPanelSelected={selected}
                       isLoading={isLoading}
+                      onCommentPopupVisibilityChange={setHasCommentPopupVisible}
                     />
                     {/* Copy button - positioned at end of text content, shows on hover - only show if there is text in prompt/question */}
                     {showPromptMoreMenu && !isResponseCollapsed && !isProjectBoard && shouldShowGreyArea && !isContentEmpty(promptContent) && (
@@ -3677,12 +3795,14 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 // Add top margin when prompt area is visible to create gap between prompt and response (increased gap)
                 shouldShowGreyArea && !isResponseCollapsed && "mt-4",
                 // Collapse response content with top as anchor (smooth transition)
-                "transition-all duration-500 ease-in-out overflow-hidden",
-                isResponseCollapsed && "opacity-0"
+                // Use overflow-visible to allow BubbleMenu to escape, but wrap content for collapse animation
+                "transition-all duration-500 ease-in-out",
+                isResponseCollapsed && "opacity-0 overflow-hidden"
               )}
               style={{
                 // Use max-height for smooth collapse from top anchor (large value allows any content height)
-                maxHeight: isResponseCollapsed ? '0px' : '2000px',
+                // Only apply max-height when collapsed to allow popups to escape
+                maxHeight: isResponseCollapsed ? '0px' : 'none',
               }}
             >
               {/* Loading spinner in response area */}
@@ -3795,7 +3915,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         )}
 
       {/* Right handle with flashcard navigation */}
-      {isFlashcard && (hasMultipleFlashcards || hasFlashcardsInOtherBoards) && nextBoardWithFlashcards && isAtLastFlashcardInBoard && selected ? (
+      {/* Hide handle when comment popup is visible */}
+      {!hasCommentPopupVisible && isFlashcard && (hasMultipleFlashcards || hasFlashcardsInOtherBoards) && nextBoardWithFlashcards && isAtLastFlashcardInBoard && selected ? (
         // Expanded pill with two buttons when cross-board navigation is available and flashcard is selected
         <div
           className={cn(
@@ -3832,7 +3953,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             </button>
           </div>
         </div>
-      ) : isFlashcard && (hasMultipleFlashcards || hasFlashcardsInOtherBoards) ? (
+      ) : !hasCommentPopupVisible && isFlashcard && (hasMultipleFlashcards || hasFlashcardsInOtherBoards) ? (
         <div
           className={cn(
             'absolute right-0 top-1/2 z-20 flex items-center justify-center translate-x-1/2 -translate-y-1/2 cursor-pointer'
@@ -3865,7 +3986,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             <ChevronRight className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
           </div>
         </div>
-      ) : (
+      ) : !hasCommentPopupVisible ? (
         <Handle
           type="source"
           position={Position.Right}
@@ -3881,7 +4002,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             border: `1px solid ${handleBorderColor}`,
           }}
         />
-      )}
+      ) : null}
 
       {/* New comment box - appears to the right when creating a comment */}
       {newCommentData && (

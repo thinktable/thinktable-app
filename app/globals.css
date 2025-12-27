@@ -662,13 +662,17 @@ span[data-added="true"] {
   }
 
 
-  /* Ensure TipTap BubbleMenu (highlight popup) appears above prompt panel (z-10) */
+  /* Ensure TipTap BubbleMenu (highlight popup) appears above prompt panel and isn't clipped */
   .tiptap-bubble-menu,
   [data-tiptap-bubble-menu],
   .ProseMirror + div[style*="position: absolute"],
   /* Target the BubbleMenu container that TipTap creates */
-  div[data-bubble-menu] {
-    z-index: 20 !important;
+  div[data-bubble-menu],
+  /* Target floating-ui container used by TipTap BubbleMenu */
+  [data-floating-ui-portal],
+  [data-floating-ui-portal] > * {
+    z-index: 1000 !important;
+    overflow: visible !important;
   }
 
   /* Constrain emoji picker height - let the package handle its own scrolling */
