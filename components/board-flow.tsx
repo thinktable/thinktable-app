@@ -2782,6 +2782,8 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
               }
             }
 
+            // Load panel styling from message metadata (fillColor, borderColor, borderStyle, borderWeight)
+            const messageMetadata = message.metadata || {}
             const panelNode: Node<ChatPanelNodeData> = {
               id: nodeId,
               type: 'chatPanel',
@@ -2791,6 +2793,12 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
                 responseMessage: responseMessage, // Different response for each panel
                 conversationId: conversationId || '',
                 isResponseCollapsed: false, // Initialize collapse state
+                // Load panel styling from message metadata
+                // Normalize null to empty string for fillColor (transparent) and 'none' for borderStyle
+                fillColor: messageMetadata.fillColor === null ? '' : (messageMetadata.fillColor || undefined),
+                borderColor: messageMetadata.borderColor === null ? undefined : (messageMetadata.borderColor || undefined),
+                borderStyle: messageMetadata.borderStyle === null ? 'none' : (messageMetadata.borderStyle || undefined),
+                borderWeight: messageMetadata.borderWeight === null ? undefined : (messageMetadata.borderWeight || undefined),
               },
               draggable: isLocked ? false : (viewMode === 'canvas'), // Lock takes precedence, then viewMode
             }
@@ -2811,17 +2819,27 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
           }
         } else {
           // No assistant messages found - create panel with just the user message
-          console.log('🔄 BoardFlow: Creating panel for user message:', message.id, 'with response: none')
+          // Check if this is a note (has metadata.isNote === true)
+          const isNote = message.metadata?.isNote === true
+          console.log('🔄 BoardFlow: Creating panel for user message:', message.id, 'with response: none', isNote ? '(note)' : '')
 
+          // Load panel styling from message metadata (fillColor, borderColor, borderStyle, borderWeight)
+          const messageMetadata = message.metadata || {}
           const panelNode: Node<ChatPanelNodeData> = {
             id: baseNodeId,
             type: 'chatPanel',
             position: currentPos,
             data: {
               promptMessage: message,
-              responseMessage: undefined, // No response yet
+              responseMessage: undefined, // No response yet (notes never have responses)
               conversationId: conversationId || '',
               isResponseCollapsed: false, // Initialize collapse state
+              // Load panel styling from message metadata
+              // Normalize null to empty string for fillColor (transparent) and 'none' for borderStyle
+              fillColor: messageMetadata.fillColor === null ? '' : (messageMetadata.fillColor || undefined),
+              borderColor: messageMetadata.borderColor === null ? undefined : (messageMetadata.borderColor || undefined),
+              borderStyle: messageMetadata.borderStyle === null ? 'none' : (messageMetadata.borderStyle || undefined),
+              borderWeight: messageMetadata.borderWeight === null ? undefined : (messageMetadata.borderWeight || undefined),
             },
             draggable: isLocked ? false : (viewMode === 'canvas'), // Lock takes precedence, then viewMode
           }

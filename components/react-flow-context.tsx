@@ -98,6 +98,12 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
         if (prefs.arrowDirection && ['down', 'up', 'left', 'right'].includes(prefs.arrowDirection)) {
           setArrowDirection(prefs.arrowDirection)
         }
+        if (prefs.boardRule && ['wide', 'college', 'narrow'].includes(prefs.boardRule)) {
+          setBoardRule(prefs.boardRule)
+        }
+        if (prefs.boardStyle && ['none', 'dotted', 'lined', 'grid'].includes(prefs.boardStyle)) {
+          setBoardStyle(prefs.boardStyle)
+        }
       } catch (e) {
         // Fallback to old localStorage keys for backward compatibility
         const savedLayoutMode = localStorage.getItem('thinkable-layout-mode') as 'auto' | 'tree' | 'cluster' | 'none' | null
@@ -120,6 +126,58 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
     const supabase = createClient()
 
     try {
+      // Check if this is the homepage board (public access via API route)
+      let homepageBoardPrefs: any = null
+      try {
+        const homepageResponse = await fetch('/api/homepage-board')
+        if (homepageResponse.ok) {
+          const homepageData = await homepageResponse.json()
+          if (homepageData.conversation?.id === currentConversationId && homepageData.conversation?.metadata) {
+            homepageBoardPrefs = homepageData.conversation.metadata
+          }
+        }
+      } catch (e) {
+        // Not homepage board or API failed, continue to normal fetch
+      }
+
+      // If we got homepage board prefs, use them (works even if unauthenticated)
+      if (homepageBoardPrefs) {
+        if (homepageBoardPrefs.boardRule && ['wide', 'college', 'narrow'].includes(homepageBoardPrefs.boardRule)) {
+          setBoardRule(homepageBoardPrefs.boardRule)
+          const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+          const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
+          localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardRule: homepageBoardPrefs.boardRule }))
+        }
+        if (homepageBoardPrefs.boardStyle && ['none', 'dotted', 'lined', 'grid'].includes(homepageBoardPrefs.boardStyle)) {
+          setBoardStyle(homepageBoardPrefs.boardStyle)
+          const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+          const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
+          localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardStyle: homepageBoardPrefs.boardStyle }))
+        }
+        // Also load other preferences from homepage board if they exist
+        if (homepageBoardPrefs.layoutMode && ['auto', 'tree', 'cluster', 'none'].includes(homepageBoardPrefs.layoutMode)) {
+          setLayoutMode(homepageBoardPrefs.layoutMode)
+          setIsDeterministicMapping(homepageBoardPrefs.layoutMode !== 'none')
+          const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+          const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
+          localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, layoutMode: homepageBoardPrefs.layoutMode }))
+        }
+        if (homepageBoardPrefs.lineStyle && ['solid', 'dotted'].includes(homepageBoardPrefs.lineStyle)) {
+          setLineStyle(homepageBoardPrefs.lineStyle)
+          const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+          const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
+          localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, lineStyle: homepageBoardPrefs.lineStyle }))
+        }
+        if (homepageBoardPrefs.arrowDirection && ['down', 'up', 'left', 'right'].includes(homepageBoardPrefs.arrowDirection)) {
+          setArrowDirection(homepageBoardPrefs.arrowDirection)
+          const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+          const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
+          localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, arrowDirection: homepageBoardPrefs.arrowDirection }))
+        }
+        return // Homepage board loaded, skip authenticated fetch
+      }
+
+      // For non-homepage boards, require authentication
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
         let prefs: any = null
@@ -172,6 +230,20 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
             const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
             const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
             localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, arrowDirection: prefs.arrowDirection }))
+          }
+
+          if (prefs.boardRule && ['wide', 'college', 'narrow'].includes(prefs.boardRule)) {
+            setBoardRule(prefs.boardRule)
+            const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+            const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
+            localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardRule: prefs.boardRule }))
+          }
+
+          if (prefs.boardStyle && ['none', 'dotted', 'lined', 'grid'].includes(prefs.boardStyle)) {
+            setBoardStyle(prefs.boardStyle)
+            const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+            const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
+            localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardStyle: prefs.boardStyle }))
           }
         }
       }
@@ -407,6 +479,188 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
 
     saveToSupabase()
   }, [lineStyle]) // Only run when lineStyle changes, NOT when conversationId changes
+
+  // Save board rule to localStorage and Supabase when it changes
+  // If conversationId is undefined, saves to profiles.metadata (default board)
+  // If conversationId exists, saves to conversations.metadata (specific board)
+  // NOTE: Only runs when boardRule changes, NOT when conversationId changes
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (isLoadingRef.current) return // Skip saves during loading/navigation to prevent overwriting wrong board
+
+    // Use ref to get current conversationId (doesn't trigger effect when it changes)
+    const currentConversationId = conversationIdRef.current
+
+    // Save to localStorage immediately (lightweight, instant)
+    const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+    const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
+    localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardRule }))
+
+    // Save to Supabase in background (for cross-device sync)
+    const saveToSupabase = async () => {
+      try {
+        const supabase = createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) {
+          console.warn('Cannot save board rule: user not authenticated')
+          return
+        }
+
+        if (currentConversationId) {
+          // Save to conversation metadata (specific board) - only this board's preferences
+          const { data: conversation, error: fetchError } = await supabase
+            .from('conversations')
+            .select('metadata')
+            .eq('id', currentConversationId)
+            .eq('user_id', user.id)
+            .single()
+
+          if (fetchError) {
+            console.error('Error fetching conversation for board rule save:', fetchError)
+            return
+          }
+
+          const existingMetadata = (conversation?.metadata as Record<string, any>) || {}
+
+          const { error: updateError } = await supabase
+            .from('conversations')
+            .update({
+              metadata: { ...existingMetadata, boardRule },
+            })
+            .eq('id', currentConversationId)
+            .eq('user_id', user.id)
+
+          if (updateError) {
+            console.error('Error updating conversation board rule:', updateError)
+          } else {
+            console.log(`✅ Saved board rule "${boardRule}" to board ${currentConversationId}`)
+          }
+        } else {
+          // Save to profile metadata (default board /board) - only default board preferences
+          const { data: profile, error: fetchError } = await supabase
+            .from('profiles')
+            .select('metadata')
+            .eq('id', user.id)
+            .single()
+
+          if (fetchError) {
+            console.error('Error fetching profile for board rule save:', fetchError)
+            return
+          }
+
+          const existingMetadata = (profile?.metadata as Record<string, any>) || {}
+
+          const { error: updateError } = await supabase
+            .from('profiles')
+            .update({
+              metadata: { ...existingMetadata, boardRule },
+            })
+            .eq('id', user.id)
+
+          if (updateError) {
+            console.error('Error updating profile board rule:', updateError)
+          } else {
+            console.log(`✅ Saved board rule "${boardRule}" to default board (/board)`)
+          }
+        }
+      } catch (error) {
+        console.error('Error saving board rule to Supabase:', error)
+      }
+    }
+
+    saveToSupabase()
+  }, [boardRule]) // Only run when boardRule changes, NOT when conversationId changes
+
+  // Save board style to localStorage and Supabase when it changes
+  // If conversationId is undefined, saves to profiles.metadata (default board)
+  // If conversationId exists, saves to conversations.metadata (specific board)
+  // NOTE: Only runs when boardStyle changes, NOT when conversationId changes
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (isLoadingRef.current) return // Skip saves during loading/navigation to prevent overwriting wrong board
+
+    // Use ref to get current conversationId (doesn't trigger effect when it changes)
+    const currentConversationId = conversationIdRef.current
+
+    // Save to localStorage immediately (lightweight, instant)
+    const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+    const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
+    localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardStyle }))
+
+    // Save to Supabase in background (for cross-device sync)
+    const saveToSupabase = async () => {
+      try {
+        const supabase = createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) {
+          console.warn('Cannot save board style: user not authenticated')
+          return
+        }
+
+        if (currentConversationId) {
+          // Save to conversation metadata (specific board) - only this board's preferences
+          const { data: conversation, error: fetchError } = await supabase
+            .from('conversations')
+            .select('metadata')
+            .eq('id', currentConversationId)
+            .eq('user_id', user.id)
+            .single()
+
+          if (fetchError) {
+            console.error('Error fetching conversation for board style save:', fetchError)
+            return
+          }
+
+          const existingMetadata = (conversation?.metadata as Record<string, any>) || {}
+
+          const { error: updateError } = await supabase
+            .from('conversations')
+            .update({
+              metadata: { ...existingMetadata, boardStyle },
+            })
+            .eq('id', currentConversationId)
+            .eq('user_id', user.id)
+
+          if (updateError) {
+            console.error('Error updating conversation board style:', updateError)
+          } else {
+            console.log(`✅ Saved board style "${boardStyle}" to board ${currentConversationId}`)
+          }
+        } else {
+          // Save to profile metadata (default board /board) - only default board preferences
+          const { data: profile, error: fetchError } = await supabase
+            .from('profiles')
+            .select('metadata')
+            .eq('id', user.id)
+            .single()
+
+          if (fetchError) {
+            console.error('Error fetching profile for board style save:', fetchError)
+            return
+          }
+
+          const existingMetadata = (profile?.metadata as Record<string, any>) || {}
+
+          const { error: updateError } = await supabase
+            .from('profiles')
+            .update({
+              metadata: { ...existingMetadata, boardStyle },
+            })
+            .eq('id', user.id)
+
+          if (updateError) {
+            console.error('Error updating profile board style:', updateError)
+          } else {
+            console.log(`✅ Saved board style "${boardStyle}" to default board (/board)`)
+          }
+        }
+      } catch (error) {
+        console.error('Error saving board style to Supabase:', error)
+      }
+    }
+
+    saveToSupabase()
+  }, [boardStyle]) // Only run when boardStyle changes, NOT when conversationId changes
 
   // Save arrow direction to localStorage and Supabase when it changes
   // If conversationId is undefined, saves to profiles.metadata (default board)

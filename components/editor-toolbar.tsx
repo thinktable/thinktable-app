@@ -130,6 +130,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       }
 
       // Create a new message with role 'user' and empty content (will be editable)
+      // Mark it as a note in metadata so it renders as a simple note node, not a full chat panel
       const { data: newMessage, error } = await supabase
         .from('messages')
         .insert({
@@ -137,6 +138,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           user_id: user.id,
           role: 'user',
           content: '', // Empty content to start
+          metadata: { isNote: true }, // Mark as note to distinguish from regular chat panels
         })
         .select()
         .single()
@@ -733,8 +735,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     }
   }
 
-  // Update panel colors when fillColor or borderColor changes
+  // Update panel styling when fillColor, borderColor, borderStyle, or borderWeight changes
   // Apply to selected panels or panels connected to selected edge
+  // Also save to database (message metadata)
   useEffect(() => {
     if (!reactFlowInstance) return
 
@@ -758,7 +761,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     // If no panels to update, don't do anything
     if (panelsToUpdate.size === 0) return
 
-    // Update panels with new colors
+    // Update panels with new styling
     reactFlowInstance.setNodes((currentNodes) =>
       currentNodes.map((node) => {
         if (panelsToUpdate.has(node.id)) {
@@ -768,13 +771,74 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               ...node.data,
               fillColor: fillColor, // Update fill color
               borderColor: borderColor, // Update border color
+              borderStyle: borderStyle, // Update border style
+              borderWeight: borderWeight ? `${borderWeight}px` : undefined, // Update border weight (convert number to string)
             },
           }
         }
         return node
       })
     )
-  }, [fillColor, borderColor, clickedEdge, reactFlowInstance])
+
+    // Save panel styling to database (message metadata) for each updated panel
+    const saveStylingToDatabase = async () => {
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      for (const nodeId of panelsToUpdate) {
+        const node = nodes.find(n => n.id === nodeId)
+        if (!node || !('promptMessage' in node.data)) continue
+
+        const panelData = node.data as { promptMessage?: { id: string; metadata?: Record<string, any> } }
+        const messageId = panelData.promptMessage?.id
+        if (!messageId) continue
+
+        // Get existing metadata
+        const { data: message, error: fetchError } = await supabase
+          .from('messages')
+          .select('metadata')
+          .eq('id', messageId)
+          .single()
+
+        if (fetchError) {
+          console.error('Error fetching message for styling save:', fetchError)
+          continue
+        }
+
+        const existingMetadata = (message?.metadata as Record<string, any>) || {}
+
+        // Update metadata with new styling (only include if value is set)
+        const updatedMetadata: Record<string, any> = { ...existingMetadata }
+        if (fillColor !== undefined) {
+          updatedMetadata.fillColor = fillColor || null // Store null for empty string (transparent)
+        }
+        if (borderColor !== undefined) {
+          updatedMetadata.borderColor = borderColor || null
+        }
+        if (borderStyle !== undefined) {
+          updatedMetadata.borderStyle = borderStyle || null
+        }
+        if (borderWeight !== undefined) {
+          updatedMetadata.borderWeight = borderWeight ? `${borderWeight}px` : null
+        }
+
+        // Save to database
+        const { error: updateError } = await supabase
+          .from('messages')
+          .update({ metadata: updatedMetadata })
+          .eq('id', messageId)
+
+        if (updateError) {
+          console.error('Error saving panel styling to database:', updateError)
+        }
+      }
+    }
+
+    // Save to database (debounced to avoid too many updates)
+    const timeoutId = setTimeout(saveStylingToDatabase, 500)
+    return () => clearTimeout(timeoutId)
+  }, [fillColor, borderColor, borderStyle, borderWeight, clickedEdge, reactFlowInstance])
 
   // Track which items should be hidden based on available space (Google Docs style)
   useEffect(() => {
@@ -1685,12 +1749,21 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   <div className="px-2 py-1.5">
                     <input
                       type="color"
-                      value={fillColor}
+                      value={fillColor || '#ffffff'}
                       onChange={(e) => setFillColor(e.target.value)}
                       className="w-full h-8 rounded border border-gray-300 dark:border-gray-600 cursor-pointer"
                       title="Fill Color"
                       aria-label="Fill Color"
                     />
+                    {/* Transparent option */}
+                    <Button
+                      variant={!fillColor ? "default" : "outline"}
+                      size="sm"
+                      className="w-full mt-2 h-7 text-xs"
+                      onClick={() => setFillColor('')}
+                    >
+                      Transparent
+                    </Button>
                   </div>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -2356,12 +2429,21 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Fill Color</div>
                       <input
                         type="color"
-                        value={fillColor}
+                        value={fillColor || '#ffffff'}
                         onChange={(e) => setFillColor(e.target.value)}
                         className="w-full h-8 rounded border border-gray-300 dark:border-gray-600 cursor-pointer"
                         title="Fill Color"
                         aria-label="Fill Color"
                       />
+                      {/* Transparent option */}
+                      <Button
+                        variant={!fillColor ? "default" : "outline"}
+                        size="sm"
+                        className="w-full mt-2 h-7 text-xs"
+                        onClick={() => setFillColor('')}
+                      >
+                        Transparent
+                      </Button>
                     </div>
                     {/* Border Color */}
                     <div className="px-2 py-1.5">

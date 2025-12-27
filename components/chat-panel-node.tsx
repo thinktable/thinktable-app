@@ -189,7 +189,8 @@ function TipTapContent({
   placeholder,
   isPanelSelected,
   isLoading,
-  onCommentPopupVisibilityChange
+  onCommentPopupVisibilityChange,
+  onBlur
 }: {
   content: string
   className?: string
@@ -208,6 +209,7 @@ function TipTapContent({
   isPanelSelected?: boolean
   isLoading?: boolean
   onCommentPopupVisibilityChange?: (isVisible: boolean) => void
+  onBlur?: () => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { setActiveEditor } = useEditorContext()
@@ -314,6 +316,10 @@ function TipTapContent({
     onBlur: () => {
       // Clear active editor when blurred (optional - keep it active for toolbar)
       // setActiveEditor(null)
+      // Call custom onBlur callback if provided
+      if (onBlur) {
+        onBlur()
+      }
     },
   })
 
@@ -673,7 +679,7 @@ function TagBoxes({ responseMessageId }: { responseMessageId: string }) {
         // RLS errors (like PGRST116) are expected for messages user doesn't own
         // Only log unexpected errors
         if (error.code !== 'PGRST116' && error.message !== 'JSON object requested, multiple (or no) rows returned') {
-          console.error('Error fetching message metadata:', error)
+        console.error('Error fetching message metadata:', error)
         }
         return
       }
@@ -685,7 +691,7 @@ function TagBoxes({ responseMessageId }: { responseMessageId: string }) {
       // Silently handle errors (expected for public boards)
       // Only log if it's an unexpected error type
       if (error instanceof Error && !error.message.includes('PGRST')) {
-        console.error('Error fetching tagged study sets:', error)
+      console.error('Error fetching tagged study sets:', error)
       }
     }
   }, [responseMessageId, supabase])
@@ -2026,6 +2032,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const [hasCommentPopupVisible, setHasCommentPopupVisible] = useState(false) // Track if comment popup is visible (to hide right handle)
   const panelRef = useRef<HTMLDivElement>(null) // Ref to panel container for positioning comment box
   const commentPanelsRef = useRef<HTMLDivElement>(null) // Ref to comment panels container for click-away detection
+  const hasInitialShrunkRef = useRef(false) // Track if we've done initial shrink on load
   const promptEditorRef = useRef<any>(null) // Ref to prompt editor instance
   const responseEditorRef = useRef<any>(null) // Ref to response editor instance
   const newCommentTextareaRef = useRef<HTMLTextAreaElement>(null) // Ref for new comment textarea
@@ -2048,44 +2055,39 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   }, [])
 
   // Calculate panel background color with transparency
-  // If fillColor is provided, convert to rgba with 0.15 opacity, otherwise use default
+  // If fillColor is provided, convert to rgba with 0.15 opacity
+  // If fillColor is empty/transparent, use fully transparent background
   const panelBackgroundColor = useMemo(() => {
     if (data.fillColor) {
       return hexToRgba(data.fillColor, 0.15) // Maintain 15% opacity for transparency
     }
-    return resolvedTheme === 'dark'
-      ? 'rgba(23, 23, 23, 0.15)' // Default: 15% opacity dark background for dark mode
-      : 'rgba(255, 255, 255, 0.15)' // Default: 15% opacity white for light mode
-  }, [data.fillColor, resolvedTheme, hexToRgba])
+    return 'transparent' // Fully transparent when no fill color is set
+  }, [data.fillColor, hexToRgba])
 
   // Calculate prompt/grey area background color
   // Dark mode: 10% opacity, Light mode: 15% opacity
   // If fillColor is provided, use that color with theme-specific opacity
-  // Otherwise use default colors
+  // If fillColor is empty/transparent, use fully transparent
   const promptAreaBackgroundColor = useMemo(() => {
     if (data.fillColor) {
       // Dark mode: 10% opacity, Light mode: 15% opacity
       const opacity = resolvedTheme === 'dark' ? 0.10 : 0.15
       return hexToRgba(data.fillColor, opacity)
     }
-    return resolvedTheme === 'dark'
-      ? 'rgba(31, 31, 31, 0.10)' // Default: 10% opacity dark grey for dark mode
-      : 'rgba(249, 250, 251, 0.15)' // Default: 15% opacity grey-50 for light mode
+    return 'transparent' // Fully transparent when no fill color is set
   }, [data.fillColor, resolvedTheme, hexToRgba])
 
   // Calculate response/white area background color
   // Dark mode: 15% opacity, Light mode: 10% opacity
   // If fillColor is provided, use that color with theme-specific opacity
-  // Otherwise use default colors
+  // If fillColor is empty/transparent, use fully transparent
   const responseAreaBackgroundColor = useMemo(() => {
     if (data.fillColor) {
       // Dark mode: 15% opacity, Light mode: 10% opacity
       const opacity = resolvedTheme === 'dark' ? 0.15 : 0.10
       return hexToRgba(data.fillColor, opacity)
     }
-    return resolvedTheme === 'dark'
-      ? 'rgba(23, 23, 23, 0.15)' // Default: 15% opacity dark background for dark mode
-      : 'rgba(255, 255, 255, 0.10)' // Default: 10% opacity white for light mode
+    return 'transparent' // Fully transparent when no fill color is set
   }, [data.fillColor, resolvedTheme, hexToRgba])
 
   // Calculate handle dot color to match panel fill color
@@ -2121,9 +2123,16 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     // Default border color based on theme
     // light: border-gray-200 (#e5e7eb)
     // dark: border-[#2f2f2f] (#2f2f2f)
-    // dark: border-[#2f2f2f] (#2f2f2f)
     return resolvedTheme === 'dark' ? '#2f2f2f' : '#e5e7eb'
   }, [data.borderColor, resolvedTheme])
+
+  // Check if panel is minimal (transparent fill + no border)
+  // When minimal and not selected, handles should be hidden
+  // Handle null/undefined/empty string for fillColor and null/undefined/'none' for borderStyle
+  const isFillTransparent = !data.fillColor || data.fillColor === '' || data.fillColor === null
+  const isBorderNone = !data.borderStyle || data.borderStyle === 'none' || data.borderStyle === null
+  const isMinimalPanel = isFillTransparent && isBorderNone
+  const shouldHideHandles = isMinimalPanel && !selected
 
   // Handle click away from comment panels to deselect
   useEffect(() => {
@@ -2434,6 +2443,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
 
   // Determine if this is a flashcard - move definition up to use in hooks
   const isFlashcard = promptMessage?.metadata?.isFlashcard === true
+  // Determine if this is a note (simple note node, not a full chat panel)
+  // Check metadata.isNote flag, or if it's an empty user message with no response
+  const isNote = promptMessage?.metadata?.isNote === true || 
+    (promptMessage?.role === 'user' && 
+     !responseMessage && 
+     (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
 
   // Flashcard navigation - get all flashcards in the same board/project/study set
   // For regular boards that are part of a project, also enable cross-board navigation
@@ -2784,6 +2799,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // Get current zoom level and update panel width when zoom is 100% or less
   const [currentZoom, setCurrentZoom] = useState(reactFlowInstance?.getViewport().zoom ?? 1)
   const [panelWidthToUse, setPanelWidthToUse] = useState(isFlashcard ? 600 : 768)
+  // Ref to track current width (avoids stale closures in callbacks)
+  const panelWidthRef = useRef(isFlashcard ? 600 : 768)
+  // Track maximum width panel has been (so it doesn't grow beyond current width)
+  const [maxPanelWidth, setMaxPanelWidth] = useState(isFlashcard ? 600 : 768)
+  // Track if panel has been manually shrunk (so zoom effect doesn't override it)
+  const [isManuallyShrunk, setIsManuallyShrunk] = useState(false)
 
   // Continuously check zoom level and update panel width
   useEffect(() => {
@@ -2794,6 +2815,11 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       setCurrentZoom(zoom)
 
       const targetMaxWidth = isFlashcard ? 600 : 768
+
+      // Don't override manually shrunk width - only update if not manually shrunk
+      if (isManuallyShrunk) {
+        return // Keep the manually set width
+      }
 
       // Use dynamic width when:
       // 1. Zoom is 100% or less (<= 1.0)
@@ -2815,7 +2841,217 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     const interval = setInterval(updateZoomAndWidth, 100)
 
     return () => clearInterval(interval)
-  }, [reactFlowInstance, panelWidth])
+  }, [reactFlowInstance, panelWidth, isManuallyShrunk])
+
+  // Update max width when panel width increases (so it doesn't grow beyond current width)
+  useEffect(() => {
+    if (panelWidthToUse > maxPanelWidth) {
+      setMaxPanelWidth(panelWidthToUse)
+    }
+    // Keep ref in sync with state
+    panelWidthRef.current = panelWidthToUse
+  }, [panelWidthToUse, maxPanelWidth])
+
+  // Ensure DOM width stays in sync after any re-render (prevents wrapping on selection change)
+  useEffect(() => {
+    if (panelRef.current && panelWidthRef.current) {
+      panelRef.current.style.width = `${panelWidthRef.current}px`
+    }
+  })
+
+  // Measure text content width as single line (before wrapping) to expand panel before text wraps
+  const measureTextWidth = useCallback(() => {
+    if (!panelRef.current) return null
+
+    const panelElement = panelRef.current
+    
+    // Get all prose content elements (prompt and response)
+    const proseElements = panelElement.querySelectorAll('.prose')
+    if (proseElements.length === 0) {
+      // Fallback: check for any text content in the panel
+      const textContent = panelElement.textContent?.trim() || ''
+      if (!textContent) return null
+      // If there's text but no prose elements, measure using a temporary element
+      const tempDiv = document.createElement('div')
+      tempDiv.style.position = 'absolute'
+      tempDiv.style.visibility = 'hidden'
+      tempDiv.style.whiteSpace = 'nowrap' // Measure as single line (before wrapping)
+      tempDiv.style.fontSize = window.getComputedStyle(panelElement).fontSize || '16px'
+      tempDiv.style.fontFamily = window.getComputedStyle(panelElement).fontFamily || 'inherit'
+      tempDiv.style.fontWeight = window.getComputedStyle(panelElement).fontWeight || 'normal'
+      tempDiv.style.lineHeight = window.getComputedStyle(panelElement).lineHeight || 'normal'
+      tempDiv.textContent = textContent
+      document.body.appendChild(tempDiv)
+      const textWidth = tempDiv.offsetWidth
+      document.body.removeChild(tempDiv)
+      return Math.max(200, Math.min(textWidth + 24 + 2, maxPanelWidth))
+    }
+
+    // Create a temporary element to measure text width with nowrap
+    const tempMeasureDiv = document.createElement('div')
+    tempMeasureDiv.style.position = 'absolute'
+    tempMeasureDiv.style.visibility = 'hidden'
+    tempMeasureDiv.style.whiteSpace = 'nowrap' // Measure as single line (before wrapping)
+    tempMeasureDiv.style.fontSize = window.getComputedStyle(panelElement).fontSize || '16px'
+    tempMeasureDiv.style.fontFamily = window.getComputedStyle(panelElement).fontFamily || 'inherit'
+    tempMeasureDiv.style.fontWeight = window.getComputedStyle(panelElement).fontWeight || 'normal'
+    tempMeasureDiv.style.lineHeight = window.getComputedStyle(panelElement).lineHeight || 'normal'
+    document.body.appendChild(tempMeasureDiv)
+    
+    try {
+      // Find the maximum width needed by measuring text as single-line (before wrapping)
+      let maxContentWidth = 0
+      
+      proseElements.forEach((proseEl) => {
+        const proseElement = proseEl as HTMLElement
+        
+        // Get all block-level text elements (p, h1-h6, li, blockquote)
+        const blockElements = proseElement.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote')
+        
+        if (blockElements.length > 0) {
+          // Measure each block element's text as a single line
+          blockElements.forEach((blockEl) => {
+            const element = blockEl as HTMLElement
+            // Get plain text content (without HTML tags)
+            const textContent = element.textContent?.trim() || ''
+            if (textContent) {
+              // Set text content and measure width as single line
+              tempMeasureDiv.textContent = textContent
+              const contentWidth = tempMeasureDiv.offsetWidth
+              maxContentWidth = Math.max(maxContentWidth, contentWidth)
+            }
+          })
+        } else {
+          // Fallback: measure the prose element's text content directly
+          const textContent = proseElement.textContent?.trim() || ''
+          if (textContent) {
+            tempMeasureDiv.textContent = textContent
+            const contentWidth = tempMeasureDiv.offsetWidth
+            maxContentWidth = Math.max(maxContentWidth, contentWidth)
+          }
+        }
+      })
+
+      if (maxContentWidth === 0) return null
+
+      // Add panel padding (px-3 = 12px on each side = 24px total) and border (1px each side = 2px total)
+      const totalWidth = maxContentWidth + 24 + 2
+      
+      // Return minimum width (at least 200px for usability, but not more than max width)
+      return Math.max(200, Math.min(totalWidth, maxPanelWidth))
+    } finally {
+      // Clean up temporary element
+      document.body.removeChild(tempMeasureDiv)
+    }
+  }, [maxPanelWidth])
+
+  // Measure text width directly from HTML content string (before rendering) - prevents wrapping
+  const measureTextWidthFromContent = useCallback((content: string) => {
+    if (!content || !panelRef.current) return null
+
+    const panelElement = panelRef.current
+    
+    // Try to get styles from existing prose element (more accurate)
+    const proseElement = panelElement.querySelector('.prose') as HTMLElement
+    const stylesSource = proseElement || panelElement
+    
+    // Get computed styles from the element where text is actually rendered
+    const computedStyle = window.getComputedStyle(stylesSource)
+    
+    // Create a temporary element to measure text width
+    const tempDiv = document.createElement('div')
+    tempDiv.style.position = 'absolute'
+    tempDiv.style.visibility = 'hidden'
+    tempDiv.style.whiteSpace = 'nowrap' // Measure as single line (before wrapping)
+    tempDiv.style.fontSize = computedStyle.fontSize || '16px'
+    tempDiv.style.fontFamily = computedStyle.fontFamily || 'inherit'
+    tempDiv.style.fontWeight = computedStyle.fontWeight || 'normal'
+    tempDiv.style.lineHeight = computedStyle.lineHeight || 'normal'
+    tempDiv.style.letterSpacing = computedStyle.letterSpacing || 'normal'
+    
+    // Strip HTML tags to get plain text for measurement
+    const tempTextDiv = document.createElement('div')
+    tempTextDiv.innerHTML = content
+    const plainText = tempTextDiv.textContent || tempTextDiv.innerText || ''
+    
+    if (!plainText.trim()) return null
+    
+    tempDiv.textContent = plainText
+    document.body.appendChild(tempDiv)
+    
+    const textWidth = tempDiv.offsetWidth
+    document.body.removeChild(tempDiv)
+    
+    // Add panel padding (px-3 = 12px on each side = 24px total), border (1px each side = 2px total),
+    // and a small buffer (10px) to prevent edge-case wrapping due to font rendering differences
+    const totalWidth = textWidth + 24 + 2 + 10
+    
+    // Return minimum width (at least 200px for usability, but not more than max width)
+    return Math.max(200, Math.min(totalWidth, maxPanelWidth))
+  }, [maxPanelWidth])
+
+  // Expand panel width as text is typed (only expands, doesn't shrink while typing)
+  // Wrapping should not happen if panel is not at max width
+  // CRITICAL: Sets DOM width directly (synchronously) to prevent wrapping before React re-renders
+  const expandPanelWidth = useCallback((newContent?: string) => {
+    // Get the width to check - either from new content string or from DOM
+    let measuredTotalWidth: number | null = null
+    
+    if (newContent !== undefined) {
+      // Measure from content string (before rendering) - this prevents wrapping
+      measuredTotalWidth = measureTextWidthFromContent(newContent)
+    } else {
+      // Fallback: measure from DOM
+      measuredTotalWidth = measureTextWidth()
+    }
+    
+    if (measuredTotalWidth) {
+      // Use ref to get current width (avoids stale closure issues)
+      const currentWidth = panelWidthRef.current
+      
+      // If panel hasn't reached max width yet, expand to fit text (prevents wrapping)
+      if (currentWidth < maxPanelWidth && measuredTotalWidth > currentWidth) {
+        const newWidth = Math.min(measuredTotalWidth, maxPanelWidth) // Cap at max width
+        
+        // CRITICAL: Set width on DOM element FIRST (synchronously) to prevent wrapping
+        // React state update is async, so text would wrap before state is applied
+        if (panelRef.current) {
+          panelRef.current.style.width = `${newWidth}px`
+        }
+        
+        // Update ref immediately (synchronous)
+        panelWidthRef.current = newWidth
+        
+        // Then update state to keep it in sync (async, but DOM is already updated)
+        setPanelWidthToUse(newWidth)
+        setIsManuallyShrunk(true) // Mark as manually adjusted to prevent zoom effect from overriding
+      }
+    }
+  }, [measureTextWidth, measureTextWidthFromContent, maxPanelWidth])
+
+  // Handle blur to shrink panel to fit text content
+  const handleEditorBlur = useCallback(() => {
+    // Use setTimeout to ensure DOM has updated after blur
+    setTimeout(() => {
+      // Measure both prompt and response content as single-line (not from DOM which might be wrapped)
+      const promptWidth = measureTextWidthFromContent(promptContent) || 0
+      const responseWidth = measureTextWidthFromContent(responseContent) || 0
+      const measuredWidth = Math.max(promptWidth, responseWidth, 200) // At least 200px minimum
+      
+      const currentWidth = panelWidthRef.current
+      
+      // Only shrink if measured width is less than current width
+      if (measuredWidth < currentWidth) {
+        // Set DOM directly to avoid flicker
+        if (panelRef.current) {
+          panelRef.current.style.width = `${measuredWidth}px`
+        }
+        panelWidthRef.current = measuredWidth
+        setPanelWidthToUse(measuredWidth)
+        setIsManuallyShrunk(true) // Mark as manually shrunk to prevent zoom effect from overriding
+      }
+    }, 100) // Small delay to ensure content is measured after blur
+  }, [measureTextWidthFromContent, promptContent, responseContent])
 
   // Sync promptContent when promptMessage changes (or boardTitle for project boards)
   useEffect(() => {
@@ -2850,7 +3086,48 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     }
   }, [responseMessage?.id, responseMessage?.content, responseContent, responseHasChanges]) // Use responseMessage.id to detect when a new message is added
 
+  // Auto-shrink panel width when content is loaded (on initial mount only)
+  // This ensures panels shrink to fit text after page reload
+  useEffect(() => {
+    // Only shrink on initial load, not on every content change
+    if (hasInitialShrunkRef.current) return
+    
+    // Wait for content to be available and DOM to be ready
+    if (!promptContent && !responseContent) return // No content yet
+    
+    // Use a delay to ensure DOM has rendered
+    const timeoutId = setTimeout(() => {
+      // Measure both prompt and response content as single-line
+      const promptWidth = measureTextWidthFromContent(promptContent) || 0
+      const responseWidth = measureTextWidthFromContent(responseContent) || 0
+      const measuredWidth = Math.max(promptWidth, responseWidth, 200) // At least 200px minimum
+      
+      const currentWidth = panelWidthRef.current
+      
+      // Shrink if measured width is less than current width (only on initial load)
+      if (measuredWidth < currentWidth) {
+        // Set DOM directly to avoid flicker
+        if (panelRef.current) {
+          panelRef.current.style.width = `${measuredWidth}px`
+        }
+        panelWidthRef.current = measuredWidth
+        setPanelWidthToUse(measuredWidth)
+        setIsManuallyShrunk(true) // Mark as adjusted to prevent zoom effect from overriding
+        hasInitialShrunkRef.current = true // Mark that we've done initial shrink
+      } else {
+        // Even if we don't shrink, mark as done to prevent re-running
+        hasInitialShrunkRef.current = true
+      }
+    }, 300) // Delay to ensure content is rendered
+    
+    return () => clearTimeout(timeoutId)
+  }, [promptContent, responseContent, measureTextWidthFromContent])
+
   const handlePromptChange = async (newContent: string) => {
+    // Expand panel width FIRST (before content update) to prevent wrapping
+    // Wrapping should not happen if panel is not at max width
+    expandPanelWidth(newContent)
+    
     setPromptContent(newContent)
 
     if (isProjectBoard) {
@@ -2917,6 +3194,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const handleResponseChange = async (newContent: string) => {
     if (isProjectBoard || !responseMessage) return // Project boards: read-only
 
+    // Expand panel width FIRST (before content update) to prevent wrapping
+    // Wrapping should not happen if panel is not at max width
+    expandPanelWidth(newContent)
+    
     setResponseContent(newContent)
     // Update message in database
     const { error } = await supabase
@@ -3010,16 +3291,19 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     }
   }
 
-  // Determine if this is a component panel (empty prompt content) - check once at top level
+  // Determine if this is a component panel (empty prompt content OR a note) - check once at top level
   // Component panels should only show white editable area, no grey area, no loading spinner
   // UNLESS it's a flashcard - flashcards show grey area even if empty content
+  // Notes are always component panels (simple note nodes)
   const promptContentValue = promptMessage?.content || ''
-  const isComponentPanel = promptContentValue.trim().length === 0
+  const isComponentPanel = isNote || promptContentValue.trim().length === 0
   // const isFlashcard = promptMessage?.metadata?.isFlashcard === true // Already defined at top
   // Show grey area if: has content OR is a flashcard (even if empty) OR has response message (to show nested on response load, even if content is empty during streaming)
-  const shouldShowGreyArea = promptContentValue.trim().length > 0 || isFlashcard || !!responseMessage
+  // Notes never show grey area (they're simple note nodes)
+  const shouldShowGreyArea = !isNote && (promptContentValue.trim().length > 0 || isFlashcard || !!responseMessage)
   // Calculate loading state: response is loading when responseMessage doesn't exist or has no content yet
-  const isLoading = !responseMessage || (responseMessage && !responseMessage.content)
+  // Notes never show loading state (they don't have responses)
+  const isLoading = !isNote && (!responseMessage || (responseMessage && !responseMessage.content))
   
   // Auto-focus note editor when first created (empty component panel that's not a flashcard)
   useEffect(() => {
@@ -3068,8 +3352,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         backgroundColor: panelBackgroundColor,
         // Use custom border color only if not selected (selection takes priority)
         borderColor: selected ? undefined : (data.borderColor || undefined),
-        borderStyle: data.borderStyle as any || undefined,
-        borderWidth: data.borderWeight || undefined,
+        // When selected, always show border (override 'none' style to show blue selection border)
+        borderStyle: selected ? 'solid' : (data.borderStyle as any || undefined),
+        // When selected, ensure border width is set (default to 1px if border was 'none')
+        borderWidth: selected ? (data.borderWeight || '1px') : (data.borderWeight || undefined),
       }}
       onClick={(e) => {
         // For flashcards, expand on single click anywhere (except interactive elements)
@@ -3155,7 +3441,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             <ChevronLeft className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
           </div>
         </div>
-      ) : (
+      ) : !shouldHideHandles ? (
         <Handle
           type="target"
           position={Position.Left}
@@ -3172,7 +3458,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             border: `1px solid ${handleBorderColor}`,
           }}
         />
-      )}
+      ) : null}
 
       {/* Response section - wraps prompt area for nested structure */}
       {/* For component panels (empty prompt), show white editable area only (no grey prompt, no loading spinner) */}
@@ -3225,14 +3511,16 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 isPanelSelected={selected}
                 isLoading={isLoading}
                 onCommentPopupVisibilityChange={setHasCommentPopupVisible}
+                onBlur={handleEditorBlur}
               />
             </div>
           )
         }
 
-        // For regular component panels (not flashcards), show editable white area only (no grey prompt area, no loading spinner)
+        // For regular component panels (not flashcards) OR notes, show editable white area only (no grey prompt area, no loading spinner)
         // Component panels are just white text panels - no grey, no loading
-        if (isComponentPanel && !isFlashcard) {
+        // Notes are always component panels
+        if ((isComponentPanel && !isFlashcard) || isNote) {
           return (
             <div
               className="p-1 backdrop-blur-sm rounded-2xl pb-10 relative transition-all duration-500 overflow-visible" // Transparent for map panels - background set via inline style, 4px padding, increased corner radius, slower collapse/expand animation, pb-10 to match response panel gap
@@ -3245,7 +3533,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               {/* Note text with same margin as response panel text and same top margin as prompt panel padding */}
               <div className="px-3 pt-4 pb-0">
                 <TipTapContent
-                  content={promptContent || ''}
+                content={promptContent || promptMessage?.content || ''}
                   className="text-gray-900 dark:text-gray-100"
                   originalContent={promptMessage?.content || ''}
                   onContentChange={handlePromptChange}
@@ -3273,6 +3561,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                   placeholder=""
                   isPanelSelected={selected}
                   isLoading={isLoading}
+                onBlur={handleEditorBlur}
                 />
               </div>
               
@@ -3435,6 +3724,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                         isPanelSelected={selected}
                         isLoading={isLoading}
                         onCommentPopupVisibilityChange={setHasCommentPopupVisible}
+                        onBlur={handleEditorBlur}
                       />
                       {/* Open board button - appears inline after title text */}
                       <Button
@@ -3489,6 +3779,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                         isPanelSelected={selected}
                         isLoading={isLoading}
                         onCommentPopupVisibilityChange={setHasCommentPopupVisible}
+                        onBlur={handleEditorBlur}
                       />
                       {/* Copy button - positioned at end of text content, shows on hover - only show if there is text in prompt/question */}
                       {showPromptMoreMenu && !isResponseCollapsed && !isProjectBoard && shouldShowGreyArea && !isContentEmpty(promptContent) && (
@@ -3583,6 +3874,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                       isFlashcard={isFlashcard}
                       isPanelSelected={selected}
                       onCommentPopupVisibilityChange={setHasCommentPopupVisible}
+                      onBlur={handleEditorBlur}
                     />
                   </div>
                 </div>
@@ -3735,6 +4027,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                       isPanelSelected={selected}
                       isLoading={isLoading}
                       onCommentPopupVisibilityChange={setHasCommentPopupVisible}
+                      onBlur={handleEditorBlur}
                     />
                     {/* Open board button - appears inline after title text */}
                     <Button
@@ -3789,6 +4082,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                       isPanelSelected={selected}
                       isLoading={isLoading}
                       onCommentPopupVisibilityChange={setHasCommentPopupVisible}
+                        onBlur={handleEditorBlur}
                     />
                     {/* Copy button - positioned at end of text content, shows on hover - only show if there is text in prompt/question */}
                     {showPromptMoreMenu && !isResponseCollapsed && !isProjectBoard && shouldShowGreyArea && !isContentEmpty(promptContent) && (
@@ -3803,7 +4097,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               </div>
             )}
 
-            {/* Response content area - show loading spinner when no response yet */}
+            {/* Response content area - show loading spinner when no response yet (but not for notes) */}
+            {!isNote && (
             <div
               className={cn(
                 // Add top margin when prompt area is visible to create gap between prompt and response (increased gap)
@@ -3819,11 +4114,14 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 maxHeight: isResponseCollapsed ? '0px' : 'none',
               }}
             >
-              {/* Loading spinner in response area */}
+                {/* Loading spinner in response area - only show if loading and not a note */}
+                {isLoading && (
               <div className="px-3 pb-0 flex items-center justify-center min-h-[100px]">
                 <Loader2 className="h-6 w-6 text-gray-400 dark:text-gray-500 animate-spin" />
               </div>
+                )}
             </div>
+            )}
           </div>
         )
       })()}
@@ -4000,7 +4298,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             <ChevronRight className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
           </div>
         </div>
-      ) : !hasCommentPopupVisible ? (
+      ) : !hasCommentPopupVisible && !shouldHideHandles ? (
         <Handle
           type="source"
           position={Position.Right}
