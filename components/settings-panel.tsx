@@ -2,7 +2,7 @@
 
 // Settings panel component - slides in from right with semi-transparent backdrop
 import { useState, useEffect } from 'react'
-import { X, Settings, User as UserIcon, Shield, CreditCard, ChevronDown } from 'lucide-react'
+import { X, Settings, User as UserIcon, Shield, CreditCard, ChevronDown, Camera } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -12,6 +12,9 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useTheme } from '@/components/theme-provider'
 import type { User } from '@supabase/supabase-js'
+import { Input } from '@/components/ui/input'
+import { createClient } from '@/lib/supabase/client'
+import { useQuery } from '@tanstack/react-query'
 
 interface SettingsPanelProps {
   open: boolean
@@ -34,6 +37,36 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const [activeTab, setActiveTab] = useState<'account' | 'general' | 'security'>('account')
   const { theme, setTheme } = useTheme()
+  const supabase = createClient()
+  
+  // Fetch user profile
+  const { data: profile } = useQuery({
+    queryKey: ['user-profile', user.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('full_name, email, subscription_tier')
+        .eq('id', user.id)
+        .single()
+      
+      if (error) {
+        console.error('Error fetching profile:', error)
+        return null
+      }
+      return data
+    },
+  })
+  
+  const [displayName, setDisplayName] = useState(profile?.full_name || '')
+  const [username, setUsername] = useState(user.email?.split('@')[0] || '')
+  
+  // Update local state when profile loads
+  useEffect(() => {
+    if (profile) {
+      setDisplayName(profile.full_name || '')
+      setUsername(user.email?.split('@')[0] || '')
+    }
+  }, [profile, user.email])
 
   if (!open) return null
 
@@ -103,17 +136,91 @@ export function SettingsPanel({
             {activeTab === 'account' && (
               <div className="space-y-6">
                 <div>
-                  <h3 className="text-lg font-semibold mb-4">Account</h3>
+                  <h3 className="text-lg font-semibold mb-4 dark:text-white">Edit profile</h3>
                   
-                  {/* User Info */}
-                  <div className="space-y-4">
-                    <div>
-                      <label className="text-sm font-medium text-gray-700">Email</label>
-                      <p className="text-sm text-gray-600 mt-1">{user.email}</p>
+                  {/* Profile Avatar */}
+                  <div className="flex flex-col items-center mb-6">
+                    <div className="relative">
+                      <div className="w-20 h-20 bg-green-500 rounded-full flex items-center justify-center">
+                        <span className="text-white font-semibold text-2xl">
+                          {profile?.full_name?.split(' ').map(n => n[0]).join('').toUpperCase() || user.email?.charAt(0).toUpperCase() || 'U'}
+                        </span>
+                      </div>
+                      <button className="absolute bottom-0 right-0 w-6 h-6 bg-gray-700 rounded-full flex items-center justify-center hover:bg-gray-600 transition-colors">
+                        <Camera className="h-3 w-3 text-white" />
+                      </button>
                     </div>
-                    <div>
-                      <label className="text-sm font-medium text-gray-700">Plan</label>
-                      <p className="text-sm text-gray-600 mt-1">Free Plan</p>
+                  </div>
+                  
+                  {/* Display Name Input */}
+                  <div className="space-y-2 mb-4">
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Display name</label>
+                    <Input
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      placeholder="Enter your display name"
+                      className="dark:bg-gray-800 dark:border-gray-700"
+                    />
+                  </div>
+                  
+                  {/* Username Input */}
+                  <div className="space-y-2 mb-4">
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Username</label>
+                    <Input
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      placeholder="Enter your username"
+                      className="dark:bg-gray-800 dark:border-gray-700"
+                    />
+                  </div>
+                  
+                  {/* Description */}
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-6">
+                    Your profile helps people recognize you. Your name and username are also used in the Thinkable app.
+                  </p>
+                  
+                  {/* Save/Cancel Buttons */}
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={onClose}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={async () => {
+                        // Save profile updates
+                        const { error } = await supabase
+                          .from('profiles')
+                          .update({ full_name: displayName })
+                          .eq('id', user.id)
+                        
+                        if (error) {
+                          console.error('Error updating profile:', error)
+                        } else {
+                          onClose()
+                        }
+                      }}
+                    >
+                      Save
+                    </Button>
+                  </div>
+                  
+                  <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
+                    <h3 className="text-lg font-semibold mb-4 dark:text-white">Account</h3>
+                    
+                    {/* User Info */}
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Email</label>
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{user.email}</p>
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Plan</label>
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                          {profile?.subscription_tier === 'pro' ? 'Plus' : profile?.subscription_tier === 'enterprise' ? 'Enterprise' : 'Free Plan'}
+                        </p>
+                      </div>
                     </div>
                   </div>
 

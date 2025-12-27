@@ -250,8 +250,7 @@ function TipTapContent({
       attributes: {
         class: cn(
           'prose max-w-none focus:outline-none min-h-[20px] cursor-text',
-          isFlashcard && 'text-xl', // Increase font size for flashcards
-          isLoading && section === 'prompt' && !isFlashcard && 'shimmer' // Apply shimmer animation to prompt text when response is loading (exclude flashcards)
+          isFlashcard && 'text-xl' // Increase font size for flashcards
         ),
       },
       handleDOMEvents: {
@@ -657,6 +656,13 @@ function TagBoxes({ responseMessageId }: { responseMessageId: string }) {
     if (!responseMessageId) return
 
     try {
+      // Check if user is authenticated first (required for RLS)
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        // Not authenticated - can't fetch message metadata (expected for public homepage boards)
+        return
+      }
+
       const { data: message, error } = await supabase
         .from('messages')
         .select('metadata')
@@ -664,7 +670,11 @@ function TagBoxes({ responseMessageId }: { responseMessageId: string }) {
         .single()
 
       if (error) {
-        console.error('Error fetching message metadata:', error)
+        // RLS errors (like PGRST116) are expected for messages user doesn't own
+        // Only log unexpected errors
+        if (error.code !== 'PGRST116' && error.message !== 'JSON object requested, multiple (or no) rows returned') {
+          console.error('Error fetching message metadata:', error)
+        }
         return
       }
 
@@ -672,7 +682,11 @@ function TagBoxes({ responseMessageId }: { responseMessageId: string }) {
       const studySetIds = (metadata.studySetIds || []) as string[]
       setTaggedStudySetIds(studySetIds)
     } catch (error) {
-      console.error('Error fetching tagged study sets:', error)
+      // Silently handle errors (expected for public boards)
+      // Only log if it's an unexpected error type
+      if (error instanceof Error && !error.message.includes('PGRST')) {
+        console.error('Error fetching tagged study sets:', error)
+      }
     }
   }, [responseMessageId, supabase])
 

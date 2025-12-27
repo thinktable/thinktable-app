@@ -58,11 +58,34 @@ interface ChatPanelNodeData {
 }
 
 // Fetch messages for a conversation and create panels
+// For homepage boards, uses API route (public access via service role)
+// For regular boards, requires authentication and ownership
 async function fetchMessagesForPanels(conversationId: string): Promise<Message[]> {
   const supabase = createClient()
+  
+  // Always check if this is the homepage board first (system user's board)
+  // Homepage board should be accessible to everyone (authenticated or not)
+  try {
+    const response = await fetch('/api/homepage-board')
+    if (response.ok) {
+      const data = await response.json()
+      // Check if this is the homepage board
+      if (data.conversation?.id === conversationId) {
+        return (data.messages || []) as Message[]
+      }
+    }
+  } catch (error) {
+    // If API route fails, continue to normal fetch (might be a regular board)
+    console.error('Error fetching homepage messages from API:', error)
+  }
+  
+  // For non-homepage boards, require authentication
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
+  if (!user) {
+    return [] // Not homepage and not authenticated - no access
+  }
 
+  // Authenticated user - fetch their own boards (RLS will enforce ownership)
   const { data, error } = await supabase
     .from('messages')
     .select('id, role, content, created_at, metadata') // Include metadata to detect flashcards
@@ -112,11 +135,34 @@ function AnimatedDottedEdge({
 }
 
 // Fetch edges (connections) for a conversation - lightweight query (just message IDs)
+// For homepage boards, uses API route (public access via service role)
+// For regular boards, requires authentication and ownership
 async function fetchEdgesForConversation(conversationId: string): Promise<Array<{ source_message_id: string; target_message_id: string }>> {
   const supabase = createClient()
+  
+  // Always check if this is the homepage board first (system user's board)
+  // Homepage board should be accessible to everyone (authenticated or not)
+  try {
+    const response = await fetch('/api/homepage-board')
+    if (response.ok) {
+      const data = await response.json()
+      // Check if this is the homepage board
+      if (data.conversation?.id === conversationId) {
+        return (data.edges || []) as Array<{ source_message_id: string; target_message_id: string }>
+      }
+    }
+  } catch (error) {
+    // If API route fails, continue to normal fetch (might be a regular board)
+    console.error('Error fetching homepage edges from API:', error)
+  }
+  
+  // For non-homepage boards, require authentication
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
+  if (!user) {
+    return [] // Not homepage and not authenticated - no access
+  }
 
+  // Authenticated user - fetch their own boards (RLS will enforce ownership)
   const { data, error } = await supabase
     .from('panel_edges')
     .select('source_message_id, target_message_id')

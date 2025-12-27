@@ -9,7 +9,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import Image from 'next/image'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { Plus, Search, MoreVertical, MoreHorizontal, Trash2, ChevronLeft, ChevronRight, SquarePen, Pencil, ChevronDown, FolderPlus, File, Folder, FolderOpen, Loader2, Share2, UserPlus, Archive, CornerUpLeft } from 'lucide-react'
+import { Plus, Search, MoreVertical, MoreHorizontal, Trash2, ChevronLeft, ChevronRight, SquarePen, Pencil, ChevronDown, FolderPlus, File, Folder, FolderOpen, Loader2, Share2, UserPlus, Archive, CornerUpLeft, Sparkles, Clock, HelpCircle, LogOut, ChevronRight as ChevronRightIcon, Settings } from 'lucide-react'
 import { SettingsPanel } from '@/components/settings-panel'
 import { cn } from '@/lib/utils'
 import {
@@ -961,6 +961,36 @@ export default function AppSidebar({ user }: AppSidebarProps) {
   const supabase = createClient()
   const queryClient = useQueryClient()
   const { isMobileMode, isSidebarOpen, closeSidebar } = useSidebarContext()
+
+  // Fetch user profile for name/username and subscription tier
+  const { data: profile } = useQuery({
+    queryKey: ['user-profile', user.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('full_name, email, subscription_tier')
+        .eq('id', user.id)
+        .single()
+      
+      if (error) {
+        console.error('Error fetching profile:', error)
+        return null
+      }
+      return data
+    },
+  })
+
+  // Handle logout
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut()
+      router.push('/login')
+    } catch (error) {
+      console.error('Error signing out:', error)
+      // Still redirect even if signOut fails
+      router.push('/login')
+    }
+  }
 
   // Ensure hover works on first load when window is in focus
   useEffect(() => {
@@ -2568,32 +2598,94 @@ export default function AppSidebar({ user }: AppSidebarProps) {
             isCollapsed ? "flex items-center justify-center" : "px-4"
           )}>
             {isCollapsed ? (
-              <button
-                onClick={() => setSettingsOpen(true)}
-                className="w-8 h-8 rounded-full bg-blue-100 dark:bg-[#2a2a3a] flex items-center justify-center hover:bg-blue-200 dark:hover:bg-[#353545] transition-colors"
-                title="Settings"
-              >
-                <span className="text-blue-600 dark:text-blue-300 font-semibold text-sm">
-                  {user.email?.charAt(0).toUpperCase() || 'U'}
-                </span>
-              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className="w-8 h-8 rounded-full bg-blue-100 dark:bg-[#2a2a3a] flex items-center justify-center hover:bg-blue-200 dark:hover:bg-[#353545] transition-colors"
+                    title="Profile"
+                  >
+                    <span className="text-gray-700 dark:text-gray-300 font-semibold text-sm">
+                      {user.email?.charAt(0).toUpperCase() || 'U'}
+                    </span>
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuItem onClick={() => setSettingsOpen(true)}>
+                    <Settings className="h-4 w-4 mr-2" />
+                    Settings
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={handleLogout}>
+                    <LogOut className="h-4 w-4 mr-2" />
+                    Log out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             ) : (
-              <button
-                onClick={() => setSettingsOpen(true)}
-                className="w-full flex items-center gap-3 pl-1 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#1f1f1f] transition-colors"
-              >
-                <div className="w-8 h-8 bg-blue-100 dark:bg-[#2a2a3a] rounded-full flex items-center justify-center flex-shrink-0">
-                  <span className="text-blue-600 dark:text-blue-300 font-semibold text-sm">
-                    {user.email?.charAt(0).toUpperCase() || 'U'}
-                  </span>
-                </div>
-                <div className="flex-1 min-w-0 text-left">
-                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
-                    {user.email}
-                  </p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Free Plan</p>
-                </div>
-              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button className="w-full flex items-center gap-3 pl-1 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#1f1f1f] transition-colors">
+                    <div className="w-8 h-8 bg-blue-100 dark:bg-[#2a2a3a] rounded-full flex items-center justify-center flex-shrink-0">
+                      <span className="text-gray-700 dark:text-gray-300 font-semibold text-sm">
+                        {user.email?.charAt(0).toUpperCase() || 'U'}
+                      </span>
+                    </div>
+                    <div className="flex-1 min-w-0 text-left">
+                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                        {profile?.full_name || user.email?.split('@')[0] || 'User'}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        {profile?.subscription_tier === 'pro' ? 'Plus' : profile?.subscription_tier === 'enterprise' ? 'Enterprise' : 'Free Plan'}
+                      </p>
+                    </div>
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuItem 
+                    onClick={() => setSettingsOpen(true)}
+                    className="px-2 py-1.5 focus:bg-transparent"
+                  >
+                    <div className="w-full flex items-center gap-2">
+                      <div className="w-8 h-8 bg-blue-100 dark:bg-[#2a2a3a] rounded-full flex items-center justify-center flex-shrink-0">
+                        <span className="text-gray-700 dark:text-gray-300 font-semibold text-sm">
+                          {user.email?.charAt(0).toUpperCase() || 'U'}
+                        </span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                          {profile?.full_name || user.email?.split('@')[0] || 'User'}
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                          {user.email || 'user@example.com'}
+                        </p>
+                      </div>
+                    </div>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator className="mx-2" />
+                  <DropdownMenuItem>
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    Upgrade plan
+                  </DropdownMenuItem>
+                  <DropdownMenuItem>
+                    <Clock className="h-4 w-4 mr-2" />
+                    Personalization
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setSettingsOpen(true)}>
+                    <Settings className="h-4 w-4 mr-2" />
+                    Settings
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator className="mx-2" />
+                  <DropdownMenuItem>
+                    <HelpCircle className="h-4 w-4 mr-2" />
+                    Help
+                    <ChevronRightIcon className="h-4 w-4 ml-auto" />
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleLogout}>
+                    <LogOut className="h-4 w-4 mr-2" />
+                    Log out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
           </div>
         </div>
