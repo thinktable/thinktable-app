@@ -2032,7 +2032,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const [hasCommentPopupVisible, setHasCommentPopupVisible] = useState(false) // Track if comment popup is visible (to hide right handle)
   const panelRef = useRef<HTMLDivElement>(null) // Ref to panel container for positioning comment box
   const commentPanelsRef = useRef<HTMLDivElement>(null) // Ref to comment panels container for click-away detection
-  const hasInitialShrunkRef = useRef(false) // Track if we've done initial shrink on load
+  const hasInitialShrunkRef = useRef<string | null>(null) // Track which panel ID we've done initial shrink for
+  const [isInitialShrinkComplete, setIsInitialShrinkComplete] = useState(false) // Track if initial shrink is done (for hiding panel until ready)
   const promptEditorRef = useRef<any>(null) // Ref to prompt editor instance
   const responseEditorRef = useRef<any>(null) // Ref to response editor instance
   const newCommentTextareaRef = useRef<HTMLTextAreaElement>(null) // Ref for new comment textarea
@@ -2449,6 +2450,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     (promptMessage?.role === 'user' && 
      !responseMessage && 
      (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
+  // Regular chat panels are those that are not flashcards and not notes
+  const isRegularChatPanel = !isFlashcard && !isNote
 
   // Flashcard navigation - get all flashcards in the same board/project/study set
   // For regular boards that are part of a project, also enable cross-board navigation
@@ -2798,13 +2801,21 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
 
   // Get current zoom level and update panel width when zoom is 100% or less
   const [currentZoom, setCurrentZoom] = useState(reactFlowInstance?.getViewport().zoom ?? 1)
-  const [panelWidthToUse, setPanelWidthToUse] = useState(isFlashcard ? 600 : 768)
+  // Check if this is a note panel (from + dropdown or inline double-click) - should use fit-content width
+  const isNotePanel = promptMessage?.metadata?.isNote === true
+  // Notes use fit-content width, flashcards and regular panels use fixed width
+  const usesFitContent = isNotePanel
+  // Regular chat panels start at max width (768), flashcards start at 600, notes use fit-content
+  const initialWidth = isFlashcard ? 600 : (isRegularChatPanel ? 768 : 768) // Regular panels start at max, flashcards at 600
+  const [panelWidthToUse, setPanelWidthToUse] = useState(initialWidth)
   // Ref to track current width (avoids stale closures in callbacks)
-  const panelWidthRef = useRef(isFlashcard ? 600 : 768)
+  const panelWidthRef = useRef(initialWidth)
   // Track maximum width panel has been (so it doesn't grow beyond current width)
   const [maxPanelWidth, setMaxPanelWidth] = useState(isFlashcard ? 600 : 768)
   // Track if panel has been manually shrunk (so zoom effect doesn't override it)
   const [isManuallyShrunk, setIsManuallyShrunk] = useState(false)
+  // Track if note panel uses fit-content (to prevent zoom-based width updates)
+  const noteInitializedRef = useRef(usesFitContent)
 
   // Continuously check zoom level and update panel width
   useEffect(() => {
@@ -2819,6 +2830,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       // Don't override manually shrunk width - only update if not manually shrunk
       if (isManuallyShrunk) {
         return // Keep the manually set width
+      }
+      
+      // Note panels use fit-content and should not be affected by zoom-based width updates
+      // Let the content determine their width naturally
+      if (noteInitializedRef.current) {
+        return // Keep note panel at fit-content width
       }
 
       // Use dynamic width when:
@@ -2853,7 +2870,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   }, [panelWidthToUse, maxPanelWidth])
 
   // Ensure DOM width stays in sync after any re-render (prevents wrapping on selection change)
+  // Skip for fit-content panels - CSS handles their width automatically
   useEffect(() => {
+    if (usesFitContent) return // Don't set width for fit-content panels
+    
     if (panelRef.current && panelWidthRef.current) {
       panelRef.current.style.width = `${panelWidthRef.current}px`
     }
@@ -2990,53 +3010,88 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     return Math.max(200, Math.min(totalWidth, maxPanelWidth))
   }, [maxPanelWidth])
 
-  // Expand panel width as text is typed (only expands, doesn't shrink while typing)
+  // Expand or shrink panel width as text changes
+  // Regular chat panels only expand (never shrink), flashcards can expand and shrink
+  // Always measures both prompt and response to get the maximum width needed
   // Wrapping should not happen if panel is not at max width
   // CRITICAL: Sets DOM width directly (synchronously) to prevent wrapping before React re-renders
   const expandPanelWidth = useCallback((newContent?: string) => {
-    // Get the width to check - either from new content string or from DOM
-    let measuredTotalWidth: number | null = null
+    // Skip for fit-content panels (notes) - CSS handles their width automatically
+    if (usesFitContent) return
     
-    if (newContent !== undefined) {
-      // Measure from content string (before rendering) - this prevents wrapping
-      measuredTotalWidth = measureTextWidthFromContent(newContent)
-    } else {
-      // Fallback: measure from DOM
-      measuredTotalWidth = measureTextWidth()
-    }
+    // Always measure both prompt and response to get the maximum width needed
+    // If newContent is provided (prompt change), use it; otherwise use current promptContent
+    const promptToMeasure = newContent !== undefined ? newContent : promptContent
+    const promptWidth = measureTextWidthFromContent(promptToMeasure) || 0
+    const responseWidth = measureTextWidthFromContent(responseContent) || 0
+    
+    // Use the maximum of prompt and response widths
+    const minWidth = isFlashcard ? 300 : 200
+    const measuredTotalWidth = Math.max(promptWidth, responseWidth, minWidth)
     
     if (measuredTotalWidth) {
       // Use ref to get current width (avoids stale closure issues)
       const currentWidth = panelWidthRef.current
       
-      // If panel hasn't reached max width yet, expand to fit text (prevents wrapping)
-      if (currentWidth < maxPanelWidth && measuredTotalWidth > currentWidth) {
-        const newWidth = Math.min(measuredTotalWidth, maxPanelWidth) // Cap at max width
-        
-        // CRITICAL: Set width on DOM element FIRST (synchronously) to prevent wrapping
-        // React state update is async, so text would wrap before state is applied
-        if (panelRef.current) {
-          panelRef.current.style.width = `${newWidth}px`
+      // Regular chat panels: only expand (never shrink from max width)
+      // Flashcards: expand or shrink to fit content
+      if (isRegularChatPanel) {
+        // Only expand if text is wider than current width
+        if (measuredTotalWidth > currentWidth) {
+          const newWidth = Math.min(measuredTotalWidth, maxPanelWidth)
+          
+          // CRITICAL: Set width on DOM element FIRST (synchronously) to prevent wrapping
+          // React state update is async, so text would wrap before state is applied
+          if (panelRef.current) {
+            panelRef.current.style.width = `${newWidth}px`
+          }
+          
+          // Update ref immediately (synchronous)
+          panelWidthRef.current = newWidth
+          
+          // Then update state to keep it in sync (async, but DOM is already updated)
+          setPanelWidthToUse(newWidth)
+          setIsManuallyShrunk(true) // Mark as manually adjusted to prevent zoom effect from overriding
         }
-        
-        // Update ref immediately (synchronous)
-        panelWidthRef.current = newWidth
-        
-        // Then update state to keep it in sync (async, but DOM is already updated)
-        setPanelWidthToUse(newWidth)
-        setIsManuallyShrunk(true) // Mark as manually adjusted to prevent zoom effect from overriding
+      } else {
+        // Flashcards: expand or shrink to fit content
+        if (measuredTotalWidth !== currentWidth) {
+          const newWidth = Math.min(measuredTotalWidth, maxPanelWidth)
+          
+          // CRITICAL: Set width on DOM element FIRST (synchronously) to prevent wrapping
+          // React state update is async, so text would wrap before state is applied
+          if (panelRef.current) {
+            panelRef.current.style.width = `${newWidth}px`
+          }
+          
+          // Update ref immediately (synchronous)
+          panelWidthRef.current = newWidth
+          
+          // Then update state to keep it in sync (async, but DOM is already updated)
+          setPanelWidthToUse(newWidth)
+          setIsManuallyShrunk(true) // Mark as manually adjusted to prevent zoom effect from overriding
+        }
       }
     }
-  }, [measureTextWidth, measureTextWidthFromContent, maxPanelWidth])
+  }, [measureTextWidthFromContent, maxPanelWidth, usesFitContent, isFlashcard, isRegularChatPanel, promptContent, responseContent])
 
   // Handle blur to shrink panel to fit text content
+  // Regular chat panels don't shrink - they stay at max width
   const handleEditorBlur = useCallback(() => {
+    // Skip fit-content panels - CSS handles their width automatically
+    if (usesFitContent) return
+    
+    // Skip regular chat panels - they stay at max width and don't shrink
+    if (isRegularChatPanel) return
+    
     // Use setTimeout to ensure DOM has updated after blur
     setTimeout(() => {
       // Measure both prompt and response content as single-line (not from DOM which might be wrapped)
       const promptWidth = measureTextWidthFromContent(promptContent) || 0
       const responseWidth = measureTextWidthFromContent(responseContent) || 0
-      const measuredWidth = Math.max(promptWidth, responseWidth, 200) // At least 200px minimum
+      // Min width: flashcards need 300px for placeholder
+      const minWidth = isFlashcard ? 300 : 200
+      const measuredWidth = Math.max(promptWidth, responseWidth, minWidth)
       
       const currentWidth = panelWidthRef.current
       
@@ -3051,7 +3106,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         setIsManuallyShrunk(true) // Mark as manually shrunk to prevent zoom effect from overriding
       }
     }, 100) // Small delay to ensure content is measured after blur
-  }, [measureTextWidthFromContent, promptContent, responseContent])
+  }, [measureTextWidthFromContent, promptContent, responseContent, usesFitContent, isFlashcard, isRegularChatPanel])
 
   // Sync promptContent when promptMessage changes (or boardTitle for project boards)
   useEffect(() => {
@@ -3079,49 +3134,141 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         // If content is already HTML, use it directly; otherwise format it
         const formattedContent = formatResponseContent(newContent)
         setResponseContent(formattedContent)
+        
+        // Trigger expansion to fit response width when response loads
+        // Use a small delay to ensure content is set before measuring
+        setTimeout(() => {
+          if (!usesFitContent) {
+            expandPanelWidth() // Measure both prompt and response to expand panel
+          }
+        }, 100)
       }
     } else if (!responseMessage) {
       // If responseMessage becomes undefined, clear content
       setResponseContent('')
     }
-  }, [responseMessage?.id, responseMessage?.content, responseContent, responseHasChanges]) // Use responseMessage.id to detect when a new message is added
+  }, [responseMessage?.id, responseMessage?.content, responseContent, responseHasChanges, usesFitContent, expandPanelWidth]) // Use responseMessage.id to detect when a new message is added
 
-  // Auto-shrink panel width when content is loaded (on initial mount only)
-  // This ensures panels shrink to fit text after page reload
+  // For fit-content panels (notes), show immediately - no shrinking needed
   useEffect(() => {
-    // Only shrink on initial load, not on every content change
-    if (hasInitialShrunkRef.current) return
+    if (usesFitContent) {
+      setIsInitialShrinkComplete(true)
+    }
+  }, [usesFitContent])
+  
+  // Initial shrink on mount - ensures panels shrink to fit content when first created
+  // This is especially important for flashcards which start at 600px
+  // Regular chat panels stay at max width, only flashcards shrink
+  // Panel is hidden until shrink is complete to prevent visual jump
+  useEffect(() => {
+    // Skip fit-content panels - CSS handles their width
+    if (usesFitContent) return
     
-    // Wait for content to be available and DOM to be ready
-    if (!promptContent && !responseContent) return // No content yet
+    // Skip regular chat panels - they start at max width and don't shrink
+    if (isRegularChatPanel) {
+      setIsInitialShrinkComplete(true) // Show immediately, no shrinking needed
+      return
+    }
     
-    // Use a delay to ensure DOM has rendered
+    // Get panel ID to track if we've shrunk this specific panel
+    const panelId = promptMessage?.id || id
+    
+    // If already shrunk for this panel, show it immediately
+    if (hasInitialShrunkRef.current === panelId) {
+      setIsInitialShrinkComplete(true)
+      return
+    }
+    
+    // Wait for DOM to be ready and content to be available
     const timeoutId = setTimeout(() => {
+      if (!panelRef.current) {
+        setIsInitialShrinkComplete(true) // Show even if ref not ready
+        return
+      }
+      
       // Measure both prompt and response content as single-line
       const promptWidth = measureTextWidthFromContent(promptContent) || 0
       const responseWidth = measureTextWidthFromContent(responseContent) || 0
-      const measuredWidth = Math.max(promptWidth, responseWidth, 200) // At least 200px minimum
+      // Min width: flashcards need 300px for placeholder
+      const minWidth = isFlashcard ? 300 : 200
+      const measuredWidth = Math.max(promptWidth, responseWidth, minWidth)
       
       const currentWidth = panelWidthRef.current
       
-      // Shrink if measured width is less than current width (only on initial load)
-      if (measuredWidth < currentWidth) {
+      // Shrink if measured width is less than current width (or if empty, shrink to min)
+      if (measuredWidth < currentWidth || (!promptContent && !responseContent)) {
+        const targetWidth = (!promptContent && !responseContent) ? minWidth : measuredWidth
         // Set DOM directly to avoid flicker
         if (panelRef.current) {
-          panelRef.current.style.width = `${measuredWidth}px`
+          panelRef.current.style.width = `${targetWidth}px`
         }
-        panelWidthRef.current = measuredWidth
-        setPanelWidthToUse(measuredWidth)
+        panelWidthRef.current = targetWidth
+        setPanelWidthToUse(targetWidth)
         setIsManuallyShrunk(true) // Mark as adjusted to prevent zoom effect from overriding
-        hasInitialShrunkRef.current = true // Mark that we've done initial shrink
+        hasInitialShrunkRef.current = panelId
       } else {
-        // Even if we don't shrink, mark as done to prevent re-running
-        hasInitialShrunkRef.current = true
+        hasInitialShrunkRef.current = panelId
       }
-    }, 300) // Delay to ensure content is rendered
+      
+      // Show panel after shrink is complete
+      setIsInitialShrinkComplete(true)
+    }, 300) // Longer delay on mount to ensure DOM is ready
     
     return () => clearTimeout(timeoutId)
-  }, [promptContent, responseContent, measureTextWidthFromContent])
+  }, [promptContent, responseContent, measureTextWidthFromContent, usesFitContent, isFlashcard, isRegularChatPanel, promptMessage?.id, id]) // Include deps but use ref to prevent re-running
+  
+  // Auto-expand/shrink panel width when content changes (continuously)
+  // Regular chat panels only expand (never shrink), flashcards can expand and shrink
+  // Skip for fit-content panels (notes) - CSS handles their width automatically
+  useEffect(() => {
+    // Skip fit-content panels - CSS handles their width
+    if (usesFitContent) return
+    
+    // Wait for content to be available
+    if (!promptContent && !responseContent) return
+    
+    // Use a debounced timeout to adjust width after content changes
+    const timeoutId = setTimeout(() => {
+      // Measure both prompt and response content as single-line to get maximum width needed
+      const promptWidth = measureTextWidthFromContent(promptContent) || 0
+      const responseWidth = measureTextWidthFromContent(responseContent) || 0
+      // Min width: flashcards need 300px for placeholder, others need 200px
+      const minWidth = isFlashcard ? 300 : 200
+      const measuredWidth = Math.max(promptWidth, responseWidth, minWidth)
+      
+      const currentWidth = panelWidthRef.current
+      
+      // Regular chat panels: only expand (never shrink from max width)
+      // Flashcards: expand or shrink to fit content
+      if (isRegularChatPanel) {
+        // Only expand if content is wider than current width
+        if (measuredWidth > currentWidth) {
+          const newWidth = Math.min(measuredWidth, maxPanelWidth) // Cap at max width
+          // Set DOM directly to avoid flicker
+          if (panelRef.current) {
+            panelRef.current.style.width = `${newWidth}px`
+          }
+          panelWidthRef.current = newWidth
+          setPanelWidthToUse(newWidth)
+          setIsManuallyShrunk(true) // Mark as adjusted to prevent zoom effect from overriding
+        }
+      } else {
+        // Flashcards: expand or shrink to fit content
+        if (measuredWidth !== currentWidth) {
+          const newWidth = Math.min(measuredWidth, maxPanelWidth) // Cap at max width
+          // Set DOM directly to avoid flicker
+          if (panelRef.current) {
+            panelRef.current.style.width = `${newWidth}px`
+          }
+          panelWidthRef.current = newWidth
+          setPanelWidthToUse(newWidth)
+          setIsManuallyShrunk(true) // Mark as adjusted to prevent zoom effect from overriding
+        }
+      }
+    }, 150) // Debounce delay - shorter than blur delay for more responsive adjustment
+    
+    return () => clearTimeout(timeoutId)
+  }, [promptContent, responseContent, measureTextWidthFromContent, usesFitContent, isFlashcard, isRegularChatPanel, maxPanelWidth])
 
   const handlePromptChange = async (newContent: string) => {
     // Expand panel width FIRST (before content update) to prevent wrapping
@@ -3346,7 +3493,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       ref={panelRef}
       data-panel-container="true" // Data attribute to help find panel container for comment popup
       className={cn(
-        'group rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible backdrop-blur-sm', // Transparent with backdrop blur for map panels - increased corner radius, group class for hover detection
+        'group rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible backdrop-blur-sm transition-opacity duration-200', // Transparent with backdrop blur for map panels - increased corner radius, group class for hover detection, smooth opacity transition
         // Always show blue border when selected, otherwise use custom border color or default theme-based color
         selected ? 'border-blue-500 dark:border-blue-400' : (data.borderColor ? '' : 'border-gray-200 dark:border-[#2f2f2f]'),
         isBookmarked
@@ -3354,7 +3501,13 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           : (data.borderStyle === 'none' ? 'shadow-none' : 'shadow-sm')
       )}
       style={{
-        width: `${panelWidthToUse}px`,
+        // Note panels use fit-content width (grows with text), others use fixed width
+        width: usesFitContent ? 'fit-content' : `${panelWidthToUse}px`,
+        // Min width: notes need ~200px for padding + buttons, flashcards need ~300px for placeholder
+        minWidth: usesFitContent ? '200px' : (isFlashcard ? '300px' : undefined),
+        maxWidth: usesFitContent ? '768px' : undefined, // Cap notes at standard panel width
+        // Hide panel until initial shrink is complete (prevents visual jump)
+        opacity: isInitialShrinkComplete ? 1 : 0,
         // Use calculated panel background color with transparency maintained
         backgroundColor: panelBackgroundColor,
         // Use custom border color only if not selected (selection takes priority)

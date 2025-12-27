@@ -5289,7 +5289,7 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
       </ReactFlow>
 
       {/* I-bar cursor overlay - appears when user double-clicks on map */}
-      {/* Styled to match the text cursor in note panel editors */}
+      {/* Styled to match the text cursor in note panel editors, scales with zoom */}
       {iBarPosition && (
         <div
           className="absolute pointer-events-none"
@@ -5300,12 +5300,12 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
             zIndex: 1000,
           }}
         >
-          {/* Simple blinking vertical line - matches editor text cursor */}
+          {/* Simple blinking vertical line - scales with map zoom to stay relative */}
           <div 
             className="bg-gray-800 dark:bg-gray-100"
             style={{
-              width: '1px',
-              height: '1.2em', // Match typical text cursor height
+              width: `${1 * iBarViewport.zoom}px`, // Scale width with zoom
+              height: `${18 * iBarViewport.zoom}px`, // ~1.2em at 100% zoom, scales with map
               animation: 'blink 1s step-end infinite',
             }}
           />
