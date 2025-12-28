@@ -46,6 +46,8 @@ import {
   Redo2,
   Paintbrush,
   Share2,
+  RotateCcw,
+  PaintBucket,
   LassoSelect,
   Eraser,
   GripVertical,
@@ -72,6 +74,129 @@ interface EditorToolbarProps {
 
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const { reactFlowInstance, isLocked, setIsLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, viewMode, boardRule, setBoardRule, boardStyle, setBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge } = useReactFlowContext()
+  const borderStyleButtonRef = useRef<HTMLButtonElement>(null)
+  const borderStyleIconRef = useRef<HTMLImageElement>(null)
+  const threadStyleButtonRef = useRef<HTMLButtonElement>(null)
+  const threadStyleIconRef = useRef<HTMLImageElement>(null)
+  
+  // Track which dropdown is currently open - only one can be open at a time
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null)
+  
+  // Handler to manage dropdown open state - closes other dropdowns when one opens
+  const handleDropdownOpenChange = (dropdownId: string, isOpen: boolean) => {
+    setOpenDropdown(isOpen ? dropdownId : null)
+  }
+
+  // Update border style icon color based on hover and selected state
+  useEffect(() => {
+    const button = borderStyleButtonRef.current
+    const icon = borderStyleIconRef.current
+    if (!button || !icon) return
+
+    const updateIconColor = () => {
+      const isOpen = button.getAttribute('data-state') === 'open'
+      const isHovering = button.matches(':hover')
+      
+      if (isOpen || isHovering) {
+        // Dark color (matches text-gray-900 / black)
+        icon.style.filter = 'brightness(0) saturate(100%) invert(0%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(0%) contrast(100%)'
+        icon.style.opacity = '1'
+      } else {
+        // Default gray color (matches text-gray-600)
+        icon.style.filter = 'brightness(0) saturate(100%) invert(38%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(98%) contrast(100%)'
+        icon.style.opacity = '0.8'
+      }
+    }
+
+    // Watch for data-state changes (dropdown open/close)
+    const observer = new MutationObserver(updateIconColor)
+    observer.observe(button, {
+      attributes: true,
+      attributeFilter: ['data-state']
+    })
+
+    // Watch for hover state
+    button.addEventListener('mouseenter', updateIconColor)
+    button.addEventListener('mouseleave', updateIconColor)
+
+    // Initial update
+    updateIconColor()
+
+    return () => {
+      observer.disconnect()
+      button.removeEventListener('mouseenter', updateIconColor)
+      button.removeEventListener('mouseleave', updateIconColor)
+    }
+  }, [])
+
+  // Update thread style icon color based on hover and selected state
+  useEffect(() => {
+    const button = threadStyleButtonRef.current
+    const icon = threadStyleIconRef.current
+    if (!button || !icon) return
+
+    const updateIconColor = () => {
+      const isOpen = button.getAttribute('data-state') === 'open'
+      const isHovering = button.matches(':hover')
+      
+      if (isOpen || isHovering) {
+        // Dark color (matches text-gray-900 / black)
+        icon.style.filter = 'brightness(0) saturate(100%) invert(0%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(0%) contrast(100%)'
+        icon.style.opacity = '1'
+      } else {
+        // Default gray color (matches text-gray-600)
+        icon.style.filter = 'brightness(0) saturate(100%) invert(38%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(98%) contrast(100%)'
+        icon.style.opacity = '0.8'
+      }
+    }
+
+    // Watch for data-state changes (dropdown open/close)
+    const observer = new MutationObserver(updateIconColor)
+    observer.observe(button, {
+      attributes: true,
+      attributeFilter: ['data-state']
+    })
+
+    // Watch for hover state
+    button.addEventListener('mouseenter', updateIconColor)
+    button.addEventListener('mouseleave', updateIconColor)
+
+    // Initial update
+    updateIconColor()
+
+    return () => {
+      observer.disconnect()
+      button.removeEventListener('mouseenter', updateIconColor)
+      button.removeEventListener('mouseleave', updateIconColor)
+    }
+  }, [])
+
+  // Default values for settings
+  const DEFAULT_BOARD_RULE: 'wide' | 'college' | 'narrow' = 'college'
+  const DEFAULT_BOARD_STYLE: 'none' | 'dotted' | 'lined' | 'grid' = 'none'
+  const DEFAULT_FILL_COLOR = '#ffffff'
+  const DEFAULT_BORDER_COLOR = '#000000'
+  const DEFAULT_BORDER_WEIGHT = 1
+  const DEFAULT_BORDER_STYLE: 'solid' | 'dashed' | 'dotted' | 'none' = 'solid'
+
+  // Check if any settings differ from defaults
+  const hasNonDefaultSettings = 
+    boardRule !== DEFAULT_BOARD_RULE ||
+    boardStyle !== DEFAULT_BOARD_STYLE ||
+    fillColor !== DEFAULT_FILL_COLOR ||
+    borderColor !== DEFAULT_BORDER_COLOR ||
+    borderWeight !== DEFAULT_BORDER_WEIGHT ||
+    borderStyle !== DEFAULT_BORDER_STYLE
+
+  // Reset all settings to defaults
+  const handleResetToDefault = () => {
+    setBoardRule(DEFAULT_BOARD_RULE)
+    setBoardStyle(DEFAULT_BOARD_STYLE)
+    setFillColor(DEFAULT_FILL_COLOR)
+    setBorderColor(DEFAULT_BORDER_COLOR)
+    setBorderWeight(DEFAULT_BORDER_WEIGHT)
+    setBorderStyle(DEFAULT_BORDER_STYLE)
+  }
 
   // Hide formatting options (clear formatting to line options) when insert/draw/view mode is selected
   const shouldHideFormattingOptions = editMenuPillMode !== 'home' // Hide when not in 'home' mode
@@ -1027,7 +1152,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 autoFocus
               />
             ) : (
-              <DropdownMenu modal={false}>
+              <DropdownMenu modal={false} open={openDropdown === 'zoom'} onOpenChange={(open) => handleDropdownOpenChange('zoom', open)}>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
@@ -1393,7 +1518,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             )}
             {/* Group 5: Shapes */}
             {!isItemHidden('drawGroup5') && (
-              <DropdownMenu>
+              <DropdownMenu open={openDropdown === 'shapes'} onOpenChange={(open) => handleDropdownOpenChange('shapes', open)}>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
@@ -1426,7 +1551,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         {/* Board Style Dropdown - View Mode Only */}
         {editMenuPillMode === 'view' && !isItemHidden('boardStyle') && (
           <>
-            <DropdownMenu>
+            <DropdownMenu open={openDropdown === 'boardStyle'} onOpenChange={(open) => handleDropdownOpenChange('boardStyle', open)}>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
@@ -1499,7 +1624,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           {/* Heading Style Dropdown */}
           {!isItemHidden('heading') && !shouldHideFormattingOptions && (
             <>
-              <DropdownMenu>
+              <DropdownMenu open={openDropdown === 'heading'} onOpenChange={(open) => handleDropdownOpenChange('heading', open)}>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
@@ -1551,7 +1676,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           {/* List Dropdown */}
           {!isItemHidden('list') && !shouldHideFormattingOptions && (
             <>
-              <DropdownMenu>
+              <DropdownMenu open={openDropdown === 'list'} onOpenChange={(open) => handleDropdownOpenChange('list', open)}>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
@@ -1665,7 +1790,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           {/* Text Alignment Dropdown */}
           {!isItemHidden('alignment') && !shouldHideFormattingOptions && (
             <>
-              <DropdownMenu>
+              <DropdownMenu open={openDropdown === 'textAlign'} onOpenChange={(open) => handleDropdownOpenChange('textAlign', open)}>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
@@ -1731,17 +1856,18 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           {!isItemHidden('panelControls') && !shouldHideFormattingOptions && (
             <>
               {/* Fill Color Button */}
-              <DropdownMenu>
+              <DropdownMenu open={openDropdown === 'fillColor'} onOpenChange={(open) => handleDropdownOpenChange('fillColor', open)}>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0"
+                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex flex-col items-center justify-center gap-0.5"
                     title="Fill Color"
                   >
+                    <PaintBucket className="h-3.5 w-3.5" />
                     <div
-                      className="w-4 h-4 rounded border border-gray-300 dark:border-gray-600"
-                      style={{ backgroundColor: fillColor }}
+                      className="w-5 rounded-full"
+                      style={{ backgroundColor: fillColor || '#ffffff', height: '3px' }}
                     />
                   </Button>
                 </DropdownMenuTrigger>
@@ -1769,17 +1895,18 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               </DropdownMenu>
 
               {/* Border Color Button */}
-              <DropdownMenu>
+              <DropdownMenu open={openDropdown === 'borderColor'} onOpenChange={(open) => handleDropdownOpenChange('borderColor', open)}>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0"
+                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex flex-col items-center justify-center gap-0.5"
                     title="Border Color"
                   >
+                    <Pencil className="h-3.5 w-3.5" />
                     <div
-                      className="w-4 h-4 rounded border-2"
-                      style={{ borderColor: borderColor, backgroundColor: 'transparent' }}
+                      className="w-5 rounded-full"
+                      style={{ backgroundColor: borderColor || '#000000', height: '3px' }}
                     />
                   </Button>
                 </DropdownMenuTrigger>
@@ -1798,28 +1925,21 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               </DropdownMenu>
 
               {/* Border Settings Combined Button */}
-              <DropdownMenu>
+              <DropdownMenu open={openDropdown === 'borderStyle'} onOpenChange={(open) => handleDropdownOpenChange('borderStyle', open)}>
                 <DropdownMenuTrigger asChild>
                   <Button
+                    ref={borderStyleButtonRef}
                     variant="ghost"
                     size="sm"
-                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0"
+                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:outline-none"
                     title={`Border: ${borderWeight}px ${borderStyle}`}
                   >
-                    <div className="w-4 h-4 flex items-center justify-center opacity-80">
-                      {/* Preview of current border style and weight */}
-                      <div
-                        className="w-full"
-                        style={{
-                          borderBottomWidth: borderStyle === 'none' ? '0' : `${Math.max(borderWeight, 1)}px`,
-                          borderBottomStyle: borderStyle === 'none' ? 'solid' : borderStyle,
-                          borderBottomColor: 'currentColor',
-                          opacity: borderStyle === 'none' ? 0.3 : 1,
-                          height: borderStyle === 'none' ? '1px' : '0',
-                          backgroundColor: borderStyle === 'none' ? 'currentColor' : 'transparent'
-                        }}
-                      />
-                    </div>
+                    <img 
+                      ref={borderStyleIconRef}
+                      src="/line%20style%20icon%201.svg" 
+                      alt="Border style" 
+                      className="w-4 h-4 transition-all duration-200"
+                    />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-40">
@@ -1830,7 +1950,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <DropdownMenuRadioItem value="3" className="pl-8 text-xs">3px</DropdownMenuRadioItem>
                     <DropdownMenuRadioItem value="4" className="pl-8 text-xs">4px</DropdownMenuRadioItem>
                   </DropdownMenuRadioGroup>
-                  <DropdownMenuSeparator />
+                  <DropdownMenuSeparator className="mx-2" />
                   <DropdownMenuLabel className="text-xs font-normal text-gray-500 pl-2 py-1.5">Style</DropdownMenuLabel>
                   <DropdownMenuRadioGroup value={borderStyle} onValueChange={(value) => setBorderStyle(value as 'solid' | 'dashed' | 'dotted' | 'none')}>
                     <DropdownMenuRadioItem value="none" className="pl-8 text-xs">None</DropdownMenuRadioItem>
@@ -1848,7 +1968,53 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           {/* Arrow Direction, Line Style, Curved/Boxed Dropdowns */}
           {!isItemHidden('arrows') && !shouldHideFormattingOptions && (
             <>
-              <DropdownMenu>
+              {/* Edge Curve Dropdown (includes curve style and line style) */}
+              <DropdownMenu open={openDropdown === 'edgeCurve'} onOpenChange={(open) => handleDropdownOpenChange('edgeCurve', open)}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    ref={threadStyleButtonRef}
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:outline-none"
+                  >
+                    <img 
+                      ref={threadStyleIconRef}
+                      src="/thread%20style%20icon%203.svg" 
+                      alt="Thread style" 
+                      className="w-3.5 h-3.5 transition-all duration-200"
+                    />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-40">
+                  <DropdownMenuLabel className="text-xs font-normal text-gray-500 pl-2 py-1.5">Thread Style</DropdownMenuLabel>
+                  {/* Line Style Options */}
+                  <DropdownMenuRadioGroup 
+                    value={verticalLineStyle === 'solid' ? 'solid' : 'dashed'}
+                    onValueChange={(value) => {
+                      setVerticalLineStyle(value === 'solid' ? 'solid' : 'dotted')
+                    }}
+                  >
+                    <DropdownMenuRadioItem value="solid" className="pl-8 text-xs">Solid</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="dashed" className="pl-8 text-xs">Dashed</DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                  
+                  {/* Separator */}
+                  <DropdownMenuSeparator className="mx-2" />
+                  
+                  {/* Curve Style Options */}
+                  <DropdownMenuRadioGroup 
+                    value={lineStyle === 'curved' ? 'smooth' : 'sharp'}
+                    onValueChange={(value) => {
+                      setLineStyle(value === 'smooth' ? 'curved' : 'boxed')
+                    }}
+                  >
+                    <DropdownMenuRadioItem value="smooth" className="pl-8 text-xs">Smooth</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="sharp" className="pl-8 text-xs">Sharp</DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <DropdownMenu open={openDropdown === 'arrowDirection'} onOpenChange={(open) => handleDropdownOpenChange('arrowDirection', open)}>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
@@ -1861,108 +2027,30 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     {arrowDirection === 'right' && <ArrowRight className="h-4 w-4" />}
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-36">
+                <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
                   <DropdownMenuItem
                     onClick={() => setArrowDirection('down')}
-                    className={cn('flex items-center justify-center', arrowDirection === 'down' && 'bg-gray-100')}
+                    className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'down' && 'bg-gray-100')}
                   >
                     <ArrowDown className="h-4 w-4" />
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onClick={() => setArrowDirection('right')}
-                    className={cn('flex items-center justify-center', arrowDirection === 'right' && 'bg-gray-100')}
+                    className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'right' && 'bg-gray-100')}
                   >
                     <ArrowRight className="h-4 w-4" />
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onClick={() => setArrowDirection('left')}
-                    className={cn('flex items-center justify-center', arrowDirection === 'left' && 'bg-gray-100')}
+                    className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'left' && 'bg-gray-100')}
                   >
                     <ArrowLeft className="h-4 w-4" />
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onClick={() => setArrowDirection('up')}
-                    className={cn('flex items-center justify-center', arrowDirection === 'up' && 'bg-gray-100')}
+                    className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'up' && 'bg-gray-100')}
                   >
                     <ArrowUp className="h-4 w-4" />
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              {/* Vertical Line Dropdown */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0 text-gray-600 hover:text-gray-900 hover:bg-gray-100 flex-shrink-0"
-                  >
-                    {verticalLineStyle === 'solid' ? (
-                      <div className="w-[2px] h-4 bg-gray-600" />
-                    ) : (
-                      <div className="flex flex-col gap-0.5 h-4 items-center">
-                        <div className="w-0.5 h-1 bg-gray-600" />
-                        <div className="w-0.5 h-1 bg-gray-600" />
-                        <div className="w-0.5 h-1 bg-gray-600" />
-                      </div>
-                    )}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-36">
-                  <DropdownMenuItem
-                    onClick={() => setVerticalLineStyle('solid')}
-                    className={cn('flex items-center justify-center', verticalLineStyle === 'solid' && 'bg-gray-100')}
-                  >
-                    <div className="w-[2px] h-4 bg-gray-600" />
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => setVerticalLineStyle('dotted')}
-                    className={cn('flex items-center justify-center', verticalLineStyle === 'dotted' && 'bg-gray-100')}
-                  >
-                    <div className="flex flex-col gap-0.5 h-4 items-center">
-                      <div className="w-0.5 h-1 bg-gray-600" />
-                      <div className="w-0.5 h-1 bg-gray-600" />
-                      <div className="w-0.5 h-1 bg-gray-600" />
-                    </div>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              {/* Curved vs Boxed Line Dropdown */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0 text-gray-600 hover:text-gray-900 hover:bg-gray-100 flex-shrink-0"
-                  >
-                    {lineStyle === 'curved' ? (
-                      <div className="w-4 h-4 flex items-center justify-center">
-                        <div className="w-3 h-3 border-l-2 border-b-2 border-gray-600 rounded-bl-full" />
-                      </div>
-                    ) : (
-                      <div className="w-4 h-4 flex items-center justify-center">
-                        <div className="w-3 h-3 border-l-2 border-b-2 border-gray-600" />
-                      </div>
-                    )}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-36">
-                  <DropdownMenuItem
-                    onClick={() => setLineStyle('curved')}
-                    className={cn('flex items-center justify-center', lineStyle === 'curved' && 'bg-gray-100')}
-                  >
-                    <div className="w-4 h-4 flex items-center justify-center">
-                      <div className="w-3 h-3 border-l-2 border-b-2 border-gray-600 rounded-bl-full" />
-                    </div>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => setLineStyle('boxed')}
-                    className={cn('flex items-center justify-center', lineStyle === 'boxed' && 'bg-gray-100')}
-                  >
-                    <div className="w-4 h-4 flex items-center justify-center">
-                      <div className="w-3 h-3 border-l-2 border-b-2 border-gray-600" />
-                    </div>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -1974,7 +2062,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
 
       {/* More menu button - contains hidden items, left-aligned after collapsible items */}
       {hiddenItems.size > 0 && (
-        <DropdownMenu>
+        <DropdownMenu open={openDropdown === 'moreMenu'} onOpenChange={(open) => handleDropdownOpenChange('moreMenu', open)}>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
@@ -2510,7 +2598,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
 
       {/* Layout Dropdown - positioned just before Component button */}
       {!isItemHidden('layout') && (
-        <DropdownMenu>
+        <DropdownMenu open={openDropdown === 'layoutMode'} onOpenChange={(open) => handleDropdownOpenChange('layoutMode', open)}>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
@@ -2555,7 +2643,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       {!isItemHidden('layout') && <div className="w-px h-6 bg-gray-300 mx-1 flex-shrink-0" />}
 
       {/* Component button - dropdown with Note and Flashcard options */}
-      <DropdownMenu>
+      <DropdownMenu open={openDropdown === 'component'} onOpenChange={(open) => handleDropdownOpenChange('component', open)}>
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
@@ -2568,11 +2656,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             <Plus className="h-4 w-4 flex-shrink-0" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-40">
-          <DropdownMenuItem onClick={handleCreateNote}>
+        <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
+          <DropdownMenuItem onClick={handleCreateNote} className="rounded-sm">
             Note
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={handleCreateFlashcard}>
+          <DropdownMenuItem onClick={handleCreateFlashcard} className="rounded-sm">
             Flashcard
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -2580,6 +2668,21 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
 
       {/* Right Section - always visible, fixed position (Share and Edit Mode) */}
       <div className="flex items-center gap-1 flex-shrink-0 ml-auto mr-4" data-right-section>
+        {/* Reset to Default Button - only show when settings differ from defaults */}
+        {hasNonDefaultSettings && (
+          <div className="flex items-center pl-2 pr-0 -mr-1 flex-shrink-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0 text-gray-600 hover:text-gray-900 hover:bg-gray-100 flex-shrink-0"
+              title="Reset to default"
+              onClick={handleResetToDefault}
+            >
+              <RotateCcw className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
+
         {/* Share Button */}
         <div className="flex items-center px-2 flex-shrink-0">
           <Button
@@ -2593,7 +2696,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         </div>
 
         {/* Edit Mode Dropdown */}
-        <DropdownMenu>
+        <DropdownMenu open={openDropdown === 'editMode'} onOpenChange={(open) => handleDropdownOpenChange('editMode', open)}>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"

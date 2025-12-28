@@ -41,6 +41,7 @@ import {
 import { ChevronDown, ArrowDown, ChevronUp, Trash2 } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
+import { LeftVerticalMenu } from './left-vertical-menu'
 
 interface Message {
   id: string
@@ -1062,8 +1063,68 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
     refetchOnWindowFocus: true,
     refetchOnMount: true,
     refetchOnReconnect: true,
-    staleTime: 0, // Always consider data stale to ensure fresh edges on load
   })
+
+  // Check if board has flashcards - check messages for isFlashcard metadata
+  const hasFlashcardsInBoard = useMemo(() => {
+    if (!messages || messages.length === 0) return false
+    return messages.some((msg) => {
+      if (msg.role !== 'user') return false
+      const metadata = (msg.metadata as Record<string, any>) || {}
+      return metadata.isFlashcard === true
+    })
+  }, [messages])
+
+  // Fetch project_id from board metadata
+  const { data: boardProjectId } = useQuery({
+    queryKey: ['board-project-id', conversationId],
+    queryFn: async () => {
+      if (!conversationId) return null
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return null
+      const { data, error } = await supabase
+        .from('conversations')
+        .select('metadata')
+        .eq('id', conversationId)
+        .single()
+      if (error || !data?.metadata) return null
+      const metadata = data.metadata as Record<string, any>
+      return metadata.project_id || null
+    },
+    enabled: !!conversationId,
+  })
+
+  // Check if project has flashcards in any board
+  const { data: hasFlashcardsInProject = false } = useQuery({
+    queryKey: ['project-flashcards', boardProjectId],
+    queryFn: async () => {
+      if (!boardProjectId) return false
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return false
+      const { data: projectBoards, error: boardsError } = await supabase
+        .from('conversations')
+        .select('id')
+        .eq('user_id', user.id)
+        .contains('metadata', { project_id: boardProjectId })
+      if (boardsError || !projectBoards || projectBoards.length === 0) return false
+      const boardIds = projectBoards.map(b => b.id)
+      const { data: allMessages, error: messagesError } = await supabase
+        .from('messages')
+        .select('id, role, metadata')
+        .eq('user_id', user.id)
+        .in('conversation_id', boardIds)
+      if (messagesError || !allMessages || allMessages.length === 0) return false
+      return allMessages.some((msg) => {
+        if (msg.role !== 'user') return false
+        const metadata = (msg.metadata as Record<string, any>) || {}
+        return metadata.isFlashcard === true
+      })
+    },
+    enabled: !!boardProjectId,
+  })
+
+  // Determine if menu should be shown - show if board has flashcards OR project has flashcards
+  const shouldShowMenu = hasFlashcardsInBoard || hasFlashcardsInProject
 
   // Handle responsive minimap positioning - move up when prompt box gets close (within 16px gap, same as top bar right margin)
   // This also affects toggle position even when minimap is hidden
@@ -5840,6 +5901,11 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
       {/* Aligned to prompt box center with same gap as minimap when jumped (16px) */}
       {viewMode === 'linear' && messages.length > 0 && !isAtBottom && (
         <ReturnToBottomButton onClick={scrollToBottom} />
+      )}
+
+      {/* Left vertical menu (set menu) - show if board or project has flashcards */}
+      {shouldShowMenu && (
+        <LeftVerticalMenu conversationId={conversationId} />
       )}
     </div>
   )
