@@ -2064,7 +2064,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   >
                     <img 
                       ref={threadStyleIconRef}
-                      src="/thread%20style%20icon%203.svg" 
+                      src="/thread%20style%20icon%208.svg" 
                       alt="Thread style" 
                       className="w-3.5 h-3.5 transition-all duration-200"
                       style={{ 

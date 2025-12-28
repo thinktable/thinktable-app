@@ -3618,6 +3618,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       : !(isFlashcard && selected)  // Normal: only unblur selected flashcard
   )
 
+  // Comments should blur the same as non-flashcard map content:
+  // - Blur during nav mode when not zoomed out
+  // - Don't blur when zoomed out in nav mode
+  // - Even focused flashcard comments should blur
+  const shouldBlurComments = flashcardMode !== null && !isZoomedOutInNavMode
+
   return (
     <div
       ref={panelRef}
@@ -4742,7 +4748,13 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
 
       {/* Comment panels - appear to the right, vertically aligned with highlighted text */}
       {showComments && comments.length > 0 && (
-        <div ref={commentPanelsRef}>
+        <div 
+          ref={commentPanelsRef}
+          className={cn(
+            // Comments blur the same as non-flashcard map content during nav mode
+            shouldBlurComments && 'blur-sm opacity-40 pointer-events-none'
+          )}
+        >
           {comments.map((comment) => {
             // Calculate vertical position based on text position in editor
             const editor = comment.section === 'prompt' ? promptEditorRef.current : responseEditorRef.current
