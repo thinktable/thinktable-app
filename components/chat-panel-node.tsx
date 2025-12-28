@@ -3528,6 +3528,31 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           }
         }
       }}
+      onDoubleClick={(e) => {
+        // Double-click anywhere on panel focuses the appropriate editor
+        const target = e.target as HTMLElement
+        // Don't interfere if clicking on interactive elements or already in an editor
+        if (target.closest('button, a, [contenteditable="true"], input, textarea, select')) {
+          return
+        }
+        e.stopPropagation()
+        // Check if click is within prompt area (grey area) - focus prompt editor
+        // Otherwise focus response editor (white area)
+        const isInPromptArea = target.closest('[data-prompt-area="true"]')
+        const editorToFocus = isInPromptArea 
+          ? (promptEditorRef.current || responseEditorRef.current)
+          : (responseEditorRef.current || promptEditorRef.current)
+        if (editorToFocus && !editorToFocus.isDestroyed) {
+          setTimeout(() => {
+            editorToFocus.commands.focus()
+            // Place cursor at end of content
+            const docSize = editorToFocus.state.doc.content.size
+            if (docSize > 1) {
+              editorToFocus.commands.setTextSelection(docSize - 1)
+            }
+          }, 0)
+        }
+      }}
     >
       {/* Left handle with flashcard navigation */}
       {isFlashcard && (hasMultipleFlashcards || hasFlashcardsInOtherBoards) && previousBoardWithFlashcards && isAtFirstFlashcardInBoard && selected ? (
@@ -3593,8 +3618,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               'handle-dot-flashcard-large'
             )}
             style={{
-              backgroundColor: handleColor,
-              border: `1px solid ${handleBorderColor}`,
+              backgroundColor: isFillTransparent ? 'transparent' : handleColor,
+              border: isBorderNone ? 'none' : `1px solid ${handleBorderColor}`,
             }}
           />
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center pointer-events-none z-30">
@@ -3812,6 +3837,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               {/* Prompt section - nested inside response area, affected by response panel padding */}
               {shouldShowGreyArea && (
                 <div
+                  data-prompt-area="true"
                   className={cn(
                     "relative z-10 overflow-visible group/prompt transition-all duration-500 ease-in-out cursor-text", // Transparent grey area - background set via inline style, slower collapse/expand animation with synchronized easing, named group for prompt panel hover
                     // When expanded: no margin - prompt area is inside response padding (p-1 = 4px), so it starts at response padding position
@@ -4456,8 +4482,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               'handle-dot-flashcard-large'
             )}
             style={{
-              backgroundColor: handleColor,
-              border: `1px solid ${handleBorderColor}`,
+              backgroundColor: isFillTransparent ? 'transparent' : handleColor,
+              border: isBorderNone ? 'none' : `1px solid ${handleBorderColor}`,
             }}
           />
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center pointer-events-none z-30">

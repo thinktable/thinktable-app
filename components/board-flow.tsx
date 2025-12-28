@@ -4711,11 +4711,16 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
   const handlePaneDoubleClick = useCallback((event: React.MouseEvent) => {
     // Only proceed if we clicked directly on the pane (not on a node or other element)
     const target = event.target as HTMLElement
+    
+    // Check if click is on a node or inside a node - don't place I-bar on panels
+    const isOnNode = target.closest('.react-flow__node')
+    if (isOnNode) return // Don't place I-bar if clicking on panels/nodes
+    
     const isPane = target.classList.contains('react-flow__pane') || 
                    target.classList.contains('react-flow__background') ||
                    target.closest('.react-flow__pane')
     
-    if (!isPane) return // Don't place I-bar if clicking on nodes/edges/controls
+    if (!isPane) return // Don't place I-bar if clicking on edges/controls
     
     // Get click position relative to React Flow container
     const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
@@ -4878,6 +4883,12 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
           }
         }}
         onEdgeClick={handleEdgeClick}
+        onNodeClick={() => {
+          // Clear I-bar cursor when clicking on a node/panel
+          if (iBarPosition) {
+            setIBarPosition(null)
+          }
+        }}
         onNodeContextMenu={handleNodeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}
         onPaneClick={(event) => {
