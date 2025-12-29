@@ -2113,6 +2113,14 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     return blendHexColors(fgColor, bgColor, opacity)
   }, [data.fillColor, resolvedTheme])
 
+  // Calculate hover/active handle color - same as handleColor (matches panel background color)
+  // Uses same calculation as handleColor to match prompt panel background (with transparency blended to solid)
+  const handleHoverColor = useMemo(() => {
+    // Use the same color as default handleColor - matches panel background color calculation
+    // This ensures hover/click state uses the panel background color, not black
+    return handleColor
+  }, [handleColor])
+
   // Calculate handle border color to match panel border
   // Always use default theme border, ignore selection (dot should not turn blue) and custom colors
   const handleBorderColor = useMemo(() => {
@@ -3758,7 +3766,9 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             style={{
               backgroundColor: isFillTransparent ? 'transparent' : handleColor,
               border: isBorderNone ? 'none' : `1px solid ${handleBorderColor}`,
-            }}
+              '--handle-color': isFillTransparent ? 'transparent' : handleColor,
+              '--handle-hover-color': isFillTransparent ? 'transparent' : handleHoverColor,
+            } as React.CSSProperties}
           />
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center pointer-events-none z-30">
             <ChevronLeft className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
@@ -3779,7 +3789,9 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             height: '8px',
             backgroundColor: handleColor,
             border: `1px solid ${handleBorderColor}`,
-          }}
+            '--handle-color': handleColor,
+            '--handle-hover-color': handleHoverColor,
+          } as React.CSSProperties}
         />
       ) : null}
 
@@ -4622,7 +4634,9 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             style={{
               backgroundColor: isFillTransparent ? 'transparent' : handleColor,
               border: isBorderNone ? 'none' : `1px solid ${handleBorderColor}`,
-            }}
+              '--handle-color': isFillTransparent ? 'transparent' : handleColor,
+              '--handle-hover-color': isFillTransparent ? 'transparent' : handleHoverColor,
+            } as React.CSSProperties}
           />
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center pointer-events-none z-30">
             <ChevronRight className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
@@ -4642,7 +4656,9 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             height: '8px',
             backgroundColor: handleColor,
             border: `1px solid ${handleBorderColor}`,
-          }}
+            '--handle-color': handleColor,
+            '--handle-hover-color': handleHoverColor,
+          } as React.CSSProperties}
         />
       ) : null}
 

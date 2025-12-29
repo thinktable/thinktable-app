@@ -623,9 +623,10 @@ span[data-added="true"] {
     background-color: #9ca3af; /* Darker grey when selected - fallback only */
   }
 
-  /* Hover state - black (overrides both default and selected) */
-  .react-flow__handle.handle-dot:hover {
-    background-color: #000000 !important; /* Black on hover */
+  /* Hover/active state - uses CSS variable for handle hover color (darker version of panel background) */
+  .react-flow__handle.handle-dot:hover,
+  .react-flow__handle.handle-dot:active {
+    background-color: var(--handle-hover-color, var(--handle-color)) !important; /* Use hover color if set, fallback to default handle color */
   }
 
   /* Ensure connection line is visible during drag */
