@@ -2,6 +2,7 @@
 // Renders a freehand-drawn path as a resizable node
 import { useMemo, useEffect } from 'react'; // useMemo for memoizing scaled points calculation, useEffect for debugging
 import { NodeResizer, type Node, type NodeProps } from 'reactflow'; // React Flow node components and types
+import { useTheme } from '@/components/theme-provider'; // Theme provider for dark mode detection
 
 import { pointsToPath } from './path'; // Path generation utility
 import type { Points } from './types'; // Points type definition
@@ -29,6 +30,8 @@ export function FreehandNode({
   selected,
   dragging,
 }: NodeProps<FreehandNodeType>) {
+  const { resolvedTheme } = useTheme(); // Get current theme for dark mode support
+  
   // Debug: Log node data on mount/update
   useEffect(() => {
     console.log('🎨 FreehandNode render:', {
@@ -92,7 +95,19 @@ export function FreehandNode({
   return (
     <>
       {/* Node resizer - shows resize handles when node is selected and not dragging */}
-      <NodeResizer isVisible={selected && !dragging} />
+      <NodeResizer 
+        isVisible={selected && !dragging}
+        handleStyle={{
+          width: '12px',
+          height: '12px',
+          minWidth: '12px',
+          minHeight: '12px',
+          backgroundColor: resolvedTheme === 'dark' ? '#1a1a1a' : '#ffffff', // Dark mode support
+          border: '2px solid #9e86ed',
+          borderRadius: '2px',
+          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
+        }}
+      />
       {/* SVG container for the drawing path */}
       {/* Use calculated nodeWidth/nodeHeight which fallback to initialSize if width/height props are undefined */}
       <svg

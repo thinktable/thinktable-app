@@ -783,6 +783,12 @@ span[data-added="true"] {
     pointer-events: none !important;
   }
 
+  /* Show selection border (blue box) when freehand node is selected */
+  .react-flow__node-freehand.selected {
+    border: 2px solid #3b82f6 !important; /* Blue border like example */
+    box-shadow: none !important;
+  }
+
   .react-flow__node-freehand.selectable:focus,
   .react-flow__node-freehand.selectable:focus:active,
   .react-flow__node-freehand.selectable:hover,
@@ -828,7 +834,40 @@ span[data-added="true"] {
     cursor: crosshair;
   }
 
+  /* General resize control pointer events */
   .react-flow__resize-control {
     pointer-events: all;
+  }
+
+  /* Hide midpoint resize handles - only show corner handles (4 total) for freehand nodes */
+  /* React Flow creates 8 handles: 4 corners + 4 midpoints. Hide midpoints (handles 5-8). */
+  /* Show only the first 4 handles which are the corner handles */
+  .react-flow__node-freehand .react-flow__node-resizer .react-flow__resize-control:nth-child(n+5) {
+    display: none !important;
+  }
+
+  /* Make resize control handles bigger for freehand nodes - corner handles only */
+  /* Use very specific selectors to override React Flow's inline styles */
+  .react-flow__node-freehand.selected .react-flow__node-resizer .react-flow__resize-control,
+  .react-flow__node-freehand .react-flow__node-resizer .react-flow__resize-control {
+    width: 12px !important;
+    height: 12px !important;
+    min-width: 12px !important;
+    min-height: 12px !important;
+    max-width: 12px !important;
+    max-height: 12px !important;
+    background-color: #ffffff !important;
+    border: 2px solid #9e86ed !important;
+    border-radius: 2px !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+    /* Override any inline styles React Flow might apply */
+    box-sizing: border-box !important;
+  }
+
+  /* Dark mode resize handles for freehand nodes */
+  .dark .react-flow__node-freehand.selected .react-flow__node-resizer .react-flow__resize-control,
+  .dark .react-flow__node-freehand .react-flow__node-resizer .react-flow__resize-control {
+    background-color: #1a1a1a !important;
+    border-color: #9e86ed !important;
   }
 }
