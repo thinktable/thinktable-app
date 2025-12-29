@@ -1850,6 +1850,236 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               >
                 <span className="text-sm line-through">S</span>
               </Button>
+              {/* Text Color Dropdown - only show if color extension is available */}
+              {editor?.extensionManager.extensions.find(ext => ext.name === 'textStyle') && (() => {
+                const textColor = editor?.getAttributes('textStyle').color
+                // Convert hex to rgba with 0.15 opacity (same as response panel)
+                const hexToRgba = (hex: string, opacity: number): string => {
+                  const cleanHex = hex.replace('#', '')
+                  const r = parseInt(cleanHex.substring(0, 2), 16)
+                  const g = parseInt(cleanHex.substring(2, 4), 16)
+                  const b = parseInt(cleanHex.substring(4, 6), 16)
+                  return `rgba(${r}, ${g}, ${b}, ${opacity})`
+                }
+                const buttonBgColor = textColor ? hexToRgba(textColor, 0.15) : 'transparent'
+                
+                return (
+                  <DropdownMenu open={openDropdown === 'textColor'} onOpenChange={(open) => handleDropdownOpenChange('textColor', open)}>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={!editor}
+                        className={cn(
+                          'h-7 w-7 p-0 text-gray-600 hover:text-gray-900 flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed'
+                        )}
+                        style={{
+                          backgroundColor: buttonBgColor
+                        }}
+                        onMouseEnter={(e) => {
+                          if (buttonBgColor !== 'transparent') {
+                            // Slightly increase opacity on hover
+                            const hoverColor = textColor ? hexToRgba(textColor, 0.25) : 'transparent'
+                            e.currentTarget.style.backgroundColor = hoverColor
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = buttonBgColor
+                        }}
+                        title="Text Color"
+                      >
+                        <span className="text-xs font-semibold">A</span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-48">
+                    <DropdownMenuLabel>Text Color</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <div className="grid grid-cols-4 gap-2 p-2">
+                      {/* Default/Black */}
+                      <button
+                        onClick={() => {
+                          editor?.chain().focus().setColor('#000000').run()
+                          handleDropdownOpenChange('textColor', false)
+                        }}
+                        className={cn(
+                          'w-8 h-8 rounded border-2 flex items-center justify-center text-xs font-medium transition-all',
+                          !editor?.getAttributes('textStyle').color || editor?.getAttributes('textStyle').color === '#000000'
+                            ? 'border-gray-900 dark:border-gray-100 ring-2 ring-offset-1 ring-gray-400'
+                            : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                        )}
+                        style={{ backgroundColor: '#000000' }}
+                        title="Black"
+                      >
+                        {(!editor?.getAttributes('textStyle').color || editor?.getAttributes('textStyle').color === '#000000') && (
+                          <span className="text-white text-xs">✓</span>
+                        )}
+                      </button>
+                      {/* Red */}
+                      <button
+                        onClick={() => {
+                          editor?.chain().focus().setColor('#ef4444').run()
+                          handleDropdownOpenChange('textColor', false)
+                        }}
+                        className={cn(
+                          'w-8 h-8 rounded border-2 flex items-center justify-center text-xs font-medium transition-all',
+                          editor?.getAttributes('textStyle').color === '#ef4444'
+                            ? 'border-gray-900 dark:border-gray-100 ring-2 ring-offset-1 ring-gray-400'
+                            : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                        )}
+                        style={{ backgroundColor: '#ef4444' }}
+                        title="Red"
+                      >
+                        {editor?.getAttributes('textStyle').color === '#ef4444' && (
+                          <span className="text-white text-xs">✓</span>
+                        )}
+                      </button>
+                      {/* Orange */}
+                      <button
+                        onClick={() => {
+                          editor?.chain().focus().setColor('#f97316').run()
+                          handleDropdownOpenChange('textColor', false)
+                        }}
+                        className={cn(
+                          'w-8 h-8 rounded border-2 flex items-center justify-center text-xs font-medium transition-all',
+                          editor?.getAttributes('textStyle').color === '#f97316'
+                            ? 'border-gray-900 dark:border-gray-100 ring-2 ring-offset-1 ring-gray-400'
+                            : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                        )}
+                        style={{ backgroundColor: '#f97316' }}
+                        title="Orange"
+                      >
+                        {editor?.getAttributes('textStyle').color === '#f97316' && (
+                          <span className="text-white text-xs">✓</span>
+                        )}
+                      </button>
+                      {/* Yellow */}
+                      <button
+                        onClick={() => {
+                          editor?.chain().focus().setColor('#eab308').run()
+                          handleDropdownOpenChange('textColor', false)
+                        }}
+                        className={cn(
+                          'w-8 h-8 rounded border-2 flex items-center justify-center text-xs font-medium transition-all',
+                          editor?.getAttributes('textStyle').color === '#eab308'
+                            ? 'border-gray-900 dark:border-gray-100 ring-2 ring-offset-1 ring-gray-400'
+                            : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                        )}
+                        style={{ backgroundColor: '#eab308' }}
+                        title="Yellow"
+                      >
+                        {editor?.getAttributes('textStyle').color === '#eab308' && (
+                          <span className="text-gray-900 text-xs">✓</span>
+                        )}
+                      </button>
+                      {/* Green */}
+                      <button
+                        onClick={() => {
+                          editor?.chain().focus().setColor('#22c55e').run()
+                          handleDropdownOpenChange('textColor', false)
+                        }}
+                        className={cn(
+                          'w-8 h-8 rounded border-2 flex items-center justify-center text-xs font-medium transition-all',
+                          editor?.getAttributes('textStyle').color === '#22c55e'
+                            ? 'border-gray-900 dark:border-gray-100 ring-2 ring-offset-1 ring-gray-400'
+                            : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                        )}
+                        style={{ backgroundColor: '#22c55e' }}
+                        title="Green"
+                      >
+                        {editor?.getAttributes('textStyle').color === '#22c55e' && (
+                          <span className="text-white text-xs">✓</span>
+                        )}
+                      </button>
+                      {/* Blue */}
+                      <button
+                        onClick={() => {
+                          editor?.chain().focus().setColor('#3b82f6').run()
+                          handleDropdownOpenChange('textColor', false)
+                        }}
+                        className={cn(
+                          'w-8 h-8 rounded border-2 flex items-center justify-center text-xs font-medium transition-all',
+                          editor?.getAttributes('textStyle').color === '#3b82f6'
+                            ? 'border-gray-900 dark:border-gray-100 ring-2 ring-offset-1 ring-gray-400'
+                            : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                        )}
+                        style={{ backgroundColor: '#3b82f6' }}
+                        title="Blue"
+                      >
+                        {editor?.getAttributes('textStyle').color === '#3b82f6' && (
+                          <span className="text-white text-xs">✓</span>
+                        )}
+                      </button>
+                      {/* Purple */}
+                      <button
+                        onClick={() => {
+                          editor?.chain().focus().setColor('#a855f7').run()
+                          handleDropdownOpenChange('textColor', false)
+                        }}
+                        className={cn(
+                          'w-8 h-8 rounded border-2 flex items-center justify-center text-xs font-medium transition-all',
+                          editor?.getAttributes('textStyle').color === '#a855f7'
+                            ? 'border-gray-900 dark:border-gray-100 ring-2 ring-offset-1 ring-gray-400'
+                            : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                        )}
+                        style={{ backgroundColor: '#a855f7' }}
+                        title="Purple"
+                      >
+                        {editor?.getAttributes('textStyle').color === '#a855f7' && (
+                          <span className="text-white text-xs">✓</span>
+                        )}
+                      </button>
+                      {/* Pink */}
+                      <button
+                        onClick={() => {
+                          editor?.chain().focus().setColor('#ec4899').run()
+                          handleDropdownOpenChange('textColor', false)
+                        }}
+                        className={cn(
+                          'w-8 h-8 rounded border-2 flex items-center justify-center text-xs font-medium transition-all',
+                          editor?.getAttributes('textStyle').color === '#ec4899'
+                            ? 'border-gray-900 dark:border-gray-100 ring-2 ring-offset-1 ring-gray-400'
+                            : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                        )}
+                        style={{ backgroundColor: '#ec4899' }}
+                        title="Pink"
+                      >
+                        {editor?.getAttributes('textStyle').color === '#ec4899' && (
+                          <span className="text-white text-xs">✓</span>
+                        )}
+                      </button>
+                      {/* Gray */}
+                      <button
+                        onClick={() => {
+                          editor?.chain().focus().setColor('#6b7280').run()
+                          handleDropdownOpenChange('textColor', false)
+                        }}
+                        className={cn(
+                          'w-8 h-8 rounded border-2 flex items-center justify-center text-xs font-medium transition-all',
+                          editor?.getAttributes('textStyle').color === '#6b7280'
+                            ? 'border-gray-900 dark:border-gray-100 ring-2 ring-offset-1 ring-gray-400'
+                            : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'
+                        )}
+                        style={{ backgroundColor: '#6b7280' }}
+                        title="Gray"
+                      >
+                        {editor?.getAttributes('textStyle').color === '#6b7280' && (
+                          <span className="text-white text-xs">✓</span>
+                        )}
+                      </button>
+                    </div>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() => {
+                        editor?.chain().focus().unsetColor().run()
+                        handleDropdownOpenChange('textColor', false)
+                      }}
+                    >
+                      Remove Color
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                  </DropdownMenu>
+                )
+              })()}
               {/* Highlight Button */}
               <Button
                 variant="ghost"
@@ -1939,18 +2169,41 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               {/* Fill Color Button */}
               <DropdownMenu open={openDropdown === 'fillColor'} onOpenChange={(open) => handleDropdownOpenChange('fillColor', open)}>
                 <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex flex-col items-center justify-center gap-0.5"
-                    title="Fill Color"
-                  >
-                    <PaintBucket className="h-3.5 w-3.5" />
-                    <div
-                      className="w-5 rounded-full"
-                      style={{ backgroundColor: fillColor || '#ffffff', height: '3px' }}
-                    />
-                  </Button>
+                  {(() => {
+                    // Convert hex to rgba with 0.15 opacity (same as response panel)
+                    const hexToRgba = (hex: string, opacity: number): string => {
+                      const cleanHex = hex.replace('#', '')
+                      const r = parseInt(cleanHex.substring(0, 2), 16)
+                      const g = parseInt(cleanHex.substring(2, 4), 16)
+                      const b = parseInt(cleanHex.substring(4, 6), 16)
+                      return `rgba(${r}, ${g}, ${b}, ${opacity})`
+                    }
+                    const buttonBgColor = fillColor ? hexToRgba(fillColor, 0.15) : 'transparent'
+                    
+                    return (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center justify-center"
+                        style={{
+                          backgroundColor: buttonBgColor
+                        }}
+                        onMouseEnter={(e) => {
+                          if (buttonBgColor !== 'transparent' && fillColor) {
+                            // Slightly increase opacity on hover
+                            const hoverColor = hexToRgba(fillColor, 0.25)
+                            e.currentTarget.style.backgroundColor = hoverColor
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = buttonBgColor
+                        }}
+                        title="Fill Color"
+                      >
+                        <PaintBucket className="h-3.5 w-3.5" />
+                      </Button>
+                    )
+                  })()}
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-48">
                   <div className="px-2 py-1.5">
@@ -1978,18 +2231,41 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               {/* Border Color Button */}
               <DropdownMenu open={openDropdown === 'borderColor'} onOpenChange={(open) => handleDropdownOpenChange('borderColor', open)}>
                 <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex flex-col items-center justify-center gap-0.5"
-                    title="Border Color"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                    <div
-                      className="w-5 rounded-full"
-                      style={{ backgroundColor: borderColor || '#000000', height: '3px' }}
-                    />
-                  </Button>
+                  {(() => {
+                    // Convert hex to rgba with 0.15 opacity (same as response panel)
+                    const hexToRgba = (hex: string, opacity: number): string => {
+                      const cleanHex = hex.replace('#', '')
+                      const r = parseInt(cleanHex.substring(0, 2), 16)
+                      const g = parseInt(cleanHex.substring(2, 4), 16)
+                      const b = parseInt(cleanHex.substring(4, 6), 16)
+                      return `rgba(${r}, ${g}, ${b}, ${opacity})`
+                    }
+                    const buttonBgColor = borderColor ? hexToRgba(borderColor, 0.15) : 'transparent'
+                    
+                    return (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center justify-center"
+                        style={{
+                          backgroundColor: buttonBgColor
+                        }}
+                        onMouseEnter={(e) => {
+                          if (buttonBgColor !== 'transparent' && borderColor) {
+                            // Slightly increase opacity on hover
+                            const hoverColor = hexToRgba(borderColor, 0.25)
+                            e.currentTarget.style.backgroundColor = hoverColor
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = buttonBgColor
+                        }}
+                        title="Border Color"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                    )
+                  })()}
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-48">
                   <div className="px-2 py-1.5">

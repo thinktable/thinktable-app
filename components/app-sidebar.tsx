@@ -653,107 +653,6 @@ function DroppableProjectItem({
   )
 }
 
-// Study set item component - similar to board item but for study sets
-function StudySetItem({
-  studySet,
-  isActive,
-  pathname,
-  openRenameDialog,
-  openDeleteDialog,
-  isRenaming,
-  deletingStudySetId,
-  supabase,
-  queryClient,
-}: {
-  studySet: { id: string; name: string }
-  isActive: boolean
-  pathname: string
-  openRenameDialog: (studySet: { id: string; name: string }) => void
-  openDeleteDialog: (studySet: { id: string; name: string }) => void
-  isRenaming: boolean
-  deletingStudySetId: string | null
-  supabase: ReturnType<typeof createClient>
-  queryClient: ReturnType<typeof useQueryClient>
-}) {
-  return (
-    <li>
-      <div
-        className={cn(
-          'flex items-center gap-2 px-4 h-8 rounded-lg transition-colors text-sm group',
-          isActive
-            ? 'bg-blue-50 dark:bg-[#2a2a3a]'
-            : 'hover:bg-gray-50 dark:hover:bg-[#1f1f1f]'
-        )}
-      >
-        <Link
-          href={`/study-set/${studySet.id}`}
-          className="flex items-center gap-2 flex-1 min-w-0 text-gray-700 dark:text-gray-300"
-        >
-          <span className="truncate flex-1">{studySet.name}</span>
-        </Link>
-
-        {/* Dropdown menu button */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn(
-                'h-8 w-6 transition-opacity hover:bg-transparent',
-                'opacity-0 group-hover:opacity-100', // CSS group-hover requires window focus (as intended)
-                isActive
-                  ? 'text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-900'
-                  : 'text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200'
-              )}
-              onClick={(e) => {
-                e.stopPropagation()
-                e.preventDefault()
-              }}
-            >
-              <MoreHorizontal className="h-8 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem
-              onClick={(e) => {
-                e.stopPropagation()
-                // Share functionality - copy study set URL to clipboard
-                const studySetUrl = `${window.location.origin}/study-set/${studySet.id}`
-                navigator.clipboard.writeText(studySetUrl)
-                // TODO: Show toast notification
-              }}
-            >
-              <Share2 className="h-4 w-4 mr-2" />
-              Share
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={(e) => {
-                e.stopPropagation()
-                openRenameDialog(studySet)
-              }}
-              disabled={isRenaming}
-            >
-              <Pencil className="h-4 w-4 mr-2" />
-              Rename
-            </DropdownMenuItem>
-            <DropdownMenuSeparator className="mx-2 my-1" />
-            <DropdownMenuItem
-              onClick={(e) => {
-                e.stopPropagation()
-                openDeleteDialog(studySet)
-              }}
-              disabled={deletingStudySetId === studySet.id}
-              className="text-red-600 focus:text-red-600 focus:bg-red-50"
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              {deletingStudySetId === studySet.id ? 'Deleting...' : 'Delete'}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </li>
-  )
-}
 
 // Boards section header component - NOT droppable, just a header
 function BoardsSectionHeader({
@@ -809,32 +708,6 @@ interface Project {
   position?: number // Optional position field for ordering
 }
 
-// Fetch study sets from user metadata
-async function fetchStudySets(): Promise<Array<{ id: string; name: string }>> {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
-
-  try {
-    const { data: profile, error } = await supabase
-      .from('profiles')
-      .select('metadata')
-      .eq('id', user.id)
-      .single()
-
-    if (error) {
-      console.error('Error fetching study sets:', error)
-      return []
-    }
-
-    const studySets = (profile?.metadata as Record<string, any>)?.studySets || []
-    console.log('📚 Fetched study sets:', studySets.length, 'sets:', studySets.map((s: any) => s.name))
-    return Array.isArray(studySets) ? studySets : []
-  } catch (error) {
-    console.error('Error fetching study sets:', error)
-    return []
-  }
-}
 
 // Fetch conversations/boards for the user
 async function fetchConversations(): Promise<Conversation[]> {
@@ -931,7 +804,6 @@ export default function AppSidebar({ user }: AppSidebarProps) {
   const [isRenaming, setIsRenaming] = useState(false)
   const [isBoardsExpanded, setIsBoardsExpanded] = useState(true) // Boards section expanded/collapsed state
   const [isArchiveExpanded, setIsArchiveExpanded] = useState(false) // Archive section expanded/collapsed state (collapsed by default)
-  const [isStudySetsExpanded, setIsStudySetsExpanded] = useState(true) // Study Sets section expanded/collapsed state
   const [isProjectsExpanded, setIsProjectsExpanded] = useState(true) // Projects section expanded/collapsed state
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set()) // Track which individual projects are expanded
   const [activeId, setActiveId] = useState<string | null>(null) // Currently dragging board ID
@@ -948,13 +820,6 @@ export default function AppSidebar({ user }: AppSidebarProps) {
   const [projectToRename, setProjectToRename] = useState<{ id: string; name: string } | null>(null) // Project to rename
   const [projectRenameInput, setProjectRenameInput] = useState('') // Project rename input
   const [isRenamingProject, setIsRenamingProject] = useState(false) // Renaming project state
-  const [showDeleteStudySetDialog, setShowDeleteStudySetDialog] = useState(false) // Delete study set dialog state
-  const [studySetToDelete, setStudySetToDelete] = useState<{ id: string; name: string } | null>(null) // Study set to delete
-  const [deletingStudySetId, setDeletingStudySetId] = useState<string | null>(null) // Currently deleting study set ID
-  const [showRenameStudySetDialog, setShowRenameStudySetDialog] = useState(false) // Rename study set dialog state
-  const [studySetToRename, setStudySetToRename] = useState<{ id: string; name: string } | null>(null) // Study set to rename
-  const [studySetRenameInput, setStudySetRenameInput] = useState('') // Study set rename input
-  const [isRenamingStudySet, setIsRenamingStudySet] = useState(false) // Renaming study set state
   const mouseMoveCleanupRef = useRef<(() => void) | null>(null) // Cleanup function for mouse move listener
   const currentMouseYRef = useRef<number | null>(null) // Track current mouse Y position for accurate indicator placement
   const projectsExpandedInitializedRef = useRef(false) // Track if we've initialized project expansion
@@ -1488,20 +1353,6 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     refetchOnWindowFocus: true,
   })
 
-  // Fetch study sets
-  const { data: studySets = [], isLoading: isLoadingStudySets, error: studySetsError } = useQuery({
-    queryKey: ['studySets'],
-    queryFn: fetchStudySets,
-    refetchOnWindowFocus: true,
-  })
-
-  // Debug: Log study sets data
-  useEffect(() => {
-    console.log('📚 Sidebar: studySets state:', studySets.length, 'sets:', studySets.map(s => s.name))
-    if (studySetsError) {
-      console.error('📚 Sidebar: Error fetching study sets:', studySetsError)
-    }
-  }, [studySets, studySetsError])
 
   // Set up Supabase Realtime subscription for conversation updates (most reliable)
   useEffect(() => {
@@ -1604,30 +1455,6 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     }
   }, [user.id, refetchProjects, queryClient, supabase])
 
-  // Set up Supabase Realtime subscription for study sets (profile metadata updates)
-  useEffect(() => {
-    const channel = supabase
-      .channel('study-sets-updates')
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'profiles',
-          filter: `id=eq.${user.id}`,
-        },
-        (payload) => {
-          console.log('🔄 Sidebar: Profile updated via Realtime (study sets may have changed)')
-          // Immediately invalidate and refetch study sets
-          queryClient.invalidateQueries({ queryKey: ['studySets'] })
-        }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [user.id, queryClient, supabase])
 
   // Listen for conversation creation/update events to refetch (fallback)
   useEffect(() => {
@@ -1865,126 +1692,6 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     setShowRenameDialog(true)
   }
 
-  // Open delete study set dialog
-  const openDeleteStudySetDialog = (studySet: { id: string; name: string }) => {
-    setStudySetToDelete(studySet)
-    setShowDeleteStudySetDialog(true)
-  }
-
-  // Open rename study set dialog
-  const openRenameStudySetDialog = (studySet: { id: string; name: string }) => {
-    setStudySetToRename(studySet)
-    setStudySetRenameInput(studySet.name)
-    setShowRenameStudySetDialog(true)
-  }
-
-  // Handle delete study set
-  const handleDeleteStudySet = async () => {
-    if (!studySetToDelete) return
-
-    setDeletingStudySetId(studySetToDelete.id)
-    setShowDeleteStudySetDialog(false)
-
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) throw new Error('User not authenticated')
-
-      // Get current profile metadata
-      const { data: profile, error: fetchError } = await supabase
-        .from('profiles')
-        .select('metadata')
-        .eq('id', user.id)
-        .single()
-
-      if (fetchError) throw new Error(fetchError.message || 'Failed to fetch profile')
-
-      const existingMetadata = (profile?.metadata as Record<string, any>) || {}
-      const studySets = (existingMetadata.studySets || []) as Array<{ id: string; name: string }>
-
-      // Remove the study set from the array
-      const updatedStudySets = studySets.filter((set) => set.id !== studySetToDelete.id)
-
-      // Update profile metadata
-      const { error } = await supabase
-        .from('profiles')
-        .update({
-          metadata: { ...existingMetadata, studySets: updatedStudySets },
-        })
-        .eq('id', user.id)
-
-      if (error) {
-        throw new Error(error.message || 'Failed to delete study set')
-      }
-
-      // Invalidate queries to refresh the list
-      await queryClient.invalidateQueries({ queryKey: ['studySets'] })
-
-      // If we're currently viewing this study set, redirect to /board
-      if (pathname === `/study-set/${studySetToDelete.id}`) {
-        router.push('/board')
-      }
-    } catch (error: any) {
-      console.error('Failed to delete study set:', error)
-      alert(error.message || 'Failed to delete study set. Please try again.')
-    } finally {
-      setDeletingStudySetId(null)
-      setStudySetToDelete(null)
-    }
-  }
-
-  // Handle rename study set
-  const handleRenameStudySet = async () => {
-    if (!studySetToRename || !studySetRenameInput.trim()) return
-
-    setIsRenamingStudySet(true)
-
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) throw new Error('User not authenticated')
-
-      // Get current profile metadata
-      const { data: profile, error: fetchError } = await supabase
-        .from('profiles')
-        .select('metadata')
-        .eq('id', user.id)
-        .single()
-
-      if (fetchError) throw new Error(fetchError.message || 'Failed to fetch profile')
-
-      const existingMetadata = (profile?.metadata as Record<string, any>) || {}
-      const studySets = (existingMetadata.studySets || []) as Array<{ id: string; name: string }>
-
-      // Update the study set name in the array
-      const updatedStudySets = studySets.map((set) =>
-        set.id === studySetToRename.id ? { ...set, name: studySetRenameInput.trim() } : set
-      )
-
-      // Update profile metadata
-      const { error } = await supabase
-        .from('profiles')
-        .update({
-          metadata: { ...existingMetadata, studySets: updatedStudySets },
-        })
-        .eq('id', user.id)
-
-      if (error) {
-        throw new Error(error.message || 'Failed to rename study set')
-      }
-
-      // Invalidate queries to refresh the list
-      await queryClient.invalidateQueries({ queryKey: ['studySets'] })
-
-      // Close dialog and reset form
-      setShowRenameStudySetDialog(false)
-      setStudySetToRename(null)
-      setStudySetRenameInput('')
-    } catch (error: any) {
-      console.error('Failed to rename study set:', error)
-      alert(error.message || 'Failed to rename study set. Please try again.')
-    } finally {
-      setIsRenamingStudySet(false)
-    }
-  }
 
   // Handle rename conversation/board
   const handleRenameConversation = async () => {
@@ -2306,48 +2013,6 @@ export default function AppSidebar({ user }: AppSidebarProps) {
               onDragEnd={handleDragEnd}
               onDragOver={handleDragOver}
             >
-              {/* Study Sets Header */}
-              <div
-                className="flex items-center gap-1 pl-1 py-2 text-xs font-medium text-gray-500 hover:text-gray-700 cursor-pointer group transition-colors rounded-lg min-h-[32px]"
-                onClick={() => setIsStudySetsExpanded(!isStudySetsExpanded)}
-              >
-                <span>Study Sets</span>
-                <ChevronDown
-                  className={cn(
-                    'h-3 w-3 opacity-0 group-hover:opacity-100 transition-all duration-200',
-                    !isStudySetsExpanded && 'group-hover:-rotate-90'
-                  )}
-                />
-              </div>
-
-              {/* Study Sets List - collapsible */}
-              {isStudySetsExpanded && (
-                <div className="space-y-1">
-                  {studySets.length > 0 ? (
-                    <ul className="space-y-1">
-                      {studySets.map((studySet) => (
-                        <StudySetItem
-                          key={studySet.id}
-                          studySet={studySet}
-                          isActive={pathname === `/study-set/${studySet.id}`}
-                          pathname={pathname}
-                          openRenameDialog={openRenameStudySetDialog}
-                          openDeleteDialog={openDeleteStudySetDialog}
-                          isRenaming={isRenamingStudySet}
-                          deletingStudySetId={deletingStudySetId}
-                          supabase={supabase}
-                          queryClient={queryClient}
-                        />
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="px-4 py-2 text-xs text-gray-500 dark:text-gray-400">
-                      No study sets yet
-                    </div>
-                  )}
-                </div>
-              )}
-
               {/* Projects Header - only show if projects exist */}
               {projects.length > 0 && (
                 <>
@@ -2883,87 +2548,6 @@ export default function AppSidebar({ user }: AppSidebarProps) {
           </DialogContent>
         </Dialog>
 
-        {/* Rename Study Set Dialog */}
-        <Dialog open={showRenameStudySetDialog} onOpenChange={setShowRenameStudySetDialog}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle className="text-lg font-semibold">Rename study set</DialogTitle>
-              <DialogDescription className="text-sm text-gray-600 pt-2">
-                Enter a new name for this study set.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="pt-4">
-              <Input
-                value={studySetRenameInput}
-                onChange={(e) => setStudySetRenameInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && studySetRenameInput.trim() && !isRenamingStudySet) {
-                    handleRenameStudySet()
-                  }
-                }}
-                placeholder="Study set name"
-                className="w-full"
-                autoFocus
-              />
-            </div>
-            <DialogFooter className="flex-row justify-end gap-2 pt-4">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setShowRenameStudySetDialog(false)
-                  setStudySetToRename(null)
-                  setStudySetRenameInput('')
-                }}
-                className="px-4 py-2"
-                disabled={isRenamingStudySet}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleRenameStudySet}
-                disabled={!studySetRenameInput.trim() || isRenamingStudySet}
-                className="px-4 py-2"
-              >
-                {isRenamingStudySet ? 'Renaming...' : 'Rename'}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* Delete Study Set Confirmation Dialog */}
-        <Dialog open={showDeleteStudySetDialog} onOpenChange={setShowDeleteStudySetDialog}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle className="text-lg font-semibold">Delete study set?</DialogTitle>
-              <DialogDescription className="text-sm text-gray-600 pt-2">
-                This will delete <span className="font-semibold text-gray-900">{studySetToDelete?.name}</span>.
-              </DialogDescription>
-              <DialogDescription className="text-sm text-gray-500 pt-1">
-                The study set will be permanently deleted. Flashcards in this study set will not be deleted.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter className="flex-row justify-end gap-2 pt-4">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setShowDeleteStudySetDialog(false)
-                  setStudySetToDelete(null)
-                }}
-                className="px-4 py-2"
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                onClick={handleDeleteStudySet}
-                disabled={deletingStudySetId !== null}
-                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white"
-              >
-                {deletingStudySetId ? 'Deleting...' : 'Delete'}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
       </div>
     </>
   )
