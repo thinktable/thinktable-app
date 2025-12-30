@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Plus, Search, MoreVertical, MoreHorizontal, Trash2, ChevronLeft, ChevronRight, SquarePen, Pencil, ChevronDown, FolderPlus, File, Folder, FolderOpen, Loader2, Share2, UserPlus, Archive, CornerUpLeft, Sparkles, Clock, HelpCircle, LogOut, ChevronRight as ChevronRightIcon, Settings } from 'lucide-react'
 import { SettingsPanel } from '@/components/settings-panel'
+import { UpgradePanel } from '@/components/upgrade-panel'
 import { cn } from '@/lib/utils'
 import {
   DropdownMenu,
@@ -794,6 +795,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
   const [isDeleting, setIsDeleting] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null)
   const [isCollapsed, setIsCollapsed] = useState(false) // Sidebar collapse state
   const [showDeleteBoardDialog, setShowDeleteBoardDialog] = useState(false)
@@ -2300,9 +2302,29 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                         {profile?.full_name || user.email?.split('@')[0] || 'User'}
                       </p>
                       <p className="text-xs text-gray-500 dark:text-gray-400">
-                        {profile?.subscription_tier === 'pro' ? 'Plus' : profile?.subscription_tier === 'enterprise' ? 'Enterprise' : 'Free Plan'}
+                        {profile?.subscription_tier === 'pro' ? 'Plus' : profile?.subscription_tier === 'enterprise' ? 'Enterprise' : 'Free'}
                       </p>
                     </div>
+                    {/* Upgrade button - only show for non-subscribed users */}
+                    {profile?.subscription_tier !== 'pro' && profile?.subscription_tier !== 'enterprise' && (
+                      <button
+                        type="button"
+                        className="ml-auto mr-2 px-3 py-1.5 h-auto text-xs font-medium bg-white dark:bg-white text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-[#1f1f1f] rounded-md transition-colors flex-shrink-0"
+                        onClick={(e) => {
+                          e.stopPropagation() // Prevent event from bubbling to parent button
+                          e.preventDefault() // Prevent default behavior
+                          setUpgradeOpen(true) // Open upgrade panel
+                        }}
+                        onMouseDown={(e) => {
+                          e.stopPropagation() // Prevent mousedown from triggering dropdown
+                        }}
+                        onPointerDown={(e) => {
+                          e.stopPropagation() // Prevent pointerdown from triggering dropdown (Radix UI uses pointer events)
+                        }}
+                      >
+                        Upgrade
+                      </button>
+                    )}
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
@@ -2367,6 +2389,13 @@ export default function AppSidebar({ user }: AppSidebarProps) {
           isDeleting={isDeleting}
           showDeleteConfirm={showDeleteConfirm}
           onShowDeleteConfirm={setShowDeleteConfirm}
+        />
+
+        {/* Upgrade Panel */}
+        <UpgradePanel
+          open={upgradeOpen}
+          onClose={() => setUpgradeOpen(false)}
+          user={user}
         />
 
         {/* Rename Board Dialog */}
