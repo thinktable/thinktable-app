@@ -356,7 +356,6 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
   // Linear mode navigation state
   const [linearNavMode, setLinearNavMode] = useState<'chat' | 'all'>('chat') // Filter mode for linear navigation
   const [focusedPanelIndex, setFocusedPanelIndex] = useState<number | null>(null) // Currently focused panel index in linear mode
-  const scrollAccumulatorRef = useRef(0) // Accumulate scroll delta for smooth one-at-a-time navigation
   
   // Allow linear mode - no longer disabled
   const setViewMode = (mode: 'linear' | 'canvas') => {
@@ -393,13 +392,9 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
   // Track if we're creating an inline note (to prevent double-creation)
   const [isCreatingInlineNote, setIsCreatingInlineNote] = useState(false)
 
-  // Track if preferences have been loaded to prevent multiple loads
-  const preferencesLoadedRef = useRef(false)
-  
   // Load preferences from localStorage first (instant), then Supabase (sync)
   useEffect(() => {
     if (typeof window === 'undefined') return
-    if (preferencesLoadedRef.current) return // Only load once on mount
 
     // STEP 1: Load from localStorage FIRST (synchronous, instant) - ensures UI shows saved prefs immediately
     const savedViewMode = localStorage.getItem('thinkable-view-mode') as 'linear' | 'canvas' | null
@@ -419,8 +414,6 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
       setIsMinimapHidden(true)
       setIsMinimapManuallyHidden(true)
     }
-
-    preferencesLoadedRef.current = true // Mark as loaded so we can save changes
 
     // STEP 2: Then load from Supabase (async) and update if different (for cross-device sync)
     const loadPreferences = async () => {
@@ -442,13 +435,11 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
             }
 
             // Update from Supabase if values exist (Supabase is source of truth for cross-device sync)
-            // Only update if different from current to avoid unnecessary state changes
-            if (prefs.viewMode && ['linear', 'canvas'].includes(prefs.viewMode)) {
-              const currentViewMode = localStorage.getItem('thinkable-view-mode')
-              if (currentViewMode !== prefs.viewMode) {
-                setViewMode(prefs.viewMode)
-                localStorage.setItem('thinkable-view-mode', prefs.viewMode)
-              }
+            // Load view mode from Supabase if available
+            // Only update if preferences haven't been loaded yet (to prevent conflicts)
+            if (!preferencesLoadedRef.current && prefs.viewMode && ['linear', 'canvas'].includes(prefs.viewMode)) {
+              setViewMode(prefs.viewMode)
+              localStorage.setItem('thinkable-view-mode', prefs.viewMode)
             }
 
             if (typeof prefs.isScrollMode === 'boolean') {
@@ -466,6 +457,9 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
       } catch (error) {
         console.error('Error loading preferences from Supabase:', error)
         // If Supabase fails, localStorage values already loaded above will be used
+      } finally {
+        // Mark as loaded AFTER Supabase load completes (or fails) to prevent other effects from interfering
+        preferencesLoadedRef.current = true
       }
     }
 
@@ -473,10 +467,10 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
   }, [])
 
   // Reload preferences from Supabase when conversationId changes (to ensure selections persist when board ID is created)
-  // NOTE: This should NOT change viewMode - only load once on mount
   useEffect(() => {
     if (typeof window === 'undefined' || !conversationId) return
-    if (preferencesLoadedRef.current) return // Skip if already loaded
+    // Don't reload if preferences have already been loaded (to prevent conflicts)
+    if (preferencesLoadedRef.current) return
 
     const reloadPreferences = async () => {
       const supabase = createClient()
@@ -498,25 +492,11 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
               isMinimapHidden?: boolean
             }
 
-            // Only update if different from current to avoid unnecessary state changes
-            // Load view mode
+            // Update from Supabase if values exist
+            // Load view mode from Supabase if available
             if (prefs.viewMode && ['linear', 'canvas'].includes(prefs.viewMode)) {
-              const currentViewMode = localStorage.getItem('thinkable-view-mode')
-              if (currentViewMode !== prefs.viewMode) {
-                setViewMode(prefs.viewMode)
-                localStorage.setItem('thinkable-view-mode', prefs.viewMode)
-              }
-            }
-
-            // Load scroll mode
-            if (typeof prefs.isScrollMode === 'boolean') {
-              setIsScrollMode(prefs.isScrollMode)
-            }
-
-            // Load minimap visibility
-            if (typeof prefs.isMinimapHidden === 'boolean') {
-              setIsMinimapHidden(prefs.isMinimapHidden)
-              setIsMinimapManuallyHidden(prefs.isMinimapHidden)
+              setViewMode(prefs.viewMode)
+              localStorage.setItem('thinkable-view-mode', prefs.viewMode)
             }
 
             if (typeof prefs.isScrollMode === 'boolean') {
@@ -536,7 +516,7 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
       }
     }
 
-    // Load from localStorage first (instant) - but only if not already loaded
+    // Load from localStorage first (instant) - only if preferences haven't been loaded yet
     if (!preferencesLoadedRef.current) {
       const savedViewMode = localStorage.getItem('thinkable-view-mode') as 'linear' | 'canvas' | null
       if (savedViewMode && ['linear', 'canvas'].includes(savedViewMode)) {
@@ -562,11 +542,14 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
   }, [conversationId])
 
   // Reload preferences from Supabase when conversation-created event fires (to catch selections made before first message)
-  // NOTE: This should NOT change viewMode after initial load
   useEffect(() => {
     if (typeof window === 'undefined') return
 
     const reloadSelections = async () => {
+      // Don't reload if preferences have already been loaded (to prevent conflicts)
+      // Only reload on explicit events (conversation-created, pathname change)
+      if (preferencesLoadedRef.current) return
+
       const supabase = createClient()
 
       try {
@@ -586,27 +569,24 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
               isMinimapHidden?: boolean
             }
 
-            // Only update viewMode if preferences haven't been loaded yet
-            // After initial load, don't change viewMode from Supabase (user might have changed it)
-            if (!preferencesLoadedRef.current && prefs.viewMode && ['linear', 'canvas'].includes(prefs.viewMode)) {
+            // Load view mode - only if preferences haven't been loaded yet
+            if (prefs.viewMode && ['linear', 'canvas'].includes(prefs.viewMode)) {
               setViewMode(prefs.viewMode)
+              localStorage.setItem('thinkable-view-mode', prefs.viewMode)
             }
 
             // Load scroll mode
             if (typeof prefs.isScrollMode === 'boolean') {
               setIsScrollMode(prefs.isScrollMode)
+              localStorage.setItem('thinkable-scroll-mode', String(prefs.isScrollMode))
             }
 
             // Load minimap visibility
             if (typeof prefs.isMinimapHidden === 'boolean') {
               setIsMinimapHidden(prefs.isMinimapHidden)
               setIsMinimapManuallyHidden(prefs.isMinimapHidden)
+              localStorage.setItem('thinkable-minimap-hidden', String(prefs.isMinimapHidden))
             }
-
-            // Also update localStorage to keep them in sync
-            if (prefs.viewMode) localStorage.setItem('thinkable-view-mode', prefs.viewMode)
-            if (typeof prefs.isScrollMode === 'boolean') localStorage.setItem('thinkable-scroll-mode', String(prefs.isScrollMode))
-            if (typeof prefs.isMinimapHidden === 'boolean') localStorage.setItem('thinkable-minimap-hidden', String(prefs.isMinimapHidden))
 
             return // Successfully loaded from Supabase, skip localStorage fallback
           }
@@ -615,38 +595,45 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
         console.error('Error loading preferences from Supabase:', error)
       }
 
-      // Fallback to localStorage
-      const savedScrollMode = localStorage.getItem('thinkable-scroll-mode')
-      if (savedScrollMode === 'true') {
-        setIsScrollMode(true)
-      } else {
-        setIsScrollMode(false)
-      }
+      // Fallback to localStorage - only if preferences haven't been loaded yet
+      if (!preferencesLoadedRef.current) {
+        const savedScrollMode = localStorage.getItem('thinkable-scroll-mode')
+        if (savedScrollMode === 'true') {
+          setIsScrollMode(true)
+        } else {
+          setIsScrollMode(false)
+        }
 
-      const savedViewMode = localStorage.getItem('thinkable-view-mode') as 'linear' | 'canvas' | null
-      if (savedViewMode && ['linear', 'canvas'].includes(savedViewMode)) {
-        setViewMode(savedViewMode)
-      }
+        const savedViewMode = localStorage.getItem('thinkable-view-mode') as 'linear' | 'canvas' | null
+        if (savedViewMode && ['linear', 'canvas'].includes(savedViewMode)) {
+          setViewMode(savedViewMode)
+        }
 
-      const savedMinimapHidden = localStorage.getItem('thinkable-minimap-hidden')
-      if (savedMinimapHidden === 'true') {
-        setIsMinimapHidden(true)
-        setIsMinimapManuallyHidden(true)
+        const savedMinimapHidden = localStorage.getItem('thinkable-minimap-hidden')
+        if (savedMinimapHidden === 'true') {
+          setIsMinimapHidden(true)
+          setIsMinimapManuallyHidden(true)
+        }
       }
     }
 
     const handleConversationCreated = () => {
-      // Reload immediately - localStorage is instant
-      reloadSelections()
+      // Don't reload on conversation-created if preferences already loaded
+      // This event should not override user's current viewMode
+      // reloadSelections()
     }
 
     // Also reload immediately on mount and when pathname changes (to catch navigation)
     const handlePathnameChange = () => {
-      reloadSelections()
+      // Don't reload on pathname change if preferences already loaded
+      // This prevents random mode switches during navigation
+      // reloadSelections()
     }
 
-    // Reload on initial mount
-    reloadSelections()
+    // Reload on initial mount - only if preferences haven't been loaded yet
+    if (!preferencesLoadedRef.current) {
+      reloadSelections()
+    }
 
     // Listen for conversation-created event
     window.addEventListener('conversation-created', handleConversationCreated)
@@ -717,7 +704,7 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
   }, [getChronologicalPanels, linearNavMode])
   
   // Center a panel above the prompt box
-  const centerPanelAbovePrompt = useCallback((nodeId: string) => {
+  const centerPanelAbovePrompt = useCallback((nodeId: string, resetZoom: boolean = false) => {
     if (!reactFlowInstance) return
     
     const node = nodes?.find(n => n.id === nodeId)
@@ -744,79 +731,37 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
     // Get current viewport
     const viewport = reactFlowInstance.getViewport()
     
+    // Use zoom 1 (100%) if resetZoom is true, otherwise preserve current zoom
+    const targetZoom = resetZoom ? 1 : viewport.zoom
+    
     // Calculate new viewport X to center panel horizontally above prompt box
-    // We want: promptBoxCenterX = panelCenterX * viewport.zoom + viewport.x
-    // Solving: viewport.x = promptBoxCenterX - panelCenterX * viewport.zoom
-    const newViewportX = promptBoxCenterX - panelCenterX * viewport.zoom
+    // We want: promptBoxCenterX = panelCenterX * targetZoom + viewport.x
+    // Solving: viewport.x = promptBoxCenterX - panelCenterX * targetZoom
+    const newViewportX = promptBoxCenterX - panelCenterX * targetZoom
     
-    // Calculate Y position to center panel vertically in the visible map area
-    // Get the visible map area (React Flow container minus prompt box area)
-    const reactFlowHeight = reactFlowRect.height
+    // Calculate Y position to place panel above prompt box
+    // Get prompt box top position relative to React Flow container
     const promptBoxTop = promptBoxRect.top - reactFlowRect.top
-    const promptBoxHeight = promptBoxRect.height
+    // Get available vertical space above prompt box
+    const availableHeight = promptBoxTop - 16 // 16px margin from top
+    // Get panel height from ref if available, otherwise estimate
+    const panelHeight = nodeHeightsRef.current.get(nodeId) || 400 // Default estimate
+    // Center panel vertically in available space
+    const targetPanelTop = 16 + (availableHeight - panelHeight) / 2
     
-    // Calculate available vertical space above prompt box
-    const availableHeight = promptBoxTop
-    
-    // Center the panel vertically in the available space
-    // Get panel height (use stored height or estimate)
-    const panelHeight = nodeHeightsRef.current.get(node.id) || node.height || 400
-    const targetPanelCenterY = availableHeight / 2 // Center in available space
-    
-    // Calculate where panel top should be (center minus half panel height)
-    const targetPanelTop = targetPanelCenterY - (panelHeight / 2)
-    
-    // Calculate new viewport Y to center panel vertically
-    // We want: targetPanelTop = panelY * viewport.zoom + newViewportY
-    // Solving: newViewportY = targetPanelTop - panelY * viewport.zoom
+    // Calculate new viewport Y to position panel at target
+    // We want: targetPanelTop = panelY * targetZoom + newViewportY
+    // Solving: newViewportY = targetPanelTop - panelY * targetZoom
     const panelY = node.position.y
-    const newViewportY = targetPanelTop - panelY * viewport.zoom
+    const newViewportY = targetPanelTop - panelY * targetZoom
     
     // Set viewport to center panel above prompt box with smooth animation
     reactFlowInstance.setViewport({
       x: newViewportX,
       y: newViewportY,
-      zoom: viewport.zoom,
+      zoom: targetZoom,
     }, { duration: 300 }) // Smooth 300ms animation
   }, [reactFlowInstance, nodes])
-  
-  // Track if we've done initial centering for linear mode
-  const hasInitialLinearCenteringRef = useRef(false)
-  
-  // Center most recent panel when board loads with linear mode already active
-  useEffect(() => {
-    // Only run once per board load
-    if (hasInitialLinearCenteringRef.current) return
-    
-    // Wait for viewMode to be 'linear' and nodes to be loaded
-    if (viewMode !== 'linear') return
-    if (!nodes || nodes.length === 0) return
-    if (!reactFlowInstance) return
-    
-    // Mark as done so we don't repeat
-    hasInitialLinearCenteringRef.current = true
-    
-    // Get most recent panel based on current filter
-    const panels = getChronologicalPanels(linearNavMode)
-    if (panels.length === 0) return
-    
-    const mostRecentPanel = panels[panels.length - 1]
-    if (!mostRecentPanel) return
-    
-    // Set focused panel index to most recent
-    setFocusedPanelIndex(panels.length - 1)
-    
-    // Center the panel after a short delay to ensure DOM is ready
-    setTimeout(() => {
-      centerPanelAbovePrompt(mostRecentPanel.id)
-    }, 200)
-  }, [viewMode, nodes, reactFlowInstance, linearNavMode, getChronologicalPanels, centerPanelAbovePrompt])
-  
-  // Reset initial centering flag when conversationId changes (new board loaded)
-  useEffect(() => {
-    hasInitialLinearCenteringRef.current = false
-  }, [conversationId])
-  
   const searchParams = useSearchParams()
 
   // Initialize undo/redo hook for map actions (node drag, add, delete, edge changes)
@@ -1119,7 +1064,7 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
 
     // Determine target draggable state based on lock
     // Locked = nodes cannot be dragged or connected
-    // Unlocked = nodes can be dragged in both canvas and linear modes
+    // Unlocked = nodes can be dragged in both canvas and linear modes (same map, just different navigation)
     const targetDraggable = !isLocked
     const targetConnectable = isLocked ? false : true // Connectable in both modes
 
@@ -1151,7 +1096,7 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
   const isSwitchingToLinearRef = useRef(false) // Track if we're currently switching to Linear mode
   const isZoomingTo100Ref = useRef(false) // Track if we're currently zooming to 100% on click
   const isScrollingToBottomRef = useRef(false) // Track if we're currently scrolling to bottom
-  // preferencesLoadedRef is already declared above - reuse it
+  const preferencesLoadedRef = useRef(false) // Track if preferences have been loaded from Supabase
   const nodeHeightsRef = useRef<Map<string, number>>(new Map()) // Store measured node heights
   const savePositionsTimeoutRef = useRef<NodeJS.Timeout | null>(null) // Debounce position saves
   const minimapDragStartRef = useRef<{ x: number; y: number; isDragging?: boolean } | null>(null) // Track minimap drag start position and drag state
@@ -1159,9 +1104,16 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
   const edgeClickPositionRef = useRef<{ x: number; y: number } | null>(null) // Store click position in flow coordinates
   const nodePopupZoomRef = useRef<number | null>(null) // Track zoom when node popup was opened
   const nodeClickPositionRef = useRef<{ x: number; y: number } | null>(null) // Store click position in flow coordinates
+  const scrollAccumulatorRef = useRef<number>(0) // Accumulate scroll delta for controlled navigation
+  const lastScrollDirectionRef = useRef<'up' | 'down' | null>(null) // Track last scroll direction to reset accumulator on direction change
 
-  // Note: preferencesLoadedRef is declared earlier and managed by the preference loading effects
-  // This effect is no longer needed as preferences are loaded in the main preference loading effect
+  // Load user preferences from localStorage only (profiles.metadata column doesn't exist yet)
+  // TODO: Add profiles.metadata column via migration if needed for cross-device sync
+  useEffect(() => {
+    // Preferences are already loaded from localStorage in useState initializers
+    // This effect is kept for future Supabase sync if metadata column is added
+    preferencesLoadedRef.current = true
+  }, [])
 
   // Save preferences to localStorage (instant) and Supabase (sync) when they change
   useEffect(() => {
@@ -3320,12 +3272,11 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
     }, 500)
   }, [conversationId, viewMode, nodes])
 
-  // Sync stored positions with current node positions in both modes
-  // This ensures any moves are remembered and positions are preserved when switching modes
+  // Sync stored positions with current node positions when in Canvas mode
+  // This ensures any moves are remembered
   useEffect(() => {
-    if (nodes && Array.isArray(nodes) && nodes.length > 0) {
-      // Update stored positions with current positions (works in both canvas and linear modes)
-      // This preserves positions when switching between modes
+    if (viewMode === 'canvas' && !isLinearModeRef.current && nodes && Array.isArray(nodes) && nodes.length > 0) {
+      // Update stored positions with current positions in Canvas mode
       nodes.forEach((node) => {
         originalPositionsRef.current.set(node.id, {
           x: node.position.x,
@@ -3333,13 +3284,11 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
         })
       })
 
-      // Save to localStorage (debounced) - only in canvas mode to avoid unnecessary writes
-      if (viewMode === 'canvas') {
-        saveCanvasPositions()
-      }
+      // Save to localStorage (debounced)
+      saveCanvasPositions()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, viewMode, saveCanvasPositions]) // Update when nodes change (including position changes)
+  }, [nodes, viewMode, saveCanvasPositions]) // Update when nodes change (including position changes) in Canvas mode
 
   // Create panels from messages (group into prompt+response pairs)
   useEffect(() => {
@@ -3457,8 +3406,8 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
           originalPositionsRef.current.set(baseNodeId, metadataPosition) // Cache in memory
         }
 
-        // Always try loading from localStorage regardless of mode to preserve panel positions
-        if (!storedPos && conversationId && typeof window !== 'undefined') {
+        // If not in memory and in Canvas mode, try loading from localStorage
+        if (!storedPos && viewMode === 'canvas' && conversationId && typeof window !== 'undefined') {
           try {
             const saved = localStorage.getItem(`thinkable-canvas-positions-${conversationId}`)
             if (saved) {
@@ -3478,9 +3427,8 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
         // Default: vertical top-to-bottom (down arrow)
         let currentPos: { x: number; y: number }
 
-        // Always use stored position if available (preserves positions in both modes)
-        if (storedPos?.x !== undefined && storedPos?.y !== undefined) {
-          // Use stored position if available (user moved it or it was previously positioned)
+        if (viewMode === 'canvas' && storedPos?.x !== undefined && storedPos?.y !== undefined) {
+          // Use stored position if available (user moved it)
           currentPos = { x: storedPos.x, y: storedPos.y }
         } else {
           // Find reference panel: use selected panel if one is selected, otherwise use most recent panel
@@ -3682,7 +3630,7 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
               borderStyle: messageMetadata.borderStyle === null ? 'none' : (messageMetadata.borderStyle || undefined),
               borderWeight: messageMetadata.borderWeight === null ? undefined : (messageMetadata.borderWeight || undefined),
             },
-            draggable: isLocked ? false : (viewMode === 'canvas'), // Lock takes precedence, then viewMode
+            draggable: !isLocked, // Draggable in both canvas and linear modes (unless locked)
           }
 
           // Store position
@@ -3970,8 +3918,8 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
     prevArrowDirectionRef.current = arrowDirection
   }, [arrowDirection, nodes, setNodes, viewMode, conversationId])
 
-  // Measure actual node heights after render (for size-aware spacing calculations)
-  // NOTE: We no longer reposition panels in linear mode - they maintain their positions
+  // Measure actual node heights after render (but don't reposition panels in linear mode)
+  // Panels should maintain their positions - only measure heights for centering calculations
   useEffect(() => {
     if (!nodes || !Array.isArray(nodes) || nodes.length === 0 || !reactFlowInstance) return
 
@@ -3982,8 +3930,8 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
 
       const viewport = reactFlowInstance.getViewport()
 
-      // Measure all node heights and store them (for future positioning calculations)
-      // But do NOT reposition existing panels - they should maintain their positions
+      // Measure all node heights and store them (for centering calculations)
+      // But don't reposition panels - they should maintain their user-defined positions
       nodes.forEach((node) => {
         // Find the React Flow node element by ID
         const nodeElement = reactFlowElement.querySelector(`[data-id="${node.id}"]`) as HTMLElement
@@ -4193,46 +4141,45 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
             setFocusedPanelIndex(currentIndex)
           }
 
-          // Accumulate scroll delta for smooth one-at-a-time navigation
-          // Require a minimum scroll amount (e.g., 150px) before moving to next panel
-          // Higher threshold = less sensitive, requires more deliberate scrolling
-          const SCROLL_THRESHOLD = 150
+          // Determine direction: scroll up = backwards (earlier), scroll down = forwards (later)
           const deltaY = e.deltaY
+          const currentDirection: 'up' | 'down' = deltaY < 0 ? 'up' : 'down'
           
-          // Reset accumulator if direction changed
-          if ((deltaY > 0 && scrollAccumulatorRef.current < 0) || 
-              (deltaY < 0 && scrollAccumulatorRef.current > 0)) {
+          // Reset accumulator if scroll direction changed
+          if (lastScrollDirectionRef.current !== null && lastScrollDirectionRef.current !== currentDirection) {
             scrollAccumulatorRef.current = 0
           }
-          
+          lastScrollDirectionRef.current = currentDirection
+
           // Accumulate scroll delta
-          scrollAccumulatorRef.current += deltaY
-          
-          // Only move to next panel if threshold is reached
-          if (Math.abs(scrollAccumulatorRef.current) >= SCROLL_THRESHOLD) {
-            let newIndex = currentIndex
-            
-            if (scrollAccumulatorRef.current < 0) {
-              // Scroll up - go to previous panel (earlier in history)
-              newIndex = Math.max(0, currentIndex - 1)
-            } else {
-              // Scroll down - go to next panel (later in history)
-              newIndex = Math.min(panels.length - 1, currentIndex + 1)
-            }
-            
-            // Only update if index changed
-            if (newIndex !== currentIndex) {
-              setFocusedPanelIndex(newIndex)
-              const panelToCenter = panels[newIndex]
-              if (panelToCenter) {
-                centerPanelAbovePrompt(panelToCenter.id)
-              }
-              
-              // Reset accumulator after moving
-              scrollAccumulatorRef.current = 0
-            } else {
-              // At boundary - reset accumulator to prevent accumulation
-              scrollAccumulatorRef.current = 0
+          scrollAccumulatorRef.current += Math.abs(deltaY)
+
+          // Threshold for navigation (higher = less sensitive)
+          const SCROLL_THRESHOLD = 250 // Increased from 150px to reduce sensitivity
+
+          // Only navigate if accumulated scroll exceeds threshold
+          if (scrollAccumulatorRef.current < SCROLL_THRESHOLD) {
+            return
+          }
+
+          // Reset accumulator after navigation
+          scrollAccumulatorRef.current = 0
+
+          let newIndex = currentIndex
+          if (deltaY < 0) {
+            // Scroll up - go to previous panel (earlier in history)
+            newIndex = Math.max(0, currentIndex - 1)
+          } else if (deltaY > 0) {
+            // Scroll down - go to next panel (later in history)
+            newIndex = Math.min(panels.length - 1, currentIndex + 1)
+          }
+
+          // Only update if index changed
+          if (newIndex !== currentIndex) {
+            setFocusedPanelIndex(newIndex)
+            const panelToCenter = panels[newIndex]
+            if (panelToCenter) {
+              centerPanelAbovePrompt(panelToCenter.id)
             }
           }
 
@@ -4535,110 +4482,19 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
         }
       }, 200)
     } else {
+      // Canvas mode - just update draggable state, don't change positions
+      // Panels should maintain their positions across mode switches (same map, different navigation)
       isLinearModeRef.current = false
-
-      // Restore stored positions when switching back to Canvas
-      // Load from localStorage first, then use in-memory ref
-      if (conversationId && typeof window !== 'undefined') {
-        try {
-          const saved = localStorage.getItem(`thinkable-canvas-positions-${conversationId}`)
-          if (saved) {
-            const positions = JSON.parse(saved) as Record<string, { x: number; y: number }>
-            Object.entries(positions).forEach(([nodeId, pos]) => {
-              originalPositionsRef.current.set(nodeId, pos)
-            })
-          }
-        } catch (error) {
-          console.error('Failed to load canvas positions from localStorage:', error)
-        }
-      }
-
+      
       if (!nodes || !Array.isArray(nodes)) return
-      const restoredNodes = nodes.map((node) => {
-        const storedPos = originalPositionsRef.current.get(node.id)
-        if (storedPos) {
-          return {
-            ...node,
-            position: storedPos,
-            draggable: isLocked ? false : true, // Lock takes precedence
-          }
-        }
-        return {
-          ...node,
-          draggable: isLocked ? false : true, // Lock takes precedence
-        }
-      })
+      
+      // Only update draggable state, don't change positions
+      const updatedNodes = nodes.map((node) => ({
+        ...node,
+        draggable: !isLocked, // Draggable in both modes (unless locked)
+      }))
 
-      setNodes(restoredNodes)
-
-      // Center panels horizontally and center on selected node if one is selected
-      setTimeout(() => {
-        if (restoredNodes.length > 0) {
-          const reactFlowElement = document.querySelector('.react-flow')
-          if (!reactFlowElement) return
-
-          const viewportWidth = reactFlowElement.clientWidth
-          const viewport = reactFlowInstance.getViewport()
-          const panelWidth = 768 // Same width as prompt box
-
-          const minX = Math.min(...restoredNodes.map(n => n.position.x))
-          const maxX = Math.max(...restoredNodes.map(n => n.position.x))
-          const boundsWidth = maxX - minX + panelWidth
-          const boundsCenterX = minX + boundsWidth / 2
-
-          // Center horizontally
-          const centerX = (viewportWidth / 2 - viewport.x) / viewport.zoom
-          const offsetX = centerX - boundsCenterX
-
-          // Only reposition if offset is significant (more than 10px)
-          let finalNodes = restoredNodes
-          if (Math.abs(offsetX) > 10) {
-            finalNodes = restoredNodes.map((node) => ({
-              ...node,
-              position: {
-                x: node.position.x + offsetX,
-                y: node.position.y,
-              },
-            }))
-
-            setNodes(finalNodes)
-
-            // Update stored positions
-            finalNodes.forEach((node) => {
-              originalPositionsRef.current.set(node.id, {
-                x: node.position.x,
-                y: node.position.y,
-              })
-            })
-          }
-
-          // Restore saved zoom for canvas mode
-          const canvasZoom = savedZoomRef.current.canvas ?? 1.0
-
-          // Center on selected node if one is selected
-          if (selectedNodeIdRef.current) {
-            const selectedNode = finalNodes.find((n) => n.id === selectedNodeIdRef.current)
-            if (selectedNode) {
-              const panelHeight = 300 // Approximate panel height
-              const nodeX = selectedNode.position.x + panelWidth / 2
-              const nodeY = selectedNode.position.y + panelHeight / 2
-              const viewport = reactFlowInstance.getViewport()
-              reactFlowInstance.setViewport({ x: viewport.x, y: viewport.y, zoom: canvasZoom }, { duration: 0 })
-              reactFlowInstance.setCenter(nodeX, nodeY, { zoom: canvasZoom })
-            } else {
-              // No selection - just restore zoom
-              const viewport = reactFlowInstance.getViewport()
-              reactFlowInstance.setViewport({ x: viewport.x, y: viewport.y, zoom: canvasZoom }, { duration: 0 })
-            }
-          } else {
-            // No selection - just restore zoom
-            const viewport = reactFlowInstance.getViewport()
-            reactFlowInstance.setViewport({ x: viewport.x, y: viewport.y, zoom: canvasZoom }, { duration: 0 })
-          }
-        }
-      }, 100)
-
-      // Don't clear originalPositionsRef - we need them for future mode switches
+      setNodes(updatedNodes)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode]) // Only run when viewMode changes, ignore nodes dependency to avoid loops
@@ -6363,9 +6219,6 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
                   // Already in linear mode - do nothing (dropdown handles navigation mode)
                   return
                 } else {
-                  // Reset scroll accumulator when switching modes
-                  scrollAccumulatorRef.current = 0
-                  
                   // Toggle to linear mode
                   setViewMode('linear')
                   
@@ -6391,18 +6244,23 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
                   
                   // Center the panel above prompt box
                   if (panelToCenter) {
-                    // Update focused panel index
+                    // Update focused panel index and reset scroll accumulator
                     const panels = getChronologicalPanels(linearNavMode)
                     const index = panels.findIndex(p => p.id === panelToCenter.id)
                     setFocusedPanelIndex(index >= 0 ? index : panels.length - 1)
+                    scrollAccumulatorRef.current = 0
+                    lastScrollDirectionRef.current = null
                     
-                    // Center the panel
+                    // Center the panel and reset zoom to 100% when focusing most recent panel
                     setTimeout(() => {
-                      centerPanelAbovePrompt(panelToCenter.id)
+                      const isMostRecent = panelToCenter.id === getMostRecentPanel(linearNavMode)?.id
+                      centerPanelAbovePrompt(panelToCenter.id, isMostRecent)
                     }, 100)
                   } else {
-                    // No panels available - reset focused index
+                    // No panels available - reset focused index and scroll accumulator
                     setFocusedPanelIndex(null)
+                    scrollAccumulatorRef.current = 0
+                    lastScrollDirectionRef.current = null
                   }
                 }
               }}
@@ -6438,8 +6296,6 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
                 <DropdownMenuLabel>Navigation</DropdownMenuLabel>
                 <DropdownMenuRadioGroup value={linearNavMode} onValueChange={(value) => {
                   const newMode = value as 'chat' | 'all'
-                  // Reset scroll accumulator when changing navigation mode
-                  scrollAccumulatorRef.current = 0
                   setLinearNavMode(newMode)
                   
                   // If in linear mode, update focused panel based on new filter
@@ -6463,8 +6319,12 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
                       if (panelToCenter) {
                         const index = newPanels.findIndex(p => p.id === panelToCenter!.id)
                         setFocusedPanelIndex(index >= 0 ? index : newPanels.length - 1)
+                        scrollAccumulatorRef.current = 0
+                        lastScrollDirectionRef.current = null
+                        // Reset zoom to 100% when focusing most recent panel
+                        const isMostRecent = panelToCenter.id === getMostRecentPanel(newMode)?.id
                         setTimeout(() => {
-                          centerPanelAbovePrompt(panelToCenter!.id)
+                          centerPanelAbovePrompt(panelToCenter!.id, isMostRecent)
                         }, 100)
                       }
                     }
@@ -6529,7 +6389,7 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
                   : 'text-gray-700 group-hover:text-gray-900'
               )}
             >
-              Free
+              Canvas
             </Button>
             {/* Nav dropdown - smaller button nested inside Canvas button */}
             <DropdownMenu>
@@ -6635,17 +6495,21 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
           const mostRecentPanel = getMostRecentPanel(filter)
           
           if (mostRecentPanel) {
-            // Center the most recent panel above prompt box
-            centerPanelAbovePrompt(mostRecentPanel.id)
+            // Center the most recent panel above prompt box and reset zoom to 100%
+            centerPanelAbovePrompt(mostRecentPanel.id, true)
             
-            // Update focused panel index if in linear mode
+            // Update focused panel index if in linear mode and reset scroll accumulator
             if (viewMode === 'linear') {
               const panels = getChronologicalPanels(linearNavMode)
               if (panels.length > 0) {
                 const index = panels.findIndex(p => p.id === mostRecentPanel.id)
                 setFocusedPanelIndex(index >= 0 ? index : panels.length - 1)
+                scrollAccumulatorRef.current = 0
+                lastScrollDirectionRef.current = null
               } else {
                 setFocusedPanelIndex(null)
+                scrollAccumulatorRef.current = 0
+                lastScrollDirectionRef.current = null
               }
             }
           } else {
