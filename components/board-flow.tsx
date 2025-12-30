@@ -5767,61 +5767,68 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
             lineWidth={0.5}
           />
         )}
-        {!isMinimapHidden && (
-          <div
-            data-minimap-context
-            onContextMenu={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
-            }}
-            onMouseEnter={() => {
-              // Keep minimap visible when hovering over it in hover mode
-              setIsMinimapHovering(true)
-              isMinimapHoveringRef.current = true
-              // Cancel any pending hide timeout
-              if (minimapHideTimeoutRef.current) {
-                clearTimeout(minimapHideTimeoutRef.current)
-                minimapHideTimeoutRef.current = null
-              }
-            }}
-            onMouseLeave={(e) => {
-              // Check if minimap should hide after leaving minimap
-              setIsMinimapHovering(false)
-              isMinimapHoveringRef.current = false
-              checkAndHideMinimap(e.relatedTarget as HTMLElement)
-            }}
-          >
-            <MiniMap
-              position="bottom-right"
-              // placeholder_attr removed
-              nodeColor={(node) => {
-                // Light grey by default, dark grey when selected
-                return node.selected ? '#9ca3af' : '#e5e7eb' // Dark grey if selected, light grey otherwise
-              }}
-              maskColor={resolvedTheme === 'dark'
-                ? 'rgba(42, 42, 58, 0.3)' // Dark mode: dark gray overlay matching selected tab container (#2a2a3a with transparency)
-                : 'rgba(206, 227, 253, 0.3)'} // Light mode: blue-200 overlay that appears as blue-50 (#eff6ff) when applied at 0.3 opacity over white
-              pannable={true} // Allow panning (horizontal movement restricted via onMove in linear mode)
-              zoomable={true}
-              className="minimap-custom-size shadow-sm"
-              style={{
-                opacity: isScrollingToBottom ? 0 : 1,
-                transition: 'opacity 0.1s',
-                borderTopLeftRadius: '0px',
-                borderTopRightRadius: '0px',
-                borderBottomLeftRadius: '8px',
-                borderBottomRightRadius: '8px',
-                overflow: 'hidden',
-                cursor: 'pointer', // Indicate clickability
-                width: 179,
-                height: 160, // Increased height to match CSS for better vertical visibility
-                bottom: `${minimapBottom - 12}px`, // 5px from bottom when at default (1px lower)
-                right: `${minimapRight}px`, // Right position - aligns with prompt box when jumped, defaults to 15px
-              }}
-            />
-          </div>
-        )}
+         <div
+           data-minimap-context
+           onContextMenu={(e) => {
+             e.preventDefault()
+             e.stopPropagation()
+             setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
+           }}
+           onMouseEnter={() => {
+             // Keep minimap visible when hovering over it in hover mode
+             setIsMinimapHovering(true)
+             isMinimapHoveringRef.current = true
+             // Cancel any pending hide timeout
+             if (minimapHideTimeoutRef.current) {
+               clearTimeout(minimapHideTimeoutRef.current)
+               minimapHideTimeoutRef.current = null
+             }
+           }}
+           onMouseLeave={(e) => {
+             // Check if minimap should hide after leaving minimap
+             setIsMinimapHovering(false)
+             isMinimapHoveringRef.current = false
+             checkAndHideMinimap(e.relatedTarget as HTMLElement)
+           }}
+           style={{
+             position: 'absolute',
+             bottom: `${minimapBottom - 12}px`,
+             right: `${minimapRight}px`,
+             width: 179,
+             height: 150,
+             opacity: isScrollingToBottom ? 0 : (isMinimapHidden ? 0 : 1),
+             transition: `opacity ${isMinimapHidden ? '0.15s' : '0.5s'} ease-in-out`, // Faster fade out (0.15s), slower fade in (0.5s)
+             pointerEvents: isMinimapHidden ? 'none' : 'auto',
+           }}
+         >
+           <MiniMap
+             position="bottom-right"
+             // placeholder_attr removed
+             nodeColor={(node) => {
+               // Light grey by default, dark grey when selected
+               return node.selected ? '#9ca3af' : '#e5e7eb' // Dark grey if selected, light grey otherwise
+             }}
+             maskColor={resolvedTheme === 'dark'
+               ? 'rgba(42, 42, 58, 0.3)' // Dark mode: dark gray overlay matching selected tab container (#2a2a3a with transparency)
+               : 'rgba(206, 227, 253, 0.3)'} // Light mode: blue-200 overlay that appears as blue-50 (#eff6ff) when applied at 0.3 opacity over white
+             pannable={true} // Allow panning (horizontal movement restricted via onMove in linear mode)
+             zoomable={true}
+             className="minimap-custom-size shadow-sm"
+             style={{
+               borderTopLeftRadius: '0px',
+               borderTopRightRadius: '0px',
+               borderBottomLeftRadius: '8px',
+               borderBottomRightRadius: '8px',
+               overflow: 'hidden',
+               cursor: 'pointer', // Indicate clickability
+               width: 179,
+               height: 150, // Minimap height
+               position: 'absolute',
+               bottom: 0, // Anchor to bottom of container
+               right: 0,
+             }}
+           />
+         </div>
 
         {/* Hover zone for minimap collapse pill - limited to minimap width (179px) */}
         {/* Show hover zone even when minimap is hidden, so pill can be shown on hover */}
@@ -5929,13 +5936,19 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
           setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
         }}
         onClick={() => {
-          // Toggle between 'shown' and 'hover' modes
+          // Toggle between 'shown' and 'hover' modes with smooth animation
           if (minimapMode === 'shown') {
             setMinimapMode('hover')
+            setIsMinimapHidden(true) // Trigger fade out animation
+            setIsMinimapManuallyHidden(true)
+            wasAutoHiddenRef.current = false
           } else if (minimapMode === 'hover') {
             setMinimapMode('shown')
+            setIsMinimapHidden(false) // Trigger fade in animation
+            setIsMinimapManuallyHidden(false)
+            wasAutoHiddenRef.current = false
           } else {
-            // If mode is 'hidden', switch to 'shown' and immediately show minimap
+            // If mode is 'hidden', switch to 'shown' and show minimap with animation
             setMinimapMode('shown')
             setIsMinimapHidden(false)
             setIsMinimapManuallyHidden(false)
@@ -6189,13 +6202,14 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
         }}
         className="absolute z-10"
         style={{
-          // Position toggle above minimap
+          // Position toggle above minimap - slides down smoothly when minimap collapses
           // Both positions use minimapBottom which already accounts for the jump when prompt box gets close
           bottom: isMinimapHidden
             ? `${minimapBottom - 12 + 15}px` // At minimap position when hidden + small offset (3px higher when collapsed)
-            : `${minimapBottom - 12 + 160 + 4}px`, // Above minimap (160px height + 4px gap, reduced from 8px)
+            : `${minimapBottom - 12 + 150 + 4}px`, // Above minimap (150px height + 4px gap)
           // Right-align with minimap (which aligns with prompt box when jumped), moved left 14px
           right: `${minimapRight + 14}px`, // Match minimap right position + 14px left offset
+          transition: 'bottom 0.25s ease-in-out', // Smooth slide animation, slightly faster
         }}
       >
         <div
