@@ -1521,15 +1521,15 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
       const reactFlowRect = reactFlowElement.getBoundingClientRect()
 
       // Calculate center position relative to board flow inner (React Flow container)
-      // Toggle is positioned at: right: minimapRight + 16px
+      // Toggle is positioned at: right: minimapRight + 14px
       // Toggle is same width as minimap (179px)
       // Account for any padding on React Flow container
       const reactFlowWidth = reactFlowElement.clientWidth
       const reactFlowPaddingLeft = parseFloat(getComputedStyle(reactFlowElement).paddingLeft) || 0
       const reactFlowPaddingRight = parseFloat(getComputedStyle(reactFlowElement).paddingRight) || 0
       const minimapWidth = 179
-      const toggleRightOffset = 16 // Toggle has 16px offset from minimap right position
-      // Toggle right edge is: reactFlowWidth - (minimapRight + 16) - paddingRight
+      const toggleRightOffset = 14 // Toggle has 14px offset from minimap right position
+      // Toggle right edge is: reactFlowWidth - (minimapRight + 14) - paddingRight
       // Toggle left edge is: toggle right - 179
       // Toggle center is: toggle left + 179/2
       const toggleRight = reactFlowWidth - minimapRight - toggleRightOffset - reactFlowPaddingRight
@@ -5800,8 +5800,8 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
                 return node.selected ? '#9ca3af' : '#e5e7eb' // Dark grey if selected, light grey otherwise
               }}
               maskColor={resolvedTheme === 'dark'
-                ? 'rgba(96, 165, 250, 0.25)' // Dark mode: lighter blue overlay (blue-400 with higher opacity for better visibility)
-                : 'rgba(202, 216, 237, 0.3)'} // Light mode: light blue overlay matching selected board tab (blue-50 with transparency)
+                ? 'rgba(42, 42, 58, 0.3)' // Dark mode: dark gray overlay matching selected tab container (#2a2a3a with transparency)
+                : 'rgba(206, 227, 253, 0.3)'} // Light mode: blue-200 overlay that appears as blue-50 (#eff6ff) when applied at 0.3 opacity over white
               pannable={true} // Allow panning (horizontal movement restricted via onMove in linear mode)
               zoomable={true}
               className="minimap-custom-size shadow-sm"
@@ -6194,19 +6194,19 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
           bottom: isMinimapHidden
             ? `${minimapBottom - 12 + 15}px` // At minimap position when hidden + small offset (3px higher when collapsed)
             : `${minimapBottom - 12 + 160 + 4}px`, // Above minimap (160px height + 4px gap, reduced from 8px)
-          // Right-align with minimap (which aligns with prompt box when jumped), moved left 16px
-          right: `${minimapRight + 16}px`, // Match minimap right position + 16px left offset (moved 1px left)
+          // Right-align with minimap (which aligns with prompt box when jumped), moved left 14px
+          right: `${minimapRight + 14}px`, // Match minimap right position + 14px left offset
         }}
       >
         <div
           className={cn(
-            "bg-blue-50 dark:bg-[#2a2a3a] rounded-lg p-1 flex items-center gap-1 relative",
+            "bg-blue-50 dark:bg-[#2a2a3a] rounded-lg pl-1 pt-1 pb-1 pr-4 flex items-center gap-1 relative w-[181px]",
             isMinimapHidden && "shadow-sm"
           )}
         >
           {/* Linear button with nested caret dropdown */}
           <div className={cn(
-            'relative pl-3 pr-3 py-1 text-xs rounded-lg flex items-center gap-2 h-auto group',
+            'relative pl-3 pr-2 py-1 text-xs rounded-lg flex items-center gap-1 h-auto group',
             viewMode === 'linear'
               ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
               : 'bg-transparent text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
@@ -6280,7 +6280,7 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
                   variant="ghost"
                   size="sm"
                   className={cn(
-                    'px-1.5 py-0.5 h-auto text-xs rounded focus-visible:ring-0 focus-visible:ring-offset-0',
+                    'px-1 py-0.5 h-auto text-xs rounded focus-visible:ring-0 focus-visible:ring-offset-0',
                     viewMode === 'linear'
                       ? 'bg-white dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100 hover:bg-gray-200 dark:hover:bg-[#2a2a2a]'
                       : 'bg-transparent text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 group-hover:bg-gray-100 dark:group-hover:bg-[#1f1f1f]'
@@ -6336,9 +6336,9 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          {/* Canvas button with nested caret dropdown */}
+          {/* Free button with nested caret dropdown */}
           <div className={cn(
-            'relative pl-3 pr-3 py-1 text-xs rounded-lg flex items-center gap-2 h-auto group mr-1.5',
+            'relative pl-3 pr-2 py-1 text-xs rounded-lg flex items-center gap-1 h-auto group',
             viewMode === 'canvas'
               ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
               : 'bg-transparent text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
@@ -6389,7 +6389,7 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
                   : 'text-gray-700 group-hover:text-gray-900'
               )}
             >
-              Canvas
+              Free
             </Button>
             {/* Nav dropdown - smaller button nested inside Canvas button */}
             <DropdownMenu>
@@ -6398,7 +6398,7 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
                   variant="ghost"
                   size="sm"
                   className={cn(
-                    'px-1.5 py-0.5 h-auto text-xs rounded focus-visible:ring-0 focus-visible:ring-offset-0',
+                    'px-1 py-0.5 h-auto text-xs rounded focus-visible:ring-0 focus-visible:ring-offset-0',
                     viewMode === 'canvas'
                       ? 'bg-white dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100 hover:bg-gray-200 dark:hover:bg-[#2a2a2a]'
                       : 'bg-transparent text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 group-hover:bg-gray-100 dark:group-hover:bg-[#1f1f1f]'
