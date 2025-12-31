@@ -1,7 +1,7 @@
 'use client'
 
 // Custom React Flow node for chat panels (prompt + response)
-import { NodeProps, Handle, Position, NodeToolbar } from 'reactflow'
+import { NodeProps, Handle, Position } from 'reactflow'
 import { cn } from '@/lib/utils'
 import { useEditor, EditorContent } from '@tiptap/react'
 import { BubbleMenu } from '@tiptap/react/menus'
@@ -4900,99 +4900,6 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               />
             )
           })}
-        </div>
-      )}
-
-      {/* NodeToolbar - positioned at bottom-left, scales with panel/zoom */}
-      {selected && (
-        <div className="absolute -bottom-10 left-0 flex gap-2 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 z-50">
-          {/* Copy button - copy response content (when expanded and has content) or prompt content (for notes) */}
-          {((!isResponseCollapsed && !isProjectBoard && !isContentEmpty(responseContent || responseMessage?.content || '')) ||
-            (isNotePanel && !isContentEmpty(promptContent || promptMessage?.content || ''))) && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
-              onClick={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                // For notes, copy prompt content; otherwise copy response content
-                const textToCopy = isNotePanel 
-                  ? (promptContent || promptMessage?.content || '')
-                  : (responseContent || responseMessage?.content || '')
-                navigator.clipboard.writeText(textToCopy)
-              }}
-              title={isFlashcard ? "Copy answer" : isNotePanel ? "Copy note" : "Copy response"}
-            >
-              <Copy className="h-3 w-3 text-gray-600 dark:text-gray-300" />
-            </Button>
-          )}
-          {/* More menu button - vertical ellipsis - show for all panels */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
-                onClick={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                }}
-              >
-                <MoreHorizontal className="h-3 w-3 text-gray-600 dark:text-gray-300" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-40">
-              {!isProjectBoard && (
-                <DropdownMenuItem
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleBookmark()
-                  }}
-                >
-                  <Bookmark className={cn("h-4 w-4 mr-2", isBookmarked && "fill-yellow-400 text-yellow-400")} />
-                  Bookmark
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleDeletePanel()
-                }}
-                disabled={isDeleting}
-                className="text-red-600 focus:text-red-600 focus:bg-red-50"
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                {isDeleting ? 'Deleting...' : 'Delete'}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {/* Collapse/Expand caret button */}
-          {((isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
-            (!isProjectBoard && responseMessage && responseMessage.content && responseMessage.content.trim()) ||
-            (isFlashcard && responseMessage)) && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
-              onClick={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                handleCollapseChange(!isResponseCollapsed)
-              }}
-              title={isResponseCollapsed ? "Show response" : "Hide response"}
-            >
-              {isResponseCollapsed ? (
-                <ChevronDown className="h-3 w-3 text-gray-600 dark:text-gray-300" />
-              ) : (
-                <ChevronUp className="h-3 w-3 text-gray-600 dark:text-gray-300" />
-              )}
-            </Button>
-          )}
-          {/* Tag button - only for flashcards */}
-          {isFlashcard && responseMessage?.id && (
-            <TagButton responseMessageId={responseMessage.id} />
-          )}
         </div>
       )}
 

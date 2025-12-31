@@ -66,6 +66,7 @@ import {
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useQueryClient } from '@tanstack/react-query'
+import { ShapeGridItem } from './shapes/ShapeGridItem'
 
 interface EditorToolbarProps {
   editor: Editor | null
@@ -73,7 +74,7 @@ interface EditorToolbarProps {
 }
 
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
-  const { reactFlowInstance, isLocked, setIsLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, viewMode, boardRule, setBoardRule, boardStyle, setBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, mapUndo, mapRedo, canMapUndo, canMapRedo } = useReactFlowContext()
+  const { reactFlowInstance, isLocked, setIsLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, viewMode, boardRule, setBoardRule, boardStyle, setBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, drawShape: contextDrawShape, setDrawShape: setContextDrawShape, mapUndo, mapRedo, canMapUndo, canMapRedo } = useReactFlowContext()
   const borderStyleButtonRef = useRef<HTMLButtonElement>(null)
   const borderStyleIconRef = useRef<HTMLImageElement>(null)
   const threadStyleButtonRef = useRef<HTMLButtonElement>(null)
@@ -265,9 +266,12 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   // Initialize with consistent defaults to avoid hydration mismatch, then load from Supabase
   const [lineStyle, setLineStyle] = useState<'curved' | 'boxed'>('curved')
   const [editMode, setEditMode] = useState<'editing' | 'suggesting' | 'viewing'>('editing')
-  const [drawTool, setDrawTool] = useState<'lasso' | 'pencil' | 'highlighter' | 'eraser' | null>(null) // Current drawing tool (null = none selected)
+  // Use context values for drawTool and drawShape, with local state as fallback
+  const drawTool = contextDrawTool ?? null
+  const setDrawTool = setContextDrawTool
+  const drawShape = contextDrawShape ?? 'rectangle'
+  const setDrawShape = setContextDrawShape
   const [drawColor, setDrawColor] = useState<'black' | 'blue' | 'green' | 'red'>('black') // Current drawing color
-  const [drawShape, setDrawShape] = useState<'rectangle' | 'circle' | 'line' | 'arrow'>('rectangle') // Current shape
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set())
   const preferencesLoadedRef = useRef(false) // Track if preferences have been loaded
   const toolbarRef = useRef<HTMLDivElement>(null)
@@ -1684,7 +1688,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             )}
             {/* Group 5: Shapes */}
             {!isItemHidden('drawGroup5') && (
-              <DropdownMenu open={openDropdown === 'shapes'} onOpenChange={(open) => handleDropdownOpenChange('shapes', open)}>
+              <DropdownMenu modal={false} open={openDropdown === 'shapes'} onOpenChange={(open) => handleDropdownOpenChange('shapes', open)}>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
@@ -1695,19 +1699,56 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <Shapes className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-32">
-                  <DropdownMenuItem onClick={() => setDrawShape('rectangle')}>
-                    Rectangle
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setDrawShape('circle')}>
-                    Circle
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setDrawShape('line')}>
-                    Line
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setDrawShape('arrow')}>
-                    Arrow
-                  </DropdownMenuItem>
+                <DropdownMenuContent 
+                  align="start" 
+                  className="w-64 p-3"
+                  onInteractOutside={(e) => {
+                    // Prevent closing when dragging shapes
+                    if (e.target instanceof HTMLElement && e.target.closest('[draggable="true"]')) {
+                      e.preventDefault();
+                    }
+                  }}
+                >
+                  <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2 px-2">
+                    Drag shapes to the canvas
+                  </div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {(['rectangle', 'round-rectangle', 'circle', 'hexagon', 'diamond', 'arrow-rectangle', 'cylinder', 'triangle', 'parallelogram', 'plus'] as const).map((shapeType) => (
+                      <ShapeGridItem
+                        key={shapeType}
+                        shapeType={shapeType}
+                        isSelected={drawShape === shapeType}
+                        onSelect={() => {
+                          setDrawShape(shapeType)
+                          setDrawTool(null)
+                          setIsDrawing(true)
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <DropdownMenuSeparator className="my-2" />
+                  <div className="flex gap-1">
+                    <DropdownMenuItem 
+                      onClick={() => {
+                        setDrawShape('line')
+                        setDrawTool(null)
+                        setIsDrawing(true)
+                      }}
+                      className="flex-1"
+                    >
+                      Line
+                    </DropdownMenuItem>
+                    <DropdownMenuItem 
+                      onClick={() => {
+                        setDrawShape('arrow')
+                        setDrawTool(null)
+                        setIsDrawing(true)
+                      }}
+                      className="flex-1"
+                    >
+                      Arrow
+                    </DropdownMenuItem>
+                  </div>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}

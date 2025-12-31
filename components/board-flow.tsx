@@ -44,6 +44,7 @@ import { useSidebarContext } from './sidebar-context'
 import { LeftVerticalMenu } from './left-vertical-menu'
 import { FreehandNode } from './freehand/FreehandNode' // Freehand drawing node component
 import { Freehand } from './freehand/Freehand' // Freehand drawing overlay component
+import { ShapeNode } from './shapes/ShapeNode' // Shape node component
 import { useUndoRedo } from './use-undo-redo' // Undo/redo hook for map actions
 import { useUserPreference } from '@/lib/hooks/use-user-preferences'
 
@@ -259,6 +260,7 @@ async function fetchCanvasNodesForConversation(conversationId: string): Promise<
 const nodeTypes = Object.freeze({
   chatPanel: ChatPanelNode,
   freehand: FreehandNode, // Freehand drawing node type
+  shape: ShapeNode, // Shape node type
 })
 
 // Define edgeTypes outside component as a module-level constant
@@ -668,7 +670,7 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
   }, [setIsScrollMode, setViewMode])
 
   const reactFlowInstance = useReactFlow()
-  const { setReactFlowInstance, registerSetNodes, isLocked, layoutMode, setLayoutMode, setIsDeterministicMapping, panelWidth: contextPanelWidth, isPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection, boardRule, boardStyle, clickedEdge: contextClickedEdge, setClickedEdge: setContextClickedEdge, fillColor, borderColor, borderWeight, borderStyle, flashcardMode, setFlashcardMode, selectedTag, setSelectedTag, isDrawing, registerMapUndoRedo, registerMapTakeSnapshot } = useReactFlowContext()
+  const { setReactFlowInstance, registerSetNodes, isLocked, layoutMode, setLayoutMode, setIsDeterministicMapping, panelWidth: contextPanelWidth, isPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection, boardRule, boardStyle, clickedEdge: contextClickedEdge, setClickedEdge: setContextClickedEdge, fillColor, borderColor, borderWeight, borderStyle, flashcardMode, setFlashcardMode, selectedTag, setSelectedTag, isDrawing, drawTool, drawShape, registerMapUndoRedo, registerMapTakeSnapshot } = useReactFlowContext()
   
   // Helper function to check if a panel is a chat panel (has AI response and is not a flashcard)
   const isChatPanel = useCallback((node: Node<ChatPanelNodeData>): boolean => {
@@ -5315,6 +5317,58 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
     setIBarViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom })
   }, [reactFlowInstance])
   
+  // Handle drag and drop for shapes from dropdown - matches shapes-pro-example
+  const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    console.log('Drag over event');
+  }, []);
+
+  const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const shapeType = event.dataTransfer.getData('application/reactflow');
+    console.log('Drop event received, shape type:', shapeType);
+    
+    // Only handle shape types, not other drag operations
+    if (!shapeType || !['rectangle', 'round-rectangle', 'circle', 'hexagon', 'diamond', 'arrow-rectangle', 'cylinder', 'triangle', 'parallelogram', 'plus'].includes(shapeType)) {
+      console.log('Invalid shape type or not a shape:', shapeType);
+      return;
+    }
+
+    if (!reactFlowInstance) return;
+
+    const position = reactFlowInstance.screenToFlowPosition({
+      x: event.clientX,
+      y: event.clientY,
+    });
+
+    // Take snapshot before creating shape for undo support
+    takeSnapshot();
+
+    const newNodeId = `shape-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    const newNode = {
+      id: newNodeId,
+      type: 'shape' as const,
+      position,
+      style: { width: 100, height: 100 },
+      data: {
+        type: shapeType,
+        color: fillColor || '#3F8AE2',
+        fillColor: fillColor || '#3F8AE2',
+        borderColor: borderColor || fillColor || '#3F8AE2',
+        borderWeight: borderWeight || 2,
+      },
+      selected: true,
+    };
+
+    setNodes((nds) => {
+      const updatedNodes = nds.map((n) => ({ ...n, selected: false }));
+      return [...updatedNodes, newNode];
+    });
+  }, [reactFlowInstance, fillColor, borderColor, borderWeight, setNodes, takeSnapshot]);
+
   return (
     <div className="w-full h-full relative" onDoubleClick={handlePaneDoubleClick}>
       <ReactFlow
@@ -5327,6 +5381,8 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
         connectionMode={ConnectionMode.Loose}
         connectionLineType={ConnectionLineType.SmoothStep}
         connectionRadius={20}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
         onConnect={async (params) => {
           if (!isLocked && params.source && params.target) {
             // Check if either source or target is a flashcard or freehand node
@@ -5983,8 +6039,8 @@ function BoardFlowInner({ conversationId }: { conversationId?: string }) {
           />
         )}
 
-        {/* Freehand drawing overlay - only shown when drawing mode is active */}
-        {isDrawing && <Freehand conversationId={conversationId} onBeforeCreate={takeSnapshot} />}
+        {/* Freehand drawing overlay - only shown when drawing mode is active and drawTool is pencil */}
+        {isDrawing && drawTool === 'pencil' && <Freehand conversationId={conversationId} onBeforeCreate={takeSnapshot} />}
 
       </ReactFlow>
 

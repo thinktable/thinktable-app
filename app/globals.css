@@ -870,4 +870,92 @@ span[data-added="true"] {
     background-color: #1a1a1a !important;
     border-color: #9e86ed !important;
   }
+
+  /* Shape node label styling - matches shapes-pro-example */
+  .node-label {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    background: none;
+    border: none;
+    outline: none;
+    box-shadow: none;
+    color: #0a0a0a;
+    pointer-events: auto;
+    width: auto;
+    min-width: 0;
+    padding: 0;
+  }
+
+  .node-label::placeholder {
+    color: #0a0a0a;
+    opacity: 0.5;
+  }
+
+  .dark .node-label {
+    color: #e5e7eb;
+  }
+
+  .dark .node-label::placeholder {
+    color: #e5e7eb;
+    opacity: 0.5;
+  }
+
+  /* Shape SVG should fill the node container */
+  .shape-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  /* Shape node resize box should use default blue selection color (same as panels) */
+  .react-flow__node-shape .react-flow__node-resizer {
+    border-color: #3b82f6 !important; /* blue-500 - same as panel selection */
+  }
+
+  /* Make resize control handles bigger for shape nodes - same size as freehand (12px) */
+  /* Use very specific selectors to override React Flow's inline styles - match freehand pattern exactly */
+  /* Note: handleStyle prop sets inline styles, but we keep CSS as fallback */
+  .react-flow__node-shape.selected .react-flow__node-resizer .react-flow__resize-control,
+  .react-flow__node-shape .react-flow__node-resizer .react-flow__resize-control {
+    width: 12px !important;
+    height: 12px !important;
+    min-width: 12px !important;
+    min-height: 12px !important;
+    max-width: 12px !important;
+    max-height: 12px !important;
+    background-color: #ffffff !important;
+    border: 2px solid #3b82f6 !important; /* blue-500 - same as panel selection */
+    border-radius: 2px !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+    box-sizing: border-box !important;
+  }
+
+  /* Dark mode resize handles for shape nodes */
+  .dark .react-flow__node-shape.selected .react-flow__node-resizer .react-flow__resize-control,
+  .dark .react-flow__node-shape .react-flow__node-resizer .react-flow__resize-control {
+    background-color: #1a1a1a !important;
+    border-color: #3b82f6 !important; /* blue-500 - same as panel selection */
+  }
+
+  /* Resize control line (the border box) should use default blue */
+  .react-flow__node-shape .react-flow__node-resizer-line {
+    stroke: #3b82f6 !important; /* blue-500 - same as panel selection */
+  }
+
+  /* Shape edge handles (connection points) - same size as panel handles (8px) */
+  .react-flow__node-shape .react-flow__handle.handle-dot {
+    width: 8px !important; /* Same as panel handles */
+    height: 8px !important; /* Same as panel handles */
+    border: 1px solid var(--handle-border-color, #e5e7eb) !important; /* Border like panel handles */
+    border-radius: 50% !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1) !important;
+  }
+
+  /* Dark mode shape edge handles */
+  .dark .react-flow__node-shape .react-flow__handle.handle-dot {
+    border-color: var(--handle-border-color, #2f2f2f) !important; /* Dark border for dark mode */
+  }
 }
