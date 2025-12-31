@@ -5017,9 +5017,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       
       {/* Panel toolbar - positioned at bottom left, outside the panel but part of the node DOM so it scales with zoom */}
       {/* Rendered inside the panel div so it naturally scales as a map object */}
+      {/* left-4 (16px) aligns with panel text padding */}
       {selected && (
         <div 
-          className="absolute left-0 flex gap-1 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 z-50 pointer-events-auto"
+          className="absolute left-4 flex gap-1 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 z-50 pointer-events-auto"
           style={{
             bottom: '-44px', // Position below the panel
           }}
