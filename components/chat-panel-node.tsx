@@ -1,7 +1,7 @@
 'use client'
 
 // Custom React Flow node for chat panels (prompt + response)
-import { NodeProps, Handle, Position, NodeToolbar, useReactFlow } from 'reactflow'
+import { NodeProps, Handle, Position, useReactFlow } from 'reactflow'
 import { cn } from '@/lib/utils'
 import { useEditor, EditorContent } from '@tiptap/react'
 import { BubbleMenu } from '@tiptap/react/menus'
@@ -3817,84 +3817,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // - Even focused flashcard comments should blur
   const shouldBlurComments = flashcardMode !== null && !isZoomedOutInNavMode
 
-  // Note: currentZoom state is defined earlier and used for toolbar scaling (so toolbar scales with the map like a map object)
-
   return (
-    <>
-      {/* NodeToolbar - positioned at bottom left, scales with zoom to behave like a map object */}
-      <NodeToolbar isVisible={selected} position={Position.Bottom} align="start" className="z-50">
-        <div 
-          className="flex gap-1 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
-          style={{
-            transform: `scale(${currentZoom})`, // Scale with zoom to behave like map object
-            transformOrigin: 'left bottom', // Scale from bottom-left corner
-          }}
-        >
-          {/* Copy button - for notes shows "Copy note", for others shows "Copy" */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={handleToolbarCopy}
-            title={isNote ? "Copy note" : "Copy"}
-          >
-            <Copy className="h-4 w-4 text-gray-600 dark:text-gray-300" />
-          </Button>
-          
-          {/* More menu with Bookmark and Delete options */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                title="More options"
-              >
-                <MoreHorizontal className="h-4 w-4 text-gray-600 dark:text-gray-300" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuItem
-                onClick={() => setIsBookmarked(!isBookmarked)}
-              >
-                <Bookmark className={cn("h-4 w-4 mr-2", isBookmarked && "fill-yellow-400 text-yellow-400")} />
-                {isBookmarked ? "Remove bookmark" : "Bookmark"}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={handleDeletePanel}
-                className="text-red-600 focus:text-red-600 focus:bg-red-50"
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          
-          {/* Tag to study set button - only for flashcards with response message */}
-          {isFlashcard && responseMessage?.id && (
-            <TagButton responseMessageId={responseMessage.id} />
-          )}
-          
-          {/* Collapse/Expand caret - only show if panel has response message (can be collapsed) */}
-          {(responseMessage || isResponseCollapsed) && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={handleToolbarCondense}
-              title={isResponseCollapsed ? "Expand" : "Collapse"}
-            >
-              {isResponseCollapsed ? (
-                <ChevronUp className="h-4 w-4 text-gray-600 dark:text-gray-300" />
-              ) : (
-                <ChevronDown className="h-4 w-4 text-gray-600 dark:text-gray-300" />
-              )}
-            </Button>
-          )}
-        </div>
-      </NodeToolbar>
-      
-      <div
+    <div
         ref={panelRef}
         data-panel-container="true" // Data attribute to help find panel container for comment popup
         className={cn(
@@ -5090,8 +5014,81 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           })}
         </div>
       )}
+      
+      {/* Panel toolbar - positioned at bottom left, outside the panel but part of the node DOM so it scales with zoom */}
+      {/* Rendered inside the panel div so it naturally scales as a map object */}
+      {selected && (
+        <div 
+          className="absolute left-0 flex gap-1 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 z-50 pointer-events-auto"
+          style={{
+            bottom: '-44px', // Position below the panel
+          }}
+          onClick={(e) => e.stopPropagation()} // Prevent clicks from propagating to panel
+        >
+          {/* Copy button - for notes shows "Copy note", for others shows "Copy" */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={handleToolbarCopy}
+            title={isNote ? "Copy note" : "Copy"}
+          >
+            <Copy className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+          </Button>
+          
+          {/* More menu with Bookmark and Delete options */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                title="More options"
+              >
+                <MoreHorizontal className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem
+                onClick={() => setIsBookmarked(!isBookmarked)}
+              >
+                <Bookmark className={cn("h-4 w-4 mr-2", isBookmarked && "fill-yellow-400 text-yellow-400")} />
+                {isBookmarked ? "Remove bookmark" : "Bookmark"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={handleDeletePanel}
+                className="text-red-600 focus:text-red-600 focus:bg-red-50"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          
+          {/* Tag to study set button - only for flashcards with response message */}
+          {isFlashcard && responseMessage?.id && (
+            <TagButton responseMessageId={responseMessage.id} />
+          )}
+          
+          {/* Collapse/Expand caret - only show if panel has response message (can be collapsed) */}
+          {(responseMessage || isResponseCollapsed) && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={handleToolbarCondense}
+              title={isResponseCollapsed ? "Expand" : "Collapse"}
+            >
+              {isResponseCollapsed ? (
+                <ChevronUp className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+              )}
+            </Button>
+          )}
+        </div>
+      )}
     </div>
-    </>
   )
 }
 
