@@ -1744,143 +1744,6 @@ function CommentButtonPopup({
   )
 }
 
-// Component to position copy button at the end of text content
-function CopyButtonAtTextEnd({
-  editorRef,
-  isFlashcard,
-  promptContent
-}: {
-  editorRef: React.MutableRefObject<any>
-  isFlashcard?: boolean
-  promptContent: string
-}) {
-  const buttonRef = useRef<HTMLDivElement>(null)
-  const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  
-  useEffect(() => {
-    const updateButtonPosition = () => {
-      const editor = editorRef.current
-      const button = buttonRef.current
-      if (!editor || !button || !editor.view) return
-      
-      // Use requestAnimationFrame to ensure DOM is ready
-      requestAnimationFrame(() => {
-        try {
-          // Get the editor's view and DOM
-          const view = editor.view
-          const editorDom = view.dom
-          if (!editorDom) return
-          
-          // Get the end position of the document
-          const docSize = editor.state.doc.content.size
-          if (docSize === 0) return // No content, don't position
-          
-          const endPos = docSize - 1
-          
-          // Get coordinates for the end position using TipTap's view
-          const coords = view.coordsAtPos(endPos)
-          if (!coords || coords.left === 0 && coords.right === 0) return // Invalid coordinates
-          
-          // Get editor container position
-          const editorRect = editorDom.getBoundingClientRect()
-          if (editorRect.width === 0 || editorRect.height === 0) return // Editor not visible
-          
-          // Get computed line height from the editor DOM
-          const computedStyle = window.getComputedStyle(editorDom)
-          let actualLineHeight = parseFloat(computedStyle.lineHeight)
-          
-          // If line height is 'normal' or invalid, calculate from font size
-          if (isNaN(actualLineHeight) || actualLineHeight <= 0) {
-            const fontSize = parseFloat(computedStyle.fontSize)
-            if (!isNaN(fontSize) && fontSize > 0) {
-              // Use 1.25x font size as line height
-              actualLineHeight = fontSize * 1.35
-            } else {
-              // Fallback to coordinate height
-              actualLineHeight = coords.bottom - coords.top
-            }
-          }
-          
-          // Calculate position relative to editor container
-          const left = coords.right - editorRect.left
-          
-          // For vertical centering, use the coordinate top (baseline of the line)
-          // and center the 24px button within the line height
-          // coords.top is the top of the line containing the last character
-          const lineTop = coords.top - editorRect.top
-          const top = lineTop + (actualLineHeight - 24) / 2
-          
-          // Only update if values are valid (positive numbers)
-          if (left >= 0 && top >= 0 && isFinite(left) && isFinite(top) && actualLineHeight > 0) {
-            // Position button at end of text
-            button.style.position = 'absolute'
-            button.style.left = `${left + 6}px` // 6px spacing after text
-            button.style.top = `${top}px`
-          }
-        } catch (error) {
-          // Silently fail - button will not be positioned
-          // console.error('Error positioning copy button:', error)
-        }
-      })
-    }
-    
-    // Debounced update function to prevent rapid position changes
-    const debouncedUpdate = () => {
-      if (updateTimeoutRef.current) {
-        clearTimeout(updateTimeoutRef.current)
-      }
-      updateTimeoutRef.current = setTimeout(updateButtonPosition, 50)
-    }
-    
-    // Update position when content changes
-    if (editorRef.current) {
-      // Initial position after a delay to ensure DOM is ready
-      const initialTimeoutId = setTimeout(updateButtonPosition, 150)
-      
-      const editor = editorRef.current
-      // Only update on content changes, not cursor movement
-      editor.on('update', debouncedUpdate)
-      
-      // Update on resize with debouncing
-      const resizeObserver = new ResizeObserver(debouncedUpdate)
-      const editorDom = editor.view?.dom
-      if (editorDom) {
-        resizeObserver.observe(editorDom)
-      }
-      
-      return () => {
-        clearTimeout(initialTimeoutId)
-        if (updateTimeoutRef.current) {
-          clearTimeout(updateTimeoutRef.current)
-        }
-        editor.off('update', debouncedUpdate)
-        resizeObserver.disconnect()
-      }
-    }
-  }, [editorRef, promptContent])
-  
-  return (
-    <div
-      ref={buttonRef}
-      className="opacity-0 group-hover/prompt:opacity-100 transition-opacity pointer-events-auto"
-      style={{ position: 'absolute' }}
-    >
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
-        onClick={(e) => {
-          e.stopPropagation()
-          navigator.clipboard.writeText(promptContent)
-        }}
-        title={isFlashcard ? "Copy question" : "Copy prompt"}
-      >
-        <Copy className="h-3 w-3 text-gray-600 dark:text-gray-300" />
-      </Button>
-    </div>
-  )
-}
-
 export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) {
   // Handle both ChatPanelNodeData and ProjectBoardPanelNodeData
   const isProjectBoard = isProjectBoardData(data)
@@ -3933,8 +3796,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 backgroundColor: responseAreaBackgroundColor,
               }}
             >
-              {/* Note text with same margin as response panel text and same top margin as prompt panel padding */}
-              <div className="px-3 pt-4 pb-0">
+              {/* Note text centered with equal top/bottom padding */}
+              <div className="px-3 py-4">
                 <TipTapContent
                 content={promptContent || promptMessage?.content || ''}
                   className="text-gray-900 dark:text-gray-100"
@@ -4127,14 +3990,6 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                         onCommentPopupVisibilityChange={setHasCommentPopupVisible}
                         onBlur={handleEditorBlur}
                       />
-                      {/* Copy button - positioned at end of text content, shows on hover - only show if there is text in prompt/question */}
-                      {showPromptMoreMenu && !isResponseCollapsed && !isProjectBoard && shouldShowGreyArea && !isContentEmpty(promptContent) && (
-                        <CopyButtonAtTextEnd
-                          editorRef={promptEditorRef}
-                          isFlashcard={isFlashcard}
-                          promptContent={promptContent}
-                        />
-                      )}
                     </div>
                   )}
 
@@ -4159,8 +4014,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                   maxHeight: isResponseCollapsed ? '0px' : 'none',
                 }}
               >
-                {/* Separate div for response text with 12px horizontal padding to align with prompt text (4px more than before), 8px bottom padding to match gap between buttons and panel bottom */}
-                <div className="px-3 pb-0 group overflow-visible">
+                {/* Separate div for response text with 12px horizontal padding and 16px bottom padding (same as note panel) */}
+                <div className="px-3 pb-4 group overflow-visible">
                   <div className="inline-flex items-center gap-1">
                     <TipTapContent
                       key={`response-${responseMessage.id}`} // Force re-render when message ID changes
@@ -4409,14 +4264,6 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                       onCommentPopupVisibilityChange={setHasCommentPopupVisible}
                         onBlur={handleEditorBlur}
                     />
-                    {/* Copy button - positioned at end of text content, shows on hover - only show if there is text in prompt/question */}
-                    {showPromptMoreMenu && !isResponseCollapsed && !isProjectBoard && shouldShowGreyArea && !isContentEmpty(promptContent) && (
-                      <CopyButtonAtTextEnd
-                        editorRef={promptEditorRef}
-                        isFlashcard={isFlashcard}
-                        promptContent={promptContent}
-                      />
-                    )}
                   </div>
                 )}
               </div>
