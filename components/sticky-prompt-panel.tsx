@@ -61,8 +61,8 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
             >
               {/* Logo - visible by default, slightly smaller */}
               <Image
-                src="/thinkable-logo.svg"
-                alt="Thinkable"
+                src="/thinktable-logo.svg"
+                alt="ThinkTable"
                 width={24}
                 height={24}
                 className="h-6 w-6 absolute inset-0 m-auto group-hover:opacity-0 transition-opacity dark:invert"

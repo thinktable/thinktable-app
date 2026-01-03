@@ -123,7 +123,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
     if (typeof window === 'undefined') return
 
     // STEP 1: Load from localStorage FIRST (synchronous, instant) - ensures UI shows saved prefs immediately
-    const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+    const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
     const savedPrefs = localStorage.getItem(storageKey)
     if (savedPrefs) {
       try {
@@ -146,16 +146,16 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
         }
       } catch (e) {
         // Fallback to old localStorage keys for backward compatibility
-        const savedLayoutMode = localStorage.getItem('thinkable-layout-mode') as 'auto' | 'tree' | 'cluster' | 'none' | null
+        const savedLayoutMode = localStorage.getItem('thinktable-layout-mode') as 'auto' | 'tree' | 'cluster' | 'none' | null
         if (savedLayoutMode && ['auto', 'tree', 'cluster', 'none'].includes(savedLayoutMode)) {
           setLayoutMode(savedLayoutMode)
           setIsDeterministicMapping(savedLayoutMode !== 'none')
         }
-        const savedLineStyle = localStorage.getItem('thinkable-line-style') as 'solid' | 'dotted' | null
+        const savedLineStyle = localStorage.getItem('thinktable-line-style') as 'solid' | 'dotted' | null
         if (savedLineStyle && ['solid', 'dotted'].includes(savedLineStyle)) {
           setLineStyle(savedLineStyle)
         }
-        const savedArrowDirection = localStorage.getItem('thinkable-arrow-direction') as 'down' | 'up' | 'left' | 'right' | null
+        const savedArrowDirection = localStorage.getItem('thinktable-arrow-direction') as 'down' | 'up' | 'left' | 'right' | null
         if (savedArrowDirection && ['down', 'up', 'left', 'right'].includes(savedArrowDirection)) {
           setArrowDirection(savedArrowDirection)
         }
@@ -184,13 +184,13 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
       if (homepageBoardPrefs) {
         if (homepageBoardPrefs.boardRule && ['wide', 'college', 'narrow'].includes(homepageBoardPrefs.boardRule)) {
           setBoardRule(homepageBoardPrefs.boardRule)
-          const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+          const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
           const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
           localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardRule: homepageBoardPrefs.boardRule }))
         }
         if (homepageBoardPrefs.boardStyle && ['none', 'dotted', 'lined', 'grid'].includes(homepageBoardPrefs.boardStyle)) {
           setBoardStyle(homepageBoardPrefs.boardStyle)
-          const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+          const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
           const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
           localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardStyle: homepageBoardPrefs.boardStyle }))
         }
@@ -198,19 +198,19 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
         if (homepageBoardPrefs.layoutMode && ['auto', 'tree', 'cluster', 'none'].includes(homepageBoardPrefs.layoutMode)) {
           setLayoutMode(homepageBoardPrefs.layoutMode)
           setIsDeterministicMapping(homepageBoardPrefs.layoutMode !== 'none')
-          const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+          const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
           const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
           localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, layoutMode: homepageBoardPrefs.layoutMode }))
         }
         if (homepageBoardPrefs.lineStyle && ['solid', 'dotted'].includes(homepageBoardPrefs.lineStyle)) {
           setLineStyle(homepageBoardPrefs.lineStyle)
-          const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+          const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
           const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
           localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, lineStyle: homepageBoardPrefs.lineStyle }))
         }
         if (homepageBoardPrefs.arrowDirection && ['down', 'up', 'left', 'right'].includes(homepageBoardPrefs.arrowDirection)) {
           setArrowDirection(homepageBoardPrefs.arrowDirection)
-          const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+          const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
           const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
           localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, arrowDirection: homepageBoardPrefs.arrowDirection }))
         }
@@ -253,35 +253,35 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
             setLayoutMode(prefs.layoutMode)
             setIsDeterministicMapping(prefs.layoutMode !== 'none')
             // Save to localStorage for instant loading next time
-            const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+            const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
             const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
             localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, layoutMode: prefs.layoutMode }))
           }
 
           if (prefs.lineStyle && ['solid', 'dotted'].includes(prefs.lineStyle)) {
             setLineStyle(prefs.lineStyle)
-            const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+            const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
             const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
             localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, lineStyle: prefs.lineStyle }))
           }
 
           if (prefs.arrowDirection && ['down', 'up', 'left', 'right'].includes(prefs.arrowDirection)) {
             setArrowDirection(prefs.arrowDirection)
-            const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+            const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
             const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
             localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, arrowDirection: prefs.arrowDirection }))
           }
 
           if (prefs.boardRule && ['wide', 'college', 'narrow'].includes(prefs.boardRule)) {
             setBoardRule(prefs.boardRule)
-            const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+            const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
             const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
             localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardRule: prefs.boardRule }))
           }
 
           if (prefs.boardStyle && ['none', 'dotted', 'lined', 'grid'].includes(prefs.boardStyle)) {
             setBoardStyle(prefs.boardStyle)
-            const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+            const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
             const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
             localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardStyle: prefs.boardStyle }))
           }
@@ -344,12 +344,12 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
     const currentConversationId = conversationIdRef.current
 
     // Save to localStorage immediately (lightweight, instant)
-    const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+    const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
     const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
     localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, layoutMode }))
 
     // Also save to old key for backward compatibility
-    localStorage.setItem('thinkable-layout-mode', layoutMode)
+    localStorage.setItem('thinktable-layout-mode', layoutMode)
 
     // Save to Supabase in background (for cross-device sync)
     const saveToSupabase = async () => {
@@ -438,12 +438,12 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
     const currentConversationId = conversationIdRef.current
 
     // Save to localStorage immediately (lightweight, instant)
-    const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+    const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
     const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
     localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, lineStyle }))
 
     // Also save to old key for backward compatibility
-    localStorage.setItem('thinkable-line-style', lineStyle)
+    localStorage.setItem('thinktable-line-style', lineStyle)
 
     // Save to Supabase in background (for cross-device sync)
     const saveToSupabase = async () => {
@@ -532,7 +532,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
     const currentConversationId = conversationIdRef.current
 
     // Save to localStorage immediately (lightweight, instant)
-    const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+    const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
     const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
     localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardRule }))
 
@@ -623,7 +623,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
     const currentConversationId = conversationIdRef.current
 
     // Save to localStorage immediately (lightweight, instant)
-    const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+    const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
     const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
     localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardStyle }))
 
@@ -714,12 +714,12 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
     const currentConversationId = conversationIdRef.current
 
     // Save to localStorage immediately (lightweight, instant)
-    const storageKey = currentConversationId ? `thinkable-prefs-${currentConversationId}` : 'thinkable-prefs-default'
+    const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
     const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
     localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, arrowDirection }))
 
     // Also save to old key for backward compatibility
-    localStorage.setItem('thinkable-arrow-direction', arrowDirection)
+    localStorage.setItem('thinktable-arrow-direction', arrowDirection)
 
     // Save to Supabase in background (for cross-device sync)
     const saveToSupabase = async () => {
@@ -866,13 +866,13 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
           }
 
           // Also copy to localStorage for instant loading
-          const defaultStorageKey = 'thinkable-prefs-default'
+          const defaultStorageKey = 'thinktable-prefs-default'
           const defaultPrefsStr = localStorage.getItem(defaultStorageKey)
           if (defaultPrefsStr) {
-            localStorage.setItem(`thinkable-prefs-${newConversationId}`, defaultPrefsStr)
+            localStorage.setItem(`thinktable-prefs-${newConversationId}`, defaultPrefsStr)
           } else {
             // If no default prefs in localStorage, save current state
-            localStorage.setItem(`thinkable-prefs-${newConversationId}`, JSON.stringify(currentPrefs))
+            localStorage.setItem(`thinktable-prefs-${newConversationId}`, JSON.stringify(currentPrefs))
           }
         } catch (error) {
           console.error('Error copying preferences to new board:', error)

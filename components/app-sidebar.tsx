@@ -1855,8 +1855,8 @@ export default function AppSidebar({ user }: AppSidebarProps) {
               >
                 {/* Logo - visible by default, slightly smaller */}
                 <Image
-                  src="/thinkable-logo.svg"
-                  alt="Thinkable"
+                  src="/thinktable-logo.svg"
+                  alt="ThinkTable"
                   width={24}
                   height={24}
                   className="h-6 w-6 absolute inset-0 m-auto group-hover:opacity-0 transition-opacity"
@@ -1875,8 +1875,8 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                 title="New board"
               >
                 <Image
-                  src="/thinkable-logo.svg"
-                  alt="Thinkable"
+                  src="/thinktable-logo.svg"
+                  alt="ThinkTable"
                   width={24}
                   height={24}
                   className="h-6 w-6"

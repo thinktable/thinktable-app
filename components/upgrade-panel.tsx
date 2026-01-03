@@ -61,7 +61,7 @@ export function UpgradePanel({
               </div>
               <h3 className="text-2xl font-semibold dark:text-white">Upgrade to Plus</h3>
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                Unlock all features and get the most out of Thinkable
+                Unlock all features and get the most out of ThinkTable
               </p>
             </div>
 

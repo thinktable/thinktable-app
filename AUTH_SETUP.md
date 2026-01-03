@@ -2,7 +2,7 @@
 
 ## Overview
 
-Thinkable uses Supabase Auth for authentication with Resend for enhanced email verification. This setup provides:
+ThinkTable uses Supabase Auth for authentication with Resend for enhanced email verification. This setup provides:
 
 - Email/password authentication
 - Email verification via Resend

@@ -26,7 +26,7 @@ That's it! The template will be updated automatically.
 ## What the Script Does
 
 - Updates the "Confirm signup" email template
-- Sets subject to: "Verify your Thinkable account"
+- Sets subject to: "Verify your ThinkTable account"
 - Applies your beautiful gradient HTML design
 - Uses Supabase Management API
 

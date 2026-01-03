@@ -138,7 +138,7 @@ export default function LoginPage() {
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle className="text-2xl">Welcome back</CardTitle>
-          <CardDescription>Sign in to your Thinkable account</CardDescription>
+          <CardDescription>Sign in to your ThinkTable account</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {message && (

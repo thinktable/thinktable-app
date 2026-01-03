@@ -1,4 +1,4 @@
-# Database Schema - Thinkable SaaS
+# Database Schema - ThinkTable SaaS
 
 ## Overview
 

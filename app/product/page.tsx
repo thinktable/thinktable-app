@@ -319,7 +319,7 @@ export default function ProductPage() {
     <div className="min-h-screen bg-gradient-to-b from-blue-50 to-white">
       {/* Navigation */}
       <nav className="container mx-auto px-6 py-4 flex justify-between items-center">
-        <Link href="/" className="text-2xl font-bold text-blue-600">Thinkable</Link>
+        <Link href="/" className="text-2xl font-bold text-blue-600">ThinkTable</Link>
         <div className="flex gap-6">
           <Link href="/" className="text-gray-700 hover:text-blue-600 transition-colors">
             Home
@@ -339,7 +339,7 @@ export default function ProductPage() {
       {/* Hero Section */}
       <section className="container mx-auto px-6 py-16 text-center">
         <h1 className="text-5xl font-bold text-gray-900 mb-4">
-          See Thinkable in Action
+          See ThinkTable in Action
         </h1>
         <p className="text-xl text-gray-600 max-w-3xl mx-auto">
           Explore how AI-powered chat transforms into interactive mind maps. 
@@ -485,7 +485,7 @@ export default function ProductPage() {
       {/* Footer */}
       <footer className="container mx-auto px-6 py-8 border-t border-gray-200">
         <div className="flex justify-between items-center">
-          <div className="text-gray-600">© 2024 Thinkable. All rights reserved.</div>
+          <div className="text-gray-600">© 2024 ThinkTable. All rights reserved.</div>
           <div className="flex gap-6">
             <Link href="/product" className="text-gray-600 hover:text-blue-600 transition-colors">Product</Link>
             <Link href="/about" className="text-gray-600 hover:text-blue-600 transition-colors">About</Link>

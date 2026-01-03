@@ -15,15 +15,15 @@ The homepage displays a public, read-only board that can be edited by admins in 
 
 1. Go to Supabase Dashboard → Authentication → Users
 2. Click "Add user" → "Create new user"
-3. Create a user with email: `system@thinkable.com` (or your preferred system email)
+3. Create a user with email: `system@thinktable.com` (or your preferred system email)
 4. Set a secure password (store it securely, you'll need it to edit)
 5. Note the user ID (you'll need this)
 
 ### 2. Create Homepage Board
 
-1. Log in to your app as the system user (`system@thinkable.com`)
+1. Log in to your app as the system user (`system@thinktable.com`)
 2. Navigate to `/board` (or create a new board)
-3. Build your homepage content using the Thinkable chat interface
+3. Build your homepage content using the ThinkTable chat interface
 4. Once you're happy with the content, copy the board's UUID from the URL: `/board/[uuid]`
 
 ### 3. Configure Environment Variables
@@ -110,7 +110,7 @@ npm run dev
 
 To edit the homepage content:
 
-1. Log in as the system user (`system@thinkable.com`)
+1. Log in as the system user (`system@thinktable.com`)
 2. Navigate to `/board/[homepage-board-id]`
 3. Use the full dashboard editing interface (topbar, chat input, etc.)
 4. Make your changes

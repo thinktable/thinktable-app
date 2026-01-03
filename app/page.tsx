@@ -46,14 +46,14 @@ export default function Home() {
         <div className="container mx-auto h-full px-6 flex justify-between items-center">
         <Link href="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <Image
-            src="/thinkable-logo.svg"
-            alt="Thinkable"
+            src="/thinktable-logo.svg"
+            alt="ThinkTable"
             width={24}
             height={24}
             className="h-6 w-6"
             priority
           />
-          <span className="text-xl font-semibold text-foreground leading-6">Thinkable</span>
+          <span className="text-xl font-semibold text-foreground leading-6">ThinkTable</span>
         </Link>
         <div className="flex items-center gap-4">
           <Link href="/product" className="text-sm text-muted-foreground hover:text-foreground transition-colors">

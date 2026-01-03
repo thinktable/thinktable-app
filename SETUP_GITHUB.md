@@ -1,14 +1,14 @@
 # GitHub Organization Setup Guide
 
-This guide walks you through setting up the separate repositories in your GitHub organization `thinkableso`.
+This guide walks you through setting up the separate repositories in your GitHub organization `thinktableso`.
 
 ## Repository Structure
 
 ```
-thinkable/
+thinktable/
   apps/
-    web/              → thinkable-app
-    backend/          → thinkable-backend
+    web/              → thinktable-app
+    backend/          → thinktable-backend
   packages/
     map-engine/      → map-engine
     design-system/   → design-system
@@ -19,7 +19,7 @@ thinkable/
 
 1. **GitHub CLI** (recommended) or manual setup via GitHub web interface
 2. **Authentication** with your GitHub account
-3. **Organization access** to `thinkableso`
+3. **Organization access** to `thinktableso`
 
 ### Check GitHub CLI Installation
 
@@ -40,25 +40,25 @@ gh auth login
 
 ### Option A: Using GitHub CLI (Recommended)
 
-Run these commands from the `thinkable` directory:
+Run these commands from the `thinktable` directory:
 
 ```bash
 # Create repositories in the organization
-gh repo create thinkableso/thinkable-app --public --source=./apps/web --remote=origin --push
-gh repo create thinkableso/thinkable-backend --public --source=./apps/backend --remote=origin --push
-gh repo create thinkableso/map-engine --public --source=./packages/map-engine --remote=origin --push
-gh repo create thinkableso/design-system --public --source=./packages/design-system --remote=origin --push
-gh repo create thinkableso/mcp-tools --public --source=./packages/mcp-tools --remote=origin --push
+gh repo create thinktableso/thinktable-app --public --source=./apps/web --remote=origin --push
+gh repo create thinktableso/thinktable-backend --public --source=./apps/backend --remote=origin --push
+gh repo create thinktableso/map-engine --public --source=./packages/map-engine --remote=origin --push
+gh repo create thinktableso/design-system --public --source=./packages/design-system --remote=origin --push
+gh repo create thinktableso/mcp-tools --public --source=./packages/mcp-tools --remote=origin --push
 ```
 
 ### Option B: Manual Setup via GitHub Web Interface
 
 For each repository:
 
-1. Go to https://github.com/organizations/thinkableso/repositories/new
+1. Go to https://github.com/organizations/thinktableso/repositories/new
 2. Create repository with the name:
-   - `thinkable-app`
-   - `thinkable-backend`
+   - `thinktable-app`
+   - `thinktable-backend`
    - `map-engine`
    - `design-system`
    - `mcp-tools`
@@ -68,27 +68,27 @@ For each repository:
 ```bash
 # For apps/web
 cd apps/web
-git remote add origin https://github.com/thinkableso/thinkable-app.git
+git remote add origin https://github.com/thinktableso/thinktable-app.git
 git push -u origin main
 
 # For apps/backend
 cd apps/backend
-git remote add origin https://github.com/thinkableso/thinkable-backend.git
+git remote add origin https://github.com/thinktableso/thinktable-backend.git
 git push -u origin main
 
 # For packages/map-engine
 cd packages/map-engine
-git remote add origin https://github.com/thinkableso/map-engine.git
+git remote add origin https://github.com/thinktableso/map-engine.git
 git push -u origin main
 
 # For packages/design-system
 cd packages/design-system
-git remote add origin https://github.com/thinkableso/design-system.git
+git remote add origin https://github.com/thinktableso/design-system.git
 git push -u origin main
 
 # For packages/mcp-tools
 cd packages/mcp-tools
-git remote add origin https://github.com/thinkableso/mcp-tools.git
+git remote add origin https://github.com/thinktableso/mcp-tools.git
 git push -u origin main
 ```
 
@@ -125,13 +125,13 @@ If you get authentication errors:
 gh auth login
 
 # Or use SSH instead of HTTPS
-git remote set-url origin git@github.com:thinkableso/REPO_NAME.git
+git remote set-url origin git@github.com:thinktableso/REPO_NAME.git
 ```
 
 ### Permission Issues
 
 Ensure you have:
-- Write access to the `thinkableso` organization
+- Write access to the `thinktableso` organization
 - Proper permissions to create repositories
 
 ### Repository Already Exists
@@ -139,7 +139,7 @@ Ensure you have:
 If a repository already exists, you can add it as a remote:
 
 ```bash
-git remote add origin https://github.com/thinkableso/REPO_NAME.git
+git remote add origin https://github.com/thinktableso/REPO_NAME.git
 git push -u origin main
 ```
 

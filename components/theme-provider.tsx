@@ -25,7 +25,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     // Only access localStorage and window after mount (client-side only)
     if (typeof window === 'undefined') return
     
-    const saved = localStorage.getItem('thinkable-theme') as Theme | null
+    const saved = localStorage.getItem('thinktable-theme') as Theme | null
     const initialTheme = saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'system'
     setThemeState(initialTheme)
     
@@ -70,7 +70,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // Save theme to localStorage when it changes
   useEffect(() => {
     if (!mounted || typeof window === 'undefined') return
-    localStorage.setItem('thinkable-theme', theme)
+    localStorage.setItem('thinktable-theme', theme)
   }, [theme, mounted])
 
   const setTheme = (newTheme: Theme) => {

@@ -315,19 +315,19 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
     if (typeof window === 'undefined') return
 
     // STEP 1: Load from localStorage FIRST (synchronous, instant) - ensures UI shows saved prefs immediately
-    const savedViewMode = localStorage.getItem('thinkable-view-mode') as 'linear' | 'canvas' | null
+    const savedViewMode = localStorage.getItem('thinktable-view-mode') as 'linear' | 'canvas' | null
     if (savedViewMode && ['linear', 'canvas'].includes(savedViewMode)) {
       setViewMode(savedViewMode)
     }
 
-    const savedScrollMode = localStorage.getItem('thinkable-scroll-mode')
+    const savedScrollMode = localStorage.getItem('thinktable-scroll-mode')
     if (savedScrollMode === 'true') {
       setIsScrollMode(true)
     } else if (savedScrollMode === 'false') {
       setIsScrollMode(false)
     }
 
-    const savedMinimapHidden = localStorage.getItem('thinkable-minimap-hidden')
+    const savedMinimapHidden = localStorage.getItem('thinktable-minimap-hidden')
     if (savedMinimapHidden === 'true') {
       setIsMinimapHidden(true)
       setIsMinimapManuallyHidden(true)
@@ -357,18 +357,18 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
             // Update from Supabase if values exist (Supabase is source of truth for cross-device sync)
             if (prefs.viewMode && ['linear', 'canvas'].includes(prefs.viewMode)) {
               setViewMode(prefs.viewMode)
-              localStorage.setItem('thinkable-view-mode', prefs.viewMode)
+              localStorage.setItem('thinktable-view-mode', prefs.viewMode)
             }
 
             if (typeof prefs.isScrollMode === 'boolean') {
               setIsScrollMode(prefs.isScrollMode)
-              localStorage.setItem('thinkable-scroll-mode', String(prefs.isScrollMode))
+              localStorage.setItem('thinktable-scroll-mode', String(prefs.isScrollMode))
             }
 
             if (typeof prefs.isMinimapHidden === 'boolean') {
               setIsMinimapHidden(prefs.isMinimapHidden)
               setIsMinimapManuallyHidden(prefs.isMinimapHidden)
-              localStorage.setItem('thinkable-minimap-hidden', String(prefs.isMinimapHidden))
+              localStorage.setItem('thinktable-minimap-hidden', String(prefs.isMinimapHidden))
             }
           }
         }
@@ -424,18 +424,18 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
             // Update from Supabase if values exist
             if (prefs.viewMode && ['linear', 'canvas'].includes(prefs.viewMode)) {
               setViewMode(prefs.viewMode)
-              localStorage.setItem('thinkable-view-mode', prefs.viewMode)
+              localStorage.setItem('thinktable-view-mode', prefs.viewMode)
             }
 
             if (typeof prefs.isScrollMode === 'boolean') {
               setIsScrollMode(prefs.isScrollMode)
-              localStorage.setItem('thinkable-scroll-mode', String(prefs.isScrollMode))
+              localStorage.setItem('thinktable-scroll-mode', String(prefs.isScrollMode))
             }
 
             if (typeof prefs.isMinimapHidden === 'boolean') {
               setIsMinimapHidden(prefs.isMinimapHidden)
               setIsMinimapManuallyHidden(prefs.isMinimapHidden)
-              localStorage.setItem('thinkable-minimap-hidden', String(prefs.isMinimapHidden))
+              localStorage.setItem('thinktable-minimap-hidden', String(prefs.isMinimapHidden))
             }
           }
         }
@@ -445,19 +445,19 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
     }
 
     // Load from localStorage first (instant)
-    const savedViewMode = localStorage.getItem('thinkable-view-mode') as 'linear' | 'canvas' | null
+    const savedViewMode = localStorage.getItem('thinktable-view-mode') as 'linear' | 'canvas' | null
     if (savedViewMode && ['linear', 'canvas'].includes(savedViewMode)) {
       setViewMode(savedViewMode)
     }
 
-    const savedScrollMode = localStorage.getItem('thinkable-scroll-mode')
+    const savedScrollMode = localStorage.getItem('thinktable-scroll-mode')
     if (savedScrollMode === 'true') {
       setIsScrollMode(true)
     } else if (savedScrollMode === 'false') {
       setIsScrollMode(false)
     }
 
-    const savedMinimapHidden = localStorage.getItem('thinkable-minimap-hidden')
+    const savedMinimapHidden = localStorage.getItem('thinktable-minimap-hidden')
     if (savedMinimapHidden === 'true') {
       setIsMinimapHidden(true)
       setIsMinimapManuallyHidden(true)
@@ -508,9 +508,9 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
             }
 
             // Also update localStorage to keep them in sync
-            if (prefs.viewMode) localStorage.setItem('thinkable-view-mode', prefs.viewMode)
-            if (typeof prefs.isScrollMode === 'boolean') localStorage.setItem('thinkable-scroll-mode', String(prefs.isScrollMode))
-            if (typeof prefs.isMinimapHidden === 'boolean') localStorage.setItem('thinkable-minimap-hidden', String(prefs.isMinimapHidden))
+            if (prefs.viewMode) localStorage.setItem('thinktable-view-mode', prefs.viewMode)
+            if (typeof prefs.isScrollMode === 'boolean') localStorage.setItem('thinktable-scroll-mode', String(prefs.isScrollMode))
+            if (typeof prefs.isMinimapHidden === 'boolean') localStorage.setItem('thinktable-minimap-hidden', String(prefs.isMinimapHidden))
 
             return // Successfully loaded from Supabase, skip localStorage fallback
           }
@@ -520,19 +520,19 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
       }
 
       // Fallback to localStorage
-      const savedScrollMode = localStorage.getItem('thinkable-scroll-mode')
+      const savedScrollMode = localStorage.getItem('thinktable-scroll-mode')
       if (savedScrollMode === 'true') {
         setIsScrollMode(true)
       } else {
         setIsScrollMode(false)
       }
 
-      const savedViewMode = localStorage.getItem('thinkable-view-mode') as 'linear' | 'canvas' | null
+      const savedViewMode = localStorage.getItem('thinktable-view-mode') as 'linear' | 'canvas' | null
       if (savedViewMode && ['linear', 'canvas'].includes(savedViewMode)) {
         setViewMode(savedViewMode)
       }
 
-      const savedMinimapHidden = localStorage.getItem('thinkable-minimap-hidden')
+      const savedMinimapHidden = localStorage.getItem('thinktable-minimap-hidden')
       if (savedMinimapHidden === 'true') {
         setIsMinimapHidden(true)
         setIsMinimapManuallyHidden(true)
@@ -613,18 +613,18 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
     if (!studySetId || typeof window === 'undefined') return
 
     // Load from localStorage first (instant) - ensures UI shows saved prefs immediately
-    const savedLayoutMode = localStorage.getItem('thinkable-layout-mode') as 'auto' | 'tree' | 'cluster' | 'none' | null
+    const savedLayoutMode = localStorage.getItem('thinktable-layout-mode') as 'auto' | 'tree' | 'cluster' | 'none' | null
     if (savedLayoutMode && ['auto', 'tree', 'cluster', 'none'].includes(savedLayoutMode)) {
       setLayoutMode(savedLayoutMode)
       setIsDeterministicMapping(savedLayoutMode !== 'none')
     }
 
-    const savedLineStyle = localStorage.getItem('thinkable-line-style') as 'solid' | 'dotted' | null
+    const savedLineStyle = localStorage.getItem('thinktable-line-style') as 'solid' | 'dotted' | null
     if (savedLineStyle && ['solid', 'dotted'].includes(savedLineStyle)) {
       setLineStyle(savedLineStyle)
     }
 
-    const savedArrowDirection = localStorage.getItem('thinkable-arrow-direction') as 'down' | 'up' | 'left' | 'right' | null
+    const savedArrowDirection = localStorage.getItem('thinktable-arrow-direction') as 'down' | 'up' | 'left' | 'right' | null
     if (savedArrowDirection && ['down', 'up', 'left', 'right'].includes(savedArrowDirection)) {
       setArrowDirection(savedArrowDirection)
     }
@@ -652,17 +652,17 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
             if (prefs.layoutMode && ['auto', 'tree', 'cluster', 'none'].includes(prefs.layoutMode)) {
               setLayoutMode(prefs.layoutMode)
               setIsDeterministicMapping(prefs.layoutMode !== 'none')
-              localStorage.setItem('thinkable-layout-mode', prefs.layoutMode)
+              localStorage.setItem('thinktable-layout-mode', prefs.layoutMode)
             }
 
             if (prefs.lineStyle && ['solid', 'dotted'].includes(prefs.lineStyle)) {
               setLineStyle(prefs.lineStyle)
-              localStorage.setItem('thinkable-line-style', prefs.lineStyle)
+              localStorage.setItem('thinktable-line-style', prefs.lineStyle)
             }
 
             if (prefs.arrowDirection && ['down', 'up', 'left', 'right'].includes(prefs.arrowDirection)) {
               setArrowDirection(prefs.arrowDirection)
-              localStorage.setItem('thinkable-arrow-direction', prefs.arrowDirection)
+              localStorage.setItem('thinktable-arrow-direction', prefs.arrowDirection)
             }
           }
         }
@@ -843,8 +843,8 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
     if (typeof window === 'undefined') return
 
     // Save to localStorage immediately (lightweight, instant)
-    localStorage.setItem('thinkable-view-mode', viewMode)
-    localStorage.setItem('thinkable-scroll-mode', String(isScrollMode))
+    localStorage.setItem('thinktable-view-mode', viewMode)
+    localStorage.setItem('thinktable-scroll-mode', String(isScrollMode))
 
     // Save to Supabase in background (for cross-device sync)
     const saveToSupabase = async () => {
@@ -883,13 +883,13 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
     if (typeof window === 'undefined') return
 
     // Save to localStorage immediately
-    localStorage.setItem('thinkable-minimap-hidden', String(isMinimapHidden))
+    localStorage.setItem('thinktable-minimap-hidden', String(isMinimapHidden))
   }, [isMinimapHidden])
 
   // Sync minimap visibility with mode
   useEffect(() => {
     // Save mode to localStorage
-    localStorage.setItem('thinkable-minimap-mode', minimapMode)
+    localStorage.setItem('thinktable-minimap-mode', minimapMode)
 
     // Apply mode
     if (minimapMode === 'shown') {
@@ -913,7 +913,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
   // Load minimap mode from localStorage on mount (after hydration)
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('thinkable-minimap-mode')
+      const saved = localStorage.getItem('thinktable-minimap-mode')
       if (saved === 'shown' || saved === 'hidden' || saved === 'hover') {
         setMinimapMode(saved)
       }
@@ -2431,7 +2431,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
     if (!studySetId || viewMode !== 'canvas') return
 
     try {
-      const saved = localStorage.getItem(`thinkable-canvas-positions-study-set-${studySetId}`)
+      const saved = localStorage.getItem(`thinktable-canvas-positions-study-set-${studySetId}`)
       if (saved) {
         const positions = JSON.parse(saved) as Record<string, { x: number; y: number }>
         Object.entries(positions).forEach(([nodeId, pos]) => {
@@ -2463,7 +2463,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
             y: node.position.y,
           }
         })
-        localStorage.setItem(`thinkable-canvas-positions-study-set-${studySetId}`, JSON.stringify(positions))
+        localStorage.setItem(`thinktable-canvas-positions-study-set-${studySetId}`, JSON.stringify(positions))
       } catch (error) {
         console.error('Failed to save canvas positions to localStorage:', error)
       }
@@ -2525,7 +2525,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
       // Clear saved positions for this conversation
       if (typeof window !== 'undefined') {
         try {
-          localStorage.removeItem(`thinkable-canvas-positions-study-set-${studySetId}`)
+          localStorage.removeItem(`thinktable-canvas-positions-study-set-${studySetId}`)
         } catch (error) {
           console.error('Failed to clear canvas positions from localStorage:', error)
         }
@@ -2596,7 +2596,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
         // If not in memory and in Canvas mode, try loading from localStorage
         if (!storedPos && viewMode === 'canvas' && studySetId && typeof window !== 'undefined') {
           try {
-            const saved = localStorage.getItem(`thinkable-canvas-positions-study-set-${studySetId}`)
+            const saved = localStorage.getItem(`thinktable-canvas-positions-study-set-${studySetId}`)
             if (saved) {
               const positions = JSON.parse(saved) as Record<string, { x: number; y: number }>
               const savedPos = positions[baseNodeId]
@@ -3133,10 +3133,10 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
           // Save to localStorage
           if (studySetId && typeof window !== 'undefined') {
             try {
-              const saved = localStorage.getItem(`thinkable-canvas-positions-study-set-${studySetId}`)
+              const saved = localStorage.getItem(`thinktable-canvas-positions-study-set-${studySetId}`)
               const positions = saved ? JSON.parse(saved) : {}
               positions[node.id] = node.position
-              localStorage.setItem(`thinkable-canvas-positions-study-set-${studySetId}`, JSON.stringify(positions))
+              localStorage.setItem(`thinktable-canvas-positions-study-set-${studySetId}`, JSON.stringify(positions))
             } catch (error) {
               console.error('Failed to save position to localStorage:', error)
             }
@@ -3203,10 +3203,10 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
           // Save to localStorage
           if (studySetId && typeof window !== 'undefined') {
             try {
-              const saved = localStorage.getItem(`thinkable-canvas-positions-study-set-${studySetId}`)
+              const saved = localStorage.getItem(`thinktable-canvas-positions-study-set-${studySetId}`)
               const positions = saved ? JSON.parse(saved) : {}
               positions[n.id] = newPosition
-              localStorage.setItem(`thinkable-canvas-positions-study-set-${studySetId}`, JSON.stringify(positions))
+              localStorage.setItem(`thinktable-canvas-positions-study-set-${studySetId}`, JSON.stringify(positions))
             } catch (error) {
               console.error('Failed to save position to localStorage:', error)
             }
@@ -3257,10 +3257,10 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
         // Save to localStorage
         if (studySetId && typeof window !== 'undefined') {
           try {
-            const saved = localStorage.getItem(`thinkable-canvas-positions-study-set-${studySetId}`)
+            const saved = localStorage.getItem(`thinktable-canvas-positions-study-set-${studySetId}`)
             const positions = saved ? JSON.parse(saved) : {}
             positions[n.id] = newPosition
-            localStorage.setItem(`thinkable-canvas-positions-study-set-${studySetId}`, JSON.stringify(positions))
+            localStorage.setItem(`thinktable-canvas-positions-study-set-${studySetId}`, JSON.stringify(positions))
           } catch (error) {
             console.error('Failed to save position to localStorage:', error)
           }
@@ -3821,7 +3821,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
       // Load from localStorage first, then use in-memory ref
       if (studySetId && typeof window !== 'undefined') {
         try {
-          const saved = localStorage.getItem(`thinkable-canvas-positions-study-set-${studySetId}`)
+          const saved = localStorage.getItem(`thinktable-canvas-positions-study-set-${studySetId}`)
           if (saved) {
             const positions = JSON.parse(saved) as Record<string, { x: number; y: number }>
             Object.entries(positions).forEach(([nodeId, pos]) => {

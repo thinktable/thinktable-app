@@ -22,7 +22,7 @@ Current migrations:
 ## Project Information
 
 - **Project ID**: `yhsyhtnnklpkfcpydbst`
-- **Project Name**: thinkable
+- **Project Name**: thinktable
 - **Region**: us-east-2
 - **Database Version**: PostgreSQL 17.6.1
 

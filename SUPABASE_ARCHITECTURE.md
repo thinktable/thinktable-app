@@ -7,10 +7,10 @@
 ### Recommended: Shared Supabase Project
 
 ```
-thinkable/
+thinktable/
   apps/
-    web/              → Same Supabase project (thinkable-app)
-    backend/          → Same Supabase project (thinkable-app)
+    web/              → Same Supabase project (thinktable-app)
+    backend/          → Same Supabase project (thinktable-app)
   packages/
     map-engine/       → No Supabase config (library)
     design-system/    → No Supabase config (library)

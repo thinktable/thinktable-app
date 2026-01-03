@@ -13,9 +13,9 @@ export function WelcomeText() {
 
   // Phrases to rotate through
   const phrases = [
-    'Welcome to Thinkable!',
+    'Welcome to ThinkTable!',
     'Think outside the box.',
-    'Do the unthinkable!',
+    'Organize your thoughts.',
     'Think for yourself.',
   ]
   const [currentPhraseIndex, setCurrentPhraseIndex] = useState(0)

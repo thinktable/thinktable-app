@@ -430,12 +430,12 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     if (typeof window === 'undefined') return
 
     // STEP 1: Load from localStorage FIRST (synchronous, instant) - ensures UI shows saved prefs immediately
-    const savedLineStyle = localStorage.getItem('thinkable-horizontal-line-style') as 'curved' | 'boxed' | null
+    const savedLineStyle = localStorage.getItem('thinktable-horizontal-line-style') as 'curved' | 'boxed' | null
     if (savedLineStyle && ['curved', 'boxed'].includes(savedLineStyle)) {
       setLineStyle(savedLineStyle)
     }
 
-    const savedEditMode = localStorage.getItem('thinkable-edit-mode') as 'editing' | 'suggesting' | 'viewing' | null
+    const savedEditMode = localStorage.getItem('thinktable-edit-mode') as 'editing' | 'suggesting' | 'viewing' | null
     if (savedEditMode && ['editing', 'suggesting', 'viewing'].includes(savedEditMode)) {
       setEditMode(savedEditMode)
     }
@@ -462,12 +462,12 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             // Update from Supabase if values exist (Supabase is source of truth for cross-device sync)
             if (prefs.horizontalLineStyle && ['curved', 'boxed'].includes(prefs.horizontalLineStyle)) {
               setLineStyle(prefs.horizontalLineStyle)
-              localStorage.setItem('thinkable-horizontal-line-style', prefs.horizontalLineStyle)
+              localStorage.setItem('thinktable-horizontal-line-style', prefs.horizontalLineStyle)
             }
 
             if (prefs.editMode && ['editing', 'suggesting', 'viewing'].includes(prefs.editMode)) {
               setEditMode(prefs.editMode)
-              localStorage.setItem('thinkable-edit-mode', prefs.editMode)
+              localStorage.setItem('thinktable-edit-mode', prefs.editMode)
             }
           }
         }
@@ -482,12 +482,12 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     // Also reload when conversation is created (to maintain selections on new boards)
     const handleConversationCreated = async () => {
       // Load from localStorage first (instant)
-      const savedLineStyle = localStorage.getItem('thinkable-horizontal-line-style') as 'curved' | 'boxed' | null
+      const savedLineStyle = localStorage.getItem('thinktable-horizontal-line-style') as 'curved' | 'boxed' | null
       if (savedLineStyle && ['curved', 'boxed'].includes(savedLineStyle)) {
         setLineStyle(savedLineStyle)
       }
 
-      const savedEditMode = localStorage.getItem('thinkable-edit-mode') as 'editing' | 'suggesting' | 'viewing' | null
+      const savedEditMode = localStorage.getItem('thinktable-edit-mode') as 'editing' | 'suggesting' | 'viewing' | null
       if (savedEditMode && ['editing', 'suggesting', 'viewing'].includes(savedEditMode)) {
         setEditMode(savedEditMode)
       }
@@ -512,12 +512,12 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               // Update from Supabase if values exist
               if (prefs.horizontalLineStyle && ['curved', 'boxed'].includes(prefs.horizontalLineStyle)) {
                 setLineStyle(prefs.horizontalLineStyle)
-                localStorage.setItem('thinkable-horizontal-line-style', prefs.horizontalLineStyle)
+                localStorage.setItem('thinktable-horizontal-line-style', prefs.horizontalLineStyle)
               }
 
               if (prefs.editMode && ['editing', 'suggesting', 'viewing'].includes(prefs.editMode)) {
                 setEditMode(prefs.editMode)
-                localStorage.setItem('thinkable-edit-mode', prefs.editMode)
+                localStorage.setItem('thinktable-edit-mode', prefs.editMode)
               }
             }
           }
@@ -542,7 +542,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     if (typeof window === 'undefined') return
 
     // Save to localStorage immediately (lightweight, instant)
-    localStorage.setItem('thinkable-horizontal-line-style', lineStyle)
+    localStorage.setItem('thinktable-horizontal-line-style', lineStyle)
 
     // Save to Supabase in background (for cross-device sync)
     const saveToSupabase = async () => {
@@ -580,7 +580,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     if (typeof window === 'undefined') return
 
     // Save to localStorage immediately (lightweight, instant)
-    localStorage.setItem('thinkable-edit-mode', editMode)
+    localStorage.setItem('thinktable-edit-mode', editMode)
 
     // Save to Supabase in background (for cross-device sync)
     const saveToSupabase = async () => {
@@ -899,7 +899,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
 
       // Get viewMode from localStorage or default to 'canvas'
       const viewMode = (typeof window !== 'undefined')
-        ? (localStorage.getItem('thinkable-view-mode') as 'linear' | 'canvas' | null) || 'canvas'
+        ? (localStorage.getItem('thinktable-view-mode') as 'linear' | 'canvas' | null) || 'canvas'
         : 'canvas'
 
       reactFlowInstance.setNodes((currentNodes) =>

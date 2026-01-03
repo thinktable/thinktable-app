@@ -29,7 +29,7 @@ Since you're using Resend's test email (`onboarding@resend.dev`), here's how to 
    - **SMTP User:** `resend`
    - **SMTP Password:** Your Resend API key (the `re_...` key from Step 1)
    - **Sender Email:** `onboarding@resend.dev` (Resend's test email)
-   - **Sender Name:** `Thinkable` (or your app name)
+   - **Sender Name:** `ThinkTable` (or your app name)
 
 5. **Click "Save"**
 

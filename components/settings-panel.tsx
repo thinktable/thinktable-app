@@ -176,7 +176,7 @@ export function SettingsPanel({
                   
                   {/* Description */}
                   <p className="text-xs text-gray-500 dark:text-gray-400 mb-6">
-                    Your profile helps people recognize you. Your name and username are also used in the Thinkable app.
+                    Your profile helps people recognize you. Your name and username are also used in the ThinkTable app.
                   </p>
                   
                   {/* Save/Cancel Buttons */}

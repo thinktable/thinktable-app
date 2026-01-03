@@ -11,7 +11,7 @@ The template in Supabase dashboard is still showing the default plain text. Here
 2. **Click "Confirm signup"** (first template in the list)
 
 3. **Update Subject:**
-   - Change to: `Verify your Thinkable account`
+   - Change to: `Verify your ThinkTable account`
 
 4. **Switch to HTML Editor:**
    - Look for tabs or buttons: "Text" / "HTML" 
@@ -29,7 +29,7 @@ The template in Supabase dashboard is still showing the default plain text. Here
   </head>
   <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
     <div style="background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
-      <h1 style="color: white; margin: 0; font-size: 28px;">Welcome to Thinkable!</h1>
+      <h1 style="color: white; margin: 0; font-size: 28px;">Welcome to ThinkTable!</h1>
     </div>
     <div style="background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px;">
       <p style="font-size: 16px; margin-bottom: 20px;">Thanks for signing up! Please verify your email address to get started.</p>
@@ -41,7 +41,7 @@ The template in Supabase dashboard is still showing the default plain text. Here
       <p style="font-size: 14px; color: #6b7280; margin-top: 30px;">This link will expire in 24 hours.</p>
     </div>
     <div style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
-      <p style="font-size: 12px; color: #9ca3af;">© 2024 Thinkable. All rights reserved.</p>
+      <p style="font-size: 12px; color: #9ca3af;">© 2024 ThinkTable. All rights reserved.</p>
     </div>
   </body>
 </html>
@@ -70,7 +70,7 @@ The template in Supabase dashboard is still showing the default plain text. Here
 The Supabase email template editor should look like:
 ```
 ┌─────────────────────────────────────┐
-│ Subject: [Verify your Thinkable...] │
+│ Subject: [Verify your ThinkTable...] │
 │                                     │
 │ [Text] [HTML] ← Click HTML tab!    │
 │                                     │

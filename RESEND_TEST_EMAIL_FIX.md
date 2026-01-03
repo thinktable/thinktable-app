@@ -22,7 +22,7 @@ You're getting a **500 error** when signing up because Resend's test email (`onb
 
 1. Go to: https://resend.com/domains
 2. Click "Add Domain"
-3. Enter your domain (e.g., `thinkable.com`)
+3. Enter your domain (e.g., `thinktable.com`)
 4. Add the DNS records Resend provides
 5. Wait for verification (usually a few minutes)
 6. Update Supabase SMTP settings:

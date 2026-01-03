@@ -1,6 +1,6 @@
-# thinkable-app
+# thinktable-app
 
-Frontend web application for Thinkable.
+Frontend web application for ThinkTable.
 
 ## Setup
 

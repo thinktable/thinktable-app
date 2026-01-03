@@ -4,7 +4,7 @@
 
 You're receiving **two verification emails**:
 1. Supabase email (via Resend SMTP) - "Confirm Your Signup"
-2. Custom Resend API email - "Verify your Thinkable account"
+2. Custom Resend API email - "Verify your ThinkTable account"
 
 ## Why This Happens
 
