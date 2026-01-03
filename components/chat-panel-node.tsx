@@ -190,7 +190,8 @@ function TipTapContent({
   isPanelSelected,
   isLoading,
   onCommentPopupVisibilityChange,
-  onBlur
+  onBlur,
+  onEditorActiveChange
 }: {
   content: string
   className?: string
@@ -210,6 +211,7 @@ function TipTapContent({
   isLoading?: boolean
   onCommentPopupVisibilityChange?: (isVisible: boolean) => void
   onBlur?: () => void
+  onEditorActiveChange?: (isActive: boolean) => void // Called when editor is focused or has selection
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { setActiveEditor } = useEditorContext()
@@ -313,6 +315,10 @@ function TipTapContent({
       if (editor) {
         setActiveEditor(editor)
       }
+      // Notify parent that editor is active (focused or has selection)
+      if (onEditorActiveChange) {
+        onEditorActiveChange(true)
+      }
     },
     onBlur: () => {
       // Clear active editor when blurred (optional - keep it active for toolbar)
@@ -320,6 +326,14 @@ function TipTapContent({
       // Call custom onBlur callback if provided
       if (onBlur) {
         onBlur()
+      }
+      // Check if editor still has selection even after blur
+      if (editor && onEditorActiveChange) {
+        const { from, to } = editor.state.selection
+        const hasSelection = from !== to
+        onEditorActiveChange(hasSelection)
+      } else if (onEditorActiveChange) {
+        onEditorActiveChange(false)
       }
     },
   })
@@ -368,6 +382,40 @@ function TipTapContent({
       editor.view.dispatch(tr)
     }
   }, [editor, comments]) // Only depend on editor and comments, not content (content sync handles it)
+
+  // Detect when editor is active (focused or has selection) and notify parent to auto-select panel
+  useEffect(() => {
+    if (!editor || !onEditorActiveChange) return
+
+    const checkEditorActive = () => {
+      try {
+        const { from, to } = editor.state.selection
+        const hasSelection = from !== to
+        const isFocused = editor.view.dom === document.activeElement || editor.view.dom.contains(document.activeElement)
+        const isActive = hasSelection || isFocused
+        onEditorActiveChange(isActive)
+      } catch (error) {
+        // Ignore errors
+      }
+    }
+
+    // Check on focus/blur
+    editor.on('focus', checkEditorActive)
+    editor.on('blur', checkEditorActive)
+    // Check on selection changes
+    editor.on('selectionUpdate', checkEditorActive)
+    editor.on('update', checkEditorActive)
+
+    // Initial check
+    checkEditorActive()
+
+    return () => {
+      editor.off('focus', checkEditorActive)
+      editor.off('blur', checkEditorActive)
+      editor.off('selectionUpdate', checkEditorActive)
+      editor.off('update', checkEditorActive)
+    }
+  }, [editor, onEditorActiveChange])
 
   // Detect when cursor is inside commented text and show/select comment
   // Only works when comments are already visible (showComments is true)
@@ -2320,6 +2368,20 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     }
   }, [isNote, promptContent, responseContent])
 
+  // Auto-select panel when editor is focused or has selection (text edit mode)
+  const handleEditorActiveChange = useCallback((isActive: boolean) => {
+    if (isActive && !selected) {
+      // Editor is active (focused or has selection) but panel is not selected - auto-select it
+      setNodes((nodes) =>
+        nodes.map((node) =>
+          node.id === id
+            ? { ...node, selected: true }
+            : node
+        )
+      )
+    }
+  }, [id, selected, setNodes])
+
   // Flashcard navigation - get all flashcards in the same board/project/study set
   // For regular boards that are part of a project, also enable cross-board navigation
   // Fetch project ID from board metadata if it's a regular board
@@ -3834,6 +3896,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 isLoading={isLoading}
                 onCommentPopupVisibilityChange={setHasCommentPopupVisible}
                 onBlur={handleEditorBlur}
+                onEditorActiveChange={handleEditorActiveChange}
               />
             </div>
           )
@@ -3887,9 +3950,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                   onAddReaction={handleAddReaction}
                   section="prompt"
                   placeholder=""
-                  isPanelSelected={selected}
-                  isLoading={isLoading}
+                isPanelSelected={selected}
+                isLoading={isLoading}
                 onBlur={handleEditorBlur}
+                onEditorActiveChange={handleEditorActiveChange}
                 />
               </div>
               
@@ -3996,6 +4060,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                         isLoading={isLoading}
                         onCommentPopupVisibilityChange={setHasCommentPopupVisible}
                         onBlur={handleEditorBlur}
+                        onEditorActiveChange={handleEditorActiveChange}
                       />
                       {/* Open board button - appears inline after title text */}
                       <Button
@@ -4051,6 +4116,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                         isLoading={isLoading}
                         onCommentPopupVisibilityChange={setHasCommentPopupVisible}
                         onBlur={handleEditorBlur}
+                        onEditorActiveChange={handleEditorActiveChange}
                       />
                     </div>
                   )}
@@ -4117,6 +4183,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                       isPanelSelected={selected}
                       onCommentPopupVisibilityChange={setHasCommentPopupVisible}
                       onBlur={handleEditorBlur}
+                      onEditorActiveChange={handleEditorActiveChange}
                     />
                   </div>
                 </div>
@@ -4173,6 +4240,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 isPanelSelected={selected}
                 isLoading={isLoading}
                 onCommentPopupVisibilityChange={setHasCommentPopupVisible}
+                onEditorActiveChange={handleEditorActiveChange}
               />
             </div>
           )
@@ -4270,6 +4338,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                       isLoading={isLoading}
                       onCommentPopupVisibilityChange={setHasCommentPopupVisible}
                       onBlur={handleEditorBlur}
+                      onEditorActiveChange={handleEditorActiveChange}
                     />
                     {/* Open board button - appears inline after title text */}
                     <Button
