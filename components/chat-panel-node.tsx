@@ -1,7 +1,7 @@
 'use client'
 
 // Custom React Flow node for chat panels (prompt + response)
-import { NodeProps, Handle, Position, useReactFlow } from 'reactflow'
+import { NodeProps, Handle, Position, useReactFlow, NodeResizeControl } from 'reactflow'
 import { cn } from '@/lib/utils'
 import { useEditor, EditorContent } from '@tiptap/react'
 import { BubbleMenu } from '@tiptap/react/menus'
@@ -13,7 +13,7 @@ import TextAlign from '@tiptap/extension-text-align'
 import Placeholder from '@tiptap/extension-placeholder'
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
-import { Highlighter, RotateCcw, MoreHorizontal, MoreVertical, Trash2, Copy, Loader2, ChevronDown, ChevronUp, MessageSquare, X, Smile, PenSquare, Bookmark, SquarePen, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus } from 'lucide-react'
+import { Highlighter, RotateCcw, MoreHorizontal, MoreVertical, Trash2, Copy, Loader2, ChevronDown, ChevronUp, MessageSquare, X, Smile, PenSquare, Bookmark, SquarePen, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, Maximize2 } from 'lucide-react'
 
 // Helper to check if content is effectively empty (handling HTML tags)
 const isContentEmpty = (content: string | undefined | null) => {
@@ -191,7 +191,8 @@ function TipTapContent({
   isLoading,
   onCommentPopupVisibilityChange,
   onBlur,
-  onEditorActiveChange
+  onEditorActiveChange,
+  fontScale
 }: {
   content: string
   className?: string
@@ -212,6 +213,7 @@ function TipTapContent({
   onCommentPopupVisibilityChange?: (isVisible: boolean) => void
   onBlur?: () => void
   onEditorActiveChange?: (isActive: boolean) => void // Called when editor is focused or has selection
+  fontScale?: number // Font scale factor for resized panels (defaults to 1)
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { setActiveEditor } = useEditorContext()
@@ -353,6 +355,20 @@ function TipTapContent({
       }
     }
   }, [editor, setActiveEditor, editorRef])
+
+  // Apply font scale to editor's DOM element when fontScale changes
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return
+    
+    const scale = fontScale ?? 1
+    const editorDOM = editor.view.dom as HTMLElement
+    
+    if (editorDOM) {
+      // Apply font size directly to the editor's DOM element
+      // This will affect all content in the editor
+      editorDOM.style.fontSize = `${scale}em`
+    }
+  }, [editor, fontScale])
 
   // Apply blue highlights to commented text when comments change
   useEffect(() => {
@@ -582,11 +598,11 @@ function TipTapContent({
           if (hasSelection) {
             try {
               const view = editor.view
-              // Get click position in editor coordinates
-              const pos = view.posAtCoords({ left: e.clientX, top: e.clientY })
-              if (pos !== null && pos >= 0) {
+              // Get click position in editor coordinates - posAtCoords returns { pos, inside } object
+              const posResult = view.posAtCoords({ left: e.clientX, top: e.clientY })
+              if (posResult !== null && posResult.pos >= 0) {
                 // Place cursor at click position to clear selection
-                editor.commands.setTextSelection(pos)
+                editor.commands.setTextSelection(posResult.pos)
                 editor.commands.focus()
                 return
               }
@@ -1904,6 +1920,18 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const replyTextareaRefs = useRef<Record<string, HTMLTextAreaElement>>({}) // Refs for reply textareas
   const hasAutoFocusedRef = useRef(false) // Track if note editor has been auto-focused
   const { resolvedTheme } = useTheme() // Get theme to set transparent background color
+  
+  // Resize state for panel scaling - default dimensions for calculating scale factor
+  const DEFAULT_PANEL_WIDTH = 768 // Default panel width (max-width)
+  const DEFAULT_PANEL_HEIGHT = 400 // Default panel height estimate
+  const [resizeDimensions, setResizeDimensions] = useState<{ width: number; height: number } | null>(null) // Track resized dimensions
+  const [fontScale, setFontScale] = useState(1) // Scale factor for text based on resize ratio
+  const isResizingRef = useRef(false) // Track if currently resizing
+  const initialResizeWidthRef = useRef<number | null>(null) // Track initial panel width when resize starts (for note panels)
+  const initialResizeHeightRef = useRef<number | null>(null) // Track initial panel height when resize starts (for note panels)
+  const initialTextWidthRef = useRef<number | null>(null) // Track initial TEXT content width (for proper fill scaling)
+  const isFirstResizeCallRef = useRef(true) // Track if this is the first resize call in the current session
+  const initialTextAspectRatioRef = useRef<number | null>(null) // Track text's natural aspect ratio (width/height)
 
   // Helper function to convert hex color to rgba with opacity
   // Maintains transparency by converting hex to rgba with specified opacity
@@ -2148,6 +2176,9 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     }
   }, [id, getSetNodes, reactFlowInstance])
 
+  // Handle resize end - clear resizing flag and reset refs for next resize session
+  // handleResizeEnd is defined after isNote to access it - see below
+
   // Handle comment creation from text selection
   const handleComment = useCallback((selectedText: string, from: number, to: number, section: 'prompt' | 'response') => {
     setNewCommentData({ selectedText, from, to, section })
@@ -2324,6 +2355,148 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
      (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
   // Regular chat panels are those that are not flashcards and not notes
   const isRegularChatPanel = !isFlashcard && !isNote
+
+  // Handle resize end - clear resizing flag and reset refs
+  // For note panels: clear resizeDimensions so fit-content takes over
+  const handleResizeEnd = useCallback(() => {
+    isResizingRef.current = false
+    isFirstResizeCallRef.current = true
+    
+    // For note panels, clear resizeDimensions so fit-content kicks in
+    // The scaled text will determine the panel size
+    if (isNote) {
+      setResizeDimensions(null)
+    }
+  }, [isNote])
+
+  // Handle panel resize - calculates font scale so text FILLS the panel
+  // For note panels: maintains fit-content behavior (panel collapses to scaled text)
+  // For other panels: sets explicit dimensions
+  const handleResize = useCallback((event: any, params: { width: number; height: number }) => {
+    // Set flag to indicate we're resizing
+    isResizingRef.current = true
+    
+    // On the very first resize call, capture the initial dimensions AND text width
+    if (isFirstResizeCallRef.current && initialTextWidthRef.current === null) {
+      isFirstResizeCallRef.current = false
+      
+      // Capture panel dimensions
+      let panelWidth: number | null = null
+      let panelHeight: number | null = null
+      
+      if (resizeDimensions && resizeDimensions.width > 0 && resizeDimensions.height > 0) {
+        panelWidth = resizeDimensions.width
+        panelHeight = resizeDimensions.height
+      } else if (panelRef.current) {
+        const domWidth = panelRef.current.offsetWidth
+        const domHeight = panelRef.current.offsetHeight
+        if (domWidth > 0 && domHeight > 0) {
+          panelWidth = domWidth
+          panelHeight = domHeight
+        }
+      }
+      
+      if (panelWidth === null || panelHeight === null) {
+        const nodes = getNodes()
+        const currentNode = nodes.find((node: any) => node.id === id)
+        if (currentNode && currentNode.width && currentNode.height) {
+          panelWidth = currentNode.width
+          panelHeight = currentNode.height
+        }
+      }
+      
+      if (panelWidth === null || panelHeight === null) {
+        panelWidth = DEFAULT_PANEL_WIDTH
+        panelHeight = DEFAULT_PANEL_HEIGHT
+      }
+      
+      initialResizeWidthRef.current = panelWidth
+      initialResizeHeightRef.current = panelHeight
+      
+      // Capture actual TEXT content width from the editor DOM
+      // This is crucial for making text fill the panel properly
+      let textWidth: number | null = null
+      
+      // Try to measure text width from the TipTap editor
+      const editor = promptEditorRef.current
+      if (editor && editor.view && editor.view.dom) {
+        const editorDom = editor.view.dom as HTMLElement
+        // Get the actual content width (scrollWidth gives the full content width)
+        // Account for current font scale to get "natural" width at 1x
+        const contentWidth = editorDom.scrollWidth
+        if (contentWidth > 0) {
+          textWidth = contentWidth / fontScale
+        }
+      }
+      
+      // If we couldn't measure text width, use panel width as fallback
+      if (textWidth === null || textWidth <= 0) {
+        textWidth = panelWidth
+      }
+      
+      initialTextWidthRef.current = textWidth
+    } else if (isFirstResizeCallRef.current) {
+      isFirstResizeCallRef.current = false
+    }
+    
+    // Calculate font scale based on resize
+    const initialTextWidth = initialTextWidthRef.current || initialResizeWidthRef.current || DEFAULT_PANEL_WIDTH
+    const initialPanelWidth = initialResizeWidthRef.current || DEFAULT_PANEL_WIDTH
+    
+    // For note panels: calculate font scale, then let fit-content determine panel size
+    // The panel will naturally collapse to fit the scaled text
+    if (isNote && initialTextWidth > 0) {
+      // Calculate scale based on how much we've resized relative to initial panel width
+      const resizeRatio = params.width / initialPanelWidth
+      const newScale = fontScale * resizeRatio / (resizeDimensions ? resizeDimensions.width / initialPanelWidth : 1)
+      
+      // Simpler approach: scale = target width / initial text width (accounting for padding)
+      const paddingAllowance = 32
+      const targetTextWidth = Math.max(params.width - paddingAllowance, 50)
+      const calculatedScale = targetTextWidth / initialTextWidth
+      
+      // Apply scale factor
+      setFontScale(calculatedScale)
+      
+      // DON'T set explicit resizeDimensions for notes - let fit-content handle sizing
+      // This maintains the "collapse to text" behavior
+      // The panel will naturally fit the scaled text
+      
+      // Update React Flow node dimensions to match what fit-content will give us
+      // This keeps the resize handle in sync
+      const scaledTextWidth = initialTextWidth * calculatedScale + paddingAllowance
+      const scaledTextHeight = (initialResizeHeightRef.current || DEFAULT_PANEL_HEIGHT) * calculatedScale
+      
+      const setNodesFunc = getSetNodes()
+      if (setNodesFunc) {
+        setNodesFunc((nodes: any[]) =>
+          nodes.map((node: any) =>
+            node.id === id
+              ? { ...node, width: scaledTextWidth, height: scaledTextHeight }
+              : node
+          )
+        )
+      }
+      
+      // Clear resizeDimensions so fit-content takes over
+      // The panel will naturally fit the scaled text
+      setResizeDimensions(null)
+    } else {
+      // For non-note panels: use explicit dimensions
+      let finalWidth = params.width
+      let finalHeight = params.height
+      
+      // Update dimensions state
+      setResizeDimensions({ width: finalWidth, height: finalHeight })
+      
+      if (initialTextWidth > 0) {
+        const paddingAllowance = 32
+        const availableWidth = Math.max(finalWidth - paddingAllowance, 50)
+        const newScale = availableWidth / initialTextWidth
+        setFontScale(newScale)
+      }
+    }
+  }, [resizeDimensions, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT, isNote, id, getSetNodes, getNodes, fontScale])
 
   // NodeToolbar handler to toggle collapse state for this specific node
   // Uses useReactFlow's setNodes to update the node's data directly
@@ -3630,6 +3803,30 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // Notes never show loading state (they don't have responses)
   const isLoading = !isNote && (!responseMessage || (responseMessage && !responseMessage.content))
   
+  // Measure panel's content aspect ratio for note panels (needed for proper height calculation during resize)
+  // This captures the natural aspect ratio of the panel content (text + padding) when first rendered
+  useEffect(() => {
+    if (isNote && panelRef.current && isInitialShrinkComplete && !resizeDimensions) {
+      // Wait a bit for the panel to fully render and settle
+      const timeoutId = setTimeout(() => {
+        const panelElement = panelRef.current
+        if (!panelElement) return
+        
+        // Measure the panel's current dimensions (this represents the natural aspect ratio of the content)
+        const panelWidth = panelElement.offsetWidth
+        const panelHeight = panelElement.offsetHeight
+        
+        if (panelWidth > 0 && panelHeight > 0 && initialTextAspectRatioRef.current === null) {
+          // Calculate panel's natural aspect ratio (width/height)
+          // This includes the text content plus all padding
+          initialTextAspectRatioRef.current = panelWidth / panelHeight
+        }
+      }, 100) // Small delay to ensure panel is fully rendered
+      
+      return () => clearTimeout(timeoutId)
+    }
+  }, [isNote, isInitialShrinkComplete, promptContent, resizeDimensions])
+
   // Auto-focus note editor when first created (empty component panel or inline note with fadeIn flag)
   useEffect(() => {
     if (isComponentPanel && !isFlashcard && promptEditorRef.current && !hasAutoFocusedRef.current) {
@@ -3697,9 +3894,14 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         )}
       style={{
         // Note panels use fit-content width (grows with text), others use fixed width
-        width: usesFitContent ? 'fit-content' : `${panelWidthToUse}px`,
+        // When resized, use the resized dimensions instead of auto-calculated width
+        width: resizeDimensions ? `${resizeDimensions.width}px` : (usesFitContent ? 'fit-content' : `${panelWidthToUse}px`),
+        // Apply resized height when available
+        height: resizeDimensions ? `${resizeDimensions.height}px` : undefined,
         // Min width: notes need ~200px for padding + buttons, flashcards need ~300px for placeholder
-        minWidth: usesFitContent ? '200px' : (isFlashcard ? '300px' : undefined),
+        minWidth: usesFitContent ? '200px' : (isFlashcard ? '300px' : '200px'),
+        // Min height for usability
+        minHeight: '100px',
         maxWidth: usesFitContent ? '768px' : undefined, // Cap notes at standard panel width
         // Hide panel until initial shrink is complete (prevents visual jump)
         opacity: isInitialShrinkComplete ? 1 : 0,
@@ -3711,6 +3913,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         borderStyle: selected ? 'solid' : (data.borderStyle as any || undefined),
         // When selected, ensure border width is set (default to 1px if border was 'none')
         borderWidth: selected ? (data.borderWeight || '1px') : (data.borderWeight || undefined),
+        // Font scaling is applied directly to Tiptap editor's DOM element (see TipTapContent component)
       }}
       onClick={(e) => {
         // For flashcards, expand on single click anywhere (except interactive elements)
@@ -3749,6 +3952,26 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         }
       }}
     >
+      {/* NodeResizeControl - enables aspect-ratio locked resizing for note panels only */}
+      {/* Control is invisible - actual resize handle is rendered as separate toolbar island below */}
+      {isNote && (
+        <NodeResizeControl
+          style={{
+            background: 'transparent',
+            border: 'none',
+            // Position at bottom-right corner but invisible (we render custom button instead)
+            opacity: 0,
+            pointerEvents: 'none',
+          }}
+          minWidth={200}
+          minHeight={100}
+          // Don't use keepAspectRatio - we calculate height based on text's aspect ratio in handleResize
+          keepAspectRatio={false}
+          onResize={handleResize}
+          onResizeEnd={handleResizeEnd}
+        />
+      )}
+      
       {/* Left handle with flashcard navigation */}
       {isFlashcard && (hasMultipleFlashcards || hasFlashcardsInOtherBoards) && previousBoardWithFlashcards && isAtFirstFlashcardInBoard && selected ? (
         // Expanded pill with two buttons when cross-board navigation is available and flashcard is selected
@@ -3932,6 +4155,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                   onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
                   comments={comments.filter(c => c.section === 'prompt')}
                   editorRef={promptEditorRef}
+                  fontScale={fontScale}
                   onCommentHover={(commentId) => {
                     if (commentId) {
                       if (showComments) {
@@ -4762,6 +4986,58 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           {isFlashcard && responseMessage?.id && (
             <TagButton responseMessageId={responseMessage.id} />
           )}
+        </div>
+      )}
+      
+      {/* Resize control toolbar island - positioned at bottom right, separate from main toolbar */}
+      {/* Uses NodeResizeControl internally to enable drag-to-resize with aspect ratio lock */}
+      {/* Only show for note panels */}
+      {selected && isNote && (
+        <div 
+          className="absolute right-0 flex items-center bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 z-50"
+          style={{
+            bottom: '-44px', // Position below the panel, aligned with left toolbar
+          }}
+        >
+          {/* Custom resize control - wraps NodeResizeControl for drag-to-resize functionality */}
+          <NodeResizeControl
+            style={{
+              background: 'transparent',
+              border: 'none',
+              width: '28px',
+              height: '28px',
+              cursor: 'nwse-resize',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            minWidth={200}
+            minHeight={100}
+            // Don't use keepAspectRatio - we calculate height based on text's aspect ratio in handleResize
+            keepAspectRatio={false}
+            onResize={handleResize}
+            onResizeEnd={handleResizeEnd}
+          >
+            {/* Custom resize icon (diagonal arrows) matching example from React Flow docs */}
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              strokeWidth="2"
+              stroke="currentColor"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="text-gray-600 dark:text-gray-300"
+            >
+              <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+              <polyline points="16 20 20 20 20 16" />
+              <line x1="14" y1="14" x2="20" y2="20" />
+              <polyline points="8 4 4 4 4 8" />
+              <line x1="4" y1="4" x2="10" y2="10" />
+            </svg>
+          </NodeResizeControl>
         </div>
       )}
     </div>

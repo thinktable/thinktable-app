@@ -21,6 +21,56 @@ const handlePositions = [
   Position.Left,
 ];
 
+// Helper function to calculate optimal font size for text to fit within shape bounds
+// Text should expand to fill available space, shrink when more text is added
+const calculateAutoFitFontSize = (
+  text: string,
+  containerWidth: number,
+  containerHeight: number,
+  minFontSize: number = 8,
+  maxFontSize: number = 72
+): number => {
+  // If no text, return default font size
+  if (!text || text.trim().length === 0) return 16;
+  
+  // Create temporary element to measure text dimensions
+  const tempSpan = document.createElement('span');
+  tempSpan.style.position = 'absolute';
+  tempSpan.style.visibility = 'hidden';
+  tempSpan.style.whiteSpace = 'nowrap';
+  tempSpan.style.fontFamily = 'inherit';
+  tempSpan.textContent = text;
+  document.body.appendChild(tempSpan);
+  
+  // Binary search to find optimal font size that fits
+  let low = minFontSize;
+  let high = maxFontSize;
+  let optimalSize = minFontSize;
+  
+  // Calculate available space (with padding margin of ~20% for shapes)
+  const availableWidth = containerWidth * 0.8;
+  const availableHeight = containerHeight * 0.6;
+  
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    tempSpan.style.fontSize = `${mid}px`;
+    
+    const textWidth = tempSpan.offsetWidth;
+    const textHeight = tempSpan.offsetHeight;
+    
+    // Check if text fits within available space
+    if (textWidth <= availableWidth && textHeight <= availableHeight) {
+      optimalSize = mid; // This size fits, try larger
+      low = mid + 1;
+    } else {
+      high = mid - 1; // Too big, try smaller
+    }
+  }
+  
+  document.body.removeChild(tempSpan);
+  return optimalSize;
+};
+
 export function ShapeNode({
   id,
   selected,
@@ -32,7 +82,12 @@ export function ShapeNode({
   
   // Get node dimensions from the store - React Flow doesn't pass width/height as props
   const nodeRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const [dimensions, setDimensions] = useState({ width: 100, height: 100 });
+  
+  // State for text content and auto-calculated font size
+  const [textContent, setTextContent] = useState('');
+  const [autoFontSize, setAutoFontSize] = useState(16);
   
   // Watch for node size changes using ResizeObserver
   useEffect(() => {
@@ -51,6 +106,22 @@ export function ShapeNode({
     resizeObserver.observe(element);
     return () => resizeObserver.disconnect();
   }, []);
+  
+  // Recalculate font size when text content or dimensions change
+  // Text expands to fill space, shrinks when more text is added
+  useEffect(() => {
+    const newFontSize = calculateAutoFitFontSize(
+      textContent,
+      dimensions.width,
+      dimensions.height
+    );
+    setAutoFontSize(newFontSize);
+  }, [textContent, dimensions.width, dimensions.height]);
+  
+  // Handle text input changes - triggers font size recalculation
+  const handleTextChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setTextContent(e.target.value);
+  }, []);
 
   // Use color if available, otherwise use fillColor, fallback to default
   const shapeColor = color || fillColor || '#3F8AE2';
@@ -63,6 +134,8 @@ export function ShapeNode({
 
   return (
     <div ref={nodeRef} className="w-full h-full relative">
+      {/* NodeResizer for free-form shape resizing (aspect ratio NOT locked by default) */}
+      {/* Hold Shift to lock aspect ratio while resizing */}
       <NodeResizer
         keepAspectRatio={shiftKeyPressed}
         isVisible={selected}
@@ -91,7 +164,22 @@ export function ShapeNode({
         stroke={strokeColor}
         fillOpacity={0.8}
       />
-      <input type="text" className="node-label" placeholder={type} />
+      {/* Auto-fitting text input - font size scales based on shape size and text content */}
+      {/* Text expands to fill available space, shrinks when more text is added */}
+      <input 
+        ref={inputRef}
+        type="text" 
+        className="node-label" 
+        placeholder={type}
+        value={textContent}
+        onChange={handleTextChange}
+        style={{
+          fontSize: `${autoFontSize}px`,
+          // Ensure text stays centered and fits within shape
+          maxWidth: '80%',
+          textOverflow: 'ellipsis',
+        }}
+      />
       {handlePositions.map((position) => (
         <Handle
           key={position}
