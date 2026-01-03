@@ -2369,7 +2369,13 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   }, [isNote, promptContent, responseContent])
 
   // Auto-select panel when editor is focused or has selection (text edit mode)
+  // Skip auto-selection for flashcards in nav mode (no blue border unless manually selected)
   const handleEditorActiveChange = useCallback((isActive: boolean) => {
+    // Don't auto-select flashcards in nav mode
+    if (isFlashcard && flashcardMode !== null) {
+      return
+    }
+    
     if (isActive && !selected) {
       // Editor is active (focused or has selection) but panel is not selected - auto-select it
       setNodes((nodes) =>
@@ -2380,7 +2386,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         )
       )
     }
-  }, [id, selected, setNodes])
+  }, [id, selected, setNodes, isFlashcard, flashcardMode])
 
   // Flashcard navigation - get all flashcards in the same board/project/study set
   // For regular boards that are part of a project, also enable cross-board navigation
