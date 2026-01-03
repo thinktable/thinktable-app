@@ -2369,16 +2369,14 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   }, [isNote, promptContent, responseContent])
 
   // Auto-select panel when editor is focused or has selection (text edit mode)
-  // Deselects all other panels to ensure only one panel is selected at a time
   const handleEditorActiveChange = useCallback((isActive: boolean) => {
     if (isActive && !selected) {
       // Editor is active (focused or has selection) but panel is not selected - auto-select it
-      // Deselect all other nodes and select this one
       setNodes((nodes) =>
         nodes.map((node) =>
           node.id === id
             ? { ...node, selected: true }
-            : { ...node, selected: false } // Deselect all other nodes
+            : node
         )
       )
     }
