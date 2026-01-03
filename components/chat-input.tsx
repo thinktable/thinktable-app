@@ -304,7 +304,7 @@ export function ChatInput({ conversationId, projectId, onHeightChange }: ChatInp
         router.replace(`/board/${convId}`)
       }
 
-      // Create user message first
+      // Create user message first (with isFlashcard metadata if in flashcards mode)
       const { data: userMessageData, error: msgError } = await supabase
         .from('messages')
         .insert({
@@ -312,6 +312,7 @@ export function ChatInput({ conversationId, projectId, onHeightChange }: ChatInp
           user_id: user.id,
           role: 'user',
           content: userMessage,
+          ...(isFlashcardsMode && { metadata: { isFlashcard: true } }), // Set flashcard metadata if mode is enabled
         })
         .select()
         .single()
@@ -458,6 +459,7 @@ export function ChatInput({ conversationId, projectId, onHeightChange }: ChatInp
           conversationId: convId,
           message: userMessage,
           deterministicMapping: isDeterministicMapping,
+          isFlashcardsMode: isFlashcardsMode, // Pass flashcard mode to API for metadata
         }),
       })
 
@@ -598,6 +600,7 @@ export function ChatInput({ conversationId, projectId, onHeightChange }: ChatInp
             user_id: user.id,
             role: 'assistant',
             content: assistantContent,
+            ...(isFlashcardsMode && { metadata: { isFlashcard: true } }), // Set flashcard metadata if mode is enabled
           })
 
         if (assistantError) {

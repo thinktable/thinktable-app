@@ -25,12 +25,13 @@ export async function POST(request: NextRequest) {
     console.log(`[${requestId}] User authenticated: ${user.id}`)
 
     const body = await request.json()
-    const { conversationId, message, deterministicMapping } = body
+    const { conversationId, message, deterministicMapping, isFlashcardsMode } = body
 
     console.log(`[${requestId}] Request params:`, {
       conversationId,
       messageLength: message?.length,
       deterministicMapping,
+      isFlashcardsMode,
     })
 
     if (!conversationId || !message) {
@@ -714,6 +715,7 @@ REMEMBER: Structure makes information scannable. Format based on intent. Always 
                             user_id: user.id,
                             role: 'assistant',
                             content: panel.content,
+                            ...(isFlashcardsMode && { metadata: { isFlashcard: true } }), // Set flashcard metadata if mode is enabled
                           })
                           .select()
                           .single()

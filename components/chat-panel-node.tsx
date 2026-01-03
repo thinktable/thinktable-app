@@ -712,8 +712,8 @@ function TipTapContent({
           onVisibilityChange={onCommentPopupVisibilityChange}
         />
       )}
-      {/* Apply shimmer animation to prompt text when response is loading */}
-      <div className={cn(isLoading && 'shimmer')}>
+      {/* Apply shimmer animation to prompt text when response is loading (not for flashcards) */}
+      <div className={cn(isLoading && !isFlashcard && 'shimmer')}>
         <EditorContent editor={editor} />
       </div>
     </div>

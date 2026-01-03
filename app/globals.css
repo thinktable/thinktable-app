@@ -161,10 +161,11 @@
 /* Shimmer effect - applies to text elements within shimmer container */
 /* Targets all paragraph elements and spans inside the shimmer wrapper */
 /* Uses explicit colors (gray-900/gray-500) to ensure proper text visibility */
-.shimmer p,
+/* Excludes empty paragraphs (placeholders) from shimmer effect */
+.shimmer p:not(.is-editor-empty),
 .shimmer span,
-.shimmer .ProseMirror,
-.shimmer .ProseMirror p {
+.shimmer .ProseMirror:not(.is-empty),
+.shimmer .ProseMirror p:not(.is-editor-empty) {
   /* Text shimmer effect: dark gray base (#111827 = gray-900) with subtle gray highlight sweep */
   background: linear-gradient(
     90deg,
@@ -186,11 +187,25 @@
   }
 }
 
+/* Ensure placeholder text is not affected by shimmer - reset to normal styling */
+.shimmer .ProseMirror p.is-editor-empty:first-child::before {
+  background: none !important;
+  -webkit-background-clip: unset !important;
+  background-clip: unset !important;
+  -webkit-text-fill-color: #9ca3af !important; /* gray-400 placeholder color */
+  animation: none !important;
+}
+
+.dark .shimmer .ProseMirror p.is-editor-empty:first-child::before {
+  -webkit-text-fill-color: #6b7280 !important; /* gray-500 for dark mode placeholder */
+}
+
 /* Dark mode shimmer - light text with subtle highlight for dark backgrounds */
-.dark .shimmer p,
+/* Excludes empty paragraphs (placeholders) from shimmer effect */
+.dark .shimmer p:not(.is-editor-empty),
 .dark .shimmer span,
-.dark .shimmer .ProseMirror,
-.dark .shimmer .ProseMirror p {
+.dark .shimmer .ProseMirror:not(.is-empty),
+.dark .shimmer .ProseMirror p:not(.is-editor-empty) {
   /* Text shimmer effect for dark mode: light gray base (#f3f4f6 = gray-100) with subtle highlight sweep */
   background: linear-gradient(
     90deg,
