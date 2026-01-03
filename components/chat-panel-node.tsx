@@ -2545,11 +2545,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const handleEditorActiveChange = useCallback((isActive: boolean) => {
     if (isActive && !selected) {
       // Editor is active (focused or has selection) but panel is not selected - auto-select it
+      // First deselect all other nodes, then select this one
       setNodes((nodes) =>
         nodes.map((node) =>
           node.id === id
             ? { ...node, selected: true }
-            : node
+            : { ...node, selected: false }
         )
       )
     }
