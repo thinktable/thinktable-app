@@ -62,6 +62,7 @@ import {
   Hash,
   Calendar,
   FileText,
+  Move,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
@@ -74,7 +75,7 @@ interface EditorToolbarProps {
 }
 
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
-  const { reactFlowInstance, isLocked, setIsLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, viewMode, boardRule, setBoardRule, boardStyle, setBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, drawShape: contextDrawShape, setDrawShape: setContextDrawShape, mapUndo, mapRedo, canMapUndo, canMapRedo } = useReactFlowContext()
+  const { reactFlowInstance, isLocked, setIsLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, viewMode, boardRule, setBoardRule, boardStyle, setBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, drawShape: contextDrawShape, setDrawShape: setContextDrawShape, mapUndo, mapRedo, canMapUndo, canMapRedo, snapEnabled, setSnapEnabled } = useReactFlowContext()
   const borderStyleButtonRef = useRef<HTMLButtonElement>(null)
   const borderStyleIconRef = useRef<HTMLImageElement>(null)
   const threadStyleButtonRef = useRef<HTMLButtonElement>(null)
@@ -1083,6 +1084,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             // View mode buttons: Board Style dropdown
             // Board Style: Grid icon (16px) + gap (6px) + text "Board Style" (~80px) + padding (16px) = ~118px
             { id: 'boardStyle', width: 118 },
+            { id: 'snap', width: 40 },
             { id: 'undoRedo', width: 70 },
             { id: 'zoom', width: 60 },
             { id: 'lock', width: 40 },
@@ -1806,6 +1808,24 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
+          </>
+        )}
+
+        {/* Snap Toggle Button - View Mode Only */}
+        {editMenuPillMode === 'view' && !isItemHidden('snap') && (
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSnapEnabled(!snapEnabled)}
+              className={cn(
+                'h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0',
+                snapEnabled && 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100'
+              )}
+              title={snapEnabled ? 'Disable snap to grid' : 'Enable snap to grid'}
+            >
+              <Move className="h-4 w-4" />
+            </Button>
           </>
         )}
 

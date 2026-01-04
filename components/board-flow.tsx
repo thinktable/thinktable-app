@@ -47,6 +47,7 @@ import { FreehandNode } from './freehand/FreehandNode' // Freehand drawing node 
 import { Freehand } from './freehand/Freehand' // Freehand drawing overlay component
 import { ShapeNode } from './shapes/ShapeNode' // Shape node component
 import { useUndoRedo } from './use-undo-redo' // Undo/redo hook for map actions
+import { useHelperLines } from './helper-lines/useHelperLines' // Helper lines hook for snap-to-grid functionality
 import { useUserPreference } from '@/lib/hooks/use-user-preferences'
 
 interface Message {
@@ -671,7 +672,10 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
   }, [setIsScrollMode, setViewMode])
 
   const reactFlowInstance = useReactFlow()
-  const { setReactFlowInstance, registerSetNodes, isLocked, layoutMode, setLayoutMode, setIsDeterministicMapping, panelWidth: contextPanelWidth, isPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection, boardRule, boardStyle, clickedEdge: contextClickedEdge, setClickedEdge: setContextClickedEdge, fillColor, borderColor, borderWeight, borderStyle, flashcardMode, setFlashcardMode, selectedTag, setSelectedTag, isDrawing, drawTool, drawShape, registerMapUndoRedo, registerMapTakeSnapshot } = useReactFlowContext()
+  const { setReactFlowInstance, registerSetNodes, isLocked, layoutMode, setLayoutMode, setIsDeterministicMapping, panelWidth: contextPanelWidth, isPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection, boardRule, boardStyle, clickedEdge: contextClickedEdge, setClickedEdge: setContextClickedEdge, fillColor, borderColor, borderWeight, borderStyle, flashcardMode, setFlashcardMode, selectedTag, setSelectedTag, isDrawing, drawTool, drawShape, registerMapUndoRedo, registerMapTakeSnapshot, snapEnabled } = useReactFlowContext()
+  
+  // Helper lines hook for snap-to-grid functionality
+  const { rebuildIndex, updateHelperLines, HelperLines } = useHelperLines(snapEnabled)
   
   // Helper function to check if a panel is a chat panel (has AI response and is not a flashcard)
   const isChatPanel = useCallback((node: Node<ChatPanelNodeData>): boolean => {
@@ -3296,8 +3300,11 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
       }
     })
 
+    // Apply helper lines snapping if enabled (before calling onNodesChange)
+    const updatedChanges = snapEnabled ? updateHelperLines(changes, nodes) : changes
+    
     // Call the original handler - this is necessary for React Flow to work
-    onNodesChange(changes)
+    onNodesChange(updatedChanges)
 
     // In linear mode, if there was a selection change, prevent any viewport adjustments
     // by setting a flag that onMove will check
@@ -3309,7 +3316,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
       }, 500) // Clear flag after 500ms
       return
     }
-  }, [onNodesChange, nodes, viewMode, setNodes, deleteNodesByIds, recalculateEdgeHandles, takeSnapshot, getChronologicalPanels, linearNavMode, centerPanelAbovePrompt])
+  }, [onNodesChange, nodes, viewMode, setNodes, deleteNodesByIds, recalculateEdgeHandles, takeSnapshot, getChronologicalPanels, linearNavMode, centerPanelAbovePrompt, snapEnabled, updateHelperLines])
 
   // Track selected node from nodes array
   // Don't trigger viewport changes on selection in linear mode
@@ -5575,6 +5582,12 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
         edges={edges}
         onNodesChange={handleNodesChange}
         onEdgesChange={onEdgesState}
+        onNodeDragStop={() => {
+          // Rebuild helper lines index when drag stops
+          if (snapEnabled) {
+            rebuildIndex(nodes)
+          }
+        }}
         nodeTypes={memoizedNodeTypes}
         edgeTypes={memoizedEdgeTypes}
         connectionMode={ConnectionMode.Loose}
@@ -6226,6 +6239,9 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
 
         {/* Freehand drawing overlay - only shown when drawing mode is active and drawTool is pencil */}
         {isDrawing && drawTool === 'pencil' && <Freehand conversationId={conversationId} onBeforeCreate={takeSnapshot} />}
+        
+        {/* Helper lines for snap-to-grid functionality */}
+        <HelperLines />
 
       </ReactFlow>
 
