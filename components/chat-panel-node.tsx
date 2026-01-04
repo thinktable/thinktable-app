@@ -4153,24 +4153,64 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           </div>
         </div>
       ) : !shouldHideHandles ? (
-        <Handle
-          type="target"
-          position={Position.Left}
-          id="left"
-          isConnectable={true}
-          className={cn(
-            'handle-dot',
-            selected ? 'handle-dot-selected' : 'handle-dot-default'
-          )}
-          style={{
-            width: '8px',
-            height: '8px',
-            backgroundColor: handleColor,
-            border: `1px solid ${handleBorderColor}`,
-            '--handle-color': handleColor,
-            '--handle-hover-color': handleHoverColor,
-          } as React.CSSProperties}
-        />
+        <>
+          <Handle
+            type="target"
+            position={Position.Left}
+            id="left"
+            isConnectable={true}
+            className={cn(
+              'handle-dot',
+              selected ? 'handle-dot-selected' : 'handle-dot-default'
+            )}
+            style={{
+              width: '10px',
+              height: '10px',
+              backgroundColor: handleColor,
+              border: `1px solid ${handleBorderColor}`,
+              '--handle-color': handleColor,
+              '--handle-hover-color': handleHoverColor,
+            } as React.CSSProperties}
+          />
+          {/* Top handle - can receive connections from above */}
+          <Handle
+            type="target"
+            position={Position.Top}
+            id="top"
+            isConnectable={true}
+            className={cn(
+              'handle-dot',
+              selected ? 'handle-dot-selected' : 'handle-dot-default'
+            )}
+            style={{
+              width: '10px',
+              height: '10px',
+              backgroundColor: handleColor,
+              border: `1px solid ${handleBorderColor}`,
+              '--handle-color': handleColor,
+              '--handle-hover-color': handleHoverColor,
+            } as React.CSSProperties}
+          />
+          {/* Bottom handle - can send connections downward */}
+          <Handle
+            type="source"
+            position={Position.Bottom}
+            id="bottom"
+            isConnectable={true}
+            className={cn(
+              'handle-dot',
+              selected ? 'handle-dot-selected' : 'handle-dot-default'
+            )}
+            style={{
+              width: '10px',
+              height: '10px',
+              backgroundColor: handleColor,
+              border: `1px solid ${handleBorderColor}`,
+              '--handle-color': handleColor,
+              '--handle-hover-color': handleHoverColor,
+            } as React.CSSProperties}
+          />
+        </>
       ) : null}
 
       {/* Response section - wraps prompt area for nested structure */}
@@ -4843,8 +4883,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             selected ? 'handle-dot-selected' : 'handle-dot-default'
           )}
           style={{
-            width: '8px',
-            height: '8px',
+            width: '10px',
+            height: '10px',
             backgroundColor: handleColor,
             border: `1px solid ${handleBorderColor}`,
             '--handle-color': handleColor,

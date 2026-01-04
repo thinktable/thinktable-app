@@ -533,9 +533,72 @@ span[data-added="true"] {
   }
   
   /* Custom handle positioning - override React Flow defaults */
-  .react-flow__handle-left,
-  .react-flow__handle-right {
-    transform: translateY(-50%) !important;
+  /* Left handle: center vertically (half on, half off) */
+  /* Target by ID, position attribute, and React Flow classes - exclude flashcard handles */
+  .react-flow__handle#left:not(.handle-dot-flashcard-large),
+  .react-flow__handle[id="left"]:not(.handle-dot-flashcard-large),
+  .react-flow__handle.handle-dot[data-handlepos="left"]:not(.handle-dot-flashcard-large),
+  .react-flow__handle.handle-dot.react-flow__handle-left:not(.handle-dot-flashcard-large),
+  .react-flow__handle[data-handlepos="left"].handle-dot:not(.handle-dot-flashcard-large),
+  .react-flow__handle.react-flow__handle-left.handle-dot:not(.handle-dot-flashcard-large),
+  /* Fallback for any left handle - exclude flashcard handles */
+  .react-flow__node .react-flow__handle[data-handlepos="left"]:not(.handle-dot-flashcard-large),
+  .react-flow__node .react-flow__handle.react-flow__handle-left:not(.handle-dot-flashcard-large) {
+    left: 0 !important;
+    top: 50% !important;
+    right: auto !important;
+    transform: translate(-50%, -50%) !important;
+  }
+  
+  /* Right handle: center vertically (half on, half off) */
+  /* Target by ID, position attribute, and React Flow classes - exclude flashcard handles */
+  .react-flow__handle#right:not(.handle-dot-flashcard-large),
+  .react-flow__handle[id="right"]:not(.handle-dot-flashcard-large),
+  .react-flow__handle.handle-dot[data-handlepos="right"]:not(.handle-dot-flashcard-large),
+  .react-flow__handle.handle-dot.react-flow__handle-right:not(.handle-dot-flashcard-large),
+  .react-flow__handle[data-handlepos="right"].handle-dot:not(.handle-dot-flashcard-large),
+  .react-flow__handle.react-flow__handle-right.handle-dot:not(.handle-dot-flashcard-large),
+  /* Fallback for any right handle - exclude flashcard handles */
+  .react-flow__node .react-flow__handle[data-handlepos="right"]:not(.handle-dot-flashcard-large),
+  .react-flow__node .react-flow__handle.react-flow__handle-right:not(.handle-dot-flashcard-large) {
+    right: 0 !important;
+    top: 50% !important;
+    left: auto !important;
+    transform: translate(50%, -50%) !important;
+  }
+  
+  /* Top handle: center horizontally (half on, half off) */
+  /* Target by ID, position attribute, and React Flow classes - exclude flashcard handles */
+  .react-flow__handle#top:not(.handle-dot-flashcard-large),
+  .react-flow__handle[id="top"]:not(.handle-dot-flashcard-large),
+  .react-flow__handle.handle-dot[data-handlepos="top"]:not(.handle-dot-flashcard-large),
+  .react-flow__handle.handle-dot.react-flow__handle-top:not(.handle-dot-flashcard-large),
+  .react-flow__handle[data-handlepos="top"].handle-dot:not(.handle-dot-flashcard-large),
+  .react-flow__handle.react-flow__handle-top.handle-dot:not(.handle-dot-flashcard-large),
+  /* Fallback for any top handle - exclude flashcard handles */
+  .react-flow__node .react-flow__handle[data-handlepos="top"]:not(.handle-dot-flashcard-large),
+  .react-flow__node .react-flow__handle.react-flow__handle-top:not(.handle-dot-flashcard-large) {
+    top: 0 !important;
+    left: 50% !important;
+    right: auto !important;
+    transform: translate(-50%, -50%) !important;
+  }
+  
+  /* Bottom handle: center horizontally (half on, half off) */
+  /* Target by ID, position attribute, and React Flow classes - exclude flashcard handles */
+  .react-flow__handle#bottom:not(.handle-dot-flashcard-large),
+  .react-flow__handle[id="bottom"]:not(.handle-dot-flashcard-large),
+  .react-flow__handle.handle-dot[data-handlepos="bottom"]:not(.handle-dot-flashcard-large),
+  .react-flow__handle.handle-dot.react-flow__handle-bottom:not(.handle-dot-flashcard-large),
+  .react-flow__handle[data-handlepos="bottom"].handle-dot:not(.handle-dot-flashcard-large),
+  .react-flow__handle.react-flow__handle-bottom.handle-dot:not(.handle-dot-flashcard-large),
+  /* Fallback for any bottom handle - exclude flashcard handles */
+  .react-flow__node .react-flow__handle[data-handlepos="bottom"]:not(.handle-dot-flashcard-large),
+  .react-flow__node .react-flow__handle.react-flow__handle-bottom:not(.handle-dot-flashcard-large) {
+    bottom: 0 !important;
+    left: 50% !important;
+    right: auto !important;
+    transform: translate(-50%, 50%) !important;
   }
   
   /* Custom positioned handles - use data attributes for specific positioning */
@@ -621,11 +684,18 @@ span[data-added="true"] {
 
   /* Panel connection handle dots (top and bottom of panels) */
   .react-flow__handle.handle-dot {
-    width: 8px !important; /* Slightly larger */
-    height: 8px !important;
+    width: 10px !important; /* Optimal size for visibility */
+    height: 10px !important;
     border-radius: 50% !important;
     transition: background-color 0.2s ease;
     z-index: 20 !important; /* Ensure handles appear above prompt area (z-10) */
+  }
+  
+  /* Override React Flow's default positioning for top/bottom handles to ensure half-on-half-off */
+  /* This ensures handles are positioned at the edge, then transformed to be half outside */
+  .react-flow__handle.handle-dot[id="top"],
+  .react-flow__handle.handle-dot[id="bottom"] {
+    position: absolute !important;
   }
 
   /* Flashcard handles - larger size when there are multiple flashcards */
@@ -972,10 +1042,10 @@ span[data-added="true"] {
     stroke: #3b82f6 !important; /* blue-500 - same as panel selection */
   }
 
-  /* Shape edge handles (connection points) - same size as panel handles (8px) */
+  /* Shape edge handles (connection points) - same size as panel handles (10px) */
   .react-flow__node-shape .react-flow__handle.handle-dot {
-    width: 8px !important; /* Same as panel handles */
-    height: 8px !important; /* Same as panel handles */
+    width: 10px !important; /* Same as panel handles */
+    height: 10px !important; /* Same as panel handles */
     border: 1px solid var(--handle-border-color, #e5e7eb) !important; /* Border like panel handles */
     border-radius: 50% !important;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1) !important;

@@ -186,6 +186,8 @@ export function ShapeNode({
           id={position}
           className="handle-dot"
           style={{ 
+            width: '10px',
+            height: '10px',
             backgroundColor: shapeColor,
             '--handle-border-color': handleBorderColor,
           } as React.CSSProperties}

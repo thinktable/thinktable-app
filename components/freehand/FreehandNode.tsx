@@ -1,7 +1,7 @@
 // Freehand drawing node component for React Flow
 // Renders a freehand-drawn path as a resizable node
 import { useMemo, useEffect } from 'react'; // useMemo for memoizing scaled points calculation, useEffect for debugging
-import { NodeResizer, type Node, type NodeProps } from 'reactflow'; // React Flow node components and types
+import { NodeResizer, Handle, Position, type Node, type NodeProps } from 'reactflow'; // React Flow node components and types
 import { useTheme } from '@/components/theme-provider'; // Theme provider for dark mode detection
 
 import { pointsToPath } from './path'; // Path generation utility
@@ -142,6 +142,34 @@ export function FreehandNode({
           <circle cx={nodeWidth / 2} cy={nodeHeight / 2} r={5} fill="#ff0000" />
         )}
       </svg>
+      {/* Top handle - can receive connections from above */}
+      <Handle
+        type="target"
+        position={Position.Top}
+        id="top"
+        isConnectable={true}
+        className="handle-dot"
+        style={{
+          width: '10px',
+          height: '10px',
+          backgroundColor: resolvedTheme === 'dark' ? '#9ca3af' : '#e5e7eb', // Match panel handle colors
+          border: `1px solid ${resolvedTheme === 'dark' ? '#2f2f2f' : '#e5e7eb'}`,
+        } as React.CSSProperties}
+      />
+      {/* Bottom handle - can send connections downward */}
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        id="bottom"
+        isConnectable={true}
+        className="handle-dot"
+        style={{
+          width: '10px',
+          height: '10px',
+          backgroundColor: resolvedTheme === 'dark' ? '#9ca3af' : '#e5e7eb', // Match panel handle colors
+          border: `1px solid ${resolvedTheme === 'dark' ? '#2f2f2f' : '#e5e7eb'}`,
+        } as React.CSSProperties}
+      />
     </>
   );
 }
