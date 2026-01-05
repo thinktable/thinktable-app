@@ -13,7 +13,8 @@ import { createClient } from '@/lib/supabase/client'
 export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conversationId?: string; projectId?: string }) {
   const [inputHeight, setInputHeight] = useState(52) // Default height
   const [maxWidth, setMaxWidth] = useState(768) // Default max-w-3xl (768px)
-  const [isCentered, setIsCentered] = useState(true) // Always centered between sidebar and right edge
+  const [isCentered, setIsCentered] = useState(false) // Whether input should be centered
+  const [leftGap, setLeftGap] = useState(112) // Dynamic left gap calculated from sidebar to minimap gap
   const [isHidden, setIsHidden] = useState(false) // Track if prompt box is hidden
   const [isHovering, setIsHovering] = useState(false) // Track if mouse is hovering over prompt box area (deprecated, use isHoveringPromptBox/isHoveringPromptPill/isHoveringPromptHoverArea)
   const [isHoveringPromptBox, setIsHoveringPromptBox] = useState(false) // Track if mouse is hovering over prompt box
@@ -54,35 +55,90 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
   const [minimapRight, setMinimapRight] = useState(15) // Track minimap right position to align hover area
   const { setPanelWidth, setIsPromptBoxCentered, editMenuPillMode, setEditMenuPillMode } = useReactFlowContext() // Get setPanelWidth, setIsPromptBoxCentered, and editMenuPillMode from context
 
-  // Calculate available width for input - always centered between sidebar and right edge
+  // Calculate available width for input - switches between left-aligned and centered based on right gap
   useEffect(() => {
     const calculateMaxWidth = () => {
-      // Calculate width using actual map area width
-      // Always center the prompt box between the sidebar and the right edge of the browser
+      // Calculate width using actual map area width to maintain consistent gap
+      // This prevents overlap with sidebar on window collapse and maintains same gap as top bar
       const reactFlowElement = document.querySelector('.react-flow')
+      
+      // Calculate the dynamic left gap: (1/2) * (gap from sidebar to minimap - prompt box width)
+      // This ensures the prompt box is centered in the space between sidebar and minimap
+      // The gap should be different for collapsed vs expanded sidebar
+      const expandedSidebarWidth = 256 // w-64 when expanded
+      const collapsedSidebarWidth = 64 // w-16 when collapsed
+      const minimapWidth = 179 // Minimap width from CSS
+      const minimapMargin = 15 // Margin from right edge
       const promptBoxMaxWidth = 768 // Max width of prompt box
+      
+      // Detect current sidebar state
+      const sidebarElement = document.querySelector('[class*="w-16"], [class*="w-64"]') as HTMLElement
+      const isSidebarExpanded = sidebarElement?.classList.contains('w-64') ?? false
+      const currentSidebarWidth = isSidebarExpanded ? expandedSidebarWidth : collapsedSidebarWidth
+      
+      // Calculate map area width with current sidebar state (full screen with current sidebar width)
+      const fullWindowWidth = window.screen.width
+      const fullMapAreaWidth = fullWindowWidth - currentSidebarWidth
+      
+      // Calculate gap from sidebar right edge (0px) to minimap left edge with current sidebar state
+      const minimapLeftEdge = fullMapAreaWidth - minimapWidth - minimapMargin
+      const gapFromSidebarToMinimap = minimapLeftEdge - 0
+      
+      // Calculate left gap: (1/2) * (gap from sidebar to minimap - prompt box width)
+      const calculatedLeftGap = Math.max(0, (1/2) * (gapFromSidebarToMinimap - promptBoxMaxWidth))
+      setLeftGap(calculatedLeftGap) // Store calculated left gap in state
       
       if (!reactFlowElement) {
         // Fallback: calculate based on expanded sidebar
-        const expandedSidebarWidth = 256 // w-64 when expanded
         const windowWidth = window.innerWidth
         const mapAreaWidth = windowWidth - expandedSidebarWidth
-        const centeredWidth = Math.min(promptBoxMaxWidth, mapAreaWidth - 32) // 16px gap on each side (32px total)
-        setMaxWidth(Math.max(0, centeredWidth))
-        setIsCentered(true) // Always centered
-        setIsPromptBoxCentered(true)
+        const availableWidth = Math.min(promptBoxMaxWidth, mapAreaWidth - calculatedLeftGap - 16) // Use calculated left gap, 16px right gap
+        setMaxWidth(Math.max(0, availableWidth))
+        setIsCentered(false) // Default to left-aligned in fallback
         return
       }
       
       const mapAreaWidth = reactFlowElement.clientWidth
       
-      // Always center the input box with same margins as top bar (16px on each side)
-      setIsCentered(true)
-      setIsPromptBoxCentered(true) // Update context so panels know prompt box is centered
-      const centeredWidth = Math.min(promptBoxMaxWidth, mapAreaWidth - 32) // 16px gap on each side (32px total) - same as top bar
-      setMaxWidth(Math.max(0, centeredWidth))
-      // Update panel width to match prompt box width (for 100% zoom)
-      setPanelWidth(centeredWidth)
+      // Check if minimap has moved up - if so, reduce right gap to allow input to expand
+      const minimapElement = document.querySelector('.react-flow__minimap') as HTMLElement
+      let minimapBottom = 15 // Default minimap bottom position
+      if (minimapElement) {
+        const computedStyle = getComputedStyle(minimapElement)
+        const bottomValue = computedStyle.bottom
+        if (bottomValue && bottomValue !== 'auto') {
+          minimapBottom = parseInt(bottomValue) || 15
+        }
+      }
+      const minimapMovedUp = minimapBottom > 15 // Minimap moved up when bottom > 15px (default is 15px)
+      
+      // When minimap is moved up, reduce right gap to allow input to expand into that space
+      // Minimap is ~179px wide + spacing, so we can reduce right gap significantly
+      const baseRightGap = minimapMovedUp ? 0 : 16 // No right gap when minimap is up, normal 16px when in normal position
+      
+      // First calculate width with left-aligned positioning using calculated left gap
+      const leftAlignedWidth = Math.min(promptBoxMaxWidth, mapAreaWidth - calculatedLeftGap - baseRightGap)
+      
+      // Calculate the right gap (distance from input box right edge to map area right edge) when left-aligned
+      const rightGapWhenLeftAligned = mapAreaWidth - calculatedLeftGap - leftAlignedWidth
+      
+      // If right gap goes below the calculated left gap, switch to centered; otherwise use left-aligned
+      if (rightGapWhenLeftAligned < calculatedLeftGap) {
+        // Center the input box with same margins as top bar (16px on each side)
+        setIsCentered(true)
+        setIsPromptBoxCentered(true) // Update context so panels know prompt box is centered
+        const centeredWidth = Math.min(promptBoxMaxWidth, mapAreaWidth - 32) // 16px gap on each side (32px total) - same as top bar
+        setMaxWidth(Math.max(0, centeredWidth))
+        // Update panel width to match prompt box width (for 100% zoom)
+        setPanelWidth(centeredWidth)
+      } else {
+        // Use left-aligned with calculated left gap
+        setIsCentered(false)
+        setIsPromptBoxCentered(false) // Update context so panels know prompt box is left-aligned
+        setMaxWidth(Math.max(0, leftAlignedWidth))
+        // Update panel width to match prompt box width (for 100% zoom)
+        setPanelWidth(leftAlignedWidth)
+      }
     }
 
     calculateMaxWidth()
@@ -193,8 +249,14 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
       
       const mapAreaWidth = reactFlowElement.clientWidth
       
-      // Always centered - pill select should be at center of map area
-      setPillSelectLeft(mapAreaWidth / 2)
+      if (isCentered) {
+        // When centered, pill select should be at center of map area
+        setPillSelectLeft(mapAreaWidth / 2)
+      } else {
+        // When left-aligned, pill select should be at center of prompt box
+        // Prompt box center = leftGap + (maxWidth / 2)
+        setPillSelectLeft(leftGap + (maxWidth / 2))
+      }
     }
     
     calculatePillSelectPosition()
@@ -217,7 +279,7 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
       window.removeEventListener('resize', calculatePillSelectPosition)
       if (sidebarObserver) sidebarObserver.disconnect()
     }
-  }, [maxWidth])
+  }, [isCentered, leftGap, maxWidth])
   
   // Keep refs in sync with state
   useEffect(() => {
@@ -619,14 +681,15 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
       {/* Hover zone below prompt box in map area - triggers pill visibility, constrained to prompt box width */}
       {/* Split into two zones: one for hover detection, one that allows clicks through to pill */}
       <div
-        className="absolute pointer-events-auto left-1/2 -translate-x-1/2"
+        className={`absolute pointer-events-auto ${isCentered ? 'left-1/2 -translate-x-1/2' : ''}`}
         style={{
           bottom: '0px',
           height: '20px', // Increased height for easier hovering
           zIndex: 15, // Below pill to allow clicks through
           cursor: 'default', // Default cursor - will be overridden to pointer when over pill
           // Position and width to match prompt box
-          width: maxWidth > 0 ? `${maxWidth}px` : 'calc(100% - 32px)', // Match prompt box width
+          ...(isCentered ? {} : { left: `${leftGap}px` }), // Match prompt box left position when not centered
+          width: maxWidth > 0 ? `${maxWidth}px` : (isCentered ? 'calc(100% - 32px)' : 'calc(100% - 128px)'), // Match prompt box width
         }}
         onMouseMove={(e) => {
           // Check if mouse is over the pill and set cursor accordingly
@@ -716,8 +779,9 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
       
       {/* Input box overlay at bottom */}
       <div 
-        className="absolute bottom-0 pointer-events-none z-10 flex flex-col items-center left-1/2 -translate-x-1/2"
+        className={`absolute bottom-0 pointer-events-none z-10 flex flex-col items-center ${isCentered ? 'left-1/2 -translate-x-1/2' : ''}`}
         style={{
+          ...(isCentered ? {} : { left: `${leftGap}px` }), // Dynamic left gap calculated from sidebar to minimap gap
           bottom: '8px', // Reduced to make room for toggle pill
         }}
       >
@@ -728,7 +792,7 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
             isHidden && 'h-0'
           )}
           style={{
-            width: maxWidth > 0 ? `${maxWidth}px` : 'calc(100% - 32px)', // Width with 16px margins on each side (same as top bar)
+            width: maxWidth > 0 ? `${maxWidth}px` : (isCentered ? 'calc(100% - 32px)' : 'calc(100% - 128px)'), // Width calculated based on centered state - 16px margins when centered (same as top bar)
             height: isHidden ? '0px' : 'auto',
           }}
           onMouseEnter={() => {
