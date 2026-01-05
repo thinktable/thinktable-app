@@ -27,7 +27,7 @@ export default async function BoardLayout({
   // Always render - never throw errors
   return (
     <SidebarContextProvider>
-      <div className="h-screen flex flex-col">
+      <div className="flex flex-col" style={{ height: 'calc(var(--vh, 1vh) * 100)' }}>
         <div className="flex-1 flex overflow-hidden">
           {user ? <AppSidebar user={user} /> : <div className="w-0" />}
           <main className="flex-1 overflow-auto">{children}</main>

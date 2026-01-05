@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { ReactQueryProvider } from "@/lib/react-query-provider";
 import { ThemeProvider } from "@/components/theme-provider";
+import { ViewportHeightFix } from "@/components/viewport-height-fix";
 import { Inter } from "next/font/google";
 
 const inter = Inter({ 
@@ -23,6 +24,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={inter.variable} suppressHydrationWarning>
+        <ViewportHeightFix />
         <ThemeProvider>
           <ReactQueryProvider>{children}</ReactQueryProvider>
         </ThemeProvider>
