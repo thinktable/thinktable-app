@@ -495,11 +495,23 @@ function ProjectFlowInner({ projectId }: { projectId?: string }) {
     checkMinimapPosition()
     window.addEventListener('resize', checkMinimapPosition)
 
+    // Watch for React Flow container resize - this catches sidebar collapse/expand
+    // This ensures minimap and toggle align correctly when sidebar collapses/expands
+    const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
+    const reactFlowResizeObserver = reactFlowElement ? new ResizeObserver(() => {
+      checkMinimapPosition()
+    }) : null
+    
+    if (reactFlowResizeObserver && reactFlowElement) {
+      reactFlowResizeObserver.observe(reactFlowElement)
+    }
+
     // Also check periodically to catch prompt box position changes
     const interval = setInterval(checkMinimapPosition, 100)
 
     return () => {
       window.removeEventListener('resize', checkMinimapPosition)
+      if (reactFlowResizeObserver) reactFlowResizeObserver.disconnect()
       clearInterval(interval)
     }
   }, [])

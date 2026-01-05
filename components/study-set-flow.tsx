@@ -1129,6 +1129,21 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
       checkMinimapPosition()
     })
 
+    // Watch for React Flow container resize - this catches sidebar collapse/expand
+    // This ensures minimap and toggle align correctly when sidebar collapses/expands
+    const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
+    const reactFlowResizeObserver = reactFlowElement ? new ResizeObserver(() => {
+      // Skip minimap position updates during scroll to bottom to prevent flashing
+      if (isScrollingToBottomRef.current) {
+        return
+      }
+      checkMinimapPosition()
+    }) : null
+    
+    if (reactFlowResizeObserver && reactFlowElement) {
+      reactFlowResizeObserver.observe(reactFlowElement)
+    }
+
     // Also watch for prompt box position/size changes (it can move/change size)
     // This ensures minimap and toggle jump even when minimap is hidden
     const setupObservers = () => {
@@ -1157,6 +1172,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
 
     return () => {
       window.removeEventListener('resize', checkMinimapPosition)
+      if (reactFlowResizeObserver) reactFlowResizeObserver.disconnect()
       cleanupObservers()
     }
   }, [isMinimapHidden]) // Re-run when minimap visibility changes to ensure toggle position updates
@@ -1329,11 +1345,23 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
     calculateHoverLeft()
     window.addEventListener('resize', calculateHoverLeft)
 
+    // Watch for React Flow container resize - this catches sidebar collapse/expand
+    // This ensures hover zone and toggle align correctly when sidebar collapses/expands
+    const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
+    const reactFlowResizeObserver = reactFlowElement ? new ResizeObserver(() => {
+      calculateHoverLeft()
+    }) : null
+    
+    if (reactFlowResizeObserver && reactFlowElement) {
+      reactFlowResizeObserver.observe(reactFlowElement)
+    }
+
     // Also check periodically to catch minimap position changes
     const interval = setInterval(calculateHoverLeft, 100)
 
     return () => {
       window.removeEventListener('resize', calculateHoverLeft)
+      if (reactFlowResizeObserver) reactFlowResizeObserver.disconnect()
       clearInterval(interval)
     }
   }, [minimapRight, isMinimapHidden, minimapBottom])
