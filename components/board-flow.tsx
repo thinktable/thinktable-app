@@ -3661,83 +3661,95 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
           // Works in both canvas and linear modes to prevent respacing on reload
           currentPos = { x: storedPos.x, y: storedPos.y }
         } else {
-          // Find reference panel: use selected panel if one is selected, otherwise use most recent panel
+          // First, check if there's a placeholder node - use its position if available
           const existingNodes = nodes && Array.isArray(nodes) ? nodes : []
-          let referenceNode: Node<ChatPanelNodeData> | null = null
+          const placeholderNode = existingNodes.find(n => n.type === 'placeholder')
+          
+          if (placeholderNode) {
+            // Use placeholder position for new panel
+            currentPos = { x: placeholderNode.position.x, y: placeholderNode.position.y }
+            console.log('📍 Using placeholder position for new panel', { 
+              placeholderPos: currentPos, 
+              placeholderId: placeholderNode.id 
+            })
+          } else {
+            // Find reference panel: use selected panel if one is selected, otherwise use most recent panel
+            let referenceNode: Node<ChatPanelNodeData> | null = null
 
-          if (existingNodes.length > 0) {
-            // First, check if there's a selected panel (this overrides most recent)
-            const selectedNode = existingNodes.find(n => n.selected)
+            if (existingNodes.length > 0) {
+              // First, check if there's a selected panel (this overrides most recent)
+              const selectedNode = existingNodes.find(n => n.selected)
 
-            if (selectedNode) {
-              // Use selected panel as reference
-              referenceNode = selectedNode
-            } else {
-              // No selected panel - find node with the newest message (highest message ID or latest created_at)
-              // Filter to only chatPanel nodes (skip freehand nodes)
-              const chatPanelNodes = existingNodes.filter(n => n.data.promptMessage?.id)
-              if (chatPanelNodes.length > 0) {
-                referenceNode = chatPanelNodes.reduce((newest, node) => {
-                  const newestMessageId = newest.data.promptMessage.id
-                  const nodeMessageId = node.data.promptMessage.id
-                  // Compare message IDs (they're UUIDs, but newer ones should be lexicographically greater)
-                  // Or compare created_at if available
-                  const newestCreated = new Date(newest.data.promptMessage.created_at || 0).getTime()
-                  const nodeCreated = new Date(node.data.promptMessage.created_at || 0).getTime()
-                  return nodeCreated > newestCreated ? node : newest
-                }, chatPanelNodes[0])
+              if (selectedNode) {
+                // Use selected panel as reference
+                referenceNode = selectedNode
+              } else {
+                // No selected panel - find node with the newest message (highest message ID or latest created_at)
+                // Filter to only chatPanel nodes (skip freehand nodes)
+                const chatPanelNodes = existingNodes.filter(n => n.data.promptMessage?.id)
+                if (chatPanelNodes.length > 0) {
+                  referenceNode = chatPanelNodes.reduce((newest, node) => {
+                    const newestMessageId = newest.data.promptMessage.id
+                    const nodeMessageId = node.data.promptMessage.id
+                    // Compare message IDs (they're UUIDs, but newer ones should be lexicographically greater)
+                    // Or compare created_at if available
+                    const newestCreated = new Date(newest.data.promptMessage.created_at || 0).getTime()
+                    const nodeCreated = new Date(node.data.promptMessage.created_at || 0).getTime()
+                    return nodeCreated > newestCreated ? node : newest
+                  }, chatPanelNodes[0])
+                }
               }
             }
-          }
 
-          if (referenceNode) {
-            // Position relative to reference panel (selected or most recent) based on arrow direction
-            // Use actual panel height for size-aware spacing
-            const referenceHeight = nodeHeightsRef.current.get(referenceNode.id) || 400
-            const baseX = referenceNode.position.x
-            const baseY = referenceNode.position.y
+            if (referenceNode) {
+              // Position relative to reference panel (selected or most recent) based on arrow direction
+              // Use actual panel height for size-aware spacing
+              const referenceHeight = nodeHeightsRef.current.get(referenceNode.id) || 400
+              const baseX = referenceNode.position.x
+              const baseY = referenceNode.position.y
 
-            // In canvas mode, use arrow direction for positioning
-            // In linear mode, always use down (vertical stacking)
-            const directionToUse = viewMode === 'canvas' ? arrowDirection : 'down'
+              // In canvas mode, use arrow direction for positioning
+              // In linear mode, always use down (vertical stacking)
+              const directionToUse = viewMode === 'canvas' ? arrowDirection : 'down'
 
-            switch (directionToUse) {
-              case 'down':
-                // Place below (increase Y): baseY + panel height + gap
-                currentPos = { x: baseX, y: baseY + referenceHeight + gapBetweenPanels }
-                break
-              case 'up':
-                // Place above (decrease Y): baseY - gap (we'll use estimated height for new panel)
-                const estimatedNewHeight = 400
-                currentPos = { x: baseX, y: baseY - estimatedNewHeight - gapBetweenPanels }
-                break
-              case 'right':
-                // Place to the right (increase X): use panel width + gap for size-aware spacing
-                const panelWidthForSpacing = contextPanelWidth || 768
-                currentPos = { x: baseX + panelWidthForSpacing + gapBetweenPanels, y: baseY }
-                break
-              case 'left':
-                // Place to the left (decrease X): use panel width + gap for size-aware spacing
-                const panelWidthForSpacingLeft = contextPanelWidth || 768
-                currentPos = { x: baseX - panelWidthForSpacingLeft - gapBetweenPanels, y: baseY }
-                break
-              default:
-                // Default to down (below)
-                currentPos = { x: baseX, y: baseY + referenceHeight + gapBetweenPanels }
-            }
-          } else {
-            // No existing panels or in linear mode: use size-aware vertical spacing
-            // Calculate cumulative height of previous panels
-            let cumulativeY = startY
-            for (let i = 0; i < panelIndex; i++) {
-              // Find the previous panel's height (if we had access to previous nodes)
-              // For now, use estimated height for new panels
-              const estimatedHeight = 400
-              cumulativeY += estimatedHeight + gapBetweenPanels
-            }
-            currentPos = {
-              x: centeredX,
-              y: cumulativeY
+              switch (directionToUse) {
+                case 'down':
+                  // Place below (increase Y): baseY + panel height + gap
+                  currentPos = { x: baseX, y: baseY + referenceHeight + gapBetweenPanels }
+                  break
+                case 'up':
+                  // Place above (decrease Y): baseY - gap (we'll use estimated height for new panel)
+                  const estimatedNewHeight = 400
+                  currentPos = { x: baseX, y: baseY - estimatedNewHeight - gapBetweenPanels }
+                  break
+                case 'right':
+                  // Place to the right (increase X): use panel width + gap for size-aware spacing
+                  const panelWidthForSpacing = contextPanelWidth || 768
+                  currentPos = { x: baseX + panelWidthForSpacing + gapBetweenPanels, y: baseY }
+                  break
+                case 'left':
+                  // Place to the left (decrease X): use panel width + gap for size-aware spacing
+                  const panelWidthForSpacingLeft = contextPanelWidth || 768
+                  currentPos = { x: baseX - panelWidthForSpacingLeft - gapBetweenPanels, y: baseY }
+                  break
+                default:
+                  // Default to down (below)
+                  currentPos = { x: baseX, y: baseY + referenceHeight + gapBetweenPanels }
+              }
+            } else {
+              // No existing panels or in linear mode: use size-aware vertical spacing
+              // Calculate cumulative height of previous panels
+              let cumulativeY = startY
+              for (let i = 0; i < panelIndex; i++) {
+                // Find the previous panel's height (if we had access to previous nodes)
+                // For now, use estimated height for new panels
+                const estimatedHeight = 400
+                cumulativeY += estimatedHeight + gapBetweenPanels
+              }
+              currentPos = {
+                x: centeredX,
+                y: cumulativeY
+              }
             }
           }
         }

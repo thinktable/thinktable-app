@@ -16,10 +16,11 @@ export function usePlaceholderManager(
   const { setNodes, setEdges, getNodes, getEdges, getViewport } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
   
-  // Store relative offsets for each placeholder (preserved only for the same target node)
-  // Format: { placeholderId: { offsetX: number, offsetY: number, targetWidth: number, targetHeight: number, sourceHandle: string, targetNodeId: string } }
+  // Store relative offsets for each placeholder (preserved across target node changes)
+  // Format: { placeholderId: { offsetX: number, offsetY: number, sourceHandle: string } }
   // The offset is relative to the handle the placeholder edge connects to, not the node's top-left corner
-  const placeholderOffsetsRef = useRef<Map<string, { offsetX: number; offsetY: number; targetWidth: number; targetHeight: number; sourceHandle: string; targetNodeId: string }>>(new Map());
+  // This offset is maintained when switching between different target nodes (selected or default)
+  const placeholderOffsetsRef = useRef<Map<string, { offsetX: number; offsetY: number; sourceHandle: string }>>(new Map());
   
   // Track previous placeholder positions to detect when they're dragged (not just repositioned)
   const previousPlaceholderPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
@@ -270,26 +271,24 @@ export function usePlaceholderManager(
       let sourceHandle: string;
       let targetHandle: string;
       
-      // If we have a stored offset FOR THE SAME TARGET NODE, use it to restore position
-      // Otherwise, reset to default position below the new target node
-      if (storedOffset && storedOffset.targetNodeId === targetNode.id) {
-        // Restore placeholder position from stored offset relative to handle
+      // If we have a stored offset, apply it to the current target node
+      // This maintains the relative position when switching between different target nodes
+      if (storedOffset) {
         // Get the latest target node from currentNodes to ensure we have the current position
         const latestTargetNode = currentNodes.find((n) => n.id === targetNode.id) || targetNode;
         
-        // The offset is stored relative to the handle, so when target node moves, recalculate from handle
-        // The offset represents: placeholder.position - handle.position
-        // So: placeholder.position = handle.position + offset
-        const currentHandlePos = getHandlePosition(latestTargetNode, storedOffset.sourceHandle);
-        placeholderPosition = {
-          x: currentHandlePos.x + storedOffset.offsetX,
-          y: currentHandlePos.y + storedOffset.offsetY,
+        // First, try to use the stored handle if it still makes sense
+        // Calculate position using stored offset relative to stored handle
+        const storedHandlePos = getHandlePosition(latestTargetNode, storedOffset.sourceHandle);
+        const tempPositionFromStoredHandle = {
+          x: storedHandlePos.x + storedOffset.offsetX,
+          y: storedHandlePos.y + storedOffset.offsetY,
         };
         
-        // Create temporary placeholder node with calculated position to find closest handles
+        // Create temporary placeholder node to find closest handles
         const tempPlaceholderNode: Node = {
           id: placeholderId,
-          position: placeholderPosition,
+          position: tempPositionFromStoredHandle,
           type: 'placeholder',
           width: 160, // Placeholder width
           height: 40, // Placeholder height
@@ -300,17 +299,22 @@ export function usePlaceholderManager(
         sourceHandle = closestHandles.sourceHandle;
         targetHandle = closestHandles.targetHandle;
         
-        // If the closest handle changed, recalculate offset relative to new handle to maintain visual position
+        // Calculate final position using the closest handle with stored offset
+        // This maintains the relative position even when handle changes
+        const closestHandlePos = getHandlePosition(latestTargetNode, sourceHandle);
+        placeholderPosition = {
+          x: closestHandlePos.x + storedOffset.offsetX,
+          y: closestHandlePos.y + storedOffset.offsetY,
+        };
+        
+        // If the handle changed, update the stored offset to maintain visual position
         if (sourceHandle !== storedOffset.sourceHandle) {
           const newHandlePos = getHandlePosition(latestTargetNode, sourceHandle);
-          // Recalculate offset to maintain the same placeholder position relative to new handle
+          // Recalculate offset to maintain the same visual position relative to new handle
           placeholderOffsetsRef.current.set(placeholderId, {
             offsetX: placeholderPosition.x - newHandlePos.x,
             offsetY: placeholderPosition.y - newHandlePos.y,
-            targetWidth: storedOffset.targetWidth,
-            targetHeight: storedOffset.targetHeight,
             sourceHandle: sourceHandle, // Update to new handle
-            targetNodeId: targetNode.id, // Keep same target node ID
           });
         }
       } else {
@@ -357,17 +361,13 @@ export function usePlaceholderManager(
           y: closestSourceHandlePos.y - (closestTargetHandlePos.y - tempPlaceholderNode.position.y) + spacing,
         };
         
-        // Store initial offset relative to handle position with target dimensions
-        const targetWidth = getNodeWidth(latestTargetNode);
-        const targetHeight = getNodeHeight(latestTargetNode);
+        // Store initial offset relative to handle position
+        // This offset will be maintained when switching between different target nodes
         const finalHandlePos = getHandlePosition(latestTargetNode, sourceHandle);
         placeholderOffsetsRef.current.set(placeholderId, {
           offsetX: placeholderPosition.x - finalHandlePos.x,
           offsetY: placeholderPosition.y - finalHandlePos.y,
-          targetWidth: targetWidth,
-          targetHeight: targetHeight,
           sourceHandle: sourceHandle,
-          targetNodeId: targetNode.id, // Store which node this offset is for
         });
       }
 
@@ -526,19 +526,13 @@ export function usePlaceholderManager(
         // Calculate relative offset from handle position (not node top-left corner)
         const offsetX = placeholder.position.x - handlePos.x;
         const offsetY = placeholder.position.y - handlePos.y;
-        
-        // Get current target node dimensions
-        const targetWidth = getNodeWidth(targetNode);
-        const targetHeight = getNodeHeight(targetNode);
 
-        // Store the offset relative to handle position with target dimensions
+        // Store the offset relative to handle position
+        // This offset will be maintained when switching between different target nodes
         placeholderOffsetsRef.current.set(placeholder.id, {
           offsetX,
           offsetY,
-          targetWidth,
-          targetHeight,
           sourceHandle, // Store which handle this offset is relative to
-          targetNodeId: targetNode.id, // Store which node this offset is for
         });
       }
 
