@@ -24,9 +24,18 @@ export async function GET() {
       )
     }
 
+    // Check if Supabase URL is configured
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    if (!supabaseUrl) {
+      return NextResponse.json(
+        { error: 'NEXT_PUBLIC_SUPABASE_URL not configured' },
+        { status: 500 }
+      )
+    }
+
     // Create admin client that bypasses RLS
     const supabaseAdmin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      supabaseUrl,
       secretKey,
       {
         auth: {

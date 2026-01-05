@@ -2,7 +2,7 @@
 
 // Custom React Flow node for chat panels (prompt + response)
 import { NodeProps, Handle, Position, useReactFlow, NodeResizeControl } from 'reactflow'
-import { cn } from '@/lib/utils'
+import { cn, generateUUID } from '@/lib/utils'
 import { useEditor, EditorContent } from '@tiptap/react'
 import { BubbleMenu } from '@tiptap/react/menus'
 import StarterKit from '@tiptap/starter-kit'
@@ -986,7 +986,7 @@ function TagButton({ responseMessageId }: { responseMessageId: string }) {
       const studySets = (existingMetadata.studySets || []) as Array<{ id: string; name: string }>
 
       // Create new study set
-      const newStudySetId = crypto.randomUUID()
+      const newStudySetId = generateUUID() // Compatible with all browsers including older Safari
       const newStudySet = { id: newStudySetId, name: newStudySetName.trim() }
       const updatedStudySets = [...studySets, newStudySet]
 

@@ -1925,6 +1925,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="pl-7 h-8 text-sm rounded-lg border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+                  suppressHydrationWarning
                 />
               </div>
               <DropdownMenu>

@@ -44,7 +44,7 @@ import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { LeftVerticalMenu } from './left-vertical-menu'
 import { FreehandNode } from './freehand/FreehandNode' // Freehand drawing node component
-import { Freehand } from './freehand/Freehand' // Freehand drawing overlay component
+import { Freehand, retryFailedSaves } from './freehand/Freehand' // Freehand drawing overlay component and retry function
 import { ShapeNode } from './shapes/ShapeNode' // Shape node component
 import { useUndoRedo } from './use-undo-redo' // Undo/redo hook for map actions
 import { useHelperLines } from './helper-lines/useHelperLines' // Helper lines hook for snap-to-grid functionality
@@ -1609,6 +1609,37 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
     refetchOnMount: true,
     refetchOnReconnect: true,
   })
+
+  // Retry failed canvas node saves when conversation loads or comes back online
+  useEffect(() => {
+    if (!conversationId) return
+    
+    // Retry immediately when conversation loads
+    retryFailedSaves(conversationId)
+    
+    // Retry when coming back online
+    const handleOnline = () => {
+      console.log('🎨 Network back online, retrying failed saves')
+      retryFailedSaves(conversationId)
+    }
+    
+    window.addEventListener('online', handleOnline)
+    
+    return () => {
+      window.removeEventListener('online', handleOnline)
+    }
+  }, [conversationId])
+
+  // Retry failed saves after canvas nodes are successfully loaded
+  useEffect(() => {
+    if (conversationId && savedCanvasNodes.length >= 0) {
+      // Small delay to ensure save operations have completed
+      const timer = setTimeout(() => {
+        retryFailedSaves(conversationId)
+      }, 1000)
+      return () => clearTimeout(timer)
+    }
+  }, [conversationId, savedCanvasNodes])
 
   // Check if board has flashcards - check messages for isFlashcard metadata
   const hasFlashcardsInBoard = useMemo(() => {

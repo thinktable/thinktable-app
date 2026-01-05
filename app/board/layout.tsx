@@ -1,4 +1,5 @@
 // Main board layout with sidebar structure
+import React from 'react'
 import AppSidebar from '@/components/app-sidebar'
 import { SidebarContextProvider } from '@/components/sidebar-context'
 

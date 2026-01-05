@@ -3,6 +3,7 @@
 import { useRef, useState, type PointerEvent } from 'react'; // React hooks for state and refs
 import { useReactFlow, type Edge, type ReactFlowInstance } from 'reactflow'; // React Flow hooks and types
 import { createClient } from '@/lib/supabase/client'; // Supabase client for database operations
+import { generateUUID } from '@/lib/utils'; // UUID generation utility (compatible with all browsers)
 
 import { pathOptions, pointsToPath } from './path'; // Path generation utilities
 import type { Points } from './types'; // Points type definition
@@ -72,6 +73,112 @@ function processPoints(
     height, // Drawing height
     data: { points: flowPoints, initialSize: { width, height } }, // Node data with normalized points
   };
+}
+
+// Store failed save in localStorage for retry later
+// node: Freehand node that failed to save
+// conversationId: Conversation/board ID
+function storeFailedSave(node: FreehandNodeType, conversationId: string) {
+  try {
+    const key = `thinktable-failed-canvas-saves-${conversationId}`
+    const failed = JSON.parse(localStorage.getItem(key) || '[]')
+    failed.push({
+      node,
+      conversationId,
+      timestamp: Date.now(),
+    })
+    // Keep only last 50 failed saves to avoid localStorage bloat
+    const trimmed = failed.slice(-50)
+    localStorage.setItem(key, JSON.stringify(trimmed))
+    console.log('🎨 Stored failed save for retry:', node.id)
+  } catch (error) {
+    console.error('🎨 Error storing failed save:', error)
+  }
+}
+
+// Remove successful save from failed saves list
+// nodeId: ID of the node that was successfully saved
+function removeFailedSave(nodeId: string) {
+  try {
+    // Try to find and remove from any conversation's failed saves
+    const keys = Object.keys(localStorage).filter(key => key.startsWith('thinktable-failed-canvas-saves-'))
+    for (const key of keys) {
+      const failed = JSON.parse(localStorage.getItem(key) || '[]')
+      const filtered = failed.filter((item: any) => item.node.id !== nodeId)
+      if (filtered.length !== failed.length) {
+        localStorage.setItem(key, JSON.stringify(filtered))
+        console.log('🎨 Removed successful save from failed list:', nodeId)
+      }
+    }
+  } catch (error) {
+    console.error('🎨 Error removing failed save:', error)
+  }
+}
+
+// Retry failed saves for a conversation
+// conversationId: Conversation/board ID to retry saves for
+export async function retryFailedSaves(conversationId: string) {
+  try {
+    const key = `thinktable-failed-canvas-saves-${conversationId}`
+    const failed = JSON.parse(localStorage.getItem(key) || '[]')
+    if (failed.length === 0) return
+
+    console.log(`🎨 Retrying ${failed.length} failed canvas saves for conversation:`, conversationId)
+    
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    
+    if (!user) {
+      console.warn('🎨 Cannot retry saves: user not authenticated')
+      return
+    }
+
+    const successful: string[] = []
+    const stillFailed: any[] = []
+
+    for (const item of failed) {
+      try {
+        const { error } = await supabase
+          .from('canvas_nodes')
+          .insert({
+            id: item.node.id,
+            conversation_id: item.conversationId,
+            user_id: user.id,
+            node_type: 'freehand',
+            position_x: item.node.position.x,
+            position_y: item.node.position.y,
+            width: item.node.width,
+            height: item.node.height,
+            data: item.node.data,
+          })
+
+        if (error) {
+          console.error('🎨 Still failed to save:', item.node.id, error)
+          stillFailed.push(item)
+        } else {
+          console.log('🎨 ✅ Retry successful:', item.node.id)
+          successful.push(item.node.id)
+        }
+      } catch (error) {
+        console.error('🎨 Error retrying save:', item.node.id, error)
+        stillFailed.push(item)
+      }
+    }
+
+    // Update localStorage with remaining failed saves
+    if (stillFailed.length > 0) {
+      localStorage.setItem(key, JSON.stringify(stillFailed))
+    } else {
+      localStorage.removeItem(key)
+    }
+
+    // Remove successful saves from all failed lists
+    successful.forEach(id => removeFailedSave(id))
+
+    console.log(`🎨 Retry complete: ${successful.length} successful, ${stillFailed.length} still failed`)
+  } catch (error) {
+    console.error('🎨 Error retrying failed saves:', error)
+  }
 }
 
 // Freehand component - overlay that captures drawing strokes
@@ -158,9 +265,12 @@ export function Freehand({ conversationId, onBeforeCreate }: { conversationId?: 
     // Process points to get node data
     const nodeData = processPoints(finalPoints, screenToFlowPosition)
     
+    // Generate unique node ID (compatible with all browsers including older Safari)
+    const nodeId = generateUUID()
+    
     // Debug: Log node creation
     console.log('🎨 Creating freehand node:', {
-      id: crypto.randomUUID(),
+      id: nodeId,
       pointCount: finalPoints.length,
       nodeData: {
         position: nodeData.position,
@@ -177,7 +287,7 @@ export function Freehand({ conversationId, onBeforeCreate }: { conversationId?: 
     // Note: reactflow v11 requires width/height in style, not as direct properties
     // v12+ (@xyflow/react) uses direct properties but we're on v11
     const newNode: FreehandNodeType = {
-      id: crypto.randomUUID(), // Generate unique node ID
+      id: nodeId, // Generate unique node ID (compatible with all browsers)
       type: 'freehand', // Set node type
       position: nodeData.position, // Node position in flow coordinates
       width: nodeData.width, // Node width (for v12+ compatibility)
@@ -209,17 +319,27 @@ export function Freehand({ conversationId, onBeforeCreate }: { conversationId?: 
     
     // Save freehand node to database if conversationId is available
     if (conversationId) {
-      const saveNodeToDatabase = async () => {
+      const saveNodeToDatabase = async (retryCount = 0, maxRetries = 3) => {
         try {
           const supabase = createClient() // Create Supabase client
-          const { data: { user } } = await supabase.auth.getUser() // Get current user
+          const { data: { user }, error: authError } = await supabase.auth.getUser() // Get current user
+          
+          if (authError) {
+            console.error('🎨 Auth error when saving freehand node:', authError)
+            // Store failed save for retry later
+            storeFailedSave(newNode, conversationId)
+            return
+          }
+          
           if (!user) {
             console.warn('🎨 Cannot save freehand node: user not authenticated')
+            // Store failed save for retry later
+            storeFailedSave(newNode, conversationId)
             return
           }
 
           // Save node to canvas_nodes table
-          const { error } = await supabase
+          const { error, data } = await supabase
             .from('canvas_nodes')
             .insert({
               id: newNode.id, // Use same ID as React Flow node
@@ -232,14 +352,54 @@ export function Freehand({ conversationId, onBeforeCreate }: { conversationId?: 
               height: newNode.height, // Node height
               data: newNode.data, // Node data (points array, initialSize, etc.)
             })
+            .select()
+            .single()
 
           if (error) {
-            console.error('🎨 Error saving freehand node to database:', error)
+            console.error('🎨 Error saving freehand node to database:', error, {
+              code: error.code,
+              message: error.message,
+              details: error.details,
+              hint: error.hint,
+            })
+            
+            // Retry on network errors or temporary failures
+            if (retryCount < maxRetries && (
+              error.code === 'PGRST116' || // Network error
+              error.message?.includes('fetch') || // Network fetch error
+              error.message?.includes('network') || // Network error
+              error.message?.includes('timeout') || // Timeout error
+              !navigator.onLine // Offline
+            )) {
+              const delay = Math.min(1000 * Math.pow(2, retryCount), 5000) // Exponential backoff, max 5s
+              console.log(`🎨 Retrying save in ${delay}ms (attempt ${retryCount + 1}/${maxRetries})`)
+              setTimeout(() => saveNodeToDatabase(retryCount + 1, maxRetries), delay)
+            } else {
+              // Store failed save for retry later
+              storeFailedSave(newNode, conversationId)
+            }
           } else {
-            console.log('🎨 ✅ Saved freehand node to database:', newNode.id)
+            console.log('🎨 ✅ Saved freehand node to database:', newNode.id, data)
+            // Remove from failed saves if it was there
+            removeFailedSave(newNode.id)
           }
-        } catch (error) {
+        } catch (error: any) {
           console.error('🎨 Error saving freehand node:', error)
+          
+          // Retry on network errors
+          if (retryCount < maxRetries && (
+            error?.message?.includes('fetch') ||
+            error?.message?.includes('network') ||
+            error?.message?.includes('timeout') ||
+            !navigator.onLine
+          )) {
+            const delay = Math.min(1000 * Math.pow(2, retryCount), 5000)
+            console.log(`🎨 Retrying save in ${delay}ms (attempt ${retryCount + 1}/${maxRetries})`)
+            setTimeout(() => saveNodeToDatabase(retryCount + 1, maxRetries), delay)
+          } else {
+            // Store failed save for retry later
+            storeFailedSave(newNode, conversationId)
+          }
         }
       }
       
