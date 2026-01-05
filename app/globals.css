@@ -266,19 +266,11 @@ span[data-added="true"] {
     color: #e5e7eb; /* gray-200 - very light text for dark mode */
   }
 
-  /* Paragraphs - proper spacing with extra space between ideas (Claude-style) */
+  /* Paragraphs - same line spacing as wrapped text (no extra margins) */
   .prose p {
-    margin-top: 1.5em;
-    margin-bottom: 1.5em;
-    line-height: 1.75;
-  }
-
-  .prose p:first-child {
     margin-top: 0;
-  }
-
-  .prose p:last-child {
     margin-bottom: 0;
+    line-height: 1.75;
   }
 
   /* Extra spacing for paragraphs that look like section breaks or major ideas */

@@ -82,8 +82,16 @@ export function usePlaceholderManager(
 
   // Helper function to get handle position based on handle ID and node dimensions
   const getHandlePosition = useCallback((node: Node, handleId: string): { x: number; y: number } => {
-    const width = getNodeWidth(node);
-    const height = getNodeHeight(node);
+    let width = getNodeWidth(node);
+    let height = getNodeHeight(node);
+    
+    // For placeholder nodes, use fixed dimensions for handle calculations
+    // Even though placeholder uses auto height, we need a fixed value for positioning
+    if (node.type === 'placeholder') {
+      width = node.width || 200;
+      height = node.height || 60; // Minimal height for empty note placeholder
+    }
+    
     const pos = node.position;
 
     // Calculate handle positions based on handle ID
@@ -105,19 +113,20 @@ export function usePlaceholderManager(
 
   // Helper function to find the closest handles between two nodes
   const findClosestHandles = useCallback((sourceNode: Node, targetNode: Node): { sourceHandle: string; targetHandle: string } => {
-    // For placeholder nodes, use fixed dimensions if not set
-    const sourceWidth = sourceNode.type === 'placeholder' 
-      ? (sourceNode.width || 160) 
-      : getNodeWidth(sourceNode);
-    const sourceHeight = sourceNode.type === 'placeholder'
-      ? (sourceNode.height || 40)
-      : getNodeHeight(sourceNode);
-    const targetWidth = targetNode.type === 'placeholder'
-      ? (targetNode.width || 160)
-      : getNodeWidth(targetNode);
-    const targetHeight = targetNode.type === 'placeholder'
-      ? (targetNode.height || 40)
-      : getNodeHeight(targetNode);
+      // For placeholder nodes, use fixed dimensions if not set
+      // Placeholder uses auto height but we need fixed values for calculations
+      const sourceWidth = sourceNode.type === 'placeholder' 
+        ? (sourceNode.width || 200) 
+        : getNodeWidth(sourceNode);
+      const sourceHeight = sourceNode.type === 'placeholder'
+        ? (sourceNode.height || 60) // Minimal height for empty note placeholder
+        : getNodeHeight(sourceNode);
+      const targetWidth = targetNode.type === 'placeholder'
+        ? (targetNode.width || 200)
+        : getNodeWidth(targetNode);
+      const targetHeight = targetNode.type === 'placeholder'
+        ? (targetNode.height || 60) // Minimal height for empty note placeholder
+        : getNodeHeight(targetNode);
 
     // Calculate all handle positions for source node
     const sourceHandles = {
@@ -290,8 +299,8 @@ export function usePlaceholderManager(
           id: placeholderId,
           position: tempPositionFromStoredHandle,
           type: 'placeholder',
-          width: 160, // Placeholder width
-          height: 40, // Placeholder height
+          width: 200, // Placeholder width (matches note panel minWidth)
+          height: 60, // Minimal height for empty note placeholder
         };
         
         // Find closest handles between target node and placeholder
@@ -336,8 +345,8 @@ export function usePlaceholderManager(
           id: placeholderId,
           position: placeholderPosition,
           type: 'placeholder',
-          width: 160, // Placeholder width (matches PlaceholderNode component)
-          height: 40, // Placeholder height (matches PlaceholderNode component)
+          width: 200, // Placeholder width (matches note panel minWidth)
+          height: 60, // Minimal height for empty note placeholder
         };
         
         // Find closest handles between target node and placeholder
@@ -382,8 +391,8 @@ export function usePlaceholderManager(
         id: placeholderId,
         position: placeholderPosition,
         type: 'placeholder',
-        width: 160, // Placeholder width (matches PlaceholderNode component)
-        height: 40, // Placeholder height (matches PlaceholderNode component)
+        width: 200, // Placeholder width (matches note panel minWidth)
+        height: 60, // Minimal height for empty note placeholder (matches collapsed note behavior)
         data: { 
           label: '+',
           targetNodeId: targetNode.id, // Store current target node ID for reference

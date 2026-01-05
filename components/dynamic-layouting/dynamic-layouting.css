@@ -7,8 +7,8 @@
 
 /* Base node styling */
 .react-flow__node {
-  width: 160px;
-  height: 40px;
+  width: 200px;
+  min-height: 60px;
   padding: 0;
 }
 

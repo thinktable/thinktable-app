@@ -1141,6 +1141,116 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
   const supabase = createClient() // Create Supabase client for creating notes
   const queryClient = useQueryClient() // Query client for invalidating queries
   const router = useRouter()
+  
+  // Handle placeholder click events - create note or flashcard at placeholder position
+  useEffect(() => {
+    const handleCreateNoteAtPlaceholder = async (event: CustomEvent<{ placeholderId: string }>) => {
+      const placeholderId = event.detail.placeholderId
+      const placeholderNode = nodes.find(n => n.id === placeholderId)
+      if (!placeholderNode || !conversationId) return
+      
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return
+        
+        // Create note at placeholder position
+        const { data: newMessage, error } = await supabase
+          .from('messages')
+          .insert({
+            conversation_id: conversationId,
+            user_id: user.id,
+            role: 'user',
+            content: '',
+            metadata: { 
+              isNote: true,
+              position: { x: placeholderNode.position.x, y: placeholderNode.position.y }
+            },
+          })
+          .select()
+          .single()
+        
+        if (error) {
+          console.error('Failed to create note at placeholder:', error)
+          return
+        }
+        
+        // Invalidate queries to refresh the board
+        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+        setTimeout(() => {
+          queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
+        }, 200)
+      } catch (error) {
+        console.error('Error creating note at placeholder:', error)
+      }
+    }
+    
+    const handleCreateFlashcardAtPlaceholder = async (event: CustomEvent<{ placeholderId: string }>) => {
+      const placeholderId = event.detail.placeholderId
+      const placeholderNode = nodes.find(n => n.id === placeholderId)
+      if (!placeholderNode || !conversationId) return
+      
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return
+        
+        // Create flashcard prompt at placeholder position
+        const { data: promptMessage, error: promptError } = await supabase
+          .from('messages')
+          .insert({
+            conversation_id: conversationId,
+            user_id: user.id,
+            role: 'user',
+            content: '',
+            metadata: { 
+              isFlashcard: true,
+              position: { x: placeholderNode.position.x, y: placeholderNode.position.y }
+            },
+          })
+          .select()
+          .single()
+        
+        if (promptError) {
+          console.error('Failed to create flashcard prompt at placeholder:', promptError)
+          return
+        }
+        
+        // Create flashcard response
+        const { data: responseMessage, error: responseError } = await supabase
+          .from('messages')
+          .insert({
+            conversation_id: conversationId,
+            user_id: user.id,
+            role: 'assistant',
+            content: '',
+          })
+          .select()
+          .single()
+        
+        if (responseError) {
+          console.error('Failed to create flashcard response at placeholder:', responseError)
+          return
+        }
+        
+        // Invalidate queries to refresh the board
+        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+        setTimeout(() => {
+          queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
+        }, 200)
+      } catch (error) {
+        console.error('Error creating flashcard at placeholder:', error)
+      }
+    }
+    
+    // Add event listeners
+    window.addEventListener('create-note-at-placeholder', handleCreateNoteAtPlaceholder as EventListener)
+    window.addEventListener('create-flashcard-at-placeholder', handleCreateFlashcardAtPlaceholder as EventListener)
+    
+    // Cleanup
+    return () => {
+      window.removeEventListener('create-note-at-placeholder', handleCreateNoteAtPlaceholder as EventListener)
+      window.removeEventListener('create-flashcard-at-placeholder', handleCreateFlashcardAtPlaceholder as EventListener)
+    }
+  }, [nodes, conversationId, supabase, queryClient])
 
   // Track selected node IDs for restoring selection after pane click (when zoom !== 100%)
   useEffect(() => {
