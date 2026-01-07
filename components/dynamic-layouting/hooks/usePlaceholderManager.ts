@@ -419,16 +419,32 @@ export function usePlaceholderManager(
       setNodes((prevNodes) => {
         const existingPlaceholderInPrev = prevNodes.find((n) => n.id === placeholderId);
         if (existingPlaceholderInPrev && storedOffset) {
-          // If we have a stored offset, we're restoring position after drag
-          // Use the calculated position from stored offset to restore relative position
-          return prevNodes.map((n) =>
-            n.id === placeholderId 
-              ? {
-                  ...placeholderNode,
-                  position: placeholderPosition, // Use calculated position from stored offset
-                }
-              : n
-          );
+          // If we have a stored offset, check if target node changed
+          const previousTargetNodeId = existingPlaceholderInPrev.data?.targetNodeId;
+          const targetNodeChanged = previousTargetNodeId !== targetNode.id;
+          
+          if (targetNodeChanged) {
+            // Target node changed, recalculate position from stored offset relative to new target
+            return prevNodes.map((n) =>
+              n.id === placeholderId 
+                ? {
+                    ...placeholderNode,
+                    position: placeholderPosition, // Use calculated position from stored offset
+                  }
+                : n
+            );
+          } else {
+            // Target node hasn't changed, preserve current position to avoid shift after drag
+            // Only update other properties (like data.targetNodeId) but keep the exact position
+            return prevNodes.map((n) =>
+              n.id === placeholderId 
+                ? {
+                    ...placeholderNode,
+                    position: existingPlaceholderInPrev.position, // Preserve current position to prevent shift
+                  }
+                : n
+            );
+          }
         } else if (existingPlaceholderInPrev) {
           // No stored offset, just update other properties but keep current position
           return prevNodes.map((n) =>
