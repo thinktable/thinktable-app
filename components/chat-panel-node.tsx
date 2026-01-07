@@ -5314,55 +5314,72 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         </div>
       )}
       
-      {/* Resize control toolbar island - positioned at bottom right, separate from main toolbar */}
+      {/* Resize control toolbar island - positioned at bottom right, in line with left toolbar */}
       {/* Uses NodeResizeControl internally to enable drag-to-resize with aspect ratio lock */}
       {/* Only show for note panels */}
       {selected && isNote && (
         <div 
-          className="absolute right-0 flex items-center bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 z-50"
+          className="absolute right-0 flex items-center gap-1 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 z-50 pointer-events-auto overflow-visible"
           style={{
             bottom: '-44px', // Position below the panel, aligned with left toolbar
           }}
+          onClick={(e) => e.stopPropagation()} // Prevent clicks from propagating to panel
         >
           {/* Custom resize control - wraps NodeResizeControl for drag-to-resize functionality */}
-          <NodeResizeControl
-            style={{
-              background: 'transparent',
-              border: 'none',
-              width: '28px',
-              height: '28px',
-              cursor: 'nwse-resize',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-            minWidth={200}
-            minHeight={0}
-            // Don't use keepAspectRatio - we calculate height based on text's aspect ratio in handleResize
-            keepAspectRatio={false}
-            onResize={handleResize}
-            onResizeEnd={handleResizeEnd}
-          >
-            {/* Custom resize icon (diagonal arrows) matching example from React Flow docs */}
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              strokeWidth="2"
-              stroke="currentColor"
-              fill="none"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="text-gray-600 dark:text-gray-300"
+          {/* Use relative positioning to contain the NodeResizeControl */}
+          <div className="relative h-7 w-7 flex items-center justify-center">
+            <NodeResizeControl
+              className="!relative !top-auto !left-auto !right-auto !bottom-auto !m-0"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                width: '100%',
+                height: '100%',
+                minWidth: '28px',
+                minHeight: '28px',
+                maxWidth: '28px',
+                maxHeight: '28px',
+                cursor: 'nwse-resize',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                position: 'relative',
+                margin: 0,
+                padding: 0,
+              }}
+              minWidth={200}
+              minHeight={0}
+              // Don't use keepAspectRatio - we calculate height based on text's aspect ratio in handleResize
+              keepAspectRatio={false}
+              onResize={handleResize}
+              onResizeEnd={handleResizeEnd}
             >
-              <path stroke="none" d="M0 0h24v24H0z" fill="none" />
-              <polyline points="16 20 20 20 20 16" />
-              <line x1="14" y1="14" x2="20" y2="20" />
-              <polyline points="8 4 4 4 4 8" />
-              <line x1="4" y1="4" x2="10" y2="10" />
-            </svg>
-          </NodeResizeControl>
+              {/* Custom resize icon (diagonal arrows) matching example from React Flow docs */}
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                strokeWidth="2"
+                stroke="currentColor"
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="text-gray-600 dark:text-gray-300 flex-shrink-0"
+                style={{
+                  display: 'block',
+                  marginLeft: '27px',
+                  marginTop: '27px',
+                }}
+              >
+                <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+                <polyline points="16 20 20 20 20 16" />
+                <line x1="14" y1="14" x2="20" y2="20" />
+                <polyline points="8 4 4 4 4 8" />
+                <line x1="4" y1="4" x2="10" y2="10" />
+              </svg>
+            </NodeResizeControl>
+          </div>
         </div>
       )}
     </div>
