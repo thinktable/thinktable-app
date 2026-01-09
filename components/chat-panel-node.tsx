@@ -746,22 +746,104 @@ async function fetchStudySets(): Promise<Array<{ id: string; name: string }>> {
   }
 }
 
+// Hook to check if flashcard tags are loaded and get tag IDs
+// Uses React Query to ensure study sets are cached and ready
+function useFlashcardTagsLoaded(responseMessageId: string | undefined): { isReady: boolean; tagIds: string[] } {
+  const supabase = createClient()
+  const [taggedStudySetIds, setTaggedStudySetIds] = useState<string[]>([])
+  const [messageLoaded, setMessageLoaded] = useState(false)
+  
+  // Use React Query for study sets (same as TagBoxes) to ensure cache is ready
+  const { data: studySets = [], isLoading: studySetsLoading } = useQuery({
+    queryKey: ['studySets'],
+    queryFn: fetchStudySets,
+  })
+
+  // Fetch message metadata to get tag IDs
+  useEffect(() => {
+    if (!responseMessageId) {
+      setMessageLoaded(true)
+      return
+    }
+
+    const fetchMessage = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) {
+          setMessageLoaded(true)
+          return
+        }
+
+        const { data: message, error } = await supabase
+          .from('messages')
+          .select('metadata')
+          .eq('id', responseMessageId)
+          .single()
+
+        if (error) {
+          if (error.code !== 'PGRST116' && error.message !== 'JSON object requested, multiple (or no) rows returned') {
+            console.error('Error fetching message metadata:', error)
+          }
+          setMessageLoaded(true)
+          return
+        }
+
+        const metadata = (message?.metadata as Record<string, any>) || {}
+        const studySetIds = (metadata.studySetIds || []) as string[]
+        setTaggedStudySetIds(studySetIds)
+        setMessageLoaded(true)
+      } catch (error) {
+        if (error instanceof Error && !error.message.includes('PGRST')) {
+          console.error('Error fetching message metadata:', error)
+        }
+        setMessageLoaded(true)
+      }
+    }
+
+    fetchMessage()
+  }, [responseMessageId, supabase])
+
+  // Return true only when:
+  // 1. Message is loaded (or no message ID)
+  // 2. Study sets are loaded (or no tags)
+  // 3. If there are tags, verify all have names in study sets
+  const isReady = messageLoaded && !studySetsLoading && (
+    taggedStudySetIds.length === 0 || 
+    taggedStudySetIds.every(id => studySets.some(s => s.id === id))
+  )
+
+  return { isReady, tagIds: taggedStudySetIds }
+}
+
 // Tag boxes component - displays study set tags for a flashcard
-function TagBoxes({ responseMessageId }: { responseMessageId: string }) {
+function TagBoxes({ responseMessageId, initialTagIds }: { responseMessageId: string; initialTagIds?: string[] }) {
   const supabase = createClient()
   const { selectedTag, setSelectedTag } = useReactFlowContext() // Get selected tag state for filtering
-  const [taggedStudySetIds, setTaggedStudySetIds] = useState<string[]>([])
+  const [taggedStudySetIds, setTaggedStudySetIds] = useState<string[]>(initialTagIds || [])
   const [studySetNames, setStudySetNames] = useState<Map<string, string>>(new Map())
+  const [hasInitialLoad, setHasInitialLoad] = useState(!!initialTagIds) // If initialTagIds provided, skip initial fetch
 
-  // Fetch current study set IDs from message metadata
+  // Update tag IDs when initialTagIds prop changes
+  useEffect(() => {
+    if (initialTagIds) {
+      setTaggedStudySetIds(initialTagIds)
+      setHasInitialLoad(true)
+    }
+  }, [initialTagIds])
+
+  // Fetch current study set IDs from message metadata (only if not provided initially)
   const fetchTaggedStudySets = useCallback(async () => {
-    if (!responseMessageId) return
+    if (!responseMessageId) {
+      setHasInitialLoad(true)
+      return
+    }
 
     try {
       // Check if user is authenticated first (required for RLS)
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) {
         // Not authenticated - can't fetch message metadata (expected for public homepage boards)
+        setHasInitialLoad(true)
         return
       }
 
@@ -777,23 +859,29 @@ function TagBoxes({ responseMessageId }: { responseMessageId: string }) {
         if (error.code !== 'PGRST116' && error.message !== 'JSON object requested, multiple (or no) rows returned') {
         console.error('Error fetching message metadata:', error)
         }
+        setHasInitialLoad(true)
         return
       }
 
       const metadata = (message?.metadata as Record<string, any>) || {}
       const studySetIds = (metadata.studySetIds || []) as string[]
       setTaggedStudySetIds(studySetIds)
+      setHasInitialLoad(true)
     } catch (error) {
       // Silently handle errors (expected for public boards)
       // Only log if it's an unexpected error type
       if (error instanceof Error && !error.message.includes('PGRST')) {
       console.error('Error fetching tagged study sets:', error)
       }
+      setHasInitialLoad(true)
     }
   }, [responseMessageId, supabase])
 
   useEffect(() => {
-    fetchTaggedStudySets()
+    // Skip initial fetch if tag IDs were provided
+    if (!initialTagIds) {
+      fetchTaggedStudySets()
+    }
 
     // Subscribe to message updates to refresh tags
     const channel = supabase
@@ -824,57 +912,75 @@ function TagBoxes({ responseMessageId }: { responseMessageId: string }) {
       supabase.removeChannel(channel)
       window.removeEventListener('flashcard-tagged', handleTagged as EventListener)
     }
-  }, [responseMessageId, supabase, fetchTaggedStudySets])
+  }, [responseMessageId, supabase, fetchTaggedStudySets, initialTagIds])
 
-  // Fetch study set names for the tagged IDs
+  // Fetch study sets using React Query (same cache as TagButton for instant access)
+  const { data: studySets = [] } = useQuery({
+    queryKey: ['studySets'],
+    queryFn: fetchStudySets,
+  })
+
+  // Update study set names map only when content actually changes
+  // Use ref to track previous key and avoid infinite loops
+  const prevMapKeyRef = useRef<string>('')
+  
   useEffect(() => {
-    const fetchStudySetNames = async () => {
-      if (taggedStudySetIds.length === 0) {
-        setStudySetNames(new Map())
-        return
-      }
+    // Create stable key from current values
+    const taggedIdsKey = taggedStudySetIds.join(',')
+    const studySetsKey = JSON.stringify(studySets.map(s => ({ id: s.id, name: s.name })).sort((a, b) => a.id.localeCompare(b.id)))
+    const mapKey = `${taggedIdsKey}|${studySetsKey}`
+    
+    // Skip if key hasn't changed (content is the same)
+    if (mapKey === prevMapKeyRef.current) {
+      return
+    }
+    
+    prevMapKeyRef.current = mapKey
 
-      try {
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) return
-
-        const { data: profile, error } = await supabase
-          .from('profiles')
-          .select('metadata')
-          .eq('id', user.id)
-          .single()
-
-        if (error) {
-          console.error('Error fetching profile:', error)
-          return
-        }
-
-        const studySets = ((profile?.metadata as Record<string, any>)?.studySets || []) as Array<{ id: string; name: string }>
-        const namesMap = new Map<string, string>()
-        
-        taggedStudySetIds.forEach((id) => {
-          const studySet = studySets.find((s) => s.id === id)
-          if (studySet) {
-            namesMap.set(id, studySet.name)
-          }
-        })
-
-        setStudySetNames(namesMap)
-      } catch (error) {
-        console.error('Error fetching study set names:', error)
-      }
+    if (taggedStudySetIds.length === 0) {
+      setStudySetNames(prev => prev.size === 0 ? prev : new Map())
+      return
     }
 
-    fetchStudySetNames()
-  }, [taggedStudySetIds, supabase])
+    const namesMap = new Map<string, string>()
+    taggedStudySetIds.forEach((id) => {
+      const studySet = studySets.find((s) => s.id === id)
+      if (studySet) {
+        namesMap.set(id, studySet.name)
+      }
+    })
 
-  if (taggedStudySetIds.length === 0) return null
+    setStudySetNames(prev => {
+      // Compare to avoid unnecessary updates
+      if (prev.size !== namesMap.size) {
+        return namesMap
+      }
+      for (const [id, name] of namesMap) {
+        if (prev.get(id) !== name) {
+          return namesMap
+        }
+      }
+      return prev // No change
+    })
+    // Dependencies: we check the key inside, so we need the arrays to be in scope
+    // but we only run when the key actually changes (checked via ref)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taggedStudySetIds, studySets])
 
+  // Only return null after initial load confirms there are no tags
+  if (hasInitialLoad && taggedStudySetIds.length === 0) return null
+
+  // Filter to only show tags that have names loaded
+  const tagsWithNames = taggedStudySetIds.filter(id => studySetNames.has(id))
+  
+  // Don't show anything if no tags have names yet
+  if (tagsWithNames.length === 0) return null
+
+  // Show container with tags that have names
   return (
     <div className="flex items-center gap-1.5 flex-wrap">
-      {taggedStudySetIds.map((studySetId) => {
-        const name = studySetNames.get(studySetId)
-        if (!name) return null // Don't show if name not found yet
+      {tagsWithNames.map((studySetId) => {
+        const name = studySetNames.get(studySetId)!
 
         const isSelected = selectedTag === studySetId
 
@@ -2408,6 +2514,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
 
   // Determine if this is a flashcard - move definition up to use in hooks
   const isFlashcard = promptMessage?.metadata?.isFlashcard === true
+  
+  // Check if flashcard tags are loaded (for controlling toolbar visibility)
+  const { isReady: tagsLoaded, tagIds } = useFlashcardTagsLoaded(isFlashcard && responseMessage?.id ? responseMessage.id : undefined)
+  
   // Determine if this is a note (simple note node, not a full chat panel)
   // Check metadata.isNote flag, or if it's an empty user message with no response
   const isNote = promptMessage?.metadata?.isNote === true || 
@@ -5244,9 +5354,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       {/* Rendered inside the panel div so it naturally scales as a map object */}
       {selected && (
         <div 
-          className="absolute left-0 flex gap-1 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 z-50 pointer-events-auto"
+          className="absolute left-0 flex items-start gap-1 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 z-50 pointer-events-auto"
           style={{
-            bottom: '-44px', // Position below the panel
+            top: '100%', // Position below the panel
+            marginTop: '8px', // Gap between panel and toolbar (matches note resize toolbar gap)
           }}
           onClick={(e) => e.stopPropagation()} // Prevent clicks from propagating to panel
         >
@@ -5307,9 +5418,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             </DropdownMenuContent>
           </DropdownMenu>
           
-          {/* Tag to study set button - only for flashcards with response message */}
-          {isFlashcard && responseMessage?.id && (
-            <TagButton responseMessageId={responseMessage.id} />
+          {/* Tag to study set button - only for flashcards with response message, wait for tags to load */}
+          {isFlashcard && responseMessage?.id && tagsLoaded && (
+            <>
+              <TagButton responseMessageId={responseMessage.id} />
+              <TagBoxes responseMessageId={responseMessage.id} initialTagIds={tagIds} />
+            </>
           )}
         </div>
       )}
