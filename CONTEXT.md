@@ -53,6 +53,9 @@ Thinktable is a spatial mind-map / board product that:
 
 ## Implementation notes
 
-- Board UI top bar: `components/sticky-prompt-panel.tsx` → `components/editor-toolbar.tsx`.
+- Board UI top bar: `components/sticky-prompt-panel.tsx` → logo + truncated board title + `components/editor-toolbar.tsx` (no bottom border; bar width = map column only).
+- Board nav: former left `AppSidebar` is a **rounded top-left hover popup** opened from the top-bar logo (`sidebar-context` open/scheduleClose).
+- Right **chat sidebar** (`components/chat-sidebar.tsx`): full-height column with prompt + return-to-bottom; **hidden by default**; toggled by brand logo beside the minimap/nav toggle (`isChatSidebarOpen`). When open, map + top edit bar shrink left.
+- Minimap + Linear/Free nav toggle sit on the **bottom-left** of the map; the **chat sidebar toggle logo** stays on the **bottom-right** of the map column.
 - Notion connect UI entry: top-bar Notion button (right section, near Share).
 - Local content paths stay unchanged when no Notion connection / node is unlinked.

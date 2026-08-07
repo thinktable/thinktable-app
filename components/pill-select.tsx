@@ -22,7 +22,7 @@ export function PillSelect({ options, value, onChange, className }: PillSelectPr
   return (
     <div
       className={cn(
-        'flex items-center gap-0.5 px-1 py-1 rounded-full bg-blue-50 dark:bg-[#2a2a3a] shadow-sm',
+        'flex items-center gap-0.5 px-1 py-1 rounded-full bg-gray-100 dark:bg-[#2a2a3a] shadow-sm',
         className
       )}
     >

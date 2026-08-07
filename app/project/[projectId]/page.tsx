@@ -1,8 +1,9 @@
-// Project page - shows React Flow map with board panels
+// Project page - map column + optional full-height right chat sidebar
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { ProjectFlow } from '@/components/project-flow'
 import { InputAreaWithStickyPrompt } from '@/components/input-area-with-sticky-prompt'
+import { ChatSidebar } from '@/components/chat-sidebar'
 import { EditorProvider } from '@/components/editor-context'
 import { ReactFlowContextProvider } from '@/components/react-flow-context'
 
@@ -36,15 +37,14 @@ export default async function ProjectPage({
   return (
     <EditorProvider>
       <ReactFlowContextProvider projectId={projectId}>
-        <div className="h-full relative">
-          {/* React Flow project map */}
-          <ProjectFlow projectId={projectId} />
-          
-          {/* Input box overlay at bottom with sticky prompt panel */}
-          <InputAreaWithStickyPrompt projectId={projectId} />
+        <div className="h-full flex">
+          <div className="flex-1 relative min-w-0 h-full">
+            <ProjectFlow projectId={projectId} />
+            <InputAreaWithStickyPrompt projectId={projectId} />
+          </div>
+          <ChatSidebar projectId={projectId} />
         </div>
       </ReactFlowContextProvider>
     </EditorProvider>
   )
 }
-

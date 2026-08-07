@@ -179,7 +179,7 @@ function ProjectFlowInner({ projectId }: { projectId?: string }) {
   const [isMinimapHidden, setIsMinimapHidden] = useState(false)
   const [isMinimapManuallyHidden, setIsMinimapManuallyHidden] = useState(false)
   const [minimapBottom, setMinimapBottom] = useState<number>(17) // Default position 2px higher
-  const [minimapRight, setMinimapRight] = useState<number>(15) // Dynamic right position to align with prompt box when jumped (default: 15px)
+  const [minimapLeft, setMinimapLeft] = useState<number>(15) // Dynamic left position — mirrored from former right-side minimap (default: 15px)
   const [isMinimapHovering, setIsMinimapHovering] = useState(false) // Track if mouse is hovering over minimap area
   const [isBottomGapHovering, setIsBottomGapHovering] = useState(false) // Track if hovering over bottom gap (shared with prompt pill)
   const wasAutoHiddenRef = useRef(false) // Track if minimap was auto-hidden (vs manually hidden while shrunken)
@@ -433,7 +433,7 @@ function ProjectFlowInner({ projectId }: { projectId?: string }) {
       if (!chatInputElement || !reactFlowElement) {
         // Fallback: use default position if elements not found
         setMinimapBottom(17) // Default position 2px higher
-        setMinimapRight(15)
+        setMinimapLeft(15)
         return
       }
 
@@ -441,7 +441,7 @@ function ProjectFlowInner({ projectId }: { projectId?: string }) {
       const promptBoxContainer = chatInputElement.closest('[class*="pointer-events-auto"]') as HTMLElement
       if (!promptBoxContainer) {
         setMinimapBottom(17) // Default position 2px higher
-        setMinimapRight(15)
+        setMinimapLeft(15)
         return
       }
 
@@ -449,46 +449,28 @@ function ProjectFlowInner({ projectId }: { projectId?: string }) {
       const promptBoxRect = promptBoxContainer.getBoundingClientRect()
       const reactFlowRect = reactFlowElement.getBoundingClientRect()
 
-      // Calculate prompt box right edge (relative to React Flow container)
-      const promptBoxRightEdge = promptBoxRect.right - reactFlowRect.left
+      // Prompt left edge relative to React Flow (mirrored from former right-edge logic)
+      const promptBoxLeftEdge = promptBoxRect.left - reactFlowRect.left
 
-      // Calculate what the minimap's left edge would be in its default position
-      // Default: 15px from right, minimap width is 179px
-      const reactFlowWidth = reactFlowElement.clientWidth
-      const defaultMinimapRight = 15
+      const defaultMinimapLeft = 15
       const minimapWidth = 179
-      const defaultMinimapLeftEdge = reactFlowWidth - defaultMinimapRight - minimapWidth
+      const defaultMinimapRightEdge = defaultMinimapLeft + minimapWidth
 
-      // Calculate gap between prompt box and default minimap position
-      const gap = defaultMinimapLeftEdge - promptBoxRightEdge
-
-      // Top bar right margin is 16px - use same gap threshold
+      const gap = promptBoxLeftEdge - defaultMinimapRightEdge
       const gapThreshold = 16
 
-      // If gap is less than threshold, move minimap and toggle up and right-align with prompt box
       if (gap < gapThreshold) {
-        // Calculate minimap bottom position based on prompt box height to maintain 16px gap
-        // Prompt box top edge in screen coordinates: promptBoxRect.top
-        // React Flow bottom in screen coordinates: reactFlowRect.bottom
-        // We want minimap bottom edge to be 16px above prompt box top
-        // CSS bottom value = distance from React Flow bottom to minimap bottom edge
-        // Minimap bottom edge should be at: promptBoxRect.top - gapAbovePrompt (in screen coordinates)
-        // So: CSS bottom = reactFlowRect.bottom - (promptBoxRect.top - gapAbovePrompt)
-        // Note: The minimap style uses minimapBottom - 12, so minimapBottom = CSS bottom + 12
-        const gapAbovePrompt = 0 // Gap between minimap bottom and prompt box top
+        const gapAbovePrompt = 0
         const cssBottom = reactFlowRect.bottom - promptBoxRect.top + gapAbovePrompt
-        const calculatedBottom = cssBottom + 12 // Add 12 because style subtracts it
-        // Ensure minimum bottom position (don't go below default of 17, which gives CSS bottom of 5px)
-        // Also ensure it's not too high (max reasonable value would be around 200px to keep minimap visible)
-        const minimapHeight = 134 // Minimap height for bounds checking
-        const maxReasonableBottom = reactFlowRect.height - minimapHeight + 12 // Keep minimap within viewport
+        const calculatedBottom = cssBottom + 12
+        const minimapHeight = 134
+        const maxReasonableBottom = reactFlowRect.height - minimapHeight + 12
         setMinimapBottom(Math.max(17, Math.min(calculatedBottom, maxReasonableBottom)))
-        // Calculate right position to align minimap's right edge with prompt box's right edge
-        const rightPosition = reactFlowWidth - promptBoxRightEdge
-        setMinimapRight(rightPosition)
+        const leftPosition = Math.max(0, promptBoxLeftEdge)
+        setMinimapLeft(leftPosition)
       } else {
-        setMinimapBottom(17) // Default position at bottom (2px higher)
-        setMinimapRight(15) // Reset to default right positioning (15px from React Flow)
+        setMinimapBottom(17)
+        setMinimapLeft(15)
       }
     }
 
@@ -1241,7 +1223,7 @@ function ProjectFlowInner({ projectId }: { projectId?: string }) {
         <Background variant={BackgroundVariant.Dots} gap={12} size={1} />
         {!isMinimapHidden && (
           <MiniMap
-            position="bottom-right"
+            position="bottom-left"
             nodeColor={(node) => {
               // Light grey by default, dark grey when selected
               return node.selected ? '#9ca3af' : '#e5e7eb' // Dark grey if selected, light grey otherwise
@@ -1260,7 +1242,7 @@ function ProjectFlowInner({ projectId }: { projectId?: string }) {
               overflow: 'hidden',
               cursor: 'pointer', // Indicate clickability
               bottom: `${minimapBottom - 12}px`, // 5px from bottom when at default (1px lower)
-              right: `${minimapRight}px`, // Right position - aligns with prompt box when jumped, defaults to 15px
+              left: `${minimapLeft}px`, // Left-anchored (mirrored from former right side)
             }}
           />
         )}
@@ -1287,7 +1269,7 @@ function ProjectFlowInner({ projectId }: { projectId?: string }) {
           )}
           style={{
             bottom: `${(minimapBottom - 12) - 4}px`, // Positioned just below minimap bottom edge
-            right: `${minimapRight + (179 - 48) / 2}px`, // Center horizontally under minimap (179px minimap width, 48px pill width)
+            left: `${minimapLeft + (179 - 48) / 2}px`, // Center horizontally under minimap (179px minimap width, 48px pill width)
           }}
           title={isMinimapHidden ? 'Show minimap' : 'Hide minimap'}
         />
@@ -1303,12 +1285,12 @@ function ProjectFlowInner({ projectId }: { projectId?: string }) {
             ? `${minimapBottom - 12 + 8}px` // At minimap position when hidden + small offset
             : `${minimapBottom - 12 + 160 + 4}px`, // Above minimap (160px height + 4px gap, reduced from 8px)
           // Right-align with minimap (which aligns with prompt box when jumped), moved left 16px
-          right: `${minimapRight + 16}px`, // Match minimap right position + 16px left offset (moved 1px left)
+          left: `${minimapLeft + 16}px`, // Match minimap left position + offset
         }}
       >
         <div
           className={cn(
-            "bg-blue-50 dark:bg-[#2a2a3a] rounded-lg px-1 py-0.5 flex items-center gap-1 relative",
+            "bg-gray-100 dark:bg-[#2a2a3a] rounded-lg px-1 py-0.5 flex items-center gap-1 relative",
             isMinimapHidden && "shadow-sm"
           )}
         >

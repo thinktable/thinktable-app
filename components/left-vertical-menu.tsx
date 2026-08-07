@@ -99,55 +99,36 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
     isHoveringRef.current = isHovering || isHoveringMenu || isHoveringPill
   }, [isHovering, isHoveringMenu, isHoveringPill])
 
-  // Calculate sidebar width to position menu - get actual sidebar right edge position relative to viewport (for fixed positioning)
-  const [sidebarRightEdge, setSidebarRightEdge] = useState(256) // Default expanded sidebar width (w-64 = 256px)
+  // Calculate left inset for the vertical tool menu (popup nav does not reserve layout width)
+  const [sidebarRightEdge, setSidebarRightEdge] = useState(0)
 
   useEffect(() => {
     // Only update after mount to prevent hydration mismatch
     if (!isMounted) return
 
     const updateSidebarRightEdge = () => {
-      // Find the actual sidebar element and get its right edge position relative to viewport (for fixed positioning)
-      const sidebarElement = document.querySelector('[class*="w-16"], [class*="w-64"]') as HTMLElement
+      // Prefer the floating nav popup when open; otherwise hug the left edge of the map
+      const sidebarElement = document.querySelector('[data-app-sidebar]') as HTMLElement | null
       if (sidebarElement) {
         const rect = sidebarElement.getBoundingClientRect()
-        // Use viewport-relative position (rect.right) for fixed positioning
         setSidebarRightEdge(rect.right)
       } else {
-        // Fallback: use class-based calculation (assume expanded by default)
-        setSidebarRightEdge(256)
+        setSidebarRightEdge(0) // Full-bleed map — menu sits at left padding
       }
     }
 
     updateSidebarRightEdge()
     window.addEventListener('resize', updateSidebarRightEdge)
 
-    // Watch for sidebar state changes
-    const sidebarElement = document.querySelector('[class*="w-16"], [class*="w-64"]') as HTMLElement
-    const sidebarObserver = sidebarElement ? new MutationObserver(() => {
+    // Watch for popup open/close via DOM mutations under body
+    const mutationObserver = new MutationObserver(() => {
       updateSidebarRightEdge()
-    }) : null
-
-    if (sidebarObserver && sidebarElement) {
-      sidebarObserver.observe(sidebarElement, {
-        attributes: true,
-        attributeFilter: ['class']
-      })
-    }
-
-    // Also use ResizeObserver for more accurate tracking
-    const resizeObserver = sidebarElement ? new ResizeObserver(() => {
-      updateSidebarRightEdge()
-    }) : null
-
-    if (resizeObserver && sidebarElement) {
-      resizeObserver.observe(sidebarElement)
-    }
+    })
+    mutationObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] })
 
     return () => {
       window.removeEventListener('resize', updateSidebarRightEdge)
-      if (sidebarObserver) sidebarObserver.disconnect()
-      if (resizeObserver) resizeObserver.disconnect()
+      mutationObserver.disconnect()
     }
   }, [isMounted])
 

@@ -24,6 +24,8 @@ import { ChatPanelNode } from './chat-panel-node'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useRef, useMemo, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
+import Image from 'next/image'
 import { useTheme } from '@/components/theme-provider'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -279,64 +281,30 @@ const edgeTypes = Object.freeze({
   placeholder: PlaceholderEdge, // Placeholder edge for dynamic layouting
 })
 
-// Return to bottom button - aligned to prompt box center with same gap as minimap when jumped
+// Return to bottom — portals into the right chat sidebar above the prompt
 function ReturnToBottomButton({ onClick, isVisible }: { onClick: () => void; isVisible: boolean }) {
-  const [position, setPosition] = useState({ left: '50%', bottom: '168px' })
-  const rafRef = useRef<number | null>(null)
+  const { isChatSidebarOpen } = useSidebarContext()
+  const [slot, setSlot] = useState<Element | null>(null)
 
   useEffect(() => {
-    const updatePosition = () => {
-      // Find prompt box to align with its center
-      const chatTextarea = document.querySelector('textarea[placeholder*="Ask"], textarea[placeholder*="Type"], textarea[placeholder*="message"]') as HTMLElement
-      const promptBox = chatTextarea?.closest('[class*="pointer-events-auto"]') as HTMLElement
-      const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
-
-      if (promptBox && reactFlowElement) {
-        const promptBoxRect = promptBox.getBoundingClientRect()
-        const reactFlowRect = reactFlowElement.getBoundingClientRect()
-
-        // Calculate prompt box center relative to React Flow container
-        const promptBoxCenterX = (promptBoxRect.left + promptBoxRect.right) / 2 - reactFlowRect.left
-
-        // Use transform to center the button (button is 40px wide, so -50% centers it)
-        const buttonLeft = promptBoxCenterX
-
-        // Position 16px above prompt box (same gap as minimap when jumped)
-        const promptBoxTop = promptBoxRect.top - reactFlowRect.top
-        const bottomFromReactFlow = reactFlowRect.height - promptBoxTop + 16
-
-        setPosition({
-          left: `${buttonLeft}px`,
-          bottom: `${bottomFromReactFlow}px`
-        })
-      }
+    if (!isChatSidebarOpen) {
+      setSlot(null)
+      return
     }
+    const find = () => setSlot(document.querySelector('[data-chat-return-slot]'))
+    find()
+    const id = window.setInterval(find, 200) // Slot mounts with chat sidebar
+    return () => window.clearInterval(id)
+  }, [isChatSidebarOpen])
 
-    // Use requestAnimationFrame loop for smooth tracking
-    const tick = () => {
-      updatePosition()
-      rafRef.current = requestAnimationFrame(tick)
-    }
+  if (!isChatSidebarOpen || !slot) return null // Lives inside chat column only
 
-    rafRef.current = requestAnimationFrame(tick)
-
-    return () => {
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current)
-      }
-    }
-  }, [])
-
-  return (
+  return createPortal(
     <div
-      className="absolute z-20"
       style={{
-        left: position.left,
-        bottom: position.bottom,
-        transform: 'translateX(-50%)', // Center the button on the calculated position
-        opacity: isVisible ? 1 : 0, // Fade in/out based on visibility
-        transition: 'opacity 0.3s ease-in-out', // Smooth fade animation
-        pointerEvents: isVisible ? 'auto' : 'none', // Disable interactions when hidden
+        opacity: isVisible ? 1 : 0,
+        transition: 'opacity 0.3s ease-in-out',
+        pointerEvents: isVisible ? 'auto' : 'none',
       }}
     >
       <Button
@@ -347,7 +315,8 @@ function ReturnToBottomButton({ onClick, isVisible }: { onClick: () => void; isV
       >
         <ArrowDown className="h-4 w-4 text-gray-600 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 transition-colors" />
       </Button>
-    </div>
+    </div>,
+    slot
   )
 }
 
@@ -1061,7 +1030,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
     if (boardStyle === 'grid') return BackgroundVariant.Lines // Grid pattern (both horizontal and vertical lines)
     return null // Default to none
   }, [boardStyle])
-  const { setIsMobileMode } = useSidebarContext()
+  const { setIsMobileMode, isChatSidebarOpen, toggleChatSidebar } = useSidebarContext()
   const originalPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map()) // Store original positions for Linear mode
   const isLinearModeRef = useRef(false) // Track if we're currently in Linear mode
 
@@ -1268,7 +1237,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
   const prevViewportWidthRef = useRef<number>(0) // Track previous viewport width to detect changes
   const [isAtBottom, setIsAtBottom] = useState(true) // Track if scrolled to bottom in linear mode
   const [minimapBottom, setMinimapBottom] = useState<number>(17) // Default position 2px higher
-  const [minimapRight, setMinimapRight] = useState<number>(15) // Dynamic right position to align with prompt box when jumped (default: 15px)
+  const [minimapLeft, setMinimapLeft] = useState<number>(15) // Dynamic left position — mirrored from former right-side minimap (default: 15px)
   const [minimapHoverLeft, setMinimapHoverLeft] = useState<number>(0) // Left position for hover zone to align with minimap left edge
   const [minimapPillCenter, setMinimapPillCenter] = useState<number>(0) // Center position for pill to center on minimap
   const [minimapPillBottom, setMinimapPillBottom] = useState<number>(8) // Bottom position for pill to center on minimap bottom edge
@@ -1732,7 +1701,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
   // Determine if menu should be shown - show if board has flashcards OR project has flashcards
   const shouldShowMenu = hasFlashcardsInBoard || hasFlashcardsInProject
 
-  // Handle responsive minimap positioning - move up when prompt box gets close (within 16px gap, same as top bar right margin)
+  // Handle responsive minimap positioning (left-anchored) — move up when prompt approaches from the right
   // This also affects toggle position even when minimap is hidden
   useEffect(() => {
     const checkMinimapPosition = () => {
@@ -1751,7 +1720,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
       if (!chatInputElement || !reactFlowElement) {
         // Fallback: use default position if elements not found
         setMinimapBottom(17) // Default position 2px higher
-        setMinimapRight(15)
+        setMinimapLeft(15)
         return
       }
 
@@ -1759,7 +1728,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
       const promptBoxContainer = chatInputElement.closest('[class*="pointer-events-auto"]') as HTMLElement
       if (!promptBoxContainer) {
         setMinimapBottom(17) // Default position 2px higher
-        setMinimapRight(15)
+        setMinimapLeft(15)
         return
       }
 
@@ -1777,46 +1746,33 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
       const promptBoxRect = promptBoxContainer.getBoundingClientRect()
       const reactFlowRect = reactFlowElement.getBoundingClientRect()
 
-      // Calculate prompt box right edge (relative to React Flow container)
-      const promptBoxRightEdge = promptBoxRect.right - reactFlowRect.left
+      // Prompt left edge relative to React Flow (mirrored from former right-edge logic)
+      const promptBoxLeftEdge = promptBoxRect.left - reactFlowRect.left
 
-      // Calculate what the minimap's left edge would be in its default position
-      // Default: 15px from right, minimap width is 179px
-      const reactFlowWidth = reactFlowElement.clientWidth
-      const defaultMinimapRight = 15
+      // Default left-anchored minimap right edge
+      const defaultMinimapLeft = 15
       const minimapWidth = 179
-      const defaultMinimapLeftEdge = reactFlowWidth - defaultMinimapRight - minimapWidth
+      const defaultMinimapRightEdge = defaultMinimapLeft + minimapWidth
 
-      // Calculate gap between prompt box and default minimap position
-      const gap = defaultMinimapLeftEdge - promptBoxRightEdge
+      // Gap between default minimap (on left) and prompt box approaching from the right
+      const gap = promptBoxLeftEdge - defaultMinimapRightEdge
 
-      // Top bar right margin is 16px - use same gap threshold
       const gapThreshold = 16
 
-      // If gap is less than threshold, move minimap and toggle up and right-align with prompt box
+      // If gap is less than threshold, move minimap/toggle up and left-align with prompt box
       if (gap < gapThreshold) {
-        // Calculate minimap bottom position based on prompt box height to maintain 16px gap
-        // Prompt box top edge in screen coordinates: promptBoxRect.top
-        // React Flow bottom in screen coordinates: reactFlowRect.bottom
-        // We want minimap bottom edge to be 16px above prompt box top
-        // CSS bottom value = distance from React Flow bottom to minimap bottom edge
-        // Minimap bottom edge should be at: promptBoxRect.top - gapAbovePrompt (in screen coordinates)
-        // So: CSS bottom = reactFlowRect.bottom - (promptBoxRect.top - gapAbovePrompt)
-        // Note: The minimap style uses minimapBottom - 12, so minimapBottom = CSS bottom + 12
         const gapAbovePrompt = 0 // Gap between minimap bottom and prompt box top
         const cssBottom = reactFlowRect.bottom - promptBoxRect.top + gapAbovePrompt
-        const calculatedBottom = cssBottom + 12 // Add 12 because style subtracts it
-        // Ensure minimum bottom position (don't go below default of 17, which gives CSS bottom of 5px)
-        // Also ensure it's not too high (max reasonable value would be around 200px to keep minimap visible)
-        const minimapHeight = 134 // Minimap height for bounds checking
-        const maxReasonableBottom = reactFlowRect.height - minimapHeight + 12 // Keep minimap within viewport
+        const calculatedBottom = cssBottom + 12 // style uses minimapBottom - 12
+        const minimapHeight = 134
+        const maxReasonableBottom = reactFlowRect.height - minimapHeight + 12
         setMinimapBottom(Math.max(17, Math.min(calculatedBottom, maxReasonableBottom)))
-        // Calculate right position to align minimap's right edge with prompt box's right edge
-        const rightPosition = reactFlowWidth - promptBoxRightEdge
-        setMinimapRight(rightPosition)
+        // Align minimap's left edge with prompt box's left edge
+        const leftPosition = Math.max(0, promptBoxLeftEdge)
+        setMinimapLeft(leftPosition)
       } else {
-        setMinimapBottom(17) // Default position at bottom (2px higher)
-        setMinimapRight(15) // Reset to default right positioning (15px from React Flow)
+        setMinimapBottom(17) // Default at bottom
+        setMinimapLeft(15) // Default 15px from left edge of React Flow
       }
     }
 
@@ -1890,21 +1846,13 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
       // Get React Flow rect first (needed for all calculations)
       const reactFlowRect = reactFlowElement.getBoundingClientRect()
 
-      // Calculate center position relative to board flow inner (React Flow container)
-      // Toggle is positioned at: right: minimapRight + 14px
-      // Toggle is same width as minimap (179px)
-      // Account for any padding on React Flow container
-      const reactFlowWidth = reactFlowElement.clientWidth
+      // Calculate center position relative to board flow (left-anchored nav toggle)
+      // Toggle is positioned at: left: minimapLeft + 14
       const reactFlowPaddingLeft = parseFloat(getComputedStyle(reactFlowElement).paddingLeft) || 0
-      const reactFlowPaddingRight = parseFloat(getComputedStyle(reactFlowElement).paddingRight) || 0
       const minimapWidth = 179
-      const toggleRightOffset = 14 // Toggle has 14px offset from minimap right position
-      // Toggle right edge is: reactFlowWidth - (minimapRight + 14) - paddingRight
-      // Toggle left edge is: toggle right - 179
-      // Toggle center is: toggle left + 179/2
-      const toggleRight = reactFlowWidth - minimapRight - toggleRightOffset - reactFlowPaddingRight
-      const toggleLeft = toggleRight - minimapWidth
-      const centerPosition = toggleLeft + minimapWidth / 2 + reactFlowPaddingLeft
+      const toggleLeftOffset = 14 // Align with minimap cluster on the left
+      const toggleLeft = minimapLeft + toggleLeftOffset + reactFlowPaddingLeft
+      const centerPosition = toggleLeft + minimapWidth / 2
       setMinimapPillCenter(centerPosition)
 
       // Get actual minimap position if available, otherwise calculate
@@ -1995,10 +1943,9 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
       } else {
         // Fallback calculation - calculate from container width
         // (Note: centerPosition already calculated above, stays the same)
-        const reactFlowWidth = reactFlowElement.clientWidth
         const minimapWidth = 179
-        // Calculate left position: container width - right offset - minimap width
-        const leftPosition = reactFlowWidth - minimapRight - minimapWidth
+        // Left-anchored minimap: hover zone starts at minimapLeft
+        const leftPosition = minimapLeft
         setMinimapHoverLeft(leftPosition)
         // When minimap is hidden, calculate bottom position
         // If minimap was jumped (minimapBottom > 17), center pill on prompt box top edge
@@ -2064,7 +2011,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
       if (reactFlowResizeObserver) reactFlowResizeObserver.disconnect()
       clearInterval(interval)
     }
-  }, [minimapRight, isMinimapHidden, minimapBottom])
+  }, [minimapLeft, isMinimapHidden, minimapBottom])
 
   // Auto-hide minimap when window shrinks below threshold, auto-show when expanded (if not manually closed while expanded)
   // Also triggers mobile mode for sidebar (sidebar hides, toggle moves to top bar)
@@ -6467,7 +6414,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
            style={{
              position: 'absolute',
              bottom: `${minimapBottom - 12}px`,
-             right: `${minimapRight}px`,
+             left: `${minimapLeft}px`,
              width: 179,
              height: 150,
              opacity: isScrollingToBottom ? 0 : (isMinimapHidden ? 0 : 1),
@@ -6476,7 +6423,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
            }}
          >
            <MiniMap
-             position="bottom-right"
+             position="bottom-left"
              // placeholder_attr removed
              nodeColor={(node) => {
                // Light grey by default, dark grey when selected
@@ -6499,7 +6446,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
                height: 150, // Minimap height
                position: 'absolute',
                bottom: 0, // Anchor to bottom of container
-               right: 0,
+               left: 0,
              }}
            />
          </div>
@@ -6915,14 +6862,14 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
           bottom: isMinimapHidden
             ? `${minimapBottom - 12 + 15}px` // At minimap position when hidden + small offset (3px higher when collapsed)
             : `${minimapBottom - 12 + 150 + 4}px`, // Above minimap (150px height + 4px gap)
-          // Right-align with minimap (which aligns with prompt box when jumped), moved left 14px
-          right: `${minimapRight + 14}px`, // Match minimap right position + 14px left offset
+          // Align with left-side minimap (no chat logo here — that stays on the right)
+          left: `${minimapLeft + 14}px`,
           transition: 'bottom 0.25s ease-in-out', // Smooth slide animation, slightly faster
         }}
       >
         <div
           className={cn(
-            "bg-blue-50 dark:bg-[#2a2a3a] rounded-lg pl-1 pt-1 pb-1 pr-4 flex items-center gap-1 relative w-[181px]",
+            "bg-gray-100 dark:bg-[#2a2a3a] rounded-lg pl-1 pt-1 pb-1 pr-4 flex items-center gap-1 relative w-[181px]",
             isMinimapHidden && "shadow-sm"
           )}
         >
@@ -7143,6 +7090,38 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
           </div>
         </div>
       </div>
+
+      {/* Brand logo — toggles right chat sidebar (stays on the map's right edge) */}
+      <button
+        type="button"
+        data-chat-sidebar-toggle
+        onClick={() => toggleChatSidebar()}
+        className={cn(
+          'absolute z-10 w-9 h-9 rounded-lg flex items-center justify-center transition-colors',
+          'bg-gray-100 dark:bg-[#2a2a3a] hover:bg-gray-200 dark:hover:bg-[#353545]',
+          'border border-transparent',
+          isChatSidebarOpen && 'ring-2 ring-gray-300 dark:ring-gray-600'
+        )}
+        style={{
+          // Same vertical band as Linear/Free toggle; pinned to the right of the map column
+          bottom: isMinimapHidden
+            ? `${minimapBottom - 12 + 15}px`
+            : `${minimapBottom - 12 + 150 + 4}px`,
+          right: '15px',
+          transition: 'bottom 0.25s ease-in-out',
+        }}
+        title={isChatSidebarOpen ? 'Hide chat' : 'Show chat'}
+        aria-label={isChatSidebarOpen ? 'Hide chat sidebar' : 'Show chat sidebar'}
+        aria-pressed={isChatSidebarOpen}
+      >
+        <Image
+          src="/thinktable-logo.svg"
+          alt="Chat"
+          width={22}
+          height={22}
+          className="h-[22px] w-[22px] dark:invert"
+        />
+      </button>
 
       {/* Context menu for minimap control */}
       {minimapContextMenuPosition && (

@@ -1,8 +1,9 @@
-// Board chat page - shows React Flow map with input box
+// Board chat page - map column + optional full-height right chat sidebar
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { BoardFlow } from '@/components/board-flow'
 import { InputAreaWithStickyPrompt } from '@/components/input-area-with-sticky-prompt'
+import { ChatSidebar } from '@/components/chat-sidebar'
 import { EditorProvider } from '@/components/editor-context'
 import { ReactFlowContextProvider } from '@/components/react-flow-context'
 
@@ -36,15 +37,16 @@ export default async function ConversationPage({
   return (
     <EditorProvider>
       <ReactFlowContextProvider conversationId={conversationId}>
-        <div className="h-full relative">
-          {/* React Flow board */}
-          <BoardFlow conversationId={conversationId} />
-
-          {/* Input box overlay at bottom with sticky prompt panel */}
-          <InputAreaWithStickyPrompt conversationId={conversationId} />
+        <div className="h-full flex">
+          {/* Map + top edit bar — shrinks left when chat sidebar opens */}
+          <div className="flex-1 relative min-w-0 h-full">
+            <BoardFlow conversationId={conversationId} />
+            <InputAreaWithStickyPrompt conversationId={conversationId} />
+          </div>
+          {/* Full-height chat column (hidden by default) */}
+          <ChatSidebar conversationId={conversationId} />
         </div>
       </ReactFlowContextProvider>
     </EditorProvider>
   )
 }
-

@@ -1,38 +1,87 @@
 'use client'
 
-// Context for managing sidebar visibility in mobile/compact mode
-import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
+// Context for board nav popup + right chat sidebar chrome
+import { createContext, useContext, useState, useCallback, useRef, ReactNode } from 'react'
+
+/** Width of the right chat sidebar when open (keeps top bar / map shrunk left). */
+export const CHAT_SIDEBAR_WIDTH = 320
 
 interface SidebarContextType {
   isMobileMode: boolean // True when window is too small (minimap auto-hides)
   setIsMobileMode: (value: boolean) => void
-  isSidebarOpen: boolean // True when sidebar is manually opened in mobile mode (overlay)
-  toggleSidebar: () => void
-  closeSidebar: () => void
+  isSidebarOpen: boolean // True when left nav popup is visible
+  openSidebar: () => void // Show nav popup (logo hover / click)
+  toggleSidebar: () => void // Toggle nav popup (mobile click)
+  closeSidebar: () => void // Hide nav popup immediately
+  scheduleCloseSidebar: () => void // Hide after short delay (bridge logo ↔ menu)
+  cancelCloseSidebar: () => void // Cancel pending delayed close when re-entering
+  isChatSidebarOpen: boolean // True when right chat sidebar is visible
+  toggleChatSidebar: () => void // Toggle right chat sidebar (logo by minimap)
+  setChatSidebarOpen: (open: boolean) => void // Explicit open/close for chat sidebar
 }
 
 const SidebarContext = createContext<SidebarContextType | undefined>(undefined)
 
 export function SidebarContextProvider({ children }: { children: ReactNode }) {
-  const [isMobileMode, setIsMobileMode] = useState(false)
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
+  const [isMobileMode, setIsMobileMode] = useState(false) // Compact layout flag from board flows
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false) // Left nav popup visibility
+  const [isChatSidebarOpen, setIsChatSidebarOpen] = useState(false) // Right chat sidebar — hidden by default
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Delayed-close handle for left nav
 
-  const toggleSidebar = useCallback(() => {
-    setIsSidebarOpen(prev => !prev)
+  const cancelCloseSidebar = useCallback(() => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current) // Drop pending hide so hover can bridge
+      closeTimerRef.current = null
+    }
   }, [])
 
+  const openSidebar = useCallback(() => {
+    cancelCloseSidebar() // Stay open if a close was queued
+    setIsSidebarOpen(true) // Show rounded nav popup
+  }, [cancelCloseSidebar])
+
   const closeSidebar = useCallback(() => {
-    setIsSidebarOpen(false)
+    cancelCloseSidebar() // Clear any queued delay
+    setIsSidebarOpen(false) // Hide immediately
+  }, [cancelCloseSidebar])
+
+  const scheduleCloseSidebar = useCallback(() => {
+    cancelCloseSidebar() // Reset previous timer
+    closeTimerRef.current = setTimeout(() => {
+      setIsSidebarOpen(false) // Hide after bridge grace period
+      closeTimerRef.current = null
+    }, 180) // ms — enough to move pointer from logo to popup
+  }, [cancelCloseSidebar])
+
+  const toggleSidebar = useCallback(() => {
+    cancelCloseSidebar()
+    setIsSidebarOpen((prev) => !prev) // Click toggle for touch / mobile
+  }, [cancelCloseSidebar])
+
+  const toggleChatSidebar = useCallback(() => {
+    setIsChatSidebarOpen((prev) => !prev) // Logo by minimap toggles chat column
+  }, [])
+
+  const setChatSidebarOpen = useCallback((open: boolean) => {
+    setIsChatSidebarOpen(open)
   }, [])
 
   return (
-    <SidebarContext.Provider value={{ 
-      isMobileMode, 
-      setIsMobileMode, 
-      isSidebarOpen, 
-      toggleSidebar, 
-      closeSidebar 
-    }}>
+    <SidebarContext.Provider
+      value={{
+        isMobileMode,
+        setIsMobileMode,
+        isSidebarOpen,
+        openSidebar,
+        toggleSidebar,
+        closeSidebar,
+        scheduleCloseSidebar,
+        cancelCloseSidebar,
+        isChatSidebarOpen,
+        toggleChatSidebar,
+        setChatSidebarOpen,
+      }}
+    >
       {children}
     </SidebarContext.Provider>
   )
@@ -41,15 +90,20 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
 export function useSidebarContext() {
   const context = useContext(SidebarContext)
   if (context === undefined) {
-    // Return default values if context is not available (graceful degradation)
-    return { 
-      isMobileMode: false, 
-      setIsMobileMode: () => {}, 
-      isSidebarOpen: false, 
-      toggleSidebar: () => {}, 
-      closeSidebar: () => {} 
+    // Graceful defaults when provider is missing (e.g. isolated stories)
+    return {
+      isMobileMode: false,
+      setIsMobileMode: () => {},
+      isSidebarOpen: false,
+      openSidebar: () => {},
+      toggleSidebar: () => {},
+      closeSidebar: () => {},
+      scheduleCloseSidebar: () => {},
+      cancelCloseSidebar: () => {},
+      isChatSidebarOpen: false,
+      toggleChatSidebar: () => {},
+      setChatSidebarOpen: () => {},
     }
   }
   return context
 }
-

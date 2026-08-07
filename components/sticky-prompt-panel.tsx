@@ -1,14 +1,14 @@
 'use client'
 
-// Edit panel - always visible at top of map area
+// Edit panel - always visible at top of map area (logo + board title + toolbar)
 import { cn } from '@/lib/utils'
-import { Button } from './ui/button'
-import { Menu, ChevronRight } from 'lucide-react'
 import { EditorToolbar } from './editor-toolbar'
 import { useEditorContext } from './editor-context'
 import { useState } from 'react'
 import { useSidebarContext } from './sidebar-context'
 import Image from 'next/image'
+import { createClient } from '@/lib/supabase/client'
+import { useQuery } from '@tanstack/react-query'
 
 interface EditPanelProps {
   conversationId?: string
@@ -19,10 +19,37 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
   const { activeEditor } = useEditorContext()
   const [isHidden, setIsHidden] = useState(false) // Track if top bar is hidden
   const [isHovering, setIsHovering] = useState(false) // Track if mouse is hovering over pill
-  const { isMobileMode, toggleSidebar } = useSidebarContext()
+  const { openSidebar, scheduleCloseSidebar, toggleSidebar, isMobileMode } = useSidebarContext()
+  const supabase = createClient() // Client for board/project title lookup
 
-  // Calculate corner radius and height: matches input box
-  const cornerRadius = 26 // px - matches input box corner radius
+  // Resolve current board title for the top bar (ellipsis when long)
+  const { data: boardTitle } = useQuery({
+    queryKey: ['edit-panel-title', conversationId, projectId],
+    queryFn: async () => {
+      if (conversationId) {
+        const { data } = await supabase
+          .from('conversations')
+          .select('title')
+          .eq('id', conversationId)
+          .maybeSingle()
+        return (data?.title as string | undefined)?.trim() || 'Untitled'
+      }
+      if (projectId) {
+        const { data } = await supabase
+          .from('projects')
+          .select('name')
+          .eq('id', projectId)
+          .maybeSingle()
+        return (data?.name as string | undefined)?.trim() || 'Untitled project'
+      }
+      return 'Thinktable'
+    },
+    enabled: Boolean(conversationId || projectId),
+    staleTime: 30_000,
+  })
+
+  const displayTitle = boardTitle || (conversationId || projectId ? '…' : 'Thinktable') // Placeholder while loading
+
   const panelHeight = 52 // px - matches input box height
 
   return (
@@ -39,39 +66,56 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
         {/* Top bar content - hidden when isHidden is true */}
         <div
           className={cn(
-            'bg-white dark:bg-[#171717] shadow-sm border-b border-gray-200 dark:border-[#2f2f2f] backdrop-blur-sm flex items-center gap-1 w-full transition-all duration-200 overflow-hidden',
-            isHidden && 'opacity-0 h-0 border-0 shadow-none'
+            // Match React Flow board/main area background — no border, no shadow
+            'bg-gray-50 dark:bg-[#0f0f0f] flex items-center gap-1 w-full transition-all duration-200 overflow-hidden',
+            isHidden && 'opacity-0 h-0'
           )}
           style={{
-            // No rounded corners - fills full width
+            // No rounded corners - fills map column width (chat sidebar is a sibling column)
             borderRadius: '0px',
+            border: 'none', // Explicitly no bottom (or any) border
+            boxShadow: 'none',
             height: isHidden ? '0px' : `${panelHeight}px`, // Same height as input box (52px), 0 when hidden
             paddingLeft: isHidden ? '0' : '0.5rem', // 8px left padding
             paddingRight: isHidden ? '0' : '0.5rem', // 8px right padding
             boxSizing: 'border-box', // Ensure padding is included in height
           }}
         >
-          {/* Sidebar toggle button - only shown in mobile mode (when sidebar is hidden) */}
-          {/* Exact same button as collapsed sidebar expand button */}
-          {isMobileMode && (
+          {/* Brand logo — hover/click opens rounded nav popup (former left sidebar) */}
+          <div
+            data-nav-logo-trigger
+            className="flex items-center gap-2 flex-shrink-0 min-w-0 mr-2 max-w-[min(240px,32vw)]"
+            onMouseEnter={() => {
+              if (!isMobileMode) openSidebar() // Desktop: open on hover
+            }}
+            onMouseLeave={() => {
+              if (!isMobileMode) scheduleCloseSidebar() // Allow pointer to reach popup
+            }}
+          >
             <button
-              onClick={toggleSidebar}
-              className="w-8 h-8 flex-shrink-0 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex items-center justify-center relative group mr-2"
-              title="Expand sidebar"
+              type="button"
+              onClick={() => toggleSidebar()} // Mobile / click: toggle popup
+              className="w-8 h-8 flex-shrink-0 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex items-center justify-center"
+              title="Open menu"
+              aria-label="Open navigation menu"
             >
-              {/* Logo - visible by default, slightly smaller */}
               <Image
                 src="/thinktable-logo.svg"
                 alt="ThinkTable"
                 width={24}
                 height={24}
-                className="h-6 w-6 absolute inset-0 m-auto group-hover:opacity-0 transition-opacity dark:invert"
+                className="h-6 w-6 dark:invert"
                 priority
               />
-              {/* Expand icon - visible on hover, slightly bigger */}
-              <ChevronRight className="h-6 w-6 text-gray-500 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 absolute inset-0 m-auto opacity-0 group-hover:opacity-100 transition-all" />
             </button>
-          )}
+            {/* Current board / project name — truncates with ellipsis when too long */}
+            <span
+              className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate select-none"
+              title={displayTitle}
+            >
+              {displayTitle}
+            </span>
+          </div>
 
           {/* Editor Toolbar - shows lock/zoom controls always, editor controls when editor is active */}
           <EditorToolbar editor={activeEditor} conversationId={conversationId} />

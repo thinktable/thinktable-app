@@ -6,10 +6,9 @@ import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import Image from 'next/image'
+import { Plus, Search, MoreVertical, MoreHorizontal, Trash2, SquarePen, Pencil, ChevronDown, FolderPlus, File, Folder, FolderOpen, Loader2, Share2, UserPlus, Archive, CornerUpLeft, Sparkles, Clock, HelpCircle, LogOut, ChevronRight as ChevronRightIcon, Settings } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { Plus, Search, MoreVertical, MoreHorizontal, Trash2, ChevronLeft, ChevronRight, SquarePen, Pencil, ChevronDown, FolderPlus, File, Folder, FolderOpen, Loader2, Share2, UserPlus, Archive, CornerUpLeft, Sparkles, Clock, HelpCircle, LogOut, ChevronRight as ChevronRightIcon, Settings } from 'lucide-react'
 import { SettingsPanel } from '@/components/settings-panel'
 import { UpgradePanel } from '@/components/upgrade-panel'
 import { cn } from '@/lib/utils'
@@ -797,7 +796,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null)
-  const [isCollapsed, setIsCollapsed] = useState(false) // Sidebar collapse state
+  const [isCollapsed] = useState(false) // Always expanded inside hover popup (kept for legacy branches)
   const [showDeleteBoardDialog, setShowDeleteBoardDialog] = useState(false)
   const [conversationToDelete, setConversationToDelete] = useState<{ id: string; title: string } | null>(null)
   const [showRenameDialog, setShowRenameDialog] = useState(false)
@@ -827,7 +826,12 @@ export default function AppSidebar({ user }: AppSidebarProps) {
   const projectsExpandedInitializedRef = useRef(false) // Track if we've initialized project expansion
   const supabase = createClient()
   const queryClient = useQueryClient()
-  const { isMobileMode, isSidebarOpen, closeSidebar } = useSidebarContext()
+  const { isMobileMode, isSidebarOpen, closeSidebar, openSidebar, scheduleCloseSidebar, cancelCloseSidebar } = useSidebarContext()
+
+  // Close nav popup when the route changes (board/project selected)
+  useEffect(() => {
+    closeSidebar()
+  }, [pathname, closeSidebar])
 
   // Fetch user profile for name/username and subscription tier
   const { data: profile } = useQuery({
@@ -1821,98 +1825,50 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     }
   }
 
-  // In mobile mode without sidebar open, don't render anything
-  if (isMobileMode && !isSidebarOpen) {
-    return null
-  }
+  // Nav popup visibility — dialogs/settings render outside the floating shell
+  const showNavPopup = isSidebarOpen
 
   return (
     <>
-      {/* Backdrop overlay when sidebar is open in mobile mode */}
-      {isMobileMode && isSidebarOpen && (
+      {/* Scrim when nav is open on compact/mobile — click closes */}
+      {isSidebarOpen && isMobileMode && (
         <div
           className="fixed inset-0 bg-black/20 z-40 transition-opacity"
           onClick={closeSidebar}
         />
       )}
 
-      <div className={cn(
-        'bg-white dark:bg-[#171717] border-r border-gray-200 dark:border-[#2f2f2f] flex flex-col transition-all duration-300',
-        isCollapsed ? 'w-16' : 'w-64',
-        // In mobile mode, show as fixed overlay
-        isMobileMode && isSidebarOpen && 'fixed left-0 top-0 bottom-0 z-50 shadow-xl'
-      )}>
-        {/* Logo / Expand Button Area - height matches top bar (52px) */}
-        <div className="relative h-[52px] flex items-center">
-          {/* Logo - fixed position, same distance from left edge in both states */}
-          <div className="absolute top-0 left-0 h-[52px] pl-4 pt-0 flex items-center">
-            {isCollapsed ? (
-              // Collapsed: Show expand button on hover (ChatGPT style)
-              <button
-                onClick={() => setIsCollapsed(false)}
-                className="w-8 h-8 rounded-md hover:bg-gray-100 transition-colors flex items-center justify-center relative group"
-                title="Expand sidebar"
-              >
-                {/* Logo - visible by default, slightly smaller */}
-                <Image
-                  src="/thinktable-logo.svg"
-                  alt="ThinkTable"
-                  width={24}
-                  height={24}
-                  className="h-6 w-6 absolute inset-0 m-auto group-hover:opacity-0 transition-opacity"
-                  priority
-                />
-                {/* Expand icon - visible on hover, slightly bigger */}
-                <ChevronRight className="h-6 w-6 text-gray-500 group-hover:text-gray-900 absolute inset-0 m-auto opacity-0 group-hover:opacity-100 transition-all" />
-              </button>
-            ) : (
-              <button
-                onClick={() => {
-                  // Create new board - navigate to /board which will create one on first message
-                  router.push('/board')
-                }}
-                className="flex items-center ml-[4px] hover:opacity-80 transition-opacity"
-                title="New board"
-              >
-                <Image
-                  src="/thinktable-logo.svg"
-                  alt="ThinkTable"
-                  width={24}
-                  height={24}
-                  className="h-6 w-6"
-                  priority
-                />
-              </button>
-            )}
-          </div>
-
-          {/* Collapse button - positioned absolutely on the right when expanded */}
-          {!isCollapsed && (
-            <div className="absolute top-0 right-0 h-[52px] pr-4 pt-0 flex items-center justify-center">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 flex items-center justify-center group"
-                onClick={() => {
-                  // In mobile mode, close the overlay completely
-                  // In normal mode, just collapse the sidebar
-                  if (isMobileMode) {
-                    closeSidebar()
-                  } else {
-                    setIsCollapsed(true)
-                  }
-                }}
-                title={isMobileMode ? "Close sidebar" : "Collapse sidebar"}
-              >
-                <ChevronLeft className="h-6 w-6 text-gray-500 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 transition-colors" />
-              </Button>
-            </div>
-          )}
-        </div>
-
-        {/* Divider between logo area and search/new section */}
-        <div className="mx-4 h-px bg-gray-200 dark:bg-[#2f2f2f]" />
-
+      {/* Rounded rectangular nav popup (former left sidebar) — top-left under logo */}
+      {showNavPopup && (
+      <div
+        data-app-sidebar
+        data-nav-menu-popup
+        className={cn(
+          'fixed z-50 flex flex-col bg-white dark:bg-[#171717] border border-gray-200 dark:border-[#2f2f2f] shadow-xl rounded-2xl overflow-hidden',
+          'w-72 max-h-[min(720px,calc(100vh-4.5rem))]'
+        )}
+        style={{
+          top: '52px', // Flush under top bar so hover can bridge from logo
+          left: '0.5rem',
+        }}
+        onMouseEnter={() => {
+          cancelCloseSidebar() // Keep open while pointer is in menu
+          openSidebar()
+        }}
+        onMouseLeave={(e) => {
+          if (isMobileMode) return // Mobile uses click + scrim
+          // Portaled menus/dialogs: relatedTarget is often null — keep open while they exist
+          if (document.querySelector('[data-radix-popper-content-wrapper], [role="menu"], [data-radix-dialog-content]')) {
+            cancelCloseSidebar()
+            return
+          }
+          const related = e.relatedTarget as HTMLElement | null
+          if (related?.closest?.('[data-radix-popper-content-wrapper], [role="menu"], [role="dialog"]')) {
+            return
+          }
+          scheduleCloseSidebar()
+        }}
+      >
         {/* Search Bar and New/Add Dropdown */}
         {!isCollapsed ? (
           <div className="px-4 pt-2 pb-4">
@@ -2278,7 +2234,10 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuItem onClick={() => setSettingsOpen(true)}>
+                  <DropdownMenuItem onClick={() => {
+                    setSettingsOpen(true)
+                    closeSidebar()
+                  }}>
                     <Settings className="h-4 w-4 mr-2" />
                     Settings
                   </DropdownMenuItem>
@@ -2315,7 +2274,10 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                   </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
                   <DropdownMenuItem 
-                    onClick={() => setSettingsOpen(true)}
+                    onClick={() => {
+                      setSettingsOpen(true)
+                      closeSidebar()
+                    }}
                     className="px-2 py-1.5 focus:bg-transparent"
                   >
                     <div className="w-full flex items-center gap-2">
@@ -2343,7 +2305,10 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                     <Clock className="h-4 w-4 mr-2" />
                     Personalization
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setSettingsOpen(true)}>
+                  <DropdownMenuItem onClick={() => {
+                    setSettingsOpen(true)
+                    closeSidebar()
+                  }}>
                     <Settings className="h-4 w-4 mr-2" />
                     Settings
                   </DropdownMenuItem>
@@ -2368,6 +2333,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                       e.stopPropagation() // Prevent event from bubbling
                       e.preventDefault() // Prevent default behavior
                       setUpgradeOpen(true) // Open upgrade panel
+                      closeSidebar()
                     }}
                     onMouseDown={(e) => {
                       e.stopPropagation() // Prevent mousedown from triggering dropdown
@@ -2383,6 +2349,9 @@ export default function AppSidebar({ user }: AppSidebarProps) {
             )}
           </div>
         </div>
+
+      </div>
+      )}
 
         {/* Settings Panel */}
         <SettingsPanel
@@ -2584,7 +2553,6 @@ export default function AppSidebar({ user }: AppSidebarProps) {
           </DialogContent>
         </Dialog>
 
-      </div>
     </>
   )
 }

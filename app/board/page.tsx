@@ -3,6 +3,7 @@
 // Default board page - same as regular board page but with welcome text overlay
 import { BoardFlow } from '@/components/board-flow'
 import { InputAreaWithStickyPrompt } from '@/components/input-area-with-sticky-prompt'
+import { ChatSidebar } from '@/components/chat-sidebar'
 import { EditorProvider } from '@/components/editor-context'
 import { ReactFlowContextProvider } from '@/components/react-flow-context'
 import dynamic from 'next/dynamic'
@@ -63,17 +64,15 @@ export default function BoardPage() {
   return (
     <EditorProvider>
       <ReactFlowContextProvider conversationId={conversationId}>
-        <div className="h-full relative">
-          {/* React Flow board */}
-          <BoardFlow conversationId={conversationId} />
-
-          {/* Welcome text overlay - disappears when first panel is placed */}
-          <Suspense fallback={null}>
-            <WelcomeText />
-          </Suspense>
-
-          {/* Input box overlay at bottom with sticky prompt panel */}
-          <InputAreaWithStickyPrompt conversationId={conversationId} />
+        <div className="h-full flex">
+          <div className="flex-1 relative min-w-0 h-full">
+            <BoardFlow conversationId={conversationId} />
+            <Suspense fallback={null}>
+              <WelcomeText />
+            </Suspense>
+            <InputAreaWithStickyPrompt conversationId={conversationId} />
+          </div>
+          <ChatSidebar conversationId={conversationId} />
         </div>
       </ReactFlowContextProvider>
     </EditorProvider>

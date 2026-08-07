@@ -1,8 +1,9 @@
-// Study set page - shows React Flow map with flashcards from study set
+// Study set page - map column + optional full-height right chat sidebar
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { StudySetFlow } from '@/components/study-set-flow'
 import { InputAreaWithStickyPrompt } from '@/components/input-area-with-sticky-prompt'
+import { ChatSidebar } from '@/components/chat-sidebar'
 import { EditorProvider } from '@/components/editor-context'
 import { ReactFlowContextProvider } from '@/components/react-flow-context'
 
@@ -43,12 +44,12 @@ export default async function StudySetPage({
   return (
     <EditorProvider>
       <ReactFlowContextProvider>
-        <div className="h-full relative">
-          {/* React Flow board with flashcards from study set */}
-          <StudySetFlow studySetId={studySetId} />
-          
-          {/* Input box overlay at bottom with sticky prompt panel */}
-          <InputAreaWithStickyPrompt />
+        <div className="h-full flex">
+          <div className="flex-1 relative min-w-0 h-full">
+            <StudySetFlow studySetId={studySetId} />
+            <InputAreaWithStickyPrompt />
+          </div>
+          <ChatSidebar />
         </div>
       </ReactFlowContextProvider>
     </EditorProvider>
