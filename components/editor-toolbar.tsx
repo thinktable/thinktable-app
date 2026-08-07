@@ -1415,7 +1415,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 <Redo2 className="h-4 w-4" />
               </Button>
             </div>
-            <div className="w-px h-6 bg-gray-300 mx-1 flex-shrink-0" />
+            {/* Slash separator after undo/redo through thread styling */}
+            <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
           </>
         )}
 
@@ -1893,7 +1894,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             >
               <Paintbrush className="h-4 w-4" />
             </Button>
-            <div className="w-px h-6 bg-gray-300 mx-1 flex-shrink-0" />
+            <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
           </>
         )}
 
@@ -1947,7 +1948,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-1 flex-shrink-0" />
+              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
             </>
           )}
 
@@ -1985,7 +1986,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-1 flex-shrink-0" />
+              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
             </>
           )}
 
@@ -2291,7 +2292,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               >
                 <Highlighter className="h-4 w-4" />
               </Button>
-              <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-1 flex-shrink-0" />
+              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
             </div>
           )}
 
@@ -2356,7 +2357,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-1 flex-shrink-0" />
+              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
             </>
           )}
 
@@ -2378,13 +2379,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center justify-center"
+                        className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center justify-center border border-solid border-gray-300 dark:border-gray-600"
                         style={{
                           backgroundColor: buttonBgColor,
                           ...(borderColorWithOpacity ? {
                             borderColor: borderColorWithOpacity,
-                            borderWidth: '1.5px',
-                            borderStyle: 'solid'
                           } : {})
                         }}
                         onMouseEnter={(e) => {
@@ -2442,13 +2441,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center justify-center"
+                        className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center justify-center border border-solid border-gray-300 dark:border-gray-600"
                         style={{
                           backgroundColor: buttonBgColor,
                           ...(borderColorWithOpacity ? {
                             borderColor: borderColorWithOpacity,
-                            borderWidth: '1.5px',
-                            borderStyle: 'solid'
                           } : {})
                         }}
                         onMouseEnter={(e) => {
@@ -2522,8 +2519,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   </DropdownMenuRadioGroup>
                 </DropdownMenuContent>
               </DropdownMenu>
-
-              <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-1 flex-shrink-0" />
             </>
           )}
 
@@ -2579,6 +2574,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   </DropdownMenuRadioGroup>
                 </DropdownMenuContent>
               </DropdownMenu>
+
+              {/* Divider left of edge direction — groups direction with layout type */}
+              <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-1 flex-shrink-0" />
 
               <DropdownMenu open={openDropdown === 'arrowDirection'} onOpenChange={(open) => handleDropdownOpenChange('arrowDirection', open)}>
                 <DropdownMenuTrigger asChild>
@@ -3273,8 +3271,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       {/* Divider between More menu and Layout dropdown - only show if More menu is visible */}
       {hiddenItems.size > 0 && <div className="w-px h-6 bg-gray-300 mx-1" />}
 
-      {/* Divider between panel controls/arrows section and Layout dropdown - only show if panel controls or arrows section is visible and More menu is not visible */}
-      {hiddenItems.size === 0 && ((!isItemHidden('panelControls') && !shouldHideFormattingOptions) || !isItemHidden('arrows')) && <div className="w-px h-6 bg-gray-300 mx-1" />}
+      {/* Divider before Layout when arrows are hidden (direction↔layout | already sits left of direction when arrows show) */}
+      {hiddenItems.size === 0 && isItemHidden('arrows') && !isItemHidden('panelControls') && !shouldHideFormattingOptions && <div className="w-px h-6 bg-gray-300 mx-1" />}
 
       {/* Layout Dropdown - positioned just before Component button */}
       {!isItemHidden('layout') && (

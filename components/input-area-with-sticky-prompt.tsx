@@ -5,7 +5,6 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { EditPanel } from './sticky-prompt-panel'
 import { cn } from '@/lib/utils'
 import { useReactFlowContext } from './react-flow-context'
-import { useSidebarContext } from './sidebar-context'
 import { PillSelect } from './pill-select'
 import { useUserPreference } from '@/lib/hooks/use-user-preferences'
 import { createClient } from '@/lib/supabase/client'
@@ -240,11 +239,10 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
   }, [])
 
   // Center Home/Insert/Draw/View menu + hide pill on the board / edit-bar column
-  // (not the prompt box). Recalculate when chat sidebar opens and the column shrinks.
+  // (not the prompt box). Chat sidebar overlays and does not change column width.
   const [pillSelectLeft, setPillSelectLeft] = useState(0)
   const [pillSelectWidth, setPillSelectWidth] = useState(200) // Default width, will be measured
   const pillSelectRef = useRef<HTMLDivElement>(null)
-  const { isChatSidebarOpen } = useSidebarContext() // Chat column changes map width
   
   useEffect(() => {
     const getBoardColumn = (): HTMLElement | null => {
@@ -273,7 +271,7 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
       window.removeEventListener('resize', calculatePillSelectPosition)
       if (resizeObserver) resizeObserver.disconnect()
     }
-  }, [isChatSidebarOpen]) // Re-attach when chat sidebar changes column width
+  }, [])
   
   // Keep refs in sync with state
   useEffect(() => {

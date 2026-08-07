@@ -6,12 +6,15 @@ import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Search, MoreVertical, MoreHorizontal, Trash2, SquarePen, Pencil, ChevronDown, FolderPlus, File, Folder, FolderOpen, Loader2, Share2, UserPlus, Archive, CornerUpLeft, Sparkles, Clock, HelpCircle, LogOut, ChevronRight as ChevronRightIcon, Settings } from 'lucide-react'
+import { Plus, Search, MoreVertical, MoreHorizontal, Trash2, SquarePen, Pencil, ChevronDown, FolderPlus, File, FileText, Folder, FolderOpen, Loader2, Share2, UserPlus, CornerUpLeft, Sparkles, Clock, HelpCircle, LogOut, ChevronRight as ChevronRightIcon, Settings } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { SettingsPanel } from '@/components/settings-panel'
 import { UpgradePanel } from '@/components/upgrade-panel'
 import { cn } from '@/lib/utils'
+import Picker from '@emoji-mart/react'
+import data from '@emoji-mart/data'
+import { useTheme } from './theme-provider'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -62,6 +65,124 @@ interface AppSidebarProps {
   user: User
 }
 
+// Page icon stored in conversations.metadata.icon (Notion-compatible shape)
+type PageIconMeta =
+  | { type: 'emoji'; emoji: string }
+  | { type: 'external'; url: string }
+  | { type: 'file'; url: string }
+  | null
+  | undefined
+
+// Clickable page icon — blank/filled default, or emoji/image; click opens emoji picker
+function PageIconButton({
+  conversation,
+  supabase,
+  queryClient,
+  userId,
+}: {
+  conversation: Conversation
+  supabase: ReturnType<typeof createClient>
+  queryClient: ReturnType<typeof useQueryClient>
+  userId: string
+}) {
+  const { resolvedTheme } = useTheme()
+  const [open, setOpen] = useState(false)
+  const icon = (conversation.metadata?.icon as PageIconMeta) || null
+  const hasContent = conversation.metadata?.hasContent === true // Filled page glyph when contentful
+
+  const saveIcon = async (next: PageIconMeta) => {
+    try {
+      const { data: row, error: fetchError } = await supabase
+        .from('conversations')
+        .select('metadata')
+        .eq('id', conversation.id)
+        .eq('user_id', userId)
+        .single()
+      if (fetchError) throw fetchError
+      const existing = (row?.metadata as Record<string, any>) || {}
+      const updated = { ...existing }
+      if (next) updated.icon = next
+      else delete updated.icon
+      const { error } = await supabase
+        .from('conversations')
+        .update({ metadata: updated })
+        .eq('id', conversation.id)
+        .eq('user_id', userId)
+      if (error) throw error
+      queryClient.setQueryData(['conversations'], (old: Conversation[] | undefined) => {
+        if (!old) return old
+        return old.map((c) =>
+          c.id === conversation.id ? { ...c, metadata: updated } : c
+        )
+      })
+      queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      queryClient.invalidateQueries({ queryKey: ['path-board-menu'] })
+      queryClient.invalidateQueries({ queryKey: ['edit-panel-title'] })
+    } catch (err) {
+      console.error('Failed to update page icon:', err)
+    }
+    setOpen(false)
+  }
+
+  let iconNode: React.ReactNode
+  if (icon?.type === 'emoji' && icon.emoji) {
+    iconNode = <span className="text-sm leading-none">{icon.emoji}</span>
+  } else if ((icon?.type === 'external' || icon?.type === 'file') && 'url' in icon && icon.url) {
+    // eslint-disable-next-line @next/next/no-img-element
+    iconNode = <img src={icon.url} alt="" className="h-4 w-4 rounded-sm object-cover" />
+  } else if (hasContent) {
+    iconNode = <FileText className="h-4 w-4 text-gray-500 dark:text-gray-400" /> // Filled / content page
+  } else {
+    iconNode = <File className="h-4 w-4 text-gray-400 dark:text-gray-500" /> // Blank page
+  }
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="h-5 w-5 flex-shrink-0 flex items-center justify-center rounded hover:bg-gray-200/70 dark:hover:bg-gray-700/70"
+          title="Change icon"
+          aria-label="Change page icon"
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
+          onPointerDown={(e) => e.stopPropagation()} // Don't start row drag
+        >
+          {iconNode}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="p-0 w-auto border-0 shadow-lg overflow-hidden"
+        onCloseAutoFocus={(e) => e.preventDefault()}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <div className="p-1">
+          <Picker
+            data={data}
+            theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
+            onEmojiSelect={(emoji: { native?: string }) => {
+              if (emoji?.native) saveIcon({ type: 'emoji', emoji: emoji.native })
+            }}
+            previewPosition="none"
+            skinTonePosition="none"
+          />
+        </div>
+        <div className="border-t border-gray-200 dark:border-gray-700 p-1">
+          <DropdownMenuItem
+            className="text-xs cursor-pointer"
+            onClick={() => saveIcon(null)}
+          >
+            Default page icon
+          </DropdownMenuItem>
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 // Sortable board item component
 function SortableBoardItem({
   conversation,
@@ -81,6 +202,11 @@ function SortableBoardItem({
   queryClient,
   refetch,
   project,
+  depth = 0, // Nesting indent level (0 = root)
+  hasChildren = false, // True when this board has nested sub-pages
+  isExpanded = false, // Whether children are visible
+  onToggleExpand, // Expand/collapse nested children
+  userId, // Owner id for icon updates
 }: {
   conversation: Conversation
   isActive: boolean
@@ -91,7 +217,7 @@ function SortableBoardItem({
   openRenameDialog: (conv: Conversation) => void
   openDeleteDialog: (conv: Conversation) => void
   dragOverId: string | null
-  dragOverPosition: 'above' | 'below' | 'top' | 'bottom' | null
+  dragOverPosition: 'above' | 'below' | 'top' | 'bottom' | 'into' | null
   activeId: string | null
   filteredConversations: Conversation[]
   projects: Project[]
@@ -99,6 +225,11 @@ function SortableBoardItem({
   queryClient: ReturnType<typeof useQueryClient>
   refetch: () => void
   project?: Project // Optional project if this board is under a project
+  depth?: number
+  hasChildren?: boolean
+  isExpanded?: boolean
+  onToggleExpand?: (id: string) => void
+  userId: string // Owner id for icon updates
 }) {
   // Fetch bookmark count for this conversation
   const { data: bookmarkCount = 0 } = useQuery({
@@ -152,6 +283,7 @@ function SortableBoardItem({
 
   const showIndicatorAbove = dragOverId === conversation.id && dragOverPosition === 'above'
   const showIndicatorBelow = dragOverId === conversation.id && dragOverPosition === 'below'
+  const showNestHighlight = dragOverId === conversation.id && dragOverPosition === 'into' // Dropping into this page
   const showIndicatorTop = dragOverPosition === 'top' && conversation.id === filteredConversations[0]?.id
   const showIndicatorBottom = dragOverPosition === 'bottom' && conversation.id === filteredConversations[filteredConversations.length - 1]?.id
 
@@ -171,13 +303,48 @@ function SortableBoardItem({
         {...attributes}
         {...listeners}
         className={cn(
-          'flex items-center gap-2 px-4 h-8 rounded-lg transition-colors text-sm group cursor-grab active:cursor-grabbing',
+          'flex items-center gap-1 pr-4 h-8 rounded-lg transition-colors text-sm group cursor-grab active:cursor-grabbing relative',
           isActive
             ? 'bg-blue-50 dark:bg-[#2a2a3a]'
             : 'hover:bg-gray-50 dark:hover:bg-[#1f1f1f]', // CSS hover requires window focus (as intended)
-          isDragging && 'cursor-grabbing opacity-50'
+          isDragging && 'cursor-grabbing opacity-50',
+          // Clear nest-into affordance when hovering center of a page
+          showNestHighlight && 'bg-blue-100 dark:bg-blue-950/50 ring-2 ring-inset ring-blue-500 dark:ring-blue-400'
         )}
+        style={{ paddingLeft: `${16 + depth * 14}px` }} // Indent nested sub-pages
+        title={showNestHighlight ? 'Drop to nest inside' : undefined}
       >
+        {showNestHighlight && (
+          // Left nest cue — mirrors Notion’s “make sub-page” hover state
+          <span
+            className="absolute left-1 top-1 bottom-1 w-0.5 rounded-full bg-blue-500 dark:bg-blue-400 pointer-events-none"
+            aria-hidden
+          />
+        )}
+        {/* Expand/collapse nested children (Notion-style) */}
+        {hasChildren ? (
+          <button
+            type="button"
+            className="h-5 w-5 flex-shrink-0 flex items-center justify-center rounded hover:bg-gray-200/60 dark:hover:bg-gray-700/60 text-gray-500"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onToggleExpand?.(conversation.id)
+            }}
+            onPointerDown={(e) => e.stopPropagation()} // Don't start drag from chevron
+            aria-label={isExpanded ? 'Collapse sub-pages' : 'Expand sub-pages'}
+          >
+            <ChevronRightIcon className={cn('h-3.5 w-3.5 transition-transform', isExpanded && 'rotate-90')} />
+          </button>
+        ) : (
+          <span className="h-5 w-5 flex-shrink-0" aria-hidden /> // Spacer aligns titles with parents that have chevrons
+        )}
+        <PageIconButton
+          conversation={conversation}
+          supabase={supabase}
+          queryClient={queryClient}
+          userId={userId}
+        />
         <Link
           href={`/board/${conversation.id}`}
           className="flex items-center gap-2 flex-1 min-w-0 text-gray-700 dark:text-gray-300"
@@ -365,52 +532,6 @@ function SortableBoardItem({
             )}
             <DropdownMenuSeparator className="mx-2 my-1" />
             <DropdownMenuItem
-              onClick={async (e) => {
-                e.stopPropagation()
-                // Archive functionality - TODO: Implement archive (add archived flag to metadata)
-                try {
-                  const { data: conversationData, error: fetchError } = await supabase
-                    .from('conversations')
-                    .select('metadata')
-                    .eq('id', conversation.id)
-                    .single()
-
-                  if (fetchError) throw new Error(fetchError.message || 'Failed to fetch conversation')
-
-                  const existingMetadata = (conversationData?.metadata as Record<string, any>) || {}
-                  const updatedMetadata = { ...existingMetadata, archived: true }
-
-                  const { error } = await supabase
-                    .from('conversations')
-                    .update({ metadata: updatedMetadata })
-                    .eq('id', conversation.id)
-
-                  if (error) {
-                    console.error('Error archiving board:', error)
-                    alert('Failed to archive board. Please try again.')
-                  } else {
-                    // Optimistic update
-                    queryClient.setQueryData(['conversations'], (oldData: Conversation[] | undefined) => {
-                      if (!oldData) return oldData
-                      return oldData.map((conv) =>
-                        conv.id === conversation.id ? { ...conv, metadata: updatedMetadata } : conv
-                      )
-                    })
-
-                    // Refetch
-                    queryClient.invalidateQueries({ queryKey: ['conversations'] })
-                    refetch()
-                  }
-                } catch (error: any) {
-                  console.error('Error archiving board:', error)
-                  alert('Failed to archive board. Please try again.')
-                }
-              }}
-            >
-              <Archive className="h-4 w-4 mr-2" />
-              Archive
-            </DropdownMenuItem>
-            <DropdownMenuItem
               onClick={(e) => {
                 e.stopPropagation()
                 openDeleteDialog(conversation)
@@ -463,6 +584,7 @@ function DroppableProjectItem({
   supabase,
   queryClient,
   refetch,
+  userId,
 }: {
   project: Project
   isActive: boolean
@@ -480,13 +602,14 @@ function DroppableProjectItem({
   deletingProjectId: string | null
   isRenamingProject: boolean
   dragOverId: string | null
-  dragOverPosition: 'above' | 'below' | 'top' | 'bottom' | null
+  dragOverPosition: 'above' | 'below' | 'top' | 'bottom' | 'into' | null
   activeId: string | null
   filteredConversations: Conversation[]
   projects: Project[]
   supabase: ReturnType<typeof createClient>
   queryClient: ReturnType<typeof useQueryClient>
   refetch: () => void
+  userId: string
 }) {
   const { setNodeRef } = useDroppable({
     id: `project-${project.id}`, // Prefix with 'project-' to identify as project drop target
@@ -634,6 +757,7 @@ function DroppableProjectItem({
                 queryClient={queryClient}
                 refetch={refetch}
                 project={project}
+                userId={userId}
               />
             )
           })}
@@ -667,7 +791,7 @@ function BoardsSectionHeader({
       className="flex items-center gap-1 pl-1 py-2 text-xs font-medium text-gray-500 hover:text-gray-700 cursor-pointer group transition-colors rounded-lg min-h-[32px]"
       onClick={onToggleExpand}
     >
-      <span>Boards</span>
+      <span>Pages</span>
       <ChevronDown
         className={cn(
           'h-3 w-3 opacity-0 group-hover:opacity-100 transition-all duration-200',
@@ -695,7 +819,11 @@ interface Conversation {
   position?: number // Optional position field for ordering
   metadata?: {
     project_id?: string
+    parent_id?: string // Nest under another board (Notion-style sub-pages)
     position?: number
+    icon?: PageIconMeta // Emoji / image / default blank|filled
+    hasContent?: boolean // True → filled page glyph when no custom icon
+    notionPageId?: string // Linked Notion page when imported
     [key: string]: any
   }
 }
@@ -706,6 +834,66 @@ interface Project {
   created_at: string
   updated_at: string
   position?: number // Optional position field for ordering
+}
+
+// Resolve parent board id from metadata (null = root)
+function getBoardParentId(conv: Conversation): string | null {
+  const parentId = conv.metadata?.parent_id // Nested under this board when set
+  if (parentId && typeof parentId === 'string' && parentId.trim() !== '') return parentId
+  return null
+}
+
+// True if nesting dragId under targetParentId would create a cycle
+function wouldCreateNestCycle(boards: Conversation[], dragId: string, targetParentId: string): boolean {
+  let current: string | null = targetParentId // Walk up from proposed parent
+  const byId = new Map(boards.map((b) => [b.id, b])) // O(1) parent lookup
+  const seen = new Set<string>() // Guard against corrupt cycles in data
+  while (current) {
+    if (current === dragId) return true // Target is drag or its descendant
+    if (seen.has(current)) return true
+    seen.add(current)
+    const parent = byId.get(current)
+    current = parent ? getBoardParentId(parent) : null
+  }
+  return false
+}
+
+// Flatten boards into a depth-aware list for Notion-style nested menu rendering
+function flattenBoardTree(
+  boards: Conversation[],
+  expandedIds: Set<string>
+): { conversation: Conversation; depth: number; hasChildren: boolean }[] {
+  const byParent = new Map<string | null, Conversation[]>() // Children grouped by parent_id
+  const idSet = new Set(boards.map((b) => b.id)) // Known ids for orphan roots
+
+  for (const board of boards) {
+    let parentId = getBoardParentId(board)
+    if (parentId && !idSet.has(parentId)) parentId = null // Orphan → treat as root
+    const list = byParent.get(parentId) || []
+    list.push(board)
+    byParent.set(parentId, list)
+  }
+
+  const sortSiblings = (a: Conversation, b: Conversation) => {
+    if (a.position !== undefined && b.position !== undefined) return a.position - b.position
+    if (a.position !== undefined) return -1
+    if (b.position !== undefined) return 1
+    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+  }
+
+  for (const [, kids] of byParent) kids.sort(sortSiblings)
+
+  const result: { conversation: Conversation; depth: number; hasChildren: boolean }[] = []
+  const walk = (parentId: string | null, depth: number) => {
+    const kids = byParent.get(parentId) || []
+    for (const child of kids) {
+      const hasChildren = (byParent.get(child.id) || []).length > 0
+      result.push({ conversation: child, depth, hasChildren })
+      if (hasChildren && expandedIds.has(child.id)) walk(child.id, depth + 1) // Recurse when expanded
+    }
+  }
+  walk(null, 0)
+  return result
 }
 
 
@@ -804,13 +992,13 @@ export default function AppSidebar({ user }: AppSidebarProps) {
   const [renameInput, setRenameInput] = useState('')
   const [isRenaming, setIsRenaming] = useState(false)
   const [isBoardsExpanded, setIsBoardsExpanded] = useState(true) // Boards section expanded/collapsed state
-  const [isArchiveExpanded, setIsArchiveExpanded] = useState(false) // Archive section expanded/collapsed state (collapsed by default)
   const [isProjectsExpanded, setIsProjectsExpanded] = useState(true) // Projects section expanded/collapsed state
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set()) // Track which individual projects are expanded
   const [activeId, setActiveId] = useState<string | null>(null) // Currently dragging board ID
   const [dragOverId, setDragOverId] = useState<string | null>(null) // Board being dragged over
-  const [dragOverPosition, setDragOverPosition] = useState<'above' | 'below' | 'top' | 'bottom' | null>(null) // Position indicator
+  const [dragOverPosition, setDragOverPosition] = useState<'above' | 'below' | 'top' | 'bottom' | 'into' | null>(null) // Position indicator (into = nest)
   const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null) // Project being dragged over (for board-to-project drops)
+  const [expandedBoardIds, setExpandedBoardIds] = useState<Set<string>>(new Set()) // Nested sub-page expand state
   const [showCreateProjectDialog, setShowCreateProjectDialog] = useState(false) // Create project dialog state
   const [projectName, setProjectName] = useState('') // Project name input
   const [isCreatingProject, setIsCreatingProject] = useState(false) // Creating project state
@@ -977,6 +1165,26 @@ export default function AppSidebar({ user }: AppSidebarProps) {
           return current
         })
       }
+
+      // Continuous above / into / below while hovering a board row (onDragOver often skips same-target moves)
+      // Walk the hit stack so DragOverlay / the dragged row don't block the drop target underneath
+      const stack = document.elementsFromPoint(e.clientX, e.clientY)
+      for (const node of stack) {
+        const row = (node as Element).closest?.('[data-id]') as HTMLElement | null
+        if (!row) continue
+        const rowId = row.getAttribute('data-id')
+        if (!rowId || rowId === activeIdValue || rowId.startsWith('project-')) continue
+
+        const rect = row.getBoundingClientRect()
+        const ratio = (e.clientY - rect.top) / Math.max(rect.height, 1)
+        setDragOverId(rowId)
+        setDragOverProjectId(null)
+        // Narrow edge bands so the nest-into zone is easy to hit on short rows
+        if (ratio < 0.22) setDragOverPosition('above')
+        else if (ratio > 0.78) setDragOverPosition('below')
+        else setDragOverPosition('into')
+        break
+      }
     }
 
     document.addEventListener('mousemove', handleMouseMove)
@@ -987,7 +1195,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     }
   }
 
-  // Handle drag end - save new order or associate with project
+  // Handle drag end - save new order, nest under a page, or associate with project
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event
 
@@ -995,6 +1203,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     const wasOverProject = dragOverProjectId !== null
     const dragOverProjectIdValue = dragOverProjectId
     const dragOverIdValue = dragOverId
+    const dragOverPositionValue = dragOverPosition // Nest vs reorder zone
 
     // Clear all drag over states immediately
     setActiveId(null)
@@ -1058,7 +1267,9 @@ export default function AppSidebar({ user }: AppSidebarProps) {
         if (fetchError) throw new Error(fetchError.message || 'Failed to fetch conversation')
 
         const existingMetadata = (conversation?.metadata as Record<string, any>) || {}
-        const updatedMetadata = { ...existingMetadata, project_id: projectId }
+        // Moving into a project clears page nesting (project membership takes over)
+        const { parent_id: _clearedParent, ...withoutParent } = existingMetadata
+        const updatedMetadata = { ...withoutParent, project_id: projectId }
 
         const { error } = await supabase
           .from('conversations')
@@ -1088,6 +1299,59 @@ export default function AppSidebar({ user }: AppSidebarProps) {
       } catch (error: any) {
         console.error('Error adding board to project:', error)
         alert('Failed to move board to project. Please try again.')
+      }
+      return
+    }
+
+    // Nest into another page when dropped in the center "into" zone (Notion-style)
+    if (
+      dragOverPositionValue === 'into' &&
+      overId &&
+      !overId.startsWith('project-') &&
+      overId !== boardId
+    ) {
+      const targetParentId = overId
+      if (wouldCreateNestCycle(conversations, boardId, targetParentId)) {
+        return // Refuse cycles (can't nest a page under its own descendant)
+      }
+      try {
+        const { data: conversation, error: fetchError } = await supabase
+          .from('conversations')
+          .select('metadata')
+          .eq('id', boardId)
+          .eq('user_id', user.id)
+          .single()
+        if (fetchError) throw new Error(fetchError.message || 'Failed to fetch conversation')
+
+        const existingMetadata = (conversation?.metadata as Record<string, any>) || {}
+        const { project_id: _dropProject, ...rest } = existingMetadata // Nesting is for main board list
+        const updatedMetadata = { ...rest, parent_id: targetParentId }
+
+        const { error } = await supabase
+          .from('conversations')
+          .update({ metadata: updatedMetadata })
+          .eq('id', boardId)
+          .eq('user_id', user.id)
+
+        if (error) {
+          console.error('Error nesting board:', error)
+          alert('Failed to nest page. Please try again.')
+        } else {
+          queryClient.setQueryData(['conversations'], (oldData: Conversation[] | undefined) => {
+            if (!oldData) return oldData
+            return oldData.map((conv) =>
+              conv.id === boardId ? { ...conv, metadata: updatedMetadata } : conv
+            )
+          })
+          setExpandedBoardIds((prev) => new Set(prev).add(targetParentId)) // Show newly nested child
+          queryClient.invalidateQueries({ queryKey: ['conversations'] })
+          queryClient.invalidateQueries({ queryKey: ['edit-panel-title'] }) // Refresh top-bar path
+          queryClient.invalidateQueries({ queryKey: ['path-board-menu'] }) // Refresh path sibling menus
+          await refetch()
+        }
+      } catch (error: any) {
+        console.error('Error nesting board:', error)
+        alert('Failed to nest page. Please try again.')
       }
       return
     }
@@ -1161,6 +1425,68 @@ export default function AppSidebar({ user }: AppSidebarProps) {
         alert('Failed to move board back to boards list. Please try again.')
       }
       return
+    }
+
+    // Sibling reorder / re-parent: drop above or below another board
+    if (
+      over &&
+      active.id !== over.id &&
+      overId &&
+      !overId.startsWith('project-') &&
+      (dragOverPositionValue === 'above' || dragOverPositionValue === 'below')
+    ) {
+      const overBoard = conversations.find((c) => c.id === overId)
+      if (overBoard) {
+        const newParentId = getBoardParentId(overBoard) // Match sibling's parent (null = root)
+        const currentParentId = activeBoard ? getBoardParentId(activeBoard) : null
+        const parentChanged = newParentId !== currentParentId
+
+        if (parentChanged) {
+          if (newParentId && wouldCreateNestCycle(conversations, boardId, newParentId)) {
+            return
+          }
+          try {
+            const { data: conversation, error: fetchError } = await supabase
+              .from('conversations')
+              .select('metadata')
+              .eq('id', boardId)
+              .eq('user_id', user.id)
+              .single()
+            if (fetchError) throw new Error(fetchError.message || 'Failed to fetch conversation')
+
+            const existingMetadata = (conversation?.metadata as Record<string, any>) || {}
+            const nextMetadata = { ...existingMetadata }
+            if (newParentId) {
+              nextMetadata.parent_id = newParentId
+            } else {
+              delete nextMetadata.parent_id // Move to root
+            }
+
+            const { error } = await supabase
+              .from('conversations')
+              .update({ metadata: nextMetadata })
+              .eq('id', boardId)
+              .eq('user_id', user.id)
+
+            if (error) {
+              console.error('Error updating board parent:', error)
+            } else {
+              queryClient.setQueryData(['conversations'], (oldData: Conversation[] | undefined) => {
+                if (!oldData) return oldData
+                return oldData.map((conv) =>
+                  conv.id === boardId ? { ...conv, metadata: nextMetadata } : conv
+                )
+              })
+              if (newParentId) setExpandedBoardIds((prev) => new Set(prev).add(newParentId))
+              queryClient.invalidateQueries({ queryKey: ['conversations'] })
+              queryClient.invalidateQueries({ queryKey: ['edit-panel-title'] })
+              queryClient.invalidateQueries({ queryKey: ['path-board-menu'] })
+            }
+          } catch (error) {
+            console.error('Error updating board parent:', error)
+          }
+        }
+      }
     }
 
     // Normal board reordering (dropping on another board) - only if we have a valid over target
@@ -1327,7 +1653,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
       (event as any).clientY ||
       null
 
-    // Determine if dragging above or below based on mouse position
+    // Determine above / into / below based on mouse Y within the row (Notion-style nest zone)
     const overElement = document.querySelector(`[data-id="${over.id}"]`) as HTMLElement
     if (overElement && mouseY !== null) {
       const rect = overElement.getBoundingClientRect()
@@ -1335,10 +1661,17 @@ export default function AppSidebar({ user }: AppSidebarProps) {
       const elementTop = rect.top
       const elementHeight = rect.height
       const relativeY = mouseY - elementTop
+      const ratio = relativeY / Math.max(elementHeight, 1)
 
-      // Use center point for accurate alignment with cursor
-      const elementCenter = elementHeight / 2
-      setDragOverPosition(relativeY < elementCenter ? 'above' : 'below')
+      // Edge bands reorder; center band nests under the target page
+      if (typeof over.id === 'string' && !over.id.startsWith('project-')) {
+        if (ratio < 0.22) setDragOverPosition('above')
+        else if (ratio > 0.78) setDragOverPosition('below')
+        else setDragOverPosition('into')
+      } else {
+        const elementCenter = elementHeight / 2
+        setDragOverPosition(relativeY < elementCenter ? 'above' : 'below')
+      }
     } else {
       // Fallback: default to 'below' if we can't determine position
       setDragOverPosition('below')
@@ -1561,12 +1894,54 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     return !isArchived && matchesSearch
   })
 
-  // Separate archived boards
-  const archivedConversations = conversationsWithoutProjects.filter((conversation) => {
-    const isArchived = conversation.metadata?.archived === true
-    const matchesSearch = conversation.title.toLowerCase().includes(searchQuery.toLowerCase())
-    return isArchived && matchesSearch
-  })
+  // Depth-aware flat list for nested sub-page rendering in the Boards menu
+  // When searching, expand all so nested matches remain visible
+  const nestedBoardRows = useMemo(() => {
+    const expandAll = searchQuery.trim().length > 0
+    const expanded = expandAll
+      ? new Set(filteredConversations.map((c) => c.id))
+      : expandedBoardIds
+    return flattenBoardTree(filteredConversations, expanded)
+  }, [filteredConversations, expandedBoardIds, searchQuery])
+
+  // Toggle expand/collapse for a board's nested children
+  const toggleBoardExpand = (id: string) => {
+    setExpandedBoardIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  // Keep ancestors + the open page expanded so nested children (e.g. Notion imports) stay visible
+  useEffect(() => {
+    const match = pathname.match(/^\/board\/([^/]+)/)
+    const openId = match?.[1]
+    if (!openId || filteredConversations.length === 0) return
+    const byId = new Map(filteredConversations.map((c) => [c.id, c]))
+    const toExpand: string[] = [openId] // Expand current page to reveal its children
+    let current = byId.get(openId)
+    let parentId = current ? getBoardParentId(current) : null
+    const seen = new Set<string>()
+    while (parentId && !seen.has(parentId)) {
+      seen.add(parentId)
+      toExpand.push(parentId)
+      current = byId.get(parentId)
+      parentId = current ? getBoardParentId(current) : null
+    }
+    setExpandedBoardIds((prev) => {
+      let changed = false
+      const next = new Set(prev)
+      for (const id of toExpand) {
+        if (!next.has(id)) {
+          next.add(id)
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [pathname, filteredConversations])
 
   // Create a stable memoized string key of project IDs that have boards
   const projectsWithBoardsKey = useMemo(() => {
@@ -1903,7 +2278,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                     }}
                   >
                     <SquarePen className="h-4 w-4 mr-2" />
-                    New board
+                    New page
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onClick={() => {
@@ -1939,7 +2314,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                   }}
                 >
                   <SquarePen className="h-4 w-4 mr-2" />
-                  New board
+                  New page
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => {
@@ -2041,6 +2416,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                               supabase={supabase}
                               queryClient={queryClient}
                               refetch={refetch}
+                              userId={user.id}
                             />
                           )
                         })}
@@ -2056,16 +2432,16 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                 onToggleExpand={() => setIsBoardsExpanded(!isBoardsExpanded)}
               />
 
-              {/* Boards List - collapsible, boards are sortable/reorderable */}
+              {/* Boards List - collapsible, boards are sortable/reorderable / nestable */}
               {isBoardsExpanded && (
                 <BoardsListWrapper>
-                  {filteredConversations.length > 0 ? (
+                  {nestedBoardRows.length > 0 ? (
                     <SortableContext
-                      items={filteredConversations.map((c) => c.id)}
+                      items={nestedBoardRows.map((r) => r.conversation.id)}
                       strategy={verticalListSortingStrategy}
                     >
                       <ul className="space-y-1">
-                        {filteredConversations.map((conversation) => {
+                        {nestedBoardRows.map(({ conversation, depth, hasChildren }) => {
                           const isActive = pathname === `/board/${conversation.id}`
                           const isDeleting = deletingConversationId === conversation.id
                           return (
@@ -2087,6 +2463,11 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                               supabase={supabase}
                               queryClient={queryClient}
                               refetch={refetch}
+                              depth={depth}
+                              hasChildren={hasChildren}
+                              isExpanded={expandedBoardIds.has(conversation.id)}
+                              onToggleExpand={toggleBoardExpand}
+                              userId={user.id}
                             />
                           )
                         })}
@@ -2094,60 +2475,10 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                     </SortableContext>
                   ) : (
                     <div className="px-4 py-8 text-center text-sm text-gray-500">
-                      {searchQuery ? 'No boards found' : 'No boards yet. Start a chat!'}
+                      {searchQuery ? 'No pages found' : 'No pages yet. Start a chat!'}
                     </div>
                   )}
                 </BoardsListWrapper>
-              )}
-
-              {/* Archive Header */}
-              <div
-                className="flex items-center gap-1 pl-1 py-2 text-xs font-medium text-gray-500 hover:text-gray-700 cursor-pointer group transition-colors rounded-lg min-h-[32px]"
-                onClick={() => setIsArchiveExpanded(!isArchiveExpanded)}
-              >
-                <span>Archive</span>
-                <ChevronDown
-                  className={cn(
-                    'h-3 w-3 opacity-0 group-hover:opacity-100 transition-all duration-200',
-                    !isArchiveExpanded && 'group-hover:-rotate-90'
-                  )}
-                />
-              </div>
-
-              {/* Archive List - collapsible */}
-              {isArchiveExpanded && archivedConversations.length > 0 && (
-                <SortableContext
-                  items={archivedConversations.map((c) => c.id)}
-                  strategy={verticalListSortingStrategy}
-                >
-                  <ul className="space-y-1">
-                    {archivedConversations.map((conversation) => {
-                      const isActive = pathname === `/board/${conversation.id}`
-                      const isDeleting = deletingConversationId === conversation.id
-                      return (
-                        <SortableBoardItem
-                          key={conversation.id}
-                          conversation={conversation}
-                          isActive={isActive}
-                          isDeleting={isDeleting}
-                          deletingConversationId={deletingConversationId}
-                          isRenaming={isRenaming}
-                          pathname={pathname}
-                          openRenameDialog={openRenameDialog}
-                          openDeleteDialog={openDeleteDialog}
-                          dragOverId={dragOverId}
-                          dragOverPosition={dragOverPosition}
-                          activeId={activeId}
-                          filteredConversations={archivedConversations}
-                          projects={projects}
-                          supabase={supabase}
-                          queryClient={queryClient}
-                          refetch={refetch}
-                        />
-                      )
-                    })}
-                  </ul>
-                </SortableContext>
               )}
 
               <DragOverlay>
@@ -2519,7 +2850,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                 This will delete <span className="font-semibold text-gray-900">{projectToDelete?.name}</span>.
               </DialogDescription>
               <DialogDescription className="text-sm text-gray-500 pt-1">
-                The project will be permanently deleted. Boards in this project will not be deleted.
+                The project will be permanently deleted. Pages in this project will not be deleted.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter className="flex-row justify-end gap-2 pt-4">

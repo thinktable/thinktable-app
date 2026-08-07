@@ -6871,13 +6871,13 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
       >
         <div
           className={cn(
-            "bg-gray-100 dark:bg-[#2a2a3a] rounded-lg pl-1 pt-1 pb-1 pr-4 flex items-center gap-1 relative w-[181px]",
+            "bg-gray-100 dark:bg-[#2a2a3a] rounded-lg p-1 flex items-center gap-1 relative w-[181px]",
             isMinimapHidden && "shadow-sm"
           )}
         >
-          {/* Linear button with nested caret dropdown */}
+          {/* Linear button with nested caret dropdown — flex-1 so both modes share container width evenly */}
           <div className={cn(
-            'relative pl-3 pr-2 py-1 text-xs rounded-lg flex items-center gap-1 h-auto group',
+            'relative flex-1 min-w-0 py-1 text-xs rounded-lg flex items-center justify-evenly h-auto group',
             viewMode === 'linear'
               ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
               : 'bg-transparent text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
@@ -7007,9 +7007,9 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          {/* Free button with nested caret dropdown */}
+          {/* Free button with nested caret dropdown — flex-1 so both modes share container width evenly */}
           <div className={cn(
-            'relative pl-3 pr-2 py-1 text-xs rounded-lg flex items-center gap-1 h-auto group',
+            'relative flex-1 min-w-0 py-1 text-xs rounded-lg flex items-center justify-evenly h-auto group',
             viewMode === 'canvas'
               ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
               : 'bg-transparent text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'

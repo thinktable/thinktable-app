@@ -94,10 +94,14 @@ export function NotionConnectButton() {
     }
     if (data.conversationId) {
       await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', data.conversationId] })
+      await queryClient.invalidateQueries({ queryKey: ['conversations'] }) // Refresh Pages menu nesting
+      await queryClient.invalidateQueries({ queryKey: ['path-board-menu'] })
+      await queryClient.invalidateQueries({ queryKey: ['edit-panel-title'] })
       if (!pathname?.includes(data.conversationId)) {
         router.push(`/board/${data.conversationId}?notion=connected&imported=${data.importedCount || 0}`)
       } else {
         await queryClient.refetchQueries({ queryKey: ['messages-for-panels', data.conversationId] })
+        await queryClient.refetchQueries({ queryKey: ['conversations'] })
         window.setTimeout(() => {
           window.dispatchEvent(new CustomEvent('fit-view-start'))
         }, 300)
@@ -125,7 +129,7 @@ export function NotionConnectButton() {
               variant="ghost"
               size="sm"
               className={cn(
-                'h-7 px-2 gap-1.5 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0'
+                'h-7 w-7 p-0 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0'
               )}
               title={status.workspaceName ? `Notion · ${status.workspaceName}` : 'Notion connected'}
               disabled={loading}
@@ -137,16 +141,13 @@ export function NotionConnectButton() {
                 height={14}
                 className="h-3.5 w-3.5 dark:invert"
               />
-              <span className="text-xs font-medium max-w-[96px] truncate">
-                {status.workspaceName || 'Notion'}
-              </span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuItem disabled className="text-xs text-gray-500">
               Connected{status.workspaceName ? ` · ${status.workspaceName}` : ''}
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setPickerOpen(true)}>Import pages to board</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setPickerOpen(true)}>Import pages</DropdownMenuItem>
             <DropdownMenuItem onClick={startConnect}>Reconnect / change pages</DropdownMenuItem>
             <DropdownMenuItem onClick={disconnect} className="text-red-600 focus:text-red-600">
               Disconnect Notion
@@ -157,7 +158,7 @@ export function NotionConnectButton() {
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 px-2 gap-1.5 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0"
+          className="h-7 w-7 p-0 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0"
           title={status?.configured === false ? 'Notion OAuth credentials missing — click for setup steps' : 'Connect Notion'}
           onClick={startConnect}
           disabled={loading}
@@ -169,7 +170,6 @@ export function NotionConnectButton() {
             height={14}
             className="h-3.5 w-3.5 dark:invert"
           />
-          <span className="text-xs font-medium">Notion</span>
         </Button>
       )}
 

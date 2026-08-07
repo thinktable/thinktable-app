@@ -64,8 +64,8 @@ export default function BoardPage() {
   return (
     <EditorProvider>
       <ReactFlowContextProvider conversationId={conversationId}>
-        <div className="h-full flex">
-          <div className="flex-1 relative min-w-0 h-full">
+        <div className="h-full relative">
+          <div className="h-full relative min-w-0">
             <BoardFlow conversationId={conversationId} />
             <Suspense fallback={null}>
               <WelcomeText />

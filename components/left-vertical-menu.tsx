@@ -1,6 +1,6 @@
 'use client'
 
-// Left vertical menu - calendar and quiz buttons with collapse pill on sidebar right edge
+// Flashcard study menu — centered at bottom of map with open/close pill
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Calendar, HelpCircle, WalletCards, Shuffle } from 'lucide-react'
 import { Button } from './ui/button'
@@ -22,14 +22,13 @@ interface LeftVerticalMenuProps {
 export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMenuProps) {
   const [isMounted, setIsMounted] = useState(false) // Track if component has mounted (to prevent hydration mismatch)
   const [isHidden, setIsHidden] = useState(false) // Track if menu is hidden
-  const [isHovering, setIsHovering] = useState(false) // Track if mouse is hovering over pill
+  const [isHovering, setIsHovering] = useState(false) // Track if mouse is hovering over hover zone
   const [isHoveringMenu, setIsHoveringMenu] = useState(false) // Track if mouse is hovering over menu
   const [isHoveringPill, setIsHoveringPill] = useState(false) // Track if mouse is hovering over pill
   // Menu visibility mode: 'shown' | 'hidden' | 'hover'
-  // Use useUserPreference hook for Supabase persistence, default to 'shown'
   const supabaseForMenu = createClient() // Create Supabase client for useUserPreference
   const { mode: menuMode, setMode: setMenuMode, isLoading: isLoadingMenuMode } = useUserPreference(supabaseForMenu, 'menuMode', 'shown')
-  const [selectedMode, setSelectedMode] = useState<'quiz' | 'flashcard'>('flashcard') // Radio toggle - one always selected (defaults to flashcard)
+  const [selectedMode, setSelectedMode] = useState<'quiz' | 'flashcard'>('flashcard') // Radio toggle - one always selected
   const [isCalendarOpen, setIsCalendarOpen] = useState(false) // Track if calendar dialog is open
   const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null) // Track hide timeout
   const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null) // Track hover timeout
@@ -45,7 +44,7 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
   // Sync menu visibility with mode (only after loading is complete)
   useEffect(() => {
     if (isLoadingMenuMode) return // Don't apply mode while loading
-    
+
     if (menuMode === 'shown') {
       setIsHidden(false)
     } else if (menuMode === 'hidden') {
@@ -84,14 +83,11 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
 
     // Small delay to allow transition between areas
     hideTimeoutRef.current = setTimeout(() => {
-      // Re-check ref at timeout execution time
       const isInAnyArea = isHoveringRef.current
-
-      // If menu is shown and we're not in any related area, hide it
       if (!isHidden && !isInAnyArea && menuMode === 'hover') {
         setIsHidden(true)
       }
-    }, 200) // Slight delay to allow moving between areas
+    }, 200)
   }, [menuMode, isHidden])
 
   // Keep ref in sync with state
@@ -99,45 +95,12 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
     isHoveringRef.current = isHovering || isHoveringMenu || isHoveringPill
   }, [isHovering, isHoveringMenu, isHoveringPill])
 
-  // Calculate left inset for the vertical tool menu (popup nav does not reserve layout width)
-  const [sidebarRightEdge, setSidebarRightEdge] = useState(0)
-
-  useEffect(() => {
-    // Only update after mount to prevent hydration mismatch
-    if (!isMounted) return
-
-    const updateSidebarRightEdge = () => {
-      // Prefer the floating nav popup when open; otherwise hug the left edge of the map
-      const sidebarElement = document.querySelector('[data-app-sidebar]') as HTMLElement | null
-      if (sidebarElement) {
-        const rect = sidebarElement.getBoundingClientRect()
-        setSidebarRightEdge(rect.right)
-      } else {
-        setSidebarRightEdge(0) // Full-bleed map — menu sits at left padding
-      }
-    }
-
-    updateSidebarRightEdge()
-    window.addEventListener('resize', updateSidebarRightEdge)
-
-    // Watch for popup open/close via DOM mutations under body
-    const mutationObserver = new MutationObserver(() => {
-      updateSidebarRightEdge()
-    })
-    mutationObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] })
-
-    return () => {
-      window.removeEventListener('resize', updateSidebarRightEdge)
-      mutationObserver.disconnect()
-    }
-  }, [isMounted])
-
   // Handle calendar button click - open calendar dialog
   const handleCalendarClick = () => {
     setIsCalendarOpen(true)
   }
 
-  // Handle quiz button click - switch to quiz mode (radio behavior, one always selected)
+  // Handle quiz button click - switch to quiz mode (radio behavior)
   const handleQuizClick = () => {
     if (selectedMode !== 'quiz') {
       setSelectedMode('quiz')
@@ -146,7 +109,7 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
     console.log('Quiz mode selected')
   }
 
-  // Handle flashcard button click - switch to flashcard mode (radio behavior, one always selected)
+  // Handle flashcard button click - switch to flashcard mode (radio behavior)
   const handleFlashcardClick = () => {
     if (selectedMode !== 'flashcard') {
       setSelectedMode('flashcard')
@@ -155,61 +118,32 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
     console.log('Flashcard mode selected')
   }
 
-  // Handle shuffle button click - just a button, no toggle
+  // Handle shuffle button click
   const handleShuffleClick = () => {
     // TODO: Implement shuffle functionality
     console.log('Shuffle clicked')
   }
 
-  const menuItemSize = 32 // Size of each circular button (w-8 h-8 = 32px, smaller than edit menu buttons)
-  const menuGap = 4 // Gap between items (same as edit menu gap: gap-0.5 = 4px, applies to all flex children)
-  const dividerHeight = 1 // Height of divider line
-  // Total height: 4 buttons + 2 dividers + 5 gaps (between 6 items: button, divider, button, button, divider, button)
-  const menuTotalHeight = (menuItemSize * 4) + (dividerHeight * 2) + (menuGap * 5)
-  const pillHeight = 48 // Pill height matches edit menu pill width (w-12 = 48px)
+  const pillBottom = 10 // px from bottom of map — open/close pill
+  const menuBottom = 22 // px — menu sits above the pill (mirrors top-bar layout)
 
-  // Calculate pill position to center it vertically in the window
-  // Initialize with consistent value to prevent hydration mismatch
-  const [windowHeight, setWindowHeight] = useState(800) // Default value, updated after mount
-
-  useEffect(() => {
-    // Only update after mount to prevent hydration mismatch
-    if (!isMounted) return
-
-    const updateWindowHeight = () => {
-      setWindowHeight(window.innerHeight)
-    }
-
-    updateWindowHeight()
-    window.addEventListener('resize', updateWindowHeight)
-
-    return () => {
-      window.removeEventListener('resize', updateWindowHeight)
-    }
-  }, [isMounted])
-
-  // Center pill vertically in window: (window height / 2) - (pill height / 2)
-  // Use consistent calculation that matches server-side initial render
-  const pillTop = isMounted ? (windowHeight / 2) - (pillHeight / 2) : 376 // Default to match server-side initial value
+  // Avoid SSR/client flash before mount
+  if (!isMounted) return null
 
   return (
     <>
-      {/* Vertical menu - positioned on left side, aligned with sidebar right edge */}
+      {/* Horizontal flashcard menu — centered at bottom of map */}
       <div
         ref={menuRef}
         data-left-menu-context
         className={cn(
-          'fixed z-[60] transition-opacity duration-200 flex flex-col gap-0.5 px-1 py-1 rounded-full bg-blue-50 dark:bg-[#2a2a3a] shadow-sm',
+          'absolute z-[60] left-1/2 -translate-x-1/2 transition-opacity duration-200 flex flex-row items-center gap-0.5 px-1 py-1 rounded-full bg-blue-50 dark:bg-[#2a2a3a] shadow-sm',
           isHidden ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'
         )}
-        style={{
-          left: `${sidebarRightEdge + 12}px`, // Position with 12px gap from sidebar right edge (viewport-relative for fixed positioning)
-          top: `${pillTop + (pillHeight / 2) - (menuTotalHeight / 2)}px`, // Center menu vertically with pill (viewport-relative)
-        }}
+        style={{ bottom: `${menuBottom}px` }}
         onMouseEnter={() => {
           setIsHoveringMenu(true)
           isHoveringRef.current = true
-          // Cancel any pending hide timeout
           if (hideTimeoutRef.current) {
             clearTimeout(hideTimeoutRef.current)
             hideTimeoutRef.current = null
@@ -217,11 +151,10 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
         }}
         onMouseLeave={(e) => {
           setIsHoveringMenu(false)
-          // Check if menu should hide after leaving menu
           checkAndHideMenu(e.relatedTarget as HTMLElement)
         }}
       >
-        {/* Calendar button - circular white like edit menu */}
+        {/* Calendar button */}
         <Button
           variant="ghost"
           size="icon"
@@ -235,10 +168,10 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
           <Calendar className="h-4 w-4" />
         </Button>
 
-        {/* Divider above flashcard button */}
-        <div className="h-px bg-gray-300 dark:bg-gray-600 mx-2" />
+        {/* Divider */}
+        <div className="w-px h-4 bg-gray-300 dark:bg-gray-600 mx-0.5" />
 
-        {/* Flashcard button - radio toggle with quiz, shows white background only when selected */}
+        {/* Flashcard button */}
         <Button
           variant="ghost"
           size="icon"
@@ -247,15 +180,15 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
             'w-8 h-8 rounded-full text-gray-700 dark:text-gray-300 transition-all duration-200',
             'flex items-center justify-center',
             selectedMode === 'flashcard'
-              ? 'bg-white dark:bg-white hover:bg-white dark:hover:bg-white' // White background when selected, stays white on hover
-              : 'bg-transparent hover:bg-transparent dark:hover:bg-transparent' // Transparent normally and on hover when not selected
+              ? 'bg-white dark:bg-white hover:bg-white dark:hover:bg-white'
+              : 'bg-transparent hover:bg-transparent dark:hover:bg-transparent'
           )}
           title="Flashcard"
         >
           <WalletCards className="h-4 w-4" />
         </Button>
 
-        {/* Quiz button - radio toggle with flashcard, shows white background only when selected */}
+        {/* Quiz button */}
         <Button
           variant="ghost"
           size="icon"
@@ -264,18 +197,18 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
             'w-8 h-8 rounded-full text-gray-700 dark:text-gray-300 transition-all duration-200',
             'flex items-center justify-center',
             selectedMode === 'quiz'
-              ? 'bg-white dark:bg-white hover:bg-white dark:hover:bg-white' // White background when selected, stays white on hover
-              : 'bg-transparent hover:bg-transparent dark:hover:bg-transparent' // Transparent normally and on hover when not selected
+              ? 'bg-white dark:bg-white hover:bg-white dark:hover:bg-white'
+              : 'bg-transparent hover:bg-transparent dark:hover:bg-transparent'
           )}
           title="Quiz"
         >
           <HelpCircle className="h-4 w-4" />
         </Button>
 
-        {/* Divider above shuffle button */}
-        <div className="h-px bg-gray-300 dark:bg-gray-600 mx-2" />
+        {/* Divider */}
+        <div className="w-px h-4 bg-gray-300 dark:bg-gray-600 mx-0.5" />
 
-        {/* Shuffle button - circular white like edit menu */}
+        {/* Shuffle button */}
         <Button
           variant="ghost"
           size="icon"
@@ -290,99 +223,81 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
         </Button>
       </div>
 
-      {/* Collapse pill on sidebar right edge - vertical pill, centered on edge */}
+      {/* Open/close pill — centered under menu at bottom edge */}
       <div
         ref={pillRef}
         data-left-menu-pill-context
         onClick={() => {
-          // Toggle between 'shown' and 'hover' modes
-          // Toggle between 'shown' and 'hidden' by default
-          // If in 'hover' mode, clicking pill changes it to 'shown'
           if (menuMode === 'shown') {
-            setMenuMode('hidden') // Toggle to hidden
+            setMenuMode('hidden')
           } else if (menuMode === 'hidden') {
-            setMenuMode('shown') // Toggle to shown
-          } else { // menuMode === 'hover'
-            setMenuMode('shown') // If in hover mode, click makes it shown
+            setMenuMode('shown')
+          } else {
+            setMenuMode('shown')
             setIsHidden(false)
           }
         }}
         onMouseEnter={() => {
           setIsHoveringPill(true)
           isHoveringRef.current = true
-          // Cancel any pending hide timeout
           if (hideTimeoutRef.current) {
             clearTimeout(hideTimeoutRef.current)
             hideTimeoutRef.current = null
           }
-          // If menu is hidden and mode is 'hover', show it after a short delay
           if (isHidden && menuMode === 'hover') {
             hoverTimeoutRef.current = setTimeout(() => {
               if (isHidden && menuMode === 'hover') {
                 setIsHidden(false)
               }
-            }, 100) // 100ms delay - quick response
+            }, 100)
           }
         }}
         onMouseLeave={(e) => {
           setIsHoveringPill(false)
-          // Clear any pending timeout
           if (hoverTimeoutRef.current) {
             clearTimeout(hoverTimeoutRef.current)
             hoverTimeoutRef.current = null
           }
-          // Check if menu should hide after leaving pill
           checkAndHideMenu(e.relatedTarget as HTMLElement)
         }}
         className={cn(
-          'fixed z-[60] w-1.5 rounded-full cursor-pointer transition-all duration-200 bg-gray-300 dark:bg-gray-600 hover:bg-gray-400 dark:hover:bg-gray-500',
-          // Show pill when hovering on it, or always show if menu is hidden (so user can restore it)
+          'absolute z-[60] left-1/2 -translate-x-1/2 w-12 h-1.5 rounded-full cursor-pointer transition-all duration-200 bg-gray-300 dark:bg-gray-600 hover:bg-gray-400 dark:hover:bg-gray-500',
           (isHoveringPill || isHidden) ? 'opacity-100' : 'opacity-0'
         )}
-        style={{
-          left: `${sidebarRightEdge}px`, // Position at sidebar right edge (viewport-relative for fixed positioning)
-          top: `${pillTop}px`, // Center pill vertically in window (viewport-relative)
-          height: `${pillHeight}px`, // Height to span both buttons + gap (matches menu height = 88px)
-          transform: 'translateX(-50%)', // Center the pill horizontally on the sidebar edge (pill width is 1.5px, so this centers it perfectly on the edge)
-        }}
+        style={{ bottom: `${pillBottom}px` }}
         title={isHidden ? 'Show menu' : 'Hide menu'}
       />
 
-      {/* Hover zone between sidebar and menu - triggers menu visibility, centered vertically with pill */}
+      {/* Hover zone above the pill — reveals menu in hover mode */}
       <div
-        className="fixed pointer-events-auto"
+        className="absolute left-1/2 -translate-x-1/2 pointer-events-auto"
         style={{
-          left: `${sidebarRightEdge}px`, // Start at sidebar right edge (viewport-relative for fixed positioning)
-          top: `${pillTop}px`, // Match pill vertical position (viewport-relative)
-          width: `${12 + menuItemSize + 8}px`, // Hover zone width (extends from sidebar edge through gap to menu)
-          height: `${pillHeight}px`, // Match pill height
-          zIndex: 55, // Above sidebar (z-50) but below pill (z-60) to allow clicks through
+          bottom: `${pillBottom}px`,
+          width: '160px',
+          height: `${menuBottom - pillBottom + 40}px`, // Covers pill + gap + menu band
+          zIndex: 55,
         }}
         onMouseEnter={() => {
           setIsHovering(true)
           isHoveringRef.current = true
-          // Clear any pending hide timeout
           if (hideTimeoutRef.current) {
             clearTimeout(hideTimeoutRef.current)
             hideTimeoutRef.current = null
           }
-          // If menu is hidden and mode is 'hover', show it after a short delay
           if (isHidden && menuMode === 'hover') {
             hoverTimeoutRef.current = setTimeout(() => {
               if (isHidden && menuMode === 'hover') {
                 setIsHidden(false)
               }
-            }, 100) // 100ms delay - quick response
+            }, 100)
           }
         }}
         onMouseLeave={(e) => {
           setIsHovering(false)
-          // Clear any pending timeout
           if (hoverTimeoutRef.current) {
             clearTimeout(hoverTimeoutRef.current)
             hoverTimeoutRef.current = null
           }
-          // Check if menu should hide after leaving hover zone
           checkAndHideMenu(e.relatedTarget as HTMLElement)
         }}
       />
@@ -404,4 +319,3 @@ export function LeftVerticalMenu({ studySetId, conversationId }: LeftVerticalMen
     </>
   )
 }
-

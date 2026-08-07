@@ -22,6 +22,7 @@ export type ImportNotionResult = {
   importedCount: number // Newly created notes
   skippedCount: number // Already-linked Notion pages skipped
   pages: NotionSearchPage[] // Pages that were considered for import
+  nestedPageCount?: number // Child Thinktable pages created in the nav
 }
 
 function parseBoardIdFromReturnTo(returnTo: string): string | null {
@@ -197,10 +198,79 @@ export async function importNotionPagesToBoard(opts: {
     }
   }
 
+  // Also create nested Thinktable pages in the nav under the current page (with Notion icons)
+  const { data: existingConvs } = await admin
+    .from('conversations')
+    .select('id, metadata')
+    .eq('user_id', opts.userId)
+
+  const alreadyMenuLinked = new Set<string>() // notionPageIds already represented as child pages
+  for (const conv of existingConvs || []) {
+    const meta = (conv.metadata as { notionPageId?: string } | null) || {}
+    if (meta.notionPageId) alreadyMenuLinked.add(normalizeNotionId(meta.notionPageId))
+  }
+
+  const pagesForMenu = pages.filter((p) => !alreadyMenuLinked.has(normalizeNotionId(p.id))) // New menu pages only
+  const notionIdToConvId = new Map<string, string>() // Notion id → new Thinktable page id (for mindmap nesting)
+
+  // Create parents before children so mindmap nesting can resolve
+  const orderedForMenu =
+    mode === 'mindmap'
+      ? pagesForMenu // Already DFS-ish from collectPageAndDescendants when single root
+      : pagesForMenu
+
+  for (const page of orderedForMenu) {
+    // Resolve Thinktable parent: current page, or the child page created for this Notion page's parent
+    let parentId = conversationId
+    if (mode === 'mindmap' && page.parent) {
+      let notionParentKey: string | null = null
+      if (page.parent.type === 'page_id') notionParentKey = normalizeNotionId(String(page.parent.page_id || ''))
+      if (page.parent.type === 'database_id') notionParentKey = normalizeNotionId(String(page.parent.database_id || ''))
+      if (notionParentKey && notionIdToConvId.has(notionParentKey)) {
+        parentId = notionIdToConvId.get(notionParentKey)! // Nest under sibling Thinktable page
+      }
+    }
+
+    const iconMeta = page.icon
+      ? page.icon.type === 'emoji' && page.icon.emoji
+        ? { type: 'emoji' as const, emoji: page.icon.emoji }
+        : page.icon.type === 'external' && page.icon.external?.url
+          ? { type: 'external' as const, url: page.icon.external.url }
+          : page.icon.type === 'file' && page.icon.file?.url
+            ? { type: 'file' as const, url: page.icon.file.url }
+            : null
+      : null
+
+    const { data: createdChild, error: childError } = await admin
+      .from('conversations')
+      .insert({
+        user_id: opts.userId,
+        title: page.title || 'Untitled',
+        metadata: {
+          parent_id: parentId, // Nest under the Thinktable page where import ran
+          notionPageId: page.id, // Link back to Notion
+          notionObject: page.object,
+          notionUrl: page.url ?? null,
+          icon: iconMeta, // Show Notion emoji/file icon in the Pages menu
+          source: 'notion',
+          hasContent: true, // Imported Notion pages count as contentful
+        },
+      })
+      .select('id')
+      .single()
+
+    if (childError || !createdChild) {
+      console.error('Failed to create nested page for Notion import:', childError)
+      continue
+    }
+    notionIdToConvId.set(normalizeNotionId(page.id), createdChild.id)
+  }
+
   return {
     conversationId, // Board to open after redirect
     importedCount: rows.length, // How many new notes
     skippedCount: pages.length - rows.length, // Already present
     pages, // Pages considered
+    nestedPageCount: notionIdToConvId.size, // Child pages added to the Pages menu
   }
 }

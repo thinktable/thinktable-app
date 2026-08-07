@@ -30,32 +30,17 @@ export function ChatSidebar({ conversationId, projectId }: ChatSidebarProps) {
   if (!isChatSidebarOpen) return null // Hidden by default; opened via board brand logo
 
   return (
-    <div className="relative h-full flex-shrink-0 flex">
-      {/* Double-right chevron outside sidebar, bottom-left — closes chat */}
-      <button
-        type="button"
-        data-chat-sidebar-collapse
-        onClick={() => setChatSidebarOpen(false)}
-        className={cn(
-          'absolute z-20 bottom-3 left-0 -translate-x-full',
-          'w-8 h-9 flex items-center justify-center',
-          'bg-transparent border-0 p-0',
-          'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100',
-          'transition-colors'
-        )}
-        title="Hide chat"
-        aria-label="Hide chat sidebar"
-      >
-        <ChevronsRight className="h-5 w-5" />
-      </button>
-
+    // Overlay on the right — does not shrink map / top-bar column
+    <div className="absolute inset-y-0 right-0 z-30 flex h-full pointer-events-none">
+      <div className="relative h-full flex pointer-events-auto">
       <aside
         data-chat-sidebar
         className={cn(
           'h-full flex flex-col',
           // Match board/top-bar surface (reverted from Notion tint)
           'bg-gray-50 dark:bg-[#0f0f0f]',
-          'border-l border-black/10 dark:border-white/10'
+          'border-l border-black/10 dark:border-white/10',
+          'shadow-[-8px_0_24px_rgba(0,0,0,0.06)] dark:shadow-[-8px_0_24px_rgba(0,0,0,0.35)]' // Soft separation over map
         )}
         style={{ width: CHAT_SIDEBAR_WIDTH }}
       >
@@ -196,6 +181,7 @@ export function ChatSidebar({ conversationId, projectId }: ChatSidebarProps) {
         topperId={topperId}
         onTopperChange={setTopperId}
       />
+      </div>
     </div>
   )
 }

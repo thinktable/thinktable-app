@@ -1,14 +1,14 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-07T15:06:49Z`
+- Snapped at: `2026-08-07T16:03:51Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `migration list` failed with `cli_login_postgres` permission denied; use migration files as source of truth.
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 
 ## Live: `public.notion_connections`
 
-Verified previously on project (unchanged this save — no new migrations).
+Verified previously on project (unchanged this save — no new schema migrations).
 
 Columns:
 
@@ -38,24 +38,3 @@ Columns:
 - `projects`
 - `subscriptions`
 - `usage`
-- `user_preferences`
-
-## Local migration files
-
-- `20251203111351_schema_documentation.md`
-- `20251204120000_create_panel_edges.sql`
-- `20251204120000_schema_snapshot.md`
-- `20251214152553_add_project_tabs_more_menu.sql`
-- `20251224163818_schema_snapshot.sql`
-- `20251224180000_add_flashcard_tag_button.md`
-- `20251228200000_create_canvas_nodes_table.sql`
-- `20251230235042_save_current_state.sql`
-- `20251231001007_save_current_state.sql`
-- `20251231004542_nodetoolbar_frontend_only.sql`
-- `20251231005556_toolbar_map_object_fix.sql`
-- `20251231093255_padding_standardization.sql`
-- `20260102220857_selection_clear_fix.sql`
-- `20260102224915_auto_focus_flashcard.sql`
-- `20260103013031_panel_selection_fix.sql`
-- `20260103020000_resize_persistence_metadata.md`
-- `20260806200000_create_notion_connections.sql`

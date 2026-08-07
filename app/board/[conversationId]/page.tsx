@@ -37,13 +37,13 @@ export default async function ConversationPage({
   return (
     <EditorProvider>
       <ReactFlowContextProvider conversationId={conversationId}>
-        <div className="h-full flex">
-          {/* Map + top edit bar — shrinks left when chat sidebar opens */}
-          <div className="flex-1 relative min-w-0 h-full">
+        <div className="h-full relative">
+          {/* Map + top edit bar — full width; chat overlays instead of shrinking */}
+          <div className="h-full relative min-w-0">
             <BoardFlow conversationId={conversationId} />
             <InputAreaWithStickyPrompt conversationId={conversationId} />
           </div>
-          {/* Full-height chat column (hidden by default) */}
+          {/* Overlay chat panel (hidden by default) */}
           <ChatSidebar conversationId={conversationId} />
         </div>
       </ReactFlowContextProvider>
