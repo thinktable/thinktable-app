@@ -71,6 +71,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ShapeGridItem } from './shapes/ShapeGridItem'
 import { useTheme } from './theme-provider'
 import { NotionConnectButton } from './notion-connect-button'
+import { newBlockMetadata } from '@/lib/blocks' // Canonical isBlock + isInlineBlock metadata
 
 interface EditorToolbarProps {
   editor: Editor | null
@@ -339,8 +340,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const queryClient = useQueryClient()
   const router = useRouter()
 
-  // Handle creating a new note (component panel)
-  const handleCreateNote = async () => {
+  // Handle creating a new block (component panel)
+  const handleCreateBlock = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
@@ -374,7 +375,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         }
       }
 
-      // Create an empty item card (untitled until titled → linked page)
+      // Create an empty block card (untitled until titled → linked page)
       const { data: newMessage, error } = await supabase
         .from('messages')
         .insert({
@@ -382,7 +383,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           user_id: user.id,
           role: 'user',
           content: '', // Empty content to start
-          metadata: { isItem: true }, // Map item card
+          metadata: newBlockMetadata(), // Map block card
         })
         .select()
         .single()
@@ -3345,8 +3346,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
-          <DropdownMenuItem onClick={handleCreateNote} className="rounded-sm">
-            Note
+          <DropdownMenuItem onClick={handleCreateBlock} className="rounded-sm">
+            Block
           </DropdownMenuItem>
           <DropdownMenuItem onClick={handleCreateFlashcard} className="rounded-sm">
             Flashcard

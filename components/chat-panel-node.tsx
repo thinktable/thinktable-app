@@ -4,15 +4,11 @@
 import { NodeProps, Handle, Position, useReactFlow, NodeResizeControl } from 'reactflow' // RF node primitives + corner resize controls
 import { cn, generateUUID } from '@/lib/utils'
 import { useEditor, EditorContent } from '@tiptap/react'
-import StarterKit from '@tiptap/starter-kit'
-import Highlight from '@tiptap/extension-highlight'
-import { TextStyle } from '@tiptap/extension-text-style'
-import Color from '@tiptap/extension-color'
-import TextAlign from '@tiptap/extension-text-align'
-import Placeholder from '@tiptap/extension-placeholder'
-import { Haze } from '@/lib/tiptap/haze' // Hide-text mark (frosted until click-reveal)
+import { createPanelExtensions } from '@/lib/tiptap/extensions' // StarterKit + Turn into nodes
+import { TipTapBlockHandles } from '@/components/tiptap-block-handles' // Per-content-block ⋮⋮ (Notion)
+import type { PageInTarget } from '@/components/block-actions-menu'
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw } from 'lucide-react' // RotateCw = bottom-left rotation affordance
+import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw } from 'lucide-react' // RotateCw = rotation
 
 // Helper to check if content is effectively empty (handling HTML tags)
 const isContentEmpty = (content: string | undefined | null) => {
@@ -61,9 +57,10 @@ import { useEditorContext } from './editor-context'
 import { useReactFlowContext } from './react-flow-context'
 import { useTheme } from './theme-provider'
 import { SelectionFormatPopupAnchor } from './selection-format-popup' // Notion-style selection menu (stable edge anchor)
-import { ItemTitleEdge } from './item-title-edge' // Edge title chip; titled items promote to pages
+import { BlockTitleEdge } from './block-title-edge' // Edge title chip; titled blocks promote to pages
 import { NestedBoardPreview, prefetchPageEmbed } from './nested-board-preview' // Page-within-page board preview
-import { deleteLinkedPageForItem, isItemMeta, isPageBodyMeta } from '@/lib/items' // Item detection + delete sync
+import { deleteLinkedPageForBlock, isBlockMeta, isPageBodyMeta } from '@/lib/blocks' // Block detection + delete sync
+import { applyTurnInto } from '@/lib/blocks/turn-into' // Page / Page in from content-block menu
 
 interface Message {
   id: string
@@ -198,7 +195,11 @@ function TipTapContent({
   isLoading,
   onBlur,
   onEditorActiveChange,
-  fontScale
+  fontScale,
+  enableBlockHandles = false, // Notion ⋮⋮ on each content block (not the card frame)
+  hostNodeId,
+  pageInTargets,
+  onPageTurnInto,
 }: {
   content: string
   className?: string
@@ -219,40 +220,24 @@ function TipTapContent({
   onBlur?: () => void
   onEditorActiveChange?: (isActive: boolean) => void // Called when editor is focused or has selection
   fontScale?: number // Font scale factor for resized panels (defaults to 1)
+  enableBlockHandles?: boolean
+  hostNodeId?: string
+  pageInTargets?: PageInTarget[]
+  onPageTurnInto?: (blockType: 'page' | 'pageIn', pageInParentId?: string | null) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { setActiveEditor } = useEditorContext()
 
-  // Build extensions array - only add Placeholder if placeholder text is provided
-  // Use any[] type to allow Placeholder extension which has incompatible types
-  const extensions: any[] = [
-    StarterKit,
-    Highlight.configure({
-      multicolor: true,
-    }),
-    Haze, // Hide-text frost mark (selection menu + click-to-reveal)
-    TextStyle,
-    Color,
-    TextAlign.configure({
-      types: ['heading', 'paragraph'],
-    }),
-  ]
-  
-  // Only add Placeholder extension if placeholder text is provided
-  if (placeholder !== undefined && placeholder !== '') {
-    extensions.push(Placeholder.configure({
-      placeholder: placeholder,
-      emptyNodeClass: 'is-editor-empty',
-      emptyEditorClass: 'is-editor-empty',
-    }))
-  } else if (placeholder === undefined) {
-    // Default placeholder behavior if placeholder prop is not provided
-    extensions.push(Placeholder.configure({
-      placeholder: section === 'prompt' ? 'What are you trying to remember?' : 'Explain it clearly or let AI help',
-      emptyNodeClass: 'is-editor-empty',
-      emptyEditorClass: 'is-editor-empty',
-    }))
-  }
+  // Shared stack: headings 1–4, lists, tasks, callout/toggle/equation/synced/columns
+  const extensions = createPanelExtensions(
+    placeholder !== undefined && placeholder !== ''
+      ? placeholder
+      : placeholder === undefined
+        ? section === 'prompt'
+          ? 'What are you trying to remember?'
+          : 'Explain it clearly or let AI help'
+        : ''
+  )
 
   const editor = useEditor({
     extensions,
@@ -702,7 +687,20 @@ function TipTapContent({
       <SelectionFormatPopupAnchor editor={editor} containerRef={containerRef} />
 
       {/* Apply shimmer animation to prompt text when response is loading (not for flashcards) */}
-      <div className={cn(isLoading && !isFlashcard && 'shimmer')}>
+      <div
+        className={cn(
+          'relative',
+          enableBlockHandles && 'pl-6', // Gutter for per-block ⋮⋮ (outside content, like Notion)
+          isLoading && !isFlashcard && 'shimmer'
+        )}
+      >
+        <TipTapBlockHandles
+          editor={editor}
+          enabled={enableBlockHandles && !isFlashcard}
+          hostNodeId={hostNodeId}
+          pageInTargets={pageInTargets}
+          onPageTurnInto={onPageTurnInto}
+        />
         <EditorContent editor={editor} />
       </div>
     </div>
@@ -1481,12 +1479,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   }, [isProjectBoard, responseMessage?.id]) // Only depend on responseMessage.id to avoid unnecessary re-runs
 
   // Load resize dimensions/fontScale from message metadata on mount to restore panel size
-  // Note: This effect calculates isItem inline to avoid dependency on isItem before it's defined
+  // Note: This effect calculates isBlock inline to avoid dependency on isBlock before it's defined
   useEffect(() => {
     if (isProjectBoard || !promptMessage || hasLoadedResizeStateRef.current) return // Project boards don't persist resize, and only load once
 
-    // Item panel: metadata.isItem, or empty user-only body
-    const isItemPanel = isItemMeta(promptMessage?.metadata) ||
+    // Block panel: metadata.isBlock, or empty user-only body
+    const isBlockPanel = isBlockMeta(promptMessage?.metadata) ||
       (promptMessage?.role === 'user' && 
        !responseMessage && 
        (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
@@ -1503,12 +1501,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         const metadata = message.metadata as Record<string, any>
         
         // For note panels: load fontScale (legacy scale-to-fit)
-        if (isItemPanel && metadata.fontScale && typeof metadata.fontScale === 'number') {
+        if (isBlockPanel && metadata.fontScale && typeof metadata.fontScale === 'number') {
           setFontScale(metadata.fontScale)
         }
 
         // Restore saved rotation for items (degrees around panel center)
-        if (isItemPanel && typeof metadata.rotation === 'number') {
+        if (isBlockPanel && typeof metadata.rotation === 'number') {
           setRotation(metadata.rotation) // Apply persisted angle so layout survives reload
         }
 
@@ -1568,7 +1566,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   }, [id, getSetNodes, reactFlowInstance])
 
   // Handle resize end - clear resizing flag and reset refs for next resize session
-  // handleResizeEnd is defined after isItem to access it - see below
+  // handleResizeEnd is defined after isBlock to access it - see below
 
   // Handle comment creation from text selection
   const handleComment = useCallback((selectedText: string, from: number, to: number, section: 'prompt' | 'response') => {
@@ -1742,15 +1740,15 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // Check if flashcard tags are loaded (for controlling toolbar visibility)
   const { isReady: tagsLoaded, tagIds } = useFlashcardTagsLoaded(isFlashcard && responseMessage?.id ? responseMessage.id : undefined)
   
-  // Item card: metadata.isItem, or empty user-only body
-  const isItem = isItemMeta(promptMessage?.metadata) ||
+  // Block card: metadata.isBlock, or empty user-only body
+  const isBlock = isBlockMeta(promptMessage?.metadata) ||
     (promptMessage?.role === 'user' && 
      !responseMessage && 
      (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
   
   // Calculate dynamic line-height for note nodes based on height (decreases as height increases)
   const calculateNoteLineHeight = useCallback(() => {
-    if (!isItem) return '1.7' // Default line-height
+    if (!isBlock) return '1.7' // Default line-height
     
     // Try to get height from React Flow node first (more accurate during resize)
     let currentHeight: number | null = null
@@ -1783,7 +1781,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     const calculatedLineHeight = baseLineHeight - (heightRatio - 1) * factor
     
     return `${calculatedLineHeight}`
-  }, [isItem, id, getNodes])
+  }, [isBlock, id, getNodes])
   
   // Get current line-height for notes - update on resize
   const [noteLineHeight, setNoteLineHeight] = useState('1.7')
@@ -1795,8 +1793,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const linkedPageId = !isProjectBoard
     ? (promptMessage?.metadata?.linkedPageId as string | undefined)
     : undefined
-  const itemTitleLabel =
-    (promptMessage?.metadata?.itemTitle as string | undefined) || ''
+  const blockTitleLabel =
+    (promptMessage?.metadata?.blockTitle as string | undefined) || ''
 
   // Warm lean embed document (and mount hidden iframe) so first nav isn’t a cold boot
   const prefetchPagePreview = () => {
@@ -1808,7 +1806,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
 
   // Update line-height + item box when note/item is resized using ResizeObserver
   useEffect(() => {
-    if (!isItem || !panelRef.current) return
+    if (!isBlock || !panelRef.current) return
     
     const updateFromSize = () => {
       const newLineHeight = calculateNoteLineHeight() // Keep note typography in sync with height
@@ -1834,15 +1832,15 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     return () => {
       resizeObserver.disconnect()
     }
-  }, [isItem, calculateNoteLineHeight])
+  }, [isBlock, calculateNoteLineHeight])
   
   // Regular chat panels are those that are not flashcards and not notes
-  const isRegularChatPanel = !isFlashcard && !isItem
+  const isRegularChatPanel = !isFlashcard && !isBlock
 
   // Keep RF node width/height aligned with the measured item box so NodeResizeControl
   // starts from real size (fit-content nodes often have width/height 0 → drag looks like move)
   useEffect(() => {
-    if (!isItem || !panelRef.current || !isInitialShrinkComplete) return // Wait until item has laid out
+    if (!isBlock || !panelRef.current || !isInitialShrinkComplete) return // Wait until block has laid out
     const el = panelRef.current // Panel DOM for measurement
     const syncNodeSize = () => {
       if (isResizingRef.current || !el) return // During active resize, RF owns dimensions
@@ -1863,7 +1861,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     const ro = new ResizeObserver(syncNodeSize) // Re-sync when text/layout changes size
     ro.observe(el)
     return () => ro.disconnect()
-  }, [isItem, id, getSetNodes, isInitialShrinkComplete, resizeDimensions, selected])
+  }, [isBlock, id, getSetNodes, isInitialShrinkComplete, resizeDimensions, selected])
 
   // Handle resize end - clear resizing flag and persist explicit box size from final params
   const handleResizeEnd = useCallback(async (_event: any, params?: { width: number; height: number }) => {
@@ -1895,7 +1893,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       ...existingMetadata,
       resizeDimensions: { width, height }, // Persist box for reload
     }
-    if (isItem) updatedMetadata.fontScale = fontScale // Keep legacy scale if present
+    if (isBlock) updatedMetadata.fontScale = fontScale // Keep legacy scale if present
 
     const { error: updateError } = await supabase
       .from('messages')
@@ -1905,7 +1903,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     if (updateError) {
       console.error('Error saving resize state to database:', updateError)
     }
-  }, [isItem, isProjectBoard, promptMessage, fontScale, resizeDimensions, supabase])
+  }, [isBlock, isProjectBoard, promptMessage, fontScale, resizeDimensions, supabase])
 
   // Corner-drag resize: apply explicit width/height so the box grows/shrinks (not just moves)
   const handleResize = useCallback((_event: any, params: { width: number; height: number }) => {
@@ -2523,9 +2521,9 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // Get current zoom level and update panel width when zoom is 100% or less
   const [currentZoom, setCurrentZoom] = useState(reactFlowInstance?.getViewport().zoom ?? 1)
   // Item panels use fit-content width
-  const isItemPanel = isItemMeta(promptMessage?.metadata)
+  const isBlockPanel = isBlockMeta(promptMessage?.metadata)
   // Items use fit-content width, flashcards and regular panels use fixed width
-  const usesFitContent = isItemPanel
+  const usesFitContent = isBlockPanel
   // Regular chat panels start at max width (768), flashcards start at 600, notes use fit-content
   const initialWidth = isFlashcard ? 600 : (isRegularChatPanel ? 768 : 768) // Regular panels start at max, flashcards at 600
   const [panelWidthToUse, setPanelWidthToUse] = useState(initialWidth)
@@ -2894,23 +2892,26 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   }, [measureTextWidthFromContent, promptContent, responseContent, usesFitContent, isFlashcard, isRegularChatPanel])
 
   // Sync single text body when underlying messages change (plain-merge prompt + response)
+  // Also force-sync after Turn into (metadata.blockType / content rewrite from outside)
+  const remoteBlockType = promptMessage?.metadata?.blockType as string | undefined
   useEffect(() => {
     if (isProjectBoard) {
       if (data.boardTitle !== promptContent && !promptHasChanges) {
         setPromptContent(data.boardTitle)
       }
-    } else if (!promptHasChanges) {
+    } else {
       const responseHtml = responseMessage?.content
         ? formatResponseContent(responseMessage.content)
         : ''
       const merged = mergePanelHtml(promptMessage?.content, responseHtml)
-      if (merged !== promptContent) {
+      if (merged !== promptContent && (!promptHasChanges || remoteBlockType)) {
         setPromptContent(merged)
+        if (remoteBlockType) setPromptHasChanges(false) // Accept server Turn into rewrite
       }
     }
     // Reset auto-focus ref when prompt message changes (new note created)
     hasAutoFocusedRef.current = false
-  }, [isProjectBoard, isProjectBoard ? data.boardTitle : promptMessage?.content, responseMessage?.content, promptContent, promptHasChanges, data, promptMessage?.id])
+  }, [isProjectBoard, isProjectBoard ? data.boardTitle : promptMessage?.content, responseMessage?.content, promptContent, promptHasChanges, data, promptMessage?.id, remoteBlockType])
 
   // Keep responseContent mirror for width-measurement helpers that still read it
   useEffect(() => {
@@ -3195,7 +3196,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
 
         // Keep Pages menu in sync: deleting a titled item removes its page map
         try {
-          await deleteLinkedPageForItem(supabase, promptMessage.metadata as Record<string, unknown>)
+          await deleteLinkedPageForBlock(supabase, promptMessage.metadata as Record<string, unknown>)
           await queryClient.invalidateQueries({ queryKey: ['conversations'] })
         } catch (linkErr) {
           console.error('Failed to delete linked page for item:', linkErr)
@@ -3231,19 +3232,19 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // UNLESS it's a flashcard - flashcards show grey area even if empty content
   // Notes are always component panels (simple note nodes)
   const promptContentValue = promptMessage?.content || ''
-  const isComponentPanel = isItem || promptContentValue.trim().length === 0
+  const isComponentPanel = isBlock || promptContentValue.trim().length === 0
   // const isFlashcard = promptMessage?.metadata?.isFlashcard === true // Already defined at top
   // Show grey area if: has content OR is a flashcard (even if empty) OR has response message (to show nested on response load, even if content is empty during streaming)
   // Notes never show grey area (they're simple note nodes)
-  const shouldShowGreyArea = !isItem && (promptContentValue.trim().length > 0 || isFlashcard || !!responseMessage)
+  const shouldShowGreyArea = !isBlock && (promptContentValue.trim().length > 0 || isFlashcard || !!responseMessage)
   // Calculate loading state: response is loading when responseMessage doesn't exist or has no content yet
   // Notes never show loading state (they don't have responses)
-  const isLoading = !isItem && (!responseMessage || (responseMessage && !responseMessage.content))
+  const isLoading = !isBlock && (!responseMessage || (responseMessage && !responseMessage.content))
   
   // Measure panel's content aspect ratio for note panels (needed for proper height calculation during resize)
   // This captures the natural aspect ratio of the panel content (text + padding) when first rendered
   useEffect(() => {
-    if (isItem && panelRef.current && isInitialShrinkComplete && !resizeDimensions) {
+    if (isBlock && panelRef.current && isInitialShrinkComplete && !resizeDimensions) {
       // Wait a bit for the panel to fully render and settle
       const timeoutId = setTimeout(() => {
         const panelElement = panelRef.current
@@ -3262,7 +3263,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       
       return () => clearTimeout(timeoutId)
     }
-  }, [isItem, isInitialShrinkComplete, promptContent, resizeDimensions])
+  }, [isBlock, isInitialShrinkComplete, promptContent, resizeDimensions])
 
   // Auto-focus note editor when first created (empty component panel or inline note with fadeIn flag)
   useEffect(() => {
@@ -3327,11 +3328,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     zIndex: 60, // Above title chip / connection dots so drag hits resize, not node drag
   }
 
+  // Map-card frame is a container (like a Notion page) — ⋮⋮ lives on TipTap content blocks inside
   return (
     <div
         ref={panelRef}
         data-panel-container="true" // Data attribute to help find panel container for comment popup
-        data-item-node={isItem ? 'true' : undefined} // Marks items for selected connection-dot styling
+        data-block-node={isBlock ? 'true' : undefined} // Marks blocks for selected connection-dot styling
         className={cn(
           'group rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible backdrop-blur-sm transition-[opacity,box-shadow,background-color,border-color] duration-300', // No transform transition so live rotate stays snappy
           // Always show blue border when selected, otherwise use custom border color or default theme-based color
@@ -3385,8 +3387,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         }
       }}
     >
-      {/* Selected items: four circular corner resize handles (replaces bottom-right toolbar island) */}
-      {selected && isItem && (
+      {/* Selected blocks: four circular corner resize handles (replaces bottom-right toolbar island) */}
+      {selected && isBlock && (
         <>
           {(['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const).map((position) => (
             <NodeResizeControl
@@ -3420,14 +3422,14 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       )}
 
       {/* Edge title chip — hidden while preview fills the card (chrome has title; chip would overlap) */}
-      {isItem && !isProjectBoard && promptMessage?.id && !pagePreviewOpen && (
-        <ItemTitleEdge
+      {isBlock && !isProjectBoard && promptMessage?.id && !pagePreviewOpen && (
+        <BlockTitleEdge
           selected={!!selected}
           width={itemBoxSize.width}
           height={itemBoxSize.height}
           messageId={promptMessage.id}
           conversationId={conversationId}
-          itemTitle={promptMessage.metadata?.itemTitle as string | undefined}
+          blockTitle={promptMessage.metadata?.blockTitle as string | undefined}
           linkedPageId={linkedPageId}
           titleEdgeT={typeof promptMessage.metadata?.titleEdgeT === 'number' ? promptMessage.metadata.titleEdgeT : null}
           previewOpen={pagePreviewOpen}
@@ -3770,7 +3772,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         {!pagePreviewOpen && (
           <div
             className="px-3 py-3"
-            style={{ lineHeight: isItem ? noteLineHeight : '1.7' }}
+            style={{ lineHeight: isBlock ? noteLineHeight : '1.7' }}
           >
             <TipTapContent
               content={promptContent || ''}
@@ -3812,6 +3814,41 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               isLoading={false}
               onBlur={handleEditorBlur}
               onEditorActiveChange={handleEditorActiveChange}
+              enableBlockHandles={isBlock && !isFlashcard} // ⋮⋮ on each TipTap block, not the card frame
+              hostNodeId={id}
+              pageInTargets={(() => {
+                const convs =
+                  (queryClient.getQueryData(['conversations']) as
+                    | Array<{ id: string; title?: string | null }>
+                    | undefined) || []
+                return [
+                  { id: conversationId || '', title: 'Current page' },
+                  ...convs
+                    .filter((c) => c.id !== conversationId)
+                    .slice(0, 40)
+                    .map((c) => ({ id: c.id, title: c.title?.trim() || 'Untitled' })),
+                ]
+              })()}
+              onPageTurnInto={async (blockType, pageInParentId) => {
+                if (!promptMessage?.id || !conversationId) return
+                try {
+                  const {
+                    data: { user },
+                  } = await supabase.auth.getUser()
+                  if (!user) return
+                  await applyTurnInto(supabase, {
+                    messageId: promptMessage.id,
+                    conversationId,
+                    userId: user.id,
+                    blockType,
+                    pageInParentId: pageInParentId || null,
+                  })
+                  await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+                  await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+                } catch (err) {
+                  console.error('Failed Page turn into from content block:', err)
+                }
+              }}
             />
           </div>
         )}
@@ -3825,7 +3862,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           >
             <NestedBoardPreview
               conversationId={linkedPageId}
-              title={itemTitleLabel}
+              title={blockTitleLabel}
               visible={pagePreviewOpen}
               fill={pagePreviewOpen}
               hostNodeId={id} // Chrome drag moves this host item

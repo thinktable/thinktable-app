@@ -1,9 +1,9 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-07T22:26:17Z`
+- Snapped at: `2026-08-07T23:24:50Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
-- CLI note: `supabase` access token not available in this environment; use migration files as source of truth.
+- CLI note: `supabase db dump --linked` failed without `SUPABASE_DB_PASSWORD` (cli_login_postgres permission). Access token works for `projects list`; migration files remain source of truth.
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 
 ## Live: `public.notion_connections`
@@ -38,3 +38,9 @@ Columns:
 - `projects`
 - `subscriptions`
 - `usage`
+
+## This save
+
+- Marker: `20260807232450_blocks_model_frontend_only.sql`
+- App: items → blocks model, TipTap content-block handles / turn-into, block groups, React Flow Pro examples vault under `React Flow copy/`.
+- Schema: no DDL; block/group state lives in `messages.metadata` JSON.

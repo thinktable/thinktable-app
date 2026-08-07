@@ -180,8 +180,8 @@ export async function importNotionPagesToBoard(opts: {
       role: 'user', // Notes are user-role messages in this app
       content: page.title, // Node label = Notion page/database name only
       metadata: {
-        isItem: true, // Map item card
-        isInlineItem: true, // Honor metadata.position
+        isBlock: true, // Map block card
+        isInlineBlock: true, // Honor metadata.position
         position, // Canvas coordinates
         notionPageId: page.id, // Link back for sync later
         notionObject: page.object, // page vs database

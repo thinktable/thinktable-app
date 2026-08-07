@@ -22,6 +22,13 @@ import ReactFlow, {
 import 'reactflow/dist/style.css'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import { ChatPanelNode } from './chat-panel-node'
+import { BlockGroupNode } from './block-group-node' // Visual block group container
+import {
+  BlockActionsMenu,
+  type BlockActionId,
+  type BlockActionPayload,
+  type BlockTypeId,
+} from './block-actions-menu' // Notion-style block actions + Turn into baseline
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useRef, useMemo, useState, useCallback } from 'react'
@@ -45,7 +52,17 @@ import { ChevronDown, ArrowDown, ChevronUp, Trash2, Plus } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
-import { ensurePageBodyItem, migrateMessagesToItemFlag, newItemMetadata } from '@/lib/items' // items + page-body ensure
+import {
+  BLOCK_GROUP_PADDING,
+  createBlockGroup,
+  deleteLinkedPageForBlock,
+  duplicateBlockMetadata,
+  ensurePageBodyBlock,
+  isBlockGroupMeta,
+  migrateMessagesToBlockFlag,
+  newBlockMetadata,
+  ungroupBlocks,
+} from '@/lib/blocks' // blocks, groups, page-body ensure
 import {
   PREVIEW_READY_MESSAGE,
   PREVIEW_RESIZE_MESSAGE,
@@ -106,7 +123,7 @@ async function fetchMessagesForPanels(
         const data = await response.json()
         if (data.conversation?.id === conversationId) {
           const homepageMessages = (data.messages || []) as Message[]
-          await migrateMessagesToItemFlag(supabase, homepageMessages)
+          await migrateMessagesToBlockFlag(supabase, homepageMessages)
           return homepageMessages
         }
       }
@@ -131,11 +148,11 @@ async function fetchMessagesForPanels(
     return []
   }
   let messages = (data || []) as Message[]
-  await migrateMessagesToItemFlag(supabase, messages)
+  await migrateMessagesToBlockFlag(supabase, messages)
 
   // Page-body materialization belongs to full open/promote — not every preview boot
   if (!isEmbed) {
-    const { created } = await ensurePageBodyItem(supabase, {
+    const { created } = await ensurePageBodyBlock(supabase, {
       pageId: conversationId,
       userId: user.id,
     })
@@ -146,7 +163,7 @@ async function fetchMessagesForPanels(
         .eq('conversation_id', conversationId)
         .order('created_at', { ascending: true })
       messages = (refreshed || []) as Message[]
-      await migrateMessagesToItemFlag(supabase, messages)
+      await migrateMessagesToBlockFlag(supabase, messages)
     }
   }
   return messages
@@ -302,6 +319,7 @@ async function fetchCanvasNodesForConversation(conversationId: string): Promise<
 // Note: ChatPanelNode is a stable function component, so this reference won't change
 const nodeTypes = Object.freeze({
   chatPanel: ChatPanelNode,
+  blockGroup: BlockGroupNode, // Visual group of map blocks
   freehand: FreehandNode, // Freehand drawing node type
   shape: ShapeNode, // Shape node type
   placeholder: PlaceholderNode, // Placeholder node for dynamic layouting
@@ -1188,7 +1206,7 @@ function BoardFlowInner({
   
   // Handle placeholder click events - create note or flashcard at placeholder position
   useEffect(() => {
-    const handleCreateNoteAtPlaceholder = async (event: CustomEvent<{ placeholderId: string }>) => {
+    const handleCreateBlockAtPlaceholder = async (event: CustomEvent<{ placeholderId: string }>) => {
       const placeholderId = event.detail.placeholderId
       const placeholderNode = nodes.find(n => n.id === placeholderId)
       if (!placeholderNode || !conversationId) return
@@ -1205,7 +1223,7 @@ function BoardFlowInner({
             user_id: user.id,
             role: 'user',
             content: '',
-            metadata: newItemMetadata({
+            metadata: newBlockMetadata({
               position: { x: placeholderNode.position.x, y: placeholderNode.position.y },
             }),
           })
@@ -1285,12 +1303,12 @@ function BoardFlowInner({
     }
     
     // Add event listeners
-    window.addEventListener('create-note-at-placeholder', handleCreateNoteAtPlaceholder as EventListener)
+    window.addEventListener('create-block-at-placeholder', handleCreateBlockAtPlaceholder as EventListener)
     window.addEventListener('create-flashcard-at-placeholder', handleCreateFlashcardAtPlaceholder as EventListener)
     
     // Cleanup
     return () => {
-      window.removeEventListener('create-note-at-placeholder', handleCreateNoteAtPlaceholder as EventListener)
+      window.removeEventListener('create-block-at-placeholder', handleCreateBlockAtPlaceholder as EventListener)
       window.removeEventListener('create-flashcard-at-placeholder', handleCreateFlashcardAtPlaceholder as EventListener)
     }
   }, [nodes, conversationId, supabase, queryClient])
@@ -1333,8 +1351,17 @@ function BoardFlowInner({
   const [edgePopupPosition, setEdgePopupPosition] = useState({ x: 0, y: 0 }) // Position for edge popup
   const [rightClickedNode, setRightClickedNode] = useState<Node<ChatPanelNodeData> | null>(null) // Track right-clicked node for popup
   const [nodePopupPosition, setNodePopupPosition] = useState({ x: 0, y: 0 }) // Position for node popup
+
+  // Keep the target block highlighted while its actions menu is open
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent('block-actions-highlight', {
+        detail: { nodeId: rightClickedNode?.id ?? null },
+      })
+    )
+  }, [rightClickedNode])
   // Empty-page click menu: screen + flow coords so items spawn where the user clicked
-  const [addItemMenu, setAddItemMenu] = useState<{
+  const [addBlockMenu, setAddBlockMenu] = useState<{
     screenX: number
     screenY: number
     flowX: number
@@ -3298,6 +3325,24 @@ function BoardFlowInner({
       let messagesDeleted = true // Track if messages were deleted successfully
       let canvasNodesDeleted = true // Track if canvas nodes were deleted successfully
 
+      // Delete linked pages for titled blocks before removing messages
+      for (const node of chatPanelNodes) {
+        const meta = node.data?.promptMessage?.metadata as Record<string, unknown> | undefined
+        if (meta?.linkedPageId) {
+          try {
+            await deleteLinkedPageForBlock(supabase, meta)
+          } catch (err) {
+            console.error('Error deleting linked page for block:', err)
+          }
+        }
+      }
+
+      // Also delete block-group message rows when a group node is removed
+      const groupMessageIds = nodesToDelete
+        .filter((n) => n.type === 'blockGroup')
+        .map((n) => n.id.replace(/^block-group-/, ''))
+      messageIdsToDelete.push(...groupMessageIds)
+
       // Delete messages for chat panel nodes
       if (messageIdsToDelete.length > 0) {
         const { error } = await supabase
@@ -3873,6 +3918,7 @@ function BoardFlowInner({
     }
 
     const newNodes: Node<ChatPanelNodeData>[] = []
+    const blockGroupNodes: Node[] = [] // Visual group frames (not chat panels)
     const gapBetweenPanels = 50 // Fixed gap between panels (size-aware spacing)
     let panelIndex = 0 // Track panel index for consistent spacing
 
@@ -3914,6 +3960,12 @@ function BoardFlowInner({
       const message = messagesToUse[i]
 
       if (message.role === 'user') {
+        // Block groups are visual containers — built in a second pass (not chat panels)
+        if (isBlockGroupMeta(message.metadata as Record<string, unknown>)) {
+          i--
+          continue
+        }
+
         // Find all consecutive assistant messages that follow this user message (in original order)
         // Since we're processing backwards, assistant messages are at higher indices (already passed)
         // So we need to look ahead in the original array
@@ -3932,7 +3984,7 @@ function BoardFlowInner({
         const baseNodeId = `panel-${message.id}`
         let storedPos = originalPositionsRef.current.get(baseNodeId)
         
-        // Prefer explicit metadata.position (inline note / add-item menu spawn at click)
+        // Prefer explicit metadata.position (inline block / add-block menu spawn at click)
         const metadataPosition = message.metadata?.position as { x: number; y: number } | undefined
 
         if (metadataPosition && !storedPos) {
@@ -4157,8 +4209,8 @@ function BoardFlowInner({
           }
         } else {
           // No assistant messages found - create panel with just the user message
-          const isItem = message.metadata?.isItem === true // Map item card
-          console.log('🔄 BoardFlow: Creating panel for user message:', message.id, 'with response: none', isItem ? '(item)' : '')
+          const isBlock = message.metadata?.isBlock === true // Map block card
+          console.log('🔄 BoardFlow: Creating panel for user message:', message.id, 'with response: none', isBlock ? '(block)' : '')
 
           // Load panel styling from message metadata (fillColor, borderColor, borderStyle, borderWeight)
           const messageMetadata = message.metadata || {}
@@ -4195,6 +4247,52 @@ function BoardFlowInner({
       }
     }
 
+    // Build visual block-group frames from isBlockGroup messages
+    for (const message of messagesToUse) {
+      if (!isBlockGroupMeta(message.metadata as Record<string, unknown>)) continue
+      const nodeId = `block-group-${message.id}`
+      const meta = (message.metadata || {}) as Record<string, unknown>
+      const metaPos = meta.position as { x: number; y: number } | undefined
+      const storedPos = originalPositionsRef.current.get(nodeId)
+      const position = storedPos || metaPos || { x: 0, y: 0 }
+      const dims = (meta.resizeDimensions as { width: number; height: number } | undefined) || {
+        width: 400,
+        height: 300,
+      }
+      blockGroupNodes.push({
+        id: nodeId,
+        type: 'blockGroup',
+        position,
+        style: { width: dims.width, height: dims.height },
+        data: { conversationId: conversationId || '' },
+        draggable: !isLocked,
+        zIndex: -1, // Sit behind child blocks
+      })
+      originalPositionsRef.current.set(nodeId, position)
+    }
+
+    // Parent child blocks into their group (relative positions for RF subflows)
+    const groupPosById = new Map(blockGroupNodes.map((g) => [g.id, g.position]))
+    for (const node of newNodes) {
+      const groupId = node.data.promptMessage?.metadata?.blockGroupId as string | undefined
+      if (!groupId) continue
+      const parentId = `block-group-${groupId}`
+      const groupPos = groupPosById.get(parentId)
+      if (!groupPos) continue
+      const existing = nodes?.find((n) => n.id === node.id)
+      // Prefer already-relative positions when the node was already parented
+      if (existing?.parentId === parentId) {
+        node.position = existing.position
+      } else {
+        node.position = {
+          x: node.position.x - groupPos.x,
+          y: node.position.y - groupPos.y,
+        }
+      }
+      node.parentId = parentId
+      node.extent = 'parent'
+    }
+
     // Deduplicate nodes by ID to prevent duplicate key errors
     const nodeMap = new Map<string, Node<ChatPanelNodeData>>()
     newNodes.forEach(node => {
@@ -4209,7 +4307,7 @@ function BoardFlowInner({
         nodeMap.set(node.id, node)
       }
     })
-    const deduplicatedNodes = Array.from(nodeMap.values())
+    const deduplicatedNodes = [...Array.from(nodeMap.values()), ...blockGroupNodes] as Node[]
 
     console.log('🔄 BoardFlow: Created', deduplicatedNodes.length, 'panels from', messagesToUse.length, 'messages (after deduplication)')
     console.log('🔄 BoardFlow: Messages order:', messagesToUse.map(m => ({ id: m.id, role: m.role, content: m.content.substring(0, 30) })))
@@ -4230,13 +4328,24 @@ function BoardFlowInner({
         const existingNode = nodes.find(existing => existing.id === n.id)
         if (!existingNode) return false
         // Update if response changed (e.g., response was added or updated)
-        const existingResponseId = existingNode.data.responseMessage?.id
-        const newResponseId = n.data.responseMessage?.id
-        return existingResponseId !== newResponseId
+        const existingResponseId = existingNode.data?.responseMessage?.id
+        const newResponseId = n.data?.responseMessage?.id
+        // Also refresh when group membership / frame geometry changes
+        const groupChanged =
+          existingNode.parentId !== n.parentId ||
+          existingNode.type === 'blockGroup' ||
+          n.type === 'blockGroup'
+        return existingResponseId !== newResponseId || groupChanged
       })
       const unchangedNodesCanvas = nodes.filter(n => {
         const needsUpdate = nodesToUpdateCanvas.some(update => update.id === n.id)
-        return !needsUpdate
+        // Drop message-derived nodes that disappeared (e.g. ungrouped empty group deleted)
+        const stillInMessages =
+          n.type === 'freehand' ||
+          n.type === 'shape' ||
+          n.type === 'placeholder' ||
+          deduplicatedNodes.some((d) => d.id === n.id)
+        return !needsUpdate && stillInMessages
       })
 
       console.log('🔄 BoardFlow: Adding', trulyNewNodesCanvas.length, 'new canvas nodes, updating', nodesToUpdateCanvas.length, 'existing nodes, keeping', unchangedNodesCanvas.length, 'unchanged')
@@ -4244,9 +4353,14 @@ function BoardFlowInner({
       // Update existing nodes that need updates (e.g., response was added) - keep their positions
       const updatedExistingNodesCanvas = nodesToUpdateCanvas.map(node => {
         const existingNode = nodes.find(n => n.id === node.id)
+        const sameParent = existingNode?.parentId === node.parentId
         return {
           ...node,
-          position: existingNode?.position ?? node.position, // Keep existing position
+          // Keep position only when group parenting did not change (relative vs absolute)
+          position: sameParent ? (existingNode?.position ?? node.position) : node.position,
+          parentId: node.parentId,
+          extent: node.extent,
+          style: node.style ?? existingNode?.style,
           draggable: existingNode?.draggable ?? node.draggable, // Keep existing draggable state
         }
       })
@@ -5176,7 +5290,7 @@ function BoardFlowInner({
   const handleNodeContextMenu = useCallback((event: React.MouseEvent, node: Node<ChatPanelNodeData>) => {
     event.preventDefault() // Prevent default browser context menu
     event.stopPropagation() // Prevent other handlers
-    setAddItemMenu(null) // Close empty-page add menu when acting on a node
+    setAddBlockMenu(null) // Close empty-page add menu when acting on a node
 
     // If node is not selected, select it first
     if (!node.selected) {
@@ -5222,7 +5336,7 @@ function BoardFlowInner({
     if (selectedNodes.length === 0) return
     event.preventDefault()
     event.stopPropagation()
-    setAddItemMenu(null) // Don't keep empty-page add menu open over a selection menu
+    setAddBlockMenu(null) // Don't keep empty-page add menu open over a selection menu
     const firstSelectedNode = selectedNodes[0]
     const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
     if (reactFlowInstance && reactFlowElement) {
@@ -5239,11 +5353,11 @@ function BoardFlowInner({
     setRightClickedNode(firstSelectedNode)
   }, [reactFlowInstance, nodes])
 
-  // Create an item or flashcard at the add-item menu's flow position (empty page click)
-  const handleAddItemFromMenu = useCallback(async (kind: 'note' | 'flashcard') => {
-    if (!addItemMenu) return // Need a spawn point from the open menu
-    const itemPosition = { x: addItemMenu.flowX, y: addItemMenu.flowY } // Panel top-left at click
-    setAddItemMenu(null) // Close menu immediately so a slow insert doesn't leave it stuck open
+  // Create an item or flashcard at the add-block menu's flow position (empty page click)
+  const handleAddBlockFromMenu = useCallback(async (kind: 'block' | 'flashcard') => {
+    if (!addBlockMenu) return // Need a spawn point from the open menu
+    const itemPosition = { x: addBlockMenu.flowX, y: addBlockMenu.flowY } // Panel top-left at click
+    setAddBlockMenu(null) // Close menu immediately so a slow insert doesn't leave it stuck open
 
     try {
       const supabase = createClient() // Browser Supabase client for insert
@@ -5252,7 +5366,7 @@ function BoardFlowInner({
 
       let currentConversationId = conversationId // Prefer the open board
 
-      // Boot a conversation when the user adds the first item on a blank /board route
+      // Boot a conversation when the user adds the first block on a blank /board route
       if (!currentConversationId) {
         const { data: newConversation, error: convError } = await supabase
           .from('conversations')
@@ -5276,8 +5390,8 @@ function BoardFlowInner({
         }
       }
 
-      if (kind === 'note') {
-        // Empty editable item at the click position (untitled until titled → page)
+      if (kind === 'block') {
+        // Empty editable block at the click position (untitled until titled → page)
         const { error } = await supabase
           .from('messages')
           .insert({
@@ -5285,7 +5399,7 @@ function BoardFlowInner({
             user_id: user.id,
             role: 'user',
             content: '',
-            metadata: newItemMetadata({
+            metadata: newBlockMetadata({
               position: itemPosition, // Spawn at click
               fadeIn: true,
             }),
@@ -5294,7 +5408,7 @@ function BoardFlowInner({
           .single()
 
         if (error) {
-          console.error('Error creating item from add-item menu:', error)
+          console.error('Error creating block from add-block menu:', error)
           return
         }
       } else {
@@ -5316,7 +5430,7 @@ function BoardFlowInner({
           .single()
 
         if (promptError || !promptMessage) {
-          console.error('Error creating flashcard prompt from add-item menu:', promptError)
+          console.error('Error creating flashcard prompt from add-block menu:', promptError)
           return
         }
 
@@ -5332,29 +5446,29 @@ function BoardFlowInner({
           .single()
 
         if (responseError) {
-          console.error('Error creating flashcard response from add-item menu:', responseError)
+          console.error('Error creating flashcard response from add-block menu:', responseError)
           return
         }
       }
 
       refetchMessages() // Pull the new panel onto the map
     } catch (error) {
-      console.error('Error creating item from add-item menu:', error)
+      console.error('Error creating block from add-block menu:', error)
     }
-  }, [addItemMenu, conversationId, router, refetchMessages])
+  }, [addBlockMenu, conversationId, router, refetchMessages])
 
-  // Dismiss add-item menu on outside click / Escape
+  // Dismiss add-block menu on outside click / Escape
   useEffect(() => {
-    if (!addItemMenu) return
+    if (!addBlockMenu) return
 
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target as HTMLElement
       if (target.closest('.add-item-menu')) return // Keep open when interacting with the menu
-      setAddItemMenu(null)
+      setAddBlockMenu(null)
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setAddItemMenu(null)
+      if (event.key === 'Escape') setAddBlockMenu(null)
     }
 
     // Capture so we close before other handlers; delay one tick so the opening click doesn't instantly close
@@ -5368,7 +5482,7 @@ function BoardFlowInner({
       document.removeEventListener('mousedown', handlePointerDown, true)
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [addItemMenu])
+  }, [addBlockMenu])
 
   // Close popup when right-clicking on background or different node
   useEffect(() => {
@@ -5461,6 +5575,287 @@ function BoardFlowInner({
 
     // Don't close popup - allow user to toggle again if needed
   }, [rightClickedNode, nodes, setNodes])
+
+  // Duplicate selected chatPanel blocks (offset position; strip page link)
+  const handleDuplicateBlocks = useCallback(async () => {
+    if (!conversationId) return
+    const selected = nodes.filter((n) => n.selected && n.type === 'chatPanel' && n.data?.promptMessage?.id)
+    if (selected.length === 0) return
+    setRightClickedNode(null)
+    try {
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      for (const node of selected) {
+        const prompt = node.data.promptMessage
+        if (!prompt?.id) continue
+        const absPos = node.parentId
+          ? (() => {
+              const parent = nodes.find((n) => n.id === node.parentId)
+              return {
+                x: (parent?.position.x ?? 0) + node.position.x + 40,
+                y: (parent?.position.y ?? 0) + node.position.y + 40,
+              }
+            })()
+          : { x: node.position.x + 40, y: node.position.y + 40 }
+        const meta = duplicateBlockMetadata(
+          (prompt.metadata as Record<string, unknown>) || {},
+          absPos
+        )
+        await supabase.from('messages').insert({
+          conversation_id: conversationId,
+          user_id: user.id,
+          role: 'user',
+          content: prompt.content || '',
+          metadata: meta,
+        })
+      }
+      await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+      await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
+    } catch (err) {
+      console.error('Failed to duplicate blocks:', err)
+    }
+  }, [conversationId, nodes, queryClient])
+
+  // Copy deep link to the focus block (#block=messageId)
+  const handleCopyLinkToBlock = useCallback(async () => {
+    if (!rightClickedNode || !conversationId) return
+    const messageId = rightClickedNode.data?.promptMessage?.id
+    if (!messageId) return
+    const url = `${window.location.origin}/board/${conversationId}?block=${messageId}`
+    try {
+      await navigator.clipboard.writeText(url)
+    } catch (err) {
+      console.error('Failed to copy block link:', err)
+    }
+    setRightClickedNode(null)
+  }, [rightClickedNode, conversationId])
+
+  // Group ≥2 selected blocks into a visual block group
+  const handleGroupBlocks = useCallback(async () => {
+    if (!conversationId) return
+    const selected = nodes.filter((n) => n.selected && n.type === 'chatPanel' && n.data?.promptMessage?.id)
+    if (selected.length < 2) return
+    setRightClickedNode(null)
+    try {
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      // Absolute bounding box of selected blocks
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+      for (const node of selected) {
+        const parent = node.parentId ? nodes.find((n) => n.id === node.parentId) : null
+        const absX = (parent?.position.x ?? 0) + node.position.x
+        const absY = (parent?.position.y ?? 0) + node.position.y
+        const w = (node.width as number) || (node.style?.width as number) || 280
+        const h = (node.height as number) || (node.style?.height as number) || 160
+        minX = Math.min(minX, absX)
+        minY = Math.min(minY, absY)
+        maxX = Math.max(maxX, absX + w)
+        maxY = Math.max(maxY, absY + h)
+      }
+      const pad = BLOCK_GROUP_PADDING
+      const bounds = {
+        x: minX - pad,
+        y: minY - pad,
+        width: maxX - minX + pad * 2,
+        height: maxY - minY + pad * 2,
+      }
+      // Persist absolute child positions before parenting
+      for (const node of selected) {
+        const parent = node.parentId ? nodes.find((n) => n.id === node.parentId) : null
+        const abs = {
+          x: (parent?.position.x ?? 0) + node.position.x,
+          y: (parent?.position.y ?? 0) + node.position.y,
+        }
+        const msgId = node.data.promptMessage!.id
+        const { data: row } = await supabase.from('messages').select('metadata').eq('id', msgId).single()
+        const existing = (row?.metadata as Record<string, unknown>) || {}
+        await supabase
+          .from('messages')
+          .update({ metadata: { ...existing, position: abs, isBlock: true } })
+          .eq('id', msgId)
+      }
+      await createBlockGroup(supabase, {
+        conversationId,
+        userId: user.id,
+        childMessageIds: selected.map((n) => n.data.promptMessage!.id),
+        bounds,
+      })
+      await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+      await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
+    } catch (err) {
+      console.error('Failed to group blocks:', err)
+    }
+  }, [conversationId, nodes, queryClient])
+
+  // Remove selected blocks from their group (delete empty groups)
+  const handleUngroupBlocks = useCallback(async () => {
+    if (!conversationId || !rightClickedNode) return
+    const selected = nodes.filter((n) => n.selected && n.type === 'chatPanel' && n.data?.promptMessage?.id)
+    const targets = selected.length > 0 ? selected : [rightClickedNode]
+    const childIds = targets
+      .map((n) => n.data?.promptMessage?.id)
+      .filter((id): id is string => Boolean(id))
+    if (childIds.length === 0) return
+    setRightClickedNode(null)
+    try {
+      const supabase = createClient()
+      // Write absolute positions before clearing parent
+      for (const node of targets) {
+        if (node.type !== 'chatPanel' || !node.data?.promptMessage?.id) continue
+        const parent = node.parentId ? nodes.find((n) => n.id === node.parentId) : null
+        const abs = {
+          x: (parent?.position.x ?? 0) + node.position.x,
+          y: (parent?.position.y ?? 0) + node.position.y,
+        }
+        const { data: row } = await supabase
+          .from('messages')
+          .select('metadata')
+          .eq('id', node.data.promptMessage.id)
+          .single()
+        const existing = (row?.metadata as Record<string, unknown>) || {}
+        await supabase
+          .from('messages')
+          .update({ metadata: { ...existing, position: abs, isBlock: true } })
+          .eq('id', node.data.promptMessage.id)
+      }
+      await ungroupBlocks(supabase, { childMessageIds: childIds })
+      await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+      await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
+    } catch (err) {
+      console.error('Failed to ungroup blocks:', err)
+    }
+  }, [conversationId, nodes, queryClient, rightClickedNode])
+
+  // Turn into — transform HTML + metadata (and promote Page / Page in)
+  const handleTurnInto = useCallback(
+    async (blockType: BlockTypeId, pageInParentId?: string | null) => {
+      const messageId = rightClickedNode?.data?.promptMessage?.id
+      if (!messageId || !conversationId) return
+      setRightClickedNode(null)
+      try {
+        const supabase = createClient()
+        const {
+          data: { user },
+        } = await supabase.auth.getUser()
+        if (!user) return
+        const { applyTurnInto } = await import('@/lib/blocks/turn-into')
+        await applyTurnInto(supabase, {
+          messageId,
+          conversationId,
+          userId: user.id,
+          blockType,
+          pageInParentId: pageInParentId || null,
+        })
+        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+        await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
+        if (blockType === 'page' || blockType === 'pageIn') {
+          await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+          await queryClient.refetchQueries({ queryKey: ['conversations'] })
+        }
+      } catch (err) {
+        console.error('Failed to turn block into type:', err)
+      }
+    },
+    [rightClickedNode, conversationId, queryClient]
+  )
+
+  // Dispatch block action from the shared menu
+  const handleBlockAction = useCallback(
+    (action: BlockActionId, payload?: BlockActionPayload) => {
+      switch (action) {
+        case 'duplicate':
+          void handleDuplicateBlocks()
+          break
+        case 'delete':
+          void handleDeleteNode()
+          break
+        case 'addChild':
+          if (rightClickedNode) {
+            addChildNode(rightClickedNode.id)
+            setRightClickedNode(null)
+          }
+          break
+        case 'condense':
+          handleCondenseNode()
+          break
+        case 'copyLink':
+          void handleCopyLinkToBlock()
+          break
+        case 'group':
+          void handleGroupBlocks()
+          break
+        case 'ungroup':
+          void handleUngroupBlocks()
+          break
+        case 'turnInto':
+          if (payload?.blockType)
+            void handleTurnInto(payload.blockType, payload.pageInParentId)
+          break
+        // Baseline stubs — menu entries present; behavior later
+        case 'color':
+        case 'listFormat':
+        case 'moveTo':
+        case 'comment':
+        case 'suggestEdits':
+        case 'presentFromHere':
+        case 'askAI':
+        case 'skills':
+          setRightClickedNode(null)
+          break
+      }
+    },
+    [
+      handleDuplicateBlocks,
+      handleDeleteNode,
+      handleCondenseNode,
+      handleCopyLinkToBlock,
+      handleGroupBlocks,
+      handleUngroupBlocks,
+      handleTurnInto,
+      rightClickedNode,
+      addChildNode,
+    ]
+  )
+
+  // Open block actions from the ⋮⋮ handle on a chat panel
+  useEffect(() => {
+    const onOpen = (event: Event) => {
+      const detail = (event as CustomEvent).detail as {
+        nodeId?: string
+        clientX?: number
+        clientY?: number
+      }
+      if (!detail?.nodeId || !reactFlowInstance) return
+      const node = nodes.find((n) => n.id === detail.nodeId)
+      if (!node) return
+      setAddBlockMenu(null)
+      if (!node.selected) {
+        setNodes((nds) => nds.map((n) => (n.id === node.id ? { ...n, selected: true } : n)))
+      }
+      const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
+      if (reactFlowElement && detail.clientX != null && detail.clientY != null) {
+        const rect = reactFlowElement.getBoundingClientRect()
+        const screenX = detail.clientX - rect.left
+        const screenY = detail.clientY - rect.top
+        const viewport = reactFlowInstance.getViewport()
+        nodeClickPositionRef.current = {
+          x: screenX / viewport.zoom - viewport.x,
+          y: screenY / viewport.zoom - viewport.y,
+        }
+        setNodePopupPosition({ x: screenX, y: screenY })
+        nodePopupZoomRef.current = viewport.zoom
+      }
+      setRightClickedNode(node as Node<ChatPanelNodeData>)
+    }
+    window.addEventListener('open-block-actions', onOpen as EventListener)
+    return () => window.removeEventListener('open-block-actions', onOpen as EventListener)
+  }, [nodes, reactFlowInstance, setNodes])
 
   // Update node popup position when node, nodes, or viewport changes
   // Position follows the click position on the node as viewport changes
@@ -5978,7 +6373,7 @@ function BoardFlowInner({
             user_id: user.id,
             role: 'user',
             content: initialContent, // Start with the first character typed
-            metadata: newItemMetadata({
+            metadata: newBlockMetadata({
               position: notePosition, // Panel position (offset so cursor aligns with I-bar)
               fadeIn: true, // Trigger fade-in animation
             }),
@@ -6381,8 +6776,8 @@ function BoardFlowInner({
           if (iBarPosition) {
             setIBarPosition(null)
           }
-          setAddItemMenu(null) // Close empty-page add menu when selecting a panel
-          // Clicking a host item (outside nested preview chrome) clears preview style-focus
+          setAddBlockMenu(null) // Close empty-page add menu when selecting a panel
+          // Clicking a host block (outside nested preview chrome) clears preview style-focus
           if (!embedded && previewFocus?.focusedPageId) {
             const target = event.target as Element | null
             if (!target?.closest?.('[data-page-preview]')) {
@@ -6408,7 +6803,7 @@ function BoardFlowInner({
           // If a panel is selected, let React Flow deselect — don't open add menu on that click
           const hasSelectedPanel = selectedNodeIdsRef.current.length > 0
           if (hasSelectedPanel) {
-            setAddItemMenu(null) // Close any leftover add menu when clearing selection
+            setAddBlockMenu(null) // Close any leftover add menu when clearing selection
             return
           }
 
@@ -6423,7 +6818,7 @@ function BoardFlowInner({
           const flowY = (screenY - viewport.y) / viewport.zoom
 
           setRightClickedNode(null) // Don't stack with node action popup
-          setAddItemMenu({ screenX, screenY, flowX, flowY }) // Show Item / Flashcard menu at click
+          setAddBlockMenu({ screenX, screenY, flowX, flowY }) // Show Block / Flashcard menu at click
         }}
         defaultViewport={{ x: 0, y: 0, zoom: embedded ? 0.8 : 0.6 }}
         // Embedded previews: no continuous fitView (fights pan/zoom); host keeps canvas fitView
@@ -6870,13 +7265,13 @@ function BoardFlowInner({
       />
       )}
 
-      {/* Add item menu — empty page/canvas click (Item / Flashcard at click position) */}
-      {addItemMenu && (
+      {/* Add block menu — empty page/canvas click (Block / Flashcard at click position) */}
+      {addBlockMenu && (
         <div
           className="add-item-menu absolute z-[1000] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[140px]"
           style={{
-            left: `${addItemMenu.screenX}px`,
-            top: `${addItemMenu.screenY}px`,
+            left: `${addBlockMenu.screenX}px`,
+            top: `${addBlockMenu.screenY}px`,
             transform: 'translate(0, 0)', // Anchor at click; no zoom scale so menu stays readable
           }}
           onClick={(e) => {
@@ -6895,7 +7290,7 @@ function BoardFlowInner({
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
-                void handleAddItemFromMenu('note')
+                void handleAddBlockFromMenu('block')
               }}
               className="justify-start text-sm h-8 px-2"
             >
@@ -6908,7 +7303,7 @@ function BoardFlowInner({
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
-                void handleAddItemFromMenu('flashcard')
+                void handleAddBlockFromMenu('flashcard')
               }}
               className="justify-start text-sm h-8 px-2"
             >
@@ -6919,84 +7314,45 @@ function BoardFlowInner({
         </div>
       )}
 
-      {/* Node popup - shows delete and condense options */}
+      {/* Block actions menu — handle click or right-click on a node */}
       {rightClickedNode && reactFlowInstance && (
-        <div
-          className="node-popup absolute z-[1000] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2"
-          style={{
-            left: `${nodePopupPosition.x}px`,
-            top: `${nodePopupPosition.y}px`,
-            transform: `translate(-50%, -100%) scale(${reactFlowInstance.getViewport().zoom})`, // Scale with zoom, center above node
-            transformOrigin: 'center bottom', // Scale from bottom center
-            marginTop: '-8px', // Small gap above node
+        <BlockActionsMenu
+          x={nodePopupPosition.x}
+          y={nodePopupPosition.y}
+          zoom={reactFlowInstance.getViewport().zoom}
+          isCollapsed={!!rightClickedNode.data?.isResponseCollapsed}
+          selectedCount={nodes.filter((n) => n.selected && n.type === 'chatPanel').length}
+          canUngroup={
+            !!rightClickedNode.parentId ||
+            !!rightClickedNode.data?.promptMessage?.metadata?.blockGroupId
+          }
+          showAddChild={rightClickedNode.type !== 'blockGroup'}
+          currentBlockType={
+            (rightClickedNode.data?.promptMessage?.metadata?.blockType as BlockTypeId) || 'text'
+          }
+          pageInTargets={(() => {
+            // Pages the new page can nest under (from sidebar cache)
+            const convs =
+              (queryClient.getQueryData(['conversations']) as
+                | Array<{ id: string; title?: string | null }>
+                | undefined) || []
+            const targets = convs
+              .filter((c) => c.id !== conversationId)
+              .slice(0, 40)
+              .map((c) => ({ id: c.id, title: c.title?.trim() || 'Untitled' }))
+            // Always offer current map first
+            return [
+              { id: conversationId || '', title: 'Current page' },
+              ...targets.filter((t) => t.id),
+            ]
+          })()}
+          onAction={handleBlockAction}
+          onClose={() => {
+            setRightClickedNode(null)
+            nodeClickPositionRef.current = null
+            nodePopupZoomRef.current = null
           }}
-          onClick={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-          }}
-          onMouseDown={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-          }}
-        >
-          <div className="flex flex-col gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.preventDefault() // Prevent default behavior
-                e.stopPropagation() // Prevent event bubbling
-                handleCondenseNode()
-              }}
-              className="justify-start text-sm"
-            >
-              {(() => {
-                // Check the state of the right-clicked node to determine button label
-                const isCollapsed = rightClickedNode.data.isResponseCollapsed || false
-                return isCollapsed ? (
-                  <>
-                    <ChevronDown className="h-4 w-4 mr-2" />
-                    Condense ✨
-                  </>
-                ) : (
-                  <>
-                    <ChevronUp className="h-4 w-4 mr-2" />
-                    Condense ✨
-                  </>
-                )
-              })()}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.preventDefault() // Prevent default behavior
-                e.stopPropagation() // Prevent event bubbling
-                // Add child node - creates placeholder where next chat panel will be added
-                addChildNode(rightClickedNode.id)
-                setRightClickedNode(null) // Close popup
-              }}
-              className="justify-start text-sm"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Add Child
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.preventDefault() // Prevent default behavior
-                e.stopPropagation() // Prevent event bubbling
-                console.log('🗑️ Delete button clicked, calling handleDeleteNode')
-                handleDeleteNode()
-              }}
-              className="justify-start text-sm text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              Delete
-            </Button>
-          </div>
-        </div>
+        />
       )}
 
       {/* Edge popup - shows collapse and delete options */}

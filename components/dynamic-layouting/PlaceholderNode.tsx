@@ -167,7 +167,7 @@ const PlaceholderNode = ({ id, data }: NodeProps) => {
               onClick={(e) => {
                 e.stopPropagation();
                 if (typeof window !== 'undefined') {
-                  window.dispatchEvent(new CustomEvent('create-note-at-placeholder', { 
+                  window.dispatchEvent(new CustomEvent('create-block-at-placeholder', { 
                     detail: { placeholderId: id } 
                   }));
                 }

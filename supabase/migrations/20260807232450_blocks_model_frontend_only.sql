@@ -1,0 +1,3 @@
+-- Frontend-only snapshot marker (no schema DDL).
+-- Blocks rename (items → blocks), TipTap content-block handles, block groups.
+-- Persistence remains message.metadata JSON (isBlock, blockGroupId, etc.).

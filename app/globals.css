@@ -1056,7 +1056,7 @@ span[data-added="true"] {
   }
 
   /* Selected items: solid dark mid-side connection dots (mockup) */
-  .react-flow__node-chatPanel.selected [data-item-node="true"] .react-flow__handle.handle-dot:not(.handle-dot-flashcard-large) {
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot:not(.handle-dot-flashcard-large) {
     background-color: #1f2937 !important; /* Near-black filled node */
     border: none !important; /* No ring — solid dot */
     width: 8px !important; /* Slightly tighter than default 10px */
@@ -1064,7 +1064,7 @@ span[data-added="true"] {
   }
 
   /* Dark mode: invert connection-dot fill for contrast on dark boards */
-  .dark .react-flow__node-chatPanel.selected [data-item-node="true"] .react-flow__handle.handle-dot:not(.handle-dot-flashcard-large) {
+  .dark .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot:not(.handle-dot-flashcard-large) {
     background-color: #e5e7eb !important;
   }
 
@@ -1121,5 +1121,82 @@ span[data-added="true"] {
 
   .dark .ProseMirror span.tt-haze[data-haze="true"] {
     background: rgba(255, 255, 255, 0.08);
+  }
+
+  /* Active content-block highlight (⋮⋮ menu open) — Notion blue wash on that block only */
+  .ProseMirror .tt-block-highlight {
+    background-color: rgba(35, 131, 226, 0.14) !important;
+    border-radius: 4px;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+  .dark .ProseMirror .tt-block-highlight {
+    background-color: rgba(59, 130, 246, 0.22) !important;
+  }
+
+  /* Turn into — Notion-like block type chrome */
+  .ProseMirror .tt-callout {
+    border-radius: 0.5rem;
+    padding: 0.75rem 0.9rem;
+    background: #f1f5f9;
+    border-left: 3px solid #64748b;
+  }
+  .dark .ProseMirror .tt-callout {
+    background: #1e293b;
+    border-left-color: #94a3b8;
+  }
+  .ProseMirror .tt-toggle {
+    position: relative;
+    padding-left: 1.25rem;
+  }
+  .ProseMirror .tt-toggle::before {
+    content: '▸';
+    position: absolute;
+    left: 0;
+    top: 0.15em;
+    color: #6b7280;
+    font-size: 0.85em;
+  }
+  .ProseMirror .tt-toggle-heading-1 > :first-child { font-size: 1.75em; font-weight: 700; }
+  .ProseMirror .tt-toggle-heading-2 > :first-child { font-size: 1.45em; font-weight: 700; }
+  .ProseMirror .tt-toggle-heading-3 > :first-child { font-size: 1.25em; font-weight: 650; }
+  .ProseMirror .tt-toggle-heading-4 > :first-child { font-size: 1.1em; font-weight: 650; }
+  .ProseMirror .tt-block-equation {
+    text-align: center;
+    font-family: ui-serif, Georgia, serif;
+    font-size: 1.15em;
+    padding: 0.75rem;
+    background: #f8fafc;
+    border-radius: 0.375rem;
+  }
+  .dark .ProseMirror .tt-block-equation {
+    background: #111827;
+  }
+  .ProseMirror .tt-synced-block {
+    border: 1px dashed #94a3b8;
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(59, 130, 246, 0.04);
+  }
+  .ProseMirror .tt-columns {
+    display: grid;
+    gap: 0.75rem;
+  }
+  .ProseMirror .tt-columns-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ProseMirror .tt-columns-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ProseMirror .tt-columns-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .ProseMirror .tt-columns-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .ProseMirror ul[data-type="taskList"] {
+    list-style: none;
+    padding-left: 0;
+  }
+  .ProseMirror ul[data-type="taskList"] li {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .ProseMirror ul[data-type="taskList"] li > label {
+    flex-shrink: 0;
+    margin-top: 0.2em;
   }
 }

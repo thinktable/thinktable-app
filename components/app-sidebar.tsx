@@ -35,7 +35,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useSidebarContext } from './sidebar-context'
-import { demoteItemForDeletedPage, syncPageRenameToItem } from '@/lib/items' // Keep item cards ↔ pages in sync
+import { demoteBlockForDeletedPage, syncPageRenameToBlock } from '@/lib/blocks' // Keep block cards ↔ pages in sync
 import {
   DndContext,
   closestCenter,
@@ -2034,7 +2034,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
 
     try {
       // Before delete: demote any parent-map item that linked to this page (keeps card body, clears title)
-      const parentMapId = await demoteItemForDeletedPage(supabase, conversationToDelete.id)
+      const parentMapId = await demoteBlockForDeletedPage(supabase, conversationToDelete.id)
       if (parentMapId) {
         await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', parentMapId] })
       }
@@ -2090,7 +2090,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     try {
       const nextTitle = renameInput.trim() // Shared title for page + linked item
 
-      // Merge metadata so we do not wipe parent_id / sourceItemMessageId / icon
+      // Merge metadata so we do not wipe parent_id / sourceBlockMessageId / icon
       const { data: existingConv } = await supabase
         .from('conversations')
         .select('metadata')
@@ -2112,7 +2112,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
       }
 
       // Mirror rename onto the parent-map item card when this page was promoted from an item
-      const parentMapId = await syncPageRenameToItem(supabase, conversationToRename.id, nextTitle)
+      const parentMapId = await syncPageRenameToBlock(supabase, conversationToRename.id, nextTitle)
       if (parentMapId) {
         await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', parentMapId] })
       }

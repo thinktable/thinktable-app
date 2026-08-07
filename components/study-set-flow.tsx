@@ -20,6 +20,12 @@ import ReactFlow, {
 import 'reactflow/dist/style.css'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import { ChatPanelNode } from './chat-panel-node'
+import {
+  BlockActionsMenu,
+  type BlockActionId,
+  type BlockActionPayload,
+  type BlockTypeId,
+} from './block-actions-menu' // Shared block actions + Turn into baseline
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useRef, useMemo, useState, useCallback } from 'react'
@@ -659,6 +665,16 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
   const [edgePopupPosition, setEdgePopupPosition] = useState({ x: 0, y: 0 }) // Position for edge popup
   const [rightClickedNode, setRightClickedNode] = useState<Node<ChatPanelNodeData> | null>(null) // Track right-clicked node for popup
   const [nodePopupPosition, setNodePopupPosition] = useState({ x: 0, y: 0 }) // Position for node popup
+
+  // Keep the target block highlighted while its actions menu is open
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent('block-actions-highlight', {
+        detail: { nodeId: rightClickedNode?.id ?? null },
+      })
+    )
+  }, [rightClickedNode])
+
   const [isMinimapManuallyHidden, setIsMinimapManuallyHidden] = useState(false) // Track if minimap was manually hidden (vs auto-hidden)
   const [isMinimapHovering, setIsMinimapHovering] = useState(false) // Track if mouse is hovering over minimap area
   const [isPillHoverAreaHovering, setIsPillHoverAreaHovering] = useState(false) // Track if mouse is hovering over pill hover area specifically
@@ -4057,6 +4073,65 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
     // Don't close popup - allow user to toggle again if needed
   }, [rightClickedNode, nodes, setNodes])
 
+  // Study-set block actions (wired subset + baseline stubs)
+  const handleBlockAction = useCallback(
+    (action: BlockActionId, _payload?: BlockActionPayload) => {
+      if (action === 'delete') {
+        void handleDeleteNode()
+        return
+      }
+      if (action === 'condense') {
+        handleCondenseNode()
+        return
+      }
+      if (action === 'copyLink' && rightClickedNode && studySetId) {
+        const messageId = rightClickedNode.data?.promptMessage?.id
+        if (messageId) {
+          const url = `${window.location.origin}/study-set/${studySetId}?block=${messageId}`
+          void navigator.clipboard.writeText(url).catch(() => {})
+        }
+        setRightClickedNode(null)
+        return
+      }
+      // Baseline stubs close the menu
+      setRightClickedNode(null)
+    },
+    [handleDeleteNode, handleCondenseNode, rightClickedNode, studySetId]
+  )
+
+  // Open block actions from the ⋮⋮ handle
+  useEffect(() => {
+    const onOpen = (event: Event) => {
+      const detail = (event as CustomEvent).detail as {
+        nodeId?: string
+        clientX?: number
+        clientY?: number
+      }
+      if (!detail?.nodeId || !reactFlowInstance) return
+      const node = nodes.find((n) => n.id === detail.nodeId)
+      if (!node) return
+      if (!node.selected) {
+        setNodes((nds) => nds.map((n) => (n.id === node.id ? { ...n, selected: true } : n)))
+      }
+      const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
+      if (reactFlowElement && detail.clientX != null && detail.clientY != null) {
+        const rect = reactFlowElement.getBoundingClientRect()
+        const screenX = detail.clientX - rect.left
+        const screenY = detail.clientY - rect.top
+        const viewport = reactFlowInstance.getViewport()
+        nodeClickPositionRef.current = {
+          x: screenX / viewport.zoom - viewport.x,
+          y: screenY / viewport.zoom - viewport.y,
+        }
+        setNodePopupPosition({ x: screenX, y: screenY })
+        nodePopupZoomRef.current = viewport.zoom
+      }
+      setRightClickedNode(node as Node<ChatPanelNodeData>)
+    }
+    window.addEventListener('open-block-actions', onOpen as EventListener)
+    return () => window.removeEventListener('open-block-actions', onOpen as EventListener)
+  }, [nodes, reactFlowInstance, setNodes])
+
   // Update node popup position when node, nodes, or viewport changes
   // Position follows the click position on the node as viewport changes
   useEffect(() => {
@@ -5052,69 +5127,26 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
         title={isMinimapHidden ? 'Show minimap' : 'Hide minimap'}
       />
 
-      {/* Node popup - shows delete and condense options */}
+      {/* Block actions menu — handle click or right-click */}
       {rightClickedNode && reactFlowInstance && (
-        <div
-          className="node-popup absolute z-[1000] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2"
-          style={{
-            left: `${nodePopupPosition.x}px`,
-            top: `${nodePopupPosition.y}px`,
-            transform: `translate(-50%, -100%) scale(${reactFlowInstance.getViewport().zoom})`, // Scale with zoom, center above node
-            transformOrigin: 'center bottom', // Scale from bottom center
-            marginTop: '-8px', // Small gap above node
+        <BlockActionsMenu
+          x={nodePopupPosition.x}
+          y={nodePopupPosition.y}
+          zoom={reactFlowInstance.getViewport().zoom}
+          isCollapsed={!!rightClickedNode.data?.isResponseCollapsed}
+          selectedCount={nodes.filter((n) => n.selected).length}
+          showAddChild={false}
+          canUngroup={false}
+          currentBlockType={
+            (rightClickedNode.data?.promptMessage?.metadata?.blockType as BlockTypeId) || 'text'
+          }
+          onAction={handleBlockAction}
+          onClose={() => {
+            setRightClickedNode(null)
+            nodeClickPositionRef.current = null
+            nodePopupZoomRef.current = null
           }}
-          onClick={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-          }}
-          onMouseDown={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-          }}
-        >
-          <div className="flex flex-col gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.preventDefault() // Prevent default behavior
-                e.stopPropagation() // Prevent event bubbling
-                handleCondenseNode()
-              }}
-              className="justify-start text-sm"
-            >
-              {(() => {
-                // Check the state of the right-clicked node to determine button label
-                const isCollapsed = rightClickedNode.data.isResponseCollapsed || false
-                return isCollapsed ? (
-                  <>
-                    <ChevronDown className="h-4 w-4 mr-2" />
-                    Condense ✨
-                  </>
-                ) : (
-                  <>
-                    <ChevronUp className="h-4 w-4 mr-2" />
-                    Condense ✨
-                  </>
-                )
-              })()}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.preventDefault() // Prevent default behavior
-                e.stopPropagation() // Prevent event bubbling
-                console.log('🗑️ Delete button clicked, calling handleDeleteNode')
-                handleDeleteNode()
-              }}
-              className="justify-start text-sm text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              Delete
-            </Button>
-          </div>
-        </div>
+        />
       )}
 
       {/* Edge popup - shows collapse and delete options */}

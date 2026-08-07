@@ -1,7 +1,7 @@
 'use client'
 
-// Edge-anchored title chip for map items — untitled items show "Add a title" when selected;
-// committing a title promotes the item to a linked page (own map). Title + page stay in sync.
+// Edge-anchored title chip for map blocks — untitled blocks show "Add a title" when selected;
+// committing a title promotes the block to a linked page (own map). Title + page stay in sync.
 
 import { useCallback, useEffect, useRef, useState } from 'react' // Local edit / drag state
 import { useRouter } from 'next/navigation' // Open linked page map
@@ -10,10 +10,10 @@ import { createClient } from '@/lib/supabase/client' // Persist title + create p
 import { useQueryClient } from '@tanstack/react-query' // Refresh Pages menu + panels
 import { cn } from '@/lib/utils' // Class merge for chip chrome
 import {
-  ensurePageBodyItem,
-  migrateLegacyItemFlags,
-  syncItemAndPageTitle,
-} from '@/lib/items' // Dual-write, page-body materialize, drop legacy isNote
+  ensurePageBodyBlock,
+  migrateLegacyBlockFlags,
+  syncBlockAndPageTitle,
+} from '@/lib/blocks' // Dual-write, page-body materialize, drop legacy item/note keys
 import { useBoardEmbed } from '@/lib/board-embed-context' // Hide preview when already inside a nested board
 
 /** Map perimeter parameter t ∈ [0,1) → pixel offset from panel top-left (clockwise from top-left). */
@@ -54,48 +54,48 @@ export function pointToPerimeterT(width: number, height: number, x: number, y: n
   return dist / peri
 }
 
-/** Default: halfway along the top edge (midpoint of the item’s top side). */
+/** Default: halfway along the top edge (midpoint of the block’s top side). */
 export function defaultTitleEdgeT(width: number, height: number): number {
   const w = Math.max(width, 1)
   const h = Math.max(height, 1)
   return w / 2 / (2 * (w + h))
 }
 
-type ItemTitleEdgeProps = {
+type BlockTitleEdgeProps = {
   selected: boolean // Only show "Add a title" when selected
   width: number // Panel width in px (for perimeter math)
   height: number // Panel height in px
-  messageId: string // Item message to update
-  conversationId: string // Parent page / map that owns this item
-  itemTitle?: string | null // Existing title on the item
+  messageId: string // Block message to update
+  conversationId: string // Parent page / map that owns this block
+  blockTitle?: string | null // Existing title on the block
   linkedPageId?: string | null // Child conversation id for this page’s map
   titleEdgeT?: number | null // Saved perimeter position
   previewOpen?: boolean // Whether the in-place nested board is expanded
   onTogglePreview?: () => void // Expand / collapse page-within-page preview
   onPrefetchPreview?: () => void // Warm /embed/{id} before click (hover)
-  isPageBody?: boolean // This item IS the current page’s content (not a nested page card)
+  isPageBody?: boolean // This block IS the current page’s content (not a nested page card)
 }
 
-export function ItemTitleEdge({
+export function BlockTitleEdge({
   selected,
   width,
   height,
   messageId,
   conversationId,
-  itemTitle,
+  blockTitle,
   linkedPageId,
   titleEdgeT,
   previewOpen = false,
   onTogglePreview,
   onPrefetchPreview,
   isPageBody = false,
-}: ItemTitleEdgeProps) {
+}: BlockTitleEdgeProps) {
   const router = useRouter() // Navigate into the page’s own map
   const queryClient = useQueryClient() // Invalidate nav + messages after promote/rename
   const { embedded } = useBoardEmbed() // Nested boards don’t offer another preview level
   const [editing, setEditing] = useState(false) // Inline title input open
-  const [displayTitle, setDisplayTitle] = useState(itemTitle || '') // Local title so chip stays after promote before refetch
-  const [draft, setDraft] = useState(itemTitle || '') // Controlled input value
+  const [displayTitle, setDisplayTitle] = useState(blockTitle || '') // Local title so chip stays after promote before refetch
+  const [draft, setDraft] = useState(blockTitle || '') // Controlled input value
   const [edgeT, setEdgeT] = useState(() =>
     typeof titleEdgeT === 'number' ? titleEdgeT : defaultTitleEdgeT(width, height)
   )
@@ -122,30 +122,30 @@ export function ItemTitleEdge({
         if (pageTitle) {
           setDisplayTitle(pageTitle)
           setDraft(pageTitle)
-          // Heal item metadata if it drifted from the page title
-          if (pageTitle !== (itemTitle || '').trim()) {
+          // Heal block metadata if it drifted from the page title
+          if (pageTitle !== (blockTitle || '').trim()) {
             try {
-              await syncItemAndPageTitle(supabase, {
+              await syncBlockAndPageTitle(supabase, {
                 messageId,
                 linkedPageId,
                 title: pageTitle,
               })
               await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
             } catch (err) {
-              console.error('Failed to heal item/page title sync:', err)
+              console.error('Failed to heal block/page title sync:', err)
             }
           }
           return
         }
       }
-      setDisplayTitle(itemTitle || '')
-      setDraft(itemTitle || '')
+      setDisplayTitle(blockTitle || '')
+      setDraft(blockTitle || '')
     }
     void reconcile()
     return () => {
       cancelled = true
     }
-  }, [itemTitle, linkedPageId, messageId, conversationId, queryClient])
+  }, [blockTitle, linkedPageId, messageId, conversationId, queryClient])
 
   useEffect(() => {
     setLocalLinkedPageId(linkedPageId || null)
@@ -168,10 +168,10 @@ export function ItemTitleEdge({
       const supabase = createClient()
       const { data: row } = await supabase.from('messages').select('metadata').eq('id', messageId).single()
       const existing = (row?.metadata as Record<string, unknown>) || {}
-      const { meta: migrated } = migrateLegacyItemFlags(existing) // Ensure isItem-only flags
+      const { meta: migrated } = migrateLegacyBlockFlags(existing) // Ensure isBlock-only flags
       const { error } = await supabase
         .from('messages')
-        .update({ metadata: { ...migrated, ...patch, isItem: true } })
+        .update({ metadata: { ...migrated, ...patch, isBlock: true } })
         .eq('id', messageId)
       if (error) throw error
       await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
@@ -202,14 +202,14 @@ export function ItemTitleEdge({
         if (!user) return
 
         if (isPageBody) {
-          // Page-body item title = this page’s name (no nested page)
+          // Page-body block title = this page’s name (no nested page)
           await supabase.from('conversations').update({ title }).eq('id', conversationId)
-          await persistMetadata({ itemTitle: title, titleEdgeT: edgeT, isPageBody: true })
+          await persistMetadata({ blockTitle: title, titleEdgeT: edgeT, isPageBody: true })
           await queryClient.invalidateQueries({ queryKey: ['conversations'] })
           await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
         } else if (localLinkedPageId) {
-          // Rename keeps item card + page menu entry identical
-          await syncItemAndPageTitle(supabase, {
+          // Rename keeps block card + page menu entry identical
+          await syncBlockAndPageTitle(supabase, {
             messageId,
             linkedPageId: localLinkedPageId,
             title,
@@ -218,7 +218,7 @@ export function ItemTitleEdge({
           await queryClient.invalidateQueries({ queryKey: ['conversations'] })
           await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
         } else {
-          // Promote item → page: child conversation nested under current map
+          // Promote block → page: child conversation nested under current map
           const { data: child, error: childError } = await supabase
             .from('conversations')
             .insert({
@@ -226,27 +226,27 @@ export function ItemTitleEdge({
               title,
               metadata: {
                 parent_id: conversationId, // Nest under this map in the Pages menu
-                sourceItemMessageId: messageId, // Reverse link for menu rename/delete sync
-                hasContent: false, // Flipped true if we materialize a page-body item
+                sourceBlockMessageId: messageId, // Reverse link for menu rename/delete sync
+                hasContent: false, // Flipped true if we materialize a page-body block
               },
             })
             .select('id')
             .single()
 
           if (childError || !child) {
-            console.error('Failed to create page from item title:', childError)
+            console.error('Failed to create page from block title:', childError)
             return
           }
 
           setLocalLinkedPageId(child.id)
-          await syncItemAndPageTitle(supabase, {
+          await syncBlockAndPageTitle(supabase, {
             messageId,
             linkedPageId: child.id,
             title,
             titleEdgeT: edgeT,
           })
-          // If the item already has content, put that content as an item on the new page’s map
-          await ensurePageBodyItem(supabase, { pageId: child.id, userId: user.id })
+          // If the block already has content, put that content as a block on the new page’s map
+          await ensurePageBodyBlock(supabase, { pageId: child.id, userId: user.id })
           await queryClient.invalidateQueries({ queryKey: ['conversations'] })
           await queryClient.refetchQueries({ queryKey: ['conversations'] })
           await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
@@ -256,7 +256,7 @@ export function ItemTitleEdge({
         setDraft(title)
         setEditing(false)
       } catch (err) {
-        console.error('Error committing item title:', err)
+        console.error('Error committing block title:', err)
       } finally {
         savingRef.current = false
       }
@@ -280,7 +280,7 @@ export function ItemTitleEdge({
       if (editing) return
       const target = e.target as HTMLElement
       // Action buttons handle their own clicks (don’t start edge drag)
-      if (target.closest('[data-item-title-expand], [data-item-title-preview]')) return
+      if (target.closest('[data-block-title-expand], [data-block-title-preview]')) return
       e.stopPropagation()
       e.preventDefault()
       dragMovedRef.current = false
@@ -329,7 +329,7 @@ export function ItemTitleEdge({
     <div
       ref={chipRef}
       className={cn(
-        'item-title-edge nodrag nopan absolute z-[60] pointer-events-auto select-none',
+        'block-title-edge nodrag nopan absolute z-[60] pointer-events-auto select-none',
         dragging ? 'cursor-grabbing' : 'cursor-grab'
       )}
       style={{
@@ -382,20 +382,20 @@ export function ItemTitleEdge({
             title={
               hasTitle
                 ? 'Drag along edge · click to edit'
-                : 'Add a title — titled items become pages with their own maps'
+                : 'Add a title — titled blocks become pages with their own maps'
             }
           >
             {hasTitle ? displayTitle : 'Add a title'}
           </button>
         )}
 
-        {/* Nested page cards only: preview / open. Page-body items are already on their page. */}
+        {/* Nested page cards only: preview / open. Page-body blocks are already on their page. */}
         {!isPageBody && localLinkedPageId && hasTitle && !editing && (
           <>
             {!embedded && onTogglePreview && (
               <button
                 type="button"
-                data-item-title-preview
+                data-block-title-preview
                 className={cn(
                   'h-full px-1.5 text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-50 dark:hover:bg-[#2a2a2a]',
                   previewOpen && 'text-blue-600 dark:text-blue-400 bg-blue-50/80 dark:bg-blue-950/40'
@@ -414,7 +414,7 @@ export function ItemTitleEdge({
             )}
             <button
               type="button"
-              data-item-title-expand
+              data-block-title-expand
               className="h-full px-1.5 rounded-r-md text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-50 dark:hover:bg-[#2a2a2a]"
               title="Open page map"
               onPointerDown={(e) => e.stopPropagation()}
