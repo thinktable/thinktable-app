@@ -35,6 +35,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useSidebarContext } from './sidebar-context'
+import { demoteItemForDeletedPage, syncPageRenameToItem } from '@/lib/items' // Keep item cards ↔ pages in sync
 import {
   DndContext,
   closestCenter,
@@ -2032,7 +2033,13 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     setShowDeleteBoardDialog(false)
 
     try {
-      // Delete conversation (cascade will delete all messages)
+      // Before delete: demote any parent-map item that linked to this page (keeps card body, clears title)
+      const parentMapId = await demoteItemForDeletedPage(supabase, conversationToDelete.id)
+      if (parentMapId) {
+        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', parentMapId] })
+      }
+
+      // Delete conversation (cascade will delete all messages on this page’s map)
       const { error } = await supabase
         .from('conversations')
         .delete()
@@ -2081,18 +2088,33 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     setIsRenaming(true)
 
     try {
-      // Update conversation title and mark as manually renamed in metadata
+      const nextTitle = renameInput.trim() // Shared title for page + linked item
+
+      // Merge metadata so we do not wipe parent_id / sourceItemMessageId / icon
+      const { data: existingConv } = await supabase
+        .from('conversations')
+        .select('metadata')
+        .eq('id', conversationToRename.id)
+        .single()
+      const existingMeta = (existingConv?.metadata as Record<string, unknown>) || {}
+
       const { error } = await supabase
         .from('conversations')
         .update({
-          title: renameInput.trim(),
-          metadata: { manuallyRenamed: true }, // Track that this was manually renamed
+          title: nextTitle,
+          metadata: { ...existingMeta, manuallyRenamed: true }, // Preserve nesting + item link
         })
         .eq('id', conversationToRename.id)
         .eq('user_id', user.id) // Ensure user owns this conversation
 
       if (error) {
         throw new Error(error.message || 'Failed to rename board')
+      }
+
+      // Mirror rename onto the parent-map item card when this page was promoted from an item
+      const parentMapId = await syncPageRenameToItem(supabase, conversationToRename.id, nextTitle)
+      if (parentMapId) {
+        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', parentMapId] })
       }
 
       // Invalidate queries to refresh the list

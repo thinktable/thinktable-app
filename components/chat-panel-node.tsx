@@ -61,6 +61,9 @@ import { useEditorContext } from './editor-context'
 import { useReactFlowContext } from './react-flow-context'
 import { useTheme } from './theme-provider'
 import { SelectionFormatPopupAnchor } from './selection-format-popup' // Notion-style selection menu (stable edge anchor)
+import { ItemTitleEdge } from './item-title-edge' // Edge title chip; titled items promote to pages
+import { NestedBoardPreview } from './nested-board-preview' // Page-within-page board preview
+import { deleteLinkedPageForItem, isItemMeta } from '@/lib/items' // Item detection + delete sync
 
 interface Message {
   id: string
@@ -1475,12 +1478,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   }, [isProjectBoard, responseMessage?.id]) // Only depend on responseMessage.id to avoid unnecessary re-runs
 
   // Load resize dimensions/fontScale from message metadata on mount to restore panel size
-  // Note: This effect calculates isNote inline to avoid dependency on isNote before it's defined
+  // Note: This effect calculates isItem inline to avoid dependency on isItem before it's defined
   useEffect(() => {
     if (isProjectBoard || !promptMessage || hasLoadedResizeStateRef.current) return // Project boards don't persist resize, and only load once
 
-    // Calculate isNote inline (same logic as defined later in component)
-    const isNotePanel = promptMessage?.metadata?.isNote === true || 
+    // Item panel: metadata.isItem, or empty user-only body
+    const isItemPanel = isItemMeta(promptMessage?.metadata) ||
       (promptMessage?.role === 'user' && 
        !responseMessage && 
        (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
@@ -1497,12 +1500,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         const metadata = message.metadata as Record<string, any>
         
         // For note panels: load fontScale
-        if (isNotePanel && metadata.fontScale && typeof metadata.fontScale === 'number') {
+        if (isItemPanel && metadata.fontScale && typeof metadata.fontScale === 'number') {
           setFontScale(metadata.fontScale)
         }
         
         // For non-note panels: load resize dimensions
-        if (!isNotePanel && metadata.resizeDimensions && typeof metadata.resizeDimensions === 'object') {
+        if (!isItemPanel && metadata.resizeDimensions && typeof metadata.resizeDimensions === 'object') {
           const dims = metadata.resizeDimensions as { width?: number; height?: number }
           if (dims.width && dims.height && dims.width > 0 && dims.height > 0) {
             setResizeDimensions({ width: dims.width, height: dims.height })
@@ -1557,7 +1560,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   }, [id, getSetNodes, reactFlowInstance])
 
   // Handle resize end - clear resizing flag and reset refs for next resize session
-  // handleResizeEnd is defined after isNote to access it - see below
+  // handleResizeEnd is defined after isItem to access it - see below
 
   // Handle comment creation from text selection
   const handleComment = useCallback((selectedText: string, from: number, to: number, section: 'prompt' | 'response') => {
@@ -1731,16 +1734,15 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // Check if flashcard tags are loaded (for controlling toolbar visibility)
   const { isReady: tagsLoaded, tagIds } = useFlashcardTagsLoaded(isFlashcard && responseMessage?.id ? responseMessage.id : undefined)
   
-  // Determine if this is a note (simple note node, not a full chat panel)
-  // Check metadata.isNote flag, or if it's an empty user message with no response
-  const isNote = promptMessage?.metadata?.isNote === true || 
+  // Item card: metadata.isItem, or empty user-only body
+  const isItem = isItemMeta(promptMessage?.metadata) ||
     (promptMessage?.role === 'user' && 
      !responseMessage && 
      (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
   
   // Calculate dynamic line-height for note nodes based on height (decreases as height increases)
   const calculateNoteLineHeight = useCallback(() => {
-    if (!isNote) return '1.7' // Default line-height
+    if (!isItem) return '1.7' // Default line-height
     
     // Try to get height from React Flow node first (more accurate during resize)
     let currentHeight: number | null = null
@@ -1773,26 +1775,41 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     const calculatedLineHeight = baseLineHeight - (heightRatio - 1) * factor
     
     return `${calculatedLineHeight}`
-  }, [isNote, id, getNodes])
+  }, [isItem, id, getNodes])
   
   // Get current line-height for notes - update on resize
   const [noteLineHeight, setNoteLineHeight] = useState('1.7')
+  // Measured item box for edge-title perimeter math (items = former notes)
+  const [itemBoxSize, setItemBoxSize] = useState({ width: 200, height: 120 })
+  // In-place nested board for a titled item’s linked page
+  const [pagePreviewOpen, setPagePreviewOpen] = useState(false)
+  const linkedPageId = !isProjectBoard
+    ? (promptMessage?.metadata?.linkedPageId as string | undefined)
+    : undefined
+  const itemTitleLabel =
+    (promptMessage?.metadata?.itemTitle as string | undefined) || ''
   
-  // Update line-height when note is resized using ResizeObserver
+  // Update line-height + item box when note/item is resized using ResizeObserver
   useEffect(() => {
-    if (!isNote || !panelRef.current) return
+    if (!isItem || !panelRef.current) return
     
-    const updateLineHeight = () => {
-      const newLineHeight = calculateNoteLineHeight()
+    const updateFromSize = () => {
+      const newLineHeight = calculateNoteLineHeight() // Keep note typography in sync with height
       setNoteLineHeight(newLineHeight)
+      if (panelRef.current) {
+        setItemBoxSize({
+          width: panelRef.current.offsetWidth || 200, // Perimeter width for title chip
+          height: panelRef.current.offsetHeight || 120, // Perimeter height for title chip
+        })
+      }
     }
     
     // Initial calculation
-    updateLineHeight()
+    updateFromSize()
     
     // Set up ResizeObserver to update line-height when panel is resized
     const resizeObserver = new ResizeObserver(() => {
-      updateLineHeight()
+      updateFromSize()
     })
     
     resizeObserver.observe(panelRef.current)
@@ -1800,10 +1817,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     return () => {
       resizeObserver.disconnect()
     }
-  }, [isNote, calculateNoteLineHeight])
+  }, [isItem, calculateNoteLineHeight])
   
   // Regular chat panels are those that are not flashcards and not notes
-  const isRegularChatPanel = !isFlashcard && !isNote
+  const isRegularChatPanel = !isFlashcard && !isItem
 
   // Handle resize end - clear resizing flag, reset refs, and save resize state to database
   // For note panels: save fontScale; for other panels: save resizeDimensions
@@ -1829,7 +1846,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       const updatedMetadata: Record<string, any> = { ...existingMetadata }
       
       // For note panels: save fontScale
-      if (isNote) {
+      if (isItem) {
         updatedMetadata.fontScale = fontScale
         // Clear resizeDimensions so fit-content takes over
         setResizeDimensions(null)
@@ -1855,12 +1872,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       if (updateError) {
         console.error('Error saving resize state to database:', updateError)
       }
-    } else if (isNote) {
+    } else if (isItem) {
       // For note panels, clear resizeDimensions so fit-content kicks in
       // The scaled text will determine the panel size
       setResizeDimensions(null)
     }
-  }, [isNote, isProjectBoard, promptMessage, fontScale, resizeDimensions, supabase])
+  }, [isItem, isProjectBoard, promptMessage, fontScale, resizeDimensions, supabase])
 
   // Handle panel resize - calculates font scale so text FILLS the panel
   // For note panels: maintains fit-content behavior (panel collapses to scaled text)
@@ -1938,7 +1955,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     
     // For note panels: calculate font scale, then let fit-content determine panel size
     // The panel will naturally collapse to fit the scaled text
-    if (isNote && initialTextWidth > 0) {
+    if (isItem && initialTextWidth > 0) {
       // Calculate scale based on how much we've resized relative to initial panel width
       const resizeRatio = params.width / initialPanelWidth
       const newScale = fontScale * resizeRatio / (resizeDimensions ? resizeDimensions.width / initialPanelWidth : 1)
@@ -1989,7 +2006,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         setFontScale(newScale)
       }
     }
-  }, [resizeDimensions, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT, isNote, id, getSetNodes, getNodes, fontScale])
+  }, [resizeDimensions, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT, isItem, id, getSetNodes, getNodes, fontScale])
 
   // Auto-select panel when editor is focused or has selection (text edit mode)
   const handleEditorActiveChange = useCallback((isActive: boolean) => {
@@ -2539,10 +2556,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
 
   // Get current zoom level and update panel width when zoom is 100% or less
   const [currentZoom, setCurrentZoom] = useState(reactFlowInstance?.getViewport().zoom ?? 1)
-  // Check if this is a note panel (from + dropdown or inline double-click) - should use fit-content width
-  const isNotePanel = promptMessage?.metadata?.isNote === true
-  // Notes use fit-content width, flashcards and regular panels use fixed width
-  const usesFitContent = isNotePanel
+  // Item panels use fit-content width
+  const isItemPanel = isItemMeta(promptMessage?.metadata)
+  // Items use fit-content width, flashcards and regular panels use fixed width
+  const usesFitContent = isItemPanel
   // Regular chat panels start at max width (768), flashcards start at 600, notes use fit-content
   const initialWidth = isFlashcard ? 600 : (isRegularChatPanel ? 768 : 768) // Regular panels start at max, flashcards at 600
   const [panelWidthToUse, setPanelWidthToUse] = useState(initialWidth)
@@ -3202,12 +3219,20 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           await queryClient.invalidateQueries({ queryKey: ['project-boards', projectId] })
         }
       } else {
-        // For regular panels, delete messages
+        // For regular panels, delete messages — and linked page if this item was titled
         if (!promptMessage) return
 
         const messageIds = [promptMessage.id]
         if (responseMessage) {
           messageIds.push(responseMessage.id)
+        }
+
+        // Keep Pages menu in sync: deleting a titled item removes its page map
+        try {
+          await deleteLinkedPageForItem(supabase, promptMessage.metadata as Record<string, unknown>)
+          await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+        } catch (linkErr) {
+          console.error('Failed to delete linked page for item:', linkErr)
         }
 
         const { error } = await supabase
@@ -3240,19 +3265,19 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // UNLESS it's a flashcard - flashcards show grey area even if empty content
   // Notes are always component panels (simple note nodes)
   const promptContentValue = promptMessage?.content || ''
-  const isComponentPanel = isNote || promptContentValue.trim().length === 0
+  const isComponentPanel = isItem || promptContentValue.trim().length === 0
   // const isFlashcard = promptMessage?.metadata?.isFlashcard === true // Already defined at top
   // Show grey area if: has content OR is a flashcard (even if empty) OR has response message (to show nested on response load, even if content is empty during streaming)
   // Notes never show grey area (they're simple note nodes)
-  const shouldShowGreyArea = !isNote && (promptContentValue.trim().length > 0 || isFlashcard || !!responseMessage)
+  const shouldShowGreyArea = !isItem && (promptContentValue.trim().length > 0 || isFlashcard || !!responseMessage)
   // Calculate loading state: response is loading when responseMessage doesn't exist or has no content yet
   // Notes never show loading state (they don't have responses)
-  const isLoading = !isNote && (!responseMessage || (responseMessage && !responseMessage.content))
+  const isLoading = !isItem && (!responseMessage || (responseMessage && !responseMessage.content))
   
   // Measure panel's content aspect ratio for note panels (needed for proper height calculation during resize)
   // This captures the natural aspect ratio of the panel content (text + padding) when first rendered
   useEffect(() => {
-    if (isNote && panelRef.current && isInitialShrinkComplete && !resizeDimensions) {
+    if (isItem && panelRef.current && isInitialShrinkComplete && !resizeDimensions) {
       // Wait a bit for the panel to fully render and settle
       const timeoutId = setTimeout(() => {
         const panelElement = panelRef.current
@@ -3271,7 +3296,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       
       return () => clearTimeout(timeoutId)
     }
-  }, [isNote, isInitialShrinkComplete, promptContent, resizeDimensions])
+  }, [isItem, isInitialShrinkComplete, promptContent, resizeDimensions])
 
   // Auto-focus note editor when first created (empty component panel or inline note with fadeIn flag)
   useEffect(() => {
@@ -3339,27 +3364,22 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           shouldBlur && 'blur-sm opacity-40 pointer-events-none'
         )}
       style={{
-        // Note panels use fit-content width (grows with text), others use fixed width
-        // When resized, use the resized dimensions instead of auto-calculated width
-        width: resizeDimensions ? `${resizeDimensions.width}px` : (usesFitContent ? 'fit-content' : `${panelWidthToUse}px`),
-        // Apply resized height when available
-        height: resizeDimensions ? `${resizeDimensions.height}px` : undefined,
-        // Min width: notes need ~200px for padding + buttons, flashcards need ~300px for placeholder
-        minWidth: usesFitContent ? '200px' : (isFlashcard ? '300px' : '200px'),
-        // Min height set to zero to allow panels to shrink completely
-        minHeight: '0px',
-        maxWidth: undefined, // No width limit - notes can expand as wide as needed
-        // Hide panel until initial shrink is complete (prevents visual jump)
+        // Item panels use fit-content width (grows with text), others use fixed width
+        // Page preview expands the item into a board-within-board window
+        width: pagePreviewOpen
+          ? '480px'
+          : resizeDimensions
+            ? `${resizeDimensions.width}px`
+            : (usesFitContent ? 'fit-content' : `${panelWidthToUse}px`),
+        height: pagePreviewOpen ? undefined : (resizeDimensions ? `${resizeDimensions.height}px` : undefined),
+        minWidth: pagePreviewOpen ? '480px' : (usesFitContent ? '200px' : (isFlashcard ? '300px' : '200px')),
+        minHeight: pagePreviewOpen ? '420px' : '0px',
+        maxWidth: undefined,
         opacity: isInitialShrinkComplete ? 1 : 0,
-        // Use calculated panel background color with transparency maintained
         backgroundColor: panelBackgroundColor,
-        // Use custom border color only if not selected (selection takes priority)
         borderColor: selected ? undefined : (data.borderColor || undefined),
-        // When selected, always show border (override 'none' style to show blue selection border)
         borderStyle: selected ? 'solid' : (data.borderStyle as any || undefined),
-        // When selected, ensure border width is set (default to 1px if border was 'none')
         borderWidth: selected ? (data.borderWeight || '1px') : (data.borderWeight || undefined),
-        // Font scaling is applied directly to Tiptap editor's DOM element (see TipTapContent component)
       }}
       onClick={(e) => {
         // Single-section items: no collapse expand-on-click
@@ -3385,7 +3405,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     >
       {/* NodeResizeControl - enables aspect-ratio locked resizing for note panels only */}
       {/* Control is invisible - actual resize handle is rendered as separate toolbar island below */}
-      {isNote && (
+      {isItem && (
         <NodeResizeControl
           style={{
             background: 'transparent',
@@ -3400,6 +3420,22 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           keepAspectRatio={false}
           onResize={handleResize}
           onResizeEnd={handleResizeEnd}
+        />
+      )}
+
+      {/* Item title on edge — select shows Add a title; titled items are pages with their own maps */}
+      {isItem && !isProjectBoard && promptMessage?.id && (
+        <ItemTitleEdge
+          selected={!!selected}
+          width={itemBoxSize.width}
+          height={itemBoxSize.height}
+          messageId={promptMessage.id}
+          conversationId={conversationId}
+          itemTitle={promptMessage.metadata?.itemTitle as string | undefined}
+          linkedPageId={linkedPageId}
+          titleEdgeT={typeof promptMessage.metadata?.titleEdgeT === 'number' ? promptMessage.metadata.titleEdgeT : null}
+          previewOpen={pagePreviewOpen}
+          onTogglePreview={() => setPagePreviewOpen((open) => !open)}
         />
       )}
       
@@ -3724,7 +3760,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           promptMessage?.metadata?.fadeIn === true && "animate-note-fade-in"
         )}
         style={{
-          lineHeight: isNote ? noteLineHeight : '1.7',
+          lineHeight: isItem ? noteLineHeight : '1.7',
           backgroundColor: responseAreaBackgroundColor,
         }}
       >
@@ -3771,6 +3807,17 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             onEditorActiveChange={handleEditorActiveChange}
           />
         </div>
+
+        {/* Page-within-page: nested board for the linked page map */}
+        {pagePreviewOpen && linkedPageId && (
+          <div className="px-2 pb-2">
+            <NestedBoardPreview
+              conversationId={linkedPageId}
+              title={itemTitleLabel}
+              onClose={() => setPagePreviewOpen(false)}
+            />
+          </div>
+        )}
       </div>
 
       {/* Right handle with flashcard navigation */}
@@ -4053,7 +4100,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       {/* Resize control toolbar island - positioned at bottom right, in line with left toolbar */}
       {/* Uses NodeResizeControl internally to enable drag-to-resize with aspect ratio lock */}
       {/* Only show for note panels */}
-      {selected && isNote && (
+      {selected && isItem && (
         <div 
           className="absolute right-0 flex items-center gap-1 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 z-50 pointer-events-auto overflow-visible"
           style={{

@@ -44,6 +44,7 @@ import { ChevronDown, ArrowDown, ChevronUp, Trash2, Plus } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
+import { migrateMessagesToItemFlag, newItemMetadata } from '@/lib/items' // isItem-only metadata + legacy migrate
 import { ThinktableBrandMark } from './personalize-ai-modal'
 import { LeftVerticalMenu } from './left-vertical-menu'
 import { FreehandNode } from './freehand/FreehandNode' // Freehand drawing node component
@@ -93,7 +94,10 @@ async function fetchMessagesForPanels(conversationId: string): Promise<Message[]
       const data = await response.json()
       // Check if this is the homepage board
       if (data.conversation?.id === conversationId) {
-        return (data.messages || []) as Message[]
+        const homepageMessages = (data.messages || []) as Message[]
+        // Homepage is public; still migrate legacy isNote → isItem when the viewer can write
+        await migrateMessagesToItemFlag(supabase, homepageMessages)
+        return homepageMessages
       }
     }
   } catch (error) {
@@ -118,7 +122,10 @@ async function fetchMessagesForPanels(conversationId: string): Promise<Message[]
     console.error('Error fetching messages:', error)
     return []
   }
-  return (data || []) as Message[]
+  const messages = (data || []) as Message[]
+  // One-time switch: persist isNote → isItem on load so old rows leave the legacy flag
+  await migrateMessagesToItemFlag(supabase, messages)
+  return messages
 }
 
 // Custom animated dotted edge component - flows like Supabase schema visualizer
@@ -321,7 +328,15 @@ function ReturnToBottomButton({ onClick, isVisible }: { onClick: () => void; isV
   )
 }
 
-function BoardFlowInner({ conversationId, searchParams }: { conversationId?: string; searchParams: ReturnType<typeof useSearchParams> | null }) {
+function BoardFlowInner({
+  conversationId,
+  searchParams,
+  embedded = false,
+}: {
+  conversationId?: string
+  searchParams: ReturnType<typeof useSearchParams> | null
+  embedded?: boolean // True when rendered as page-within-page preview
+}) {
   const { resolvedTheme } = useTheme()
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesState] = useEdgesState([])
@@ -1132,10 +1147,9 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
             user_id: user.id,
             role: 'user',
             content: '',
-            metadata: { 
-              isNote: true,
-              position: { x: placeholderNode.position.x, y: placeholderNode.position.y }
-            },
+            metadata: newItemMetadata({
+              position: { x: placeholderNode.position.x, y: placeholderNode.position.y },
+            }),
           })
           .select()
           .single()
@@ -4003,9 +4017,8 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
           }
         } else {
           // No assistant messages found - create panel with just the user message
-          // Check if this is a note (has metadata.isNote === true)
-          const isNote = message.metadata?.isNote === true
-          console.log('🔄 BoardFlow: Creating panel for user message:', message.id, 'with response: none', isNote ? '(note)' : '')
+          const isItem = message.metadata?.isItem === true // Map item card
+          console.log('🔄 BoardFlow: Creating panel for user message:', message.id, 'with response: none', isItem ? '(item)' : '')
 
           // Load panel styling from message metadata (fillColor, borderColor, borderStyle, borderWeight)
           const messageMetadata = message.metadata || {}
@@ -5086,10 +5099,10 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
     setRightClickedNode(firstSelectedNode)
   }, [reactFlowInstance, nodes])
 
-  // Create a note or flashcard at the add-item menu's flow position (empty page click)
+  // Create an item or flashcard at the add-item menu's flow position (empty page click)
   const handleAddItemFromMenu = useCallback(async (kind: 'note' | 'flashcard') => {
     if (!addItemMenu) return // Need a spawn point from the open menu
-    const notePosition = { x: addItemMenu.flowX, y: addItemMenu.flowY } // Panel top-left at click
+    const itemPosition = { x: addItemMenu.flowX, y: addItemMenu.flowY } // Panel top-left at click
     setAddItemMenu(null) // Close menu immediately so a slow insert doesn't leave it stuck open
 
     try {
@@ -5124,7 +5137,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
       }
 
       if (kind === 'note') {
-        // Empty editable note at the click position (same flags as double-click I-bar notes)
+        // Empty editable item at the click position (untitled until titled → page)
         const { error } = await supabase
           .from('messages')
           .insert({
@@ -5132,18 +5145,16 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
             user_id: user.id,
             role: 'user',
             content: '',
-            metadata: {
-              isInlineNote: true, // Position path treats this as a placed note
-              isNote: true, // Note styling (single body, no chat chrome)
-              position: notePosition, // Spawn at click
+            metadata: newItemMetadata({
+              position: itemPosition, // Spawn at click
               fadeIn: true,
-            },
+            }),
           })
           .select()
           .single()
 
         if (error) {
-          console.error('Error creating note from add-item menu:', error)
+          console.error('Error creating item from add-item menu:', error)
           return
         }
       } else {
@@ -5157,7 +5168,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
             content: '',
             metadata: {
               isFlashcard: true,
-              position: notePosition, // Spawn at click (honored via metadata.position)
+              position: itemPosition, // Spawn at click (honored via metadata.position)
               fadeIn: true,
             },
           })
@@ -5827,12 +5838,10 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
             user_id: user.id,
             role: 'user',
             content: initialContent, // Start with the first character typed
-            metadata: { 
-              isInlineNote: true, // For position handling
-              isNote: true, // For styling (editable, no grey area)
+            metadata: newItemMetadata({
               position: notePosition, // Panel position (offset so cursor aligns with I-bar)
               fadeIn: true, // Trigger fade-in animation
-            },
+            }),
           })
           .select()
           .single()
@@ -5942,8 +5951,16 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
     });
   }, [reactFlowInstance, fillColor, borderColor, borderWeight, setNodes, takeSnapshot]);
 
+  // Embedded page previews stay chrome-light (no minimap / nav chrome fighting the tiny viewport)
+  useEffect(() => {
+    if (embedded) {
+      setIsMinimapHidden(true)
+      setIsMinimapManuallyHidden(true)
+    }
+  }, [embedded])
+
   return (
-    <div className="w-full h-full relative" onDoubleClick={handlePaneDoubleClick}>
+    <div className="w-full h-full relative" onDoubleClick={embedded ? undefined : handlePaneDoubleClick}>
       <ReactFlow
         // Hide React Flow watermark; Pro license by launch
         proOptions={{ hideAttribution: true }}
@@ -6251,7 +6268,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
           const flowY = (screenY - viewport.y) / viewport.zoom
 
           setRightClickedNode(null) // Don't stack with node action popup
-          setAddItemMenu({ screenX, screenY, flowX, flowY }) // Show Note / Flashcard menu at click
+          setAddItemMenu({ screenX, screenY, flowX, flowY }) // Show Item / Flashcard menu at click
         }}
         defaultViewport={{ x: 0, y: 0, zoom: 0.6 }} // Lower default zoom (0.6 instead of 1.0)
         fitView={viewMode === 'canvas'} // Only use fitView in Canvas mode to prevent extra space above first panel in Linear mode
@@ -6688,7 +6705,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
         title={isMinimapHidden ? 'Show minimap' : 'Hide minimap'}
       />
 
-      {/* Add item menu — empty page/canvas click (Note / Flashcard at click position) */}
+      {/* Add item menu — empty page/canvas click (Item / Flashcard at click position) */}
       {addItemMenu && (
         <div
           className="add-item-menu absolute z-[1000] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[140px]"
@@ -6718,7 +6735,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
               className="justify-start text-sm h-8 px-2"
             >
               <Plus className="h-4 w-4 mr-2" />
-              Note
+              Item
             </Button>
             <Button
               variant="ghost"
@@ -7205,7 +7222,8 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
       </div>
 
       {/* Brand logo + topper — opens chat sidebar; hidden while chat is open; bottom-right of map */}
-      {!isChatSidebarOpen && (
+      {/* Omitted in embedded page-preview boards (chrome belongs to the parent map) */}
+      {!embedded && !isChatSidebarOpen && (
         <button
           type="button"
           data-chat-sidebar-toggle
@@ -7332,7 +7350,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
       })()}
 
       {/* Left vertical menu (set menu) - show if board or project has flashcards */}
-      {shouldShowMenu && (
+      {!embedded && shouldShowMenu && (
         <LeftVerticalMenu conversationId={conversationId} />
       )}
     </div>
@@ -7340,16 +7358,34 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
 }
 
 // Wrapper component that handles Suspense for useSearchParams
-function BoardFlowWithSearchParams({ conversationId }: { conversationId?: string }) {
+function BoardFlowWithSearchParams({
+  conversationId,
+  embedded,
+}: {
+  conversationId?: string
+  embedded?: boolean
+}) {
   const searchParams = useSearchParams()
-  return <BoardFlowInner conversationId={conversationId} searchParams={searchParams} />
+  return (
+    <BoardFlowInner
+      conversationId={conversationId}
+      searchParams={searchParams}
+      embedded={embedded}
+    />
+  )
 }
 
-export function BoardFlow({ conversationId }: { conversationId?: string }) {
+export function BoardFlow({
+  conversationId,
+  embedded = false,
+}: {
+  conversationId?: string
+  embedded?: boolean // Page-within-page: strip outer chrome
+}) {
   return (
     <ReactFlowProvider>
       <Suspense fallback={<div className="h-full w-full flex items-center justify-center">Loading...</div>}>
-        <BoardFlowWithSearchParams conversationId={conversationId} />
+        <BoardFlowWithSearchParams conversationId={conversationId} embedded={embedded} />
       </Suspense>
     </ReactFlowProvider>
   )

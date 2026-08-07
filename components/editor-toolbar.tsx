@@ -283,7 +283,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
 
   // Default values for settings
   const DEFAULT_BOARD_RULE: 'wide' | 'college' | 'narrow' = 'college'
-  const DEFAULT_BOARD_STYLE: 'none' | 'dotted' | 'lined' | 'grid' = 'none'
+  const DEFAULT_BOARD_STYLE: 'none' | 'dotted' | 'lined' | 'grid' = 'dotted'
   const DEFAULT_FILL_COLOR = '#ffffff'
   const DEFAULT_BORDER_COLOR = '#000000'
   const DEFAULT_BORDER_WEIGHT = 1
@@ -367,8 +367,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         }
       }
 
-      // Create a new message with role 'user' and empty content (will be editable)
-      // Mark it as a note in metadata so it renders as a simple note node, not a full chat panel
+      // Create an empty item card (untitled until titled → linked page)
       const { data: newMessage, error } = await supabase
         .from('messages')
         .insert({
@@ -376,7 +375,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           user_id: user.id,
           role: 'user',
           content: '', // Empty content to start
-          metadata: { isNote: true }, // Mark as note to distinguish from regular chat panels
+          metadata: { isItem: true }, // Map item card
         })
         .select()
         .single()

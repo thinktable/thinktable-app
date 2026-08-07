@@ -7,7 +7,7 @@ import { createPortal } from 'react-dom';
 // This is a visual-only component - placeholders are managed by usePlaceholderManager
 // They show below the last added panel or below the selected panel
 // Styled to match React Flow placeholder appearance: dashed border, simple "+" label
-// Clicking shows a dropdown menu with Note and Flashcard options
+// Clicking shows a dropdown menu with Item and Flashcard options
 // Only registers clicks on mouse release (mouseup) to prevent accidental clicks during drag
 const PlaceholderNode = ({ id, data }: NodeProps) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -186,7 +186,7 @@ const PlaceholderNode = ({ id, data }: NodeProps) => {
               }}
               className="hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-gray-100"
             >
-              Note
+              Item
             </button>
             <button
               onClick={(e) => {

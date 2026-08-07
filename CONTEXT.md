@@ -4,7 +4,7 @@
 
 Thinktable is a spatial mind-map / board product that:
 
-1. **Keeps first-class local content** — notes, chat panels, flashcards, drawings, and boards work without Notion (current behavior remains).
+1. **Keeps first-class local content** — items (map cards), pages (titled items with their own maps), chat panels, flashcards, and drawings work without Notion (current behavior remains).
 2. **Optionally connects Notion** — users OAuth-connect their workspace (Mindmap.so-style), pick pages, map them on the board, edit on-site, and sync both ways.
 3. **Exposes an MCP server** — external AIs (Cursor, Claude, etc.) can create/edit mind maps via tools, using the user’s Thinktable account (and optional Notion connection).
 
@@ -12,7 +12,7 @@ Thinktable is a spatial mind-map / board product that:
 
 | Concern | Source of truth |
 |---|---|
-| Page / note **content** (when Notion-linked) | Notion (bidirectional sync via API) |
+| Page / item **content** (when Notion-linked) | Notion (bidirectional sync via API) |
 | Spatial **layout**, edges, board metadata | Thinktable |
 | Local-only nodes (no Notion link) | Thinktable only |
 
@@ -58,9 +58,11 @@ Thinktable is a spatial mind-map / board product that:
 - Right **chat sidebar** (`components/chat-sidebar.tsx`): Notion-like AI panel (header title + actions, empty-state body, bottom composer); **hidden by default**; toggled by brand logo beside the minimap/nav toggle (`isChatSidebarOpen`). When open, **sibling column** (`CHAT_SIDEBAR_WIDTH`) shrinks the map/top-bar column; flows call `useChatSidebarViewportAdjust` so zoom scales by `newWidth/oldWidth` (same relative framing). Close via header chevrons (`ChevronsRight`).
 - Chat empty state shows **Thinktable brand mark**; hover reveals **Personalize** (Notion-style). Opens sample modal (`components/personalize-ai-modal.tsx`) to pick a **topper** overlaid on the logo. Selection lives in `sidebar-context` (`topperId`) + `localStorage` (`thinktable-ai-topper`) so the **map chat-open icon** shows the same topper. Custom assets: drop files in `/public/toppers/` and set `src` on entries in `SAMPLE_TOPPERS`.
 - TipTap text selection on chat panels: Notion-style format popup (`components/selection-format-popup.tsx` → `SelectionFormatPopupAnchor`) — `position:fixed` portal; **1 line** → at end of highlight; **multi-line** → right of panel/item edge → left of panel/item edge → end of text. **Hide text** toggles TipTap `haze` mark (`lib/tiptap/haze.ts`); click hazed span adds temporary `tt-haze-revealed` (blur clears until blur/click-away). Page items are a **single text body** (plain-merge legacy prompt+response; no top/bottom sections or collapse).
-- Empty board/canvas **left-click** (no panel selected) opens an **add item** menu at the click (`board-flow` `addItemMenu`) with Note / Flashcard; items spawn at click flow coords via `metadata.position`. Deselect click does not open the menu; Escape / outside click dismisses. Double-click still places the I-bar for type-to-create notes.
+- Empty board/canvas **left-click** (no panel selected) opens an **add item** menu at the click (`board-flow` `addItemMenu`) with Item / Flashcard; items spawn at click flow coords via `metadata.position`. Deselect click does not open the menu; Escape / outside click dismisses. Double-click still places the I-bar for type-to-create items.
+- **Item vs page**: Map cards are **items** (`metadata.isItem` only; load migrates legacy `isNote` → `isItem` via `lib/items.ts`). Selecting an untitled item shows **Add a title** on the edge (`components/item-title-edge.tsx`, mid-top default, draggable via `titleEdgeT`). Titling promotes to a **page**: child `conversations` (`parent_id` + `sourceItemMessageId`), message gets `itemTitle` + `linkedPageId` (dual-write keeps menu rename ↔ item title in sync). Title chip: **preview** (`AppWindow`) expands a nested board inside the item (`components/nested-board-preview.tsx` + `BoardFlow` `embedded` — page-within-page); **expand** navigates to `/board/{linkedPageId}`. Nested boards set `BoardEmbedProvider` so preview isn’t offered again inside. Delete item → delete linked page; delete page → demote item (clear title/link, keep body). Untitled items are map-only (not in Pages menu).
 - Placeholder preview: disabled — `usePlaceholderManager` only strips leftover ghost “+” nodes/edges; none are created.
 - Minimap + Linear/Free nav toggle sit on the **bottom-left** of the map; the **chat sidebar toggle logo** (with topper) stays on the **bottom-right** of the map column; the **flashcard study menu** (`left-vertical-menu.tsx`) + its open/close pill sit **centered at the bottom** of the map.
+- View board background defaults to **college** rule + **dotted** style (`boardRule`/`boardStyle` in `react-flow-context`).
 - React Flow attribution hidden via `proOptions={{ hideAttribution: true }}` on board/project/study-set flows (Pro license by launch).
 - Notion connect UI entry: top-bar Notion button (right section, near Share).
 - Local content paths stay unchanged when no Notion connection / node is unlinked.
