@@ -1,8 +1,10 @@
 'use client'
 
 // Full-height right chat column — Notion-style AI panel layout
+import { useState } from 'react'
 import { ChatInput } from './chat-input'
 import { useSidebarContext, CHAT_SIDEBAR_WIDTH } from './sidebar-context'
+import { ThinktableBrandMark, PersonalizeAiModal } from './personalize-ai-modal'
 import { cn } from '@/lib/utils'
 import {
   X,
@@ -12,6 +14,7 @@ import {
   Search,
   ListTodo,
   Sparkles,
+  Pencil,
 } from 'lucide-react'
 
 interface ChatSidebarProps {
@@ -20,7 +23,9 @@ interface ChatSidebarProps {
 }
 
 export function ChatSidebar({ conversationId, projectId }: ChatSidebarProps) {
-  const { isChatSidebarOpen, setChatSidebarOpen } = useSidebarContext()
+  const { isChatSidebarOpen, setChatSidebarOpen, topperId, setTopperId } = useSidebarContext()
+  const [personalizeOpen, setPersonalizeOpen] = useState(false) // Sample personalize modal
+  const [hoverBrand, setHoverBrand] = useState(false) // Show Personalize pill on logo hover
 
   if (!isChatSidebarOpen) return null // Hidden by default; opened via board brand logo
 
@@ -99,6 +104,43 @@ export function ChatSidebar({ conversationId, projectId }: ChatSidebarProps) {
         {/* Body — empty state / transcript (Notion-like quiet center) */}
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-6">
           <div className="flex flex-col items-start gap-5 max-w-[280px] mx-auto mt-6">
+            {/* Brand mark + Personalize on hover (Notion AI pattern) */}
+            <div
+              className="flex items-center gap-2.5"
+              onMouseEnter={() => setHoverBrand(true)}
+              onMouseLeave={() => setHoverBrand(false)}
+            >
+              <button
+                type="button"
+                onClick={() => setPersonalizeOpen(true)}
+                className="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                title="Personalize Thinktable AI"
+                aria-label="Personalize Thinktable AI"
+              >
+                <ThinktableBrandMark topperId={topperId} size={52} />
+              </button>
+
+              {/* Personalize pill — appears on hover, Notion-style */}
+              <button
+                type="button"
+                onClick={() => setPersonalizeOpen(true)}
+                className={cn(
+                  'flex items-center gap-1.5 h-8 px-3 rounded-full text-xs font-medium',
+                  'bg-black/[0.06] dark:bg-white/[0.08] text-gray-700 dark:text-gray-200',
+                  'border border-black/5 dark:border-white/10',
+                  'hover:bg-black/[0.1] dark:hover:bg-white/[0.12] transition-all',
+                  hoverBrand
+                    ? 'opacity-100 translate-x-0'
+                    : 'opacity-0 -translate-x-1 pointer-events-none'
+                )}
+                tabIndex={hoverBrand ? 0 : -1}
+                aria-hidden={!hoverBrand}
+              >
+                <Pencil className="h-3 w-3" />
+                Personalize
+              </button>
+            </div>
+
             <div>
               <h2 className="text-xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">
                 What&apos;s on your mind?
@@ -146,6 +188,14 @@ export function ChatSidebar({ conversationId, projectId }: ChatSidebarProps) {
           </div>
         </div>
       </aside>
+
+      {/* Sample personalize popup — topper picker */}
+      <PersonalizeAiModal
+        open={personalizeOpen}
+        onOpenChange={setPersonalizeOpen}
+        topperId={topperId}
+        onTopperChange={setTopperId}
+      />
     </div>
   )
 }

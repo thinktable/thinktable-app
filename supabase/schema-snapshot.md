@@ -1,13 +1,14 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-07T14:20:18Z`
-- Source: Management API live check + local `supabase/migrations/`
-- CLI note: `supabase db dump --linked` failed with `cli_login_postgres` permission denied; use migration files as source of truth.
+- Snapped at: `2026-08-07T15:06:49Z`
+- Source: local `supabase/migrations/` + `.temp` service versions (linked project)
+- CLI note: `supabase db dump --linked` / `migration list` failed with `cli_login_postgres` permission denied; use migration files as source of truth.
+- Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 
 ## Live: `public.notion_connections`
 
-Verified: `notion_connections`
+Verified previously on project (unchanged this save — no new migrations).
 
 Columns:
 

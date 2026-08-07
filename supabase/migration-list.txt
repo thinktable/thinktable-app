@@ -1,8 +1,9 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-07T14:20:18Z
-# Note: supabase db dump --linked failed (cli_login_postgres permission); snapshot via Management API + local migrations.
+# snapped_at=2026-08-07T15:06:49Z
+# postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
+# Note: supabase db dump --linked / migration list failed (cli_login_postgres permission); snapshot via local migrations + .temp versions.
 #
 # Local migration files:
 20251203111351_schema_documentation.md
@@ -23,4 +24,4 @@
 20260103020000_resize_persistence_metadata.md
 20260806200000_create_notion_connections.sql
 #
-# Live verify: public.notion_connections -> [{"table_name": "notion_connections"}]
+# No new migrations this save (UI: brand topper personalize, centering, toolbar cleanup).

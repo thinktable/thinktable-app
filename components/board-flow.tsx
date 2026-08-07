@@ -25,7 +25,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useRef, useMemo, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import Image from 'next/image'
 import { useTheme } from '@/components/theme-provider'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -44,6 +43,7 @@ import {
 import { ChevronDown, ArrowDown, ChevronUp, Trash2, Plus } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
+import { ThinktableBrandMark } from './personalize-ai-modal'
 import { LeftVerticalMenu } from './left-vertical-menu'
 import { FreehandNode } from './freehand/FreehandNode' // Freehand drawing node component
 import { Freehand, retryFailedSaves } from './freehand/Freehand' // Freehand drawing overlay component and retry function
@@ -1030,7 +1030,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
     if (boardStyle === 'grid') return BackgroundVariant.Lines // Grid pattern (both horizontal and vertical lines)
     return null // Default to none
   }, [boardStyle])
-  const { setIsMobileMode, isChatSidebarOpen, toggleChatSidebar } = useSidebarContext()
+  const { setIsMobileMode, isChatSidebarOpen, toggleChatSidebar, topperId } = useSidebarContext()
   const originalPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map()) // Store original positions for Linear mode
   const isLinearModeRef = useRef(false) // Track if we're currently in Linear mode
 
@@ -7093,13 +7093,13 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
         </div>
       </div>
 
-      {/* Brand logo — opens chat sidebar; hidden while chat is open; bottom-right of map */}
+      {/* Brand logo + topper — opens chat sidebar; hidden while chat is open; bottom-right of map */}
       {!isChatSidebarOpen && (
         <button
           type="button"
           data-chat-sidebar-toggle
           onClick={() => toggleChatSidebar()}
-          className="absolute z-10 flex items-center justify-center bg-transparent hover:opacity-80 transition-opacity p-0 border-0"
+          className="absolute z-10 flex items-center justify-center bg-transparent hover:opacity-80 transition-opacity p-0 border-0 overflow-visible"
           style={{
             bottom: '12px',
             right: '12px',
@@ -7107,13 +7107,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
           title="Show chat"
           aria-label="Show chat sidebar"
         >
-          <Image
-            src="/thinktable-logo.svg"
-            alt="Chat"
-            width={36}
-            height={36}
-            className="h-9 w-9 dark:invert"
-          />
+          <ThinktableBrandMark topperId={topperId} size={36} />
         </button>
       )}
 

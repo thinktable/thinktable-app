@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { EditPanel } from './sticky-prompt-panel'
 import { cn } from '@/lib/utils'
 import { useReactFlowContext } from './react-flow-context'
+import { useSidebarContext } from './sidebar-context'
 import { PillSelect } from './pill-select'
 import { useUserPreference } from '@/lib/hooks/use-user-preferences'
 import { createClient } from '@/lib/supabase/client'
@@ -238,49 +239,41 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
     }
   }, [])
 
-  // Calculate prompt box center position for pill select alignment
+  // Center Home/Insert/Draw/View menu + hide pill on the board / edit-bar column
+  // (not the prompt box). Recalculate when chat sidebar opens and the column shrinks.
   const [pillSelectLeft, setPillSelectLeft] = useState(0)
   const [pillSelectWidth, setPillSelectWidth] = useState(200) // Default width, will be measured
   const pillSelectRef = useRef<HTMLDivElement>(null)
+  const { isChatSidebarOpen } = useSidebarContext() // Chat column changes map width
   
   useEffect(() => {
+    const getBoardColumn = (): HTMLElement | null => {
+      // Map column wraps BoardFlow + overlays; react-flow fills it
+      const rf = document.querySelector('.react-flow') as HTMLElement | null
+      if (!rf) return null
+      return (rf.parentElement as HTMLElement) || rf
+    }
+
     const calculatePillSelectPosition = () => {
-      const reactFlowElement = document.querySelector('.react-flow')
-      if (!reactFlowElement) return
-      
-      const mapAreaWidth = reactFlowElement.clientWidth
-      
-      if (isCentered) {
-        // When centered, pill select should be at center of map area
-        setPillSelectLeft(mapAreaWidth / 2)
-      } else {
-        // When left-aligned, pill select should be at center of prompt box
-        // Prompt box center = leftGap + (maxWidth / 2)
-        setPillSelectLeft(leftGap + (maxWidth / 2))
-      }
+      const boardColumn = getBoardColumn()
+      if (!boardColumn) return
+      setPillSelectLeft(boardColumn.clientWidth / 2) // Center of board / edit-bar area
     }
     
     calculatePillSelectPosition()
     window.addEventListener('resize', calculatePillSelectPosition)
-    
-    // Watch for sidebar state changes
-    const sidebarElement = document.querySelector('[class*="w-16"], [class*="w-64"]') as HTMLElement
-    const sidebarObserver = sidebarElement ? new MutationObserver(() => {
-      calculatePillSelectPosition()
-    }) : null
-    
-    if (sidebarObserver && sidebarElement) {
-      sidebarObserver.observe(sidebarElement, {
-        attributes: true,
-        attributeFilter: ['class']
-      })
-    }
+
+    const boardColumn = getBoardColumn()
+    const resizeObserver = boardColumn
+      ? new ResizeObserver(() => calculatePillSelectPosition())
+      : null
+    if (resizeObserver && boardColumn) resizeObserver.observe(boardColumn)
     
     return () => {
       window.removeEventListener('resize', calculatePillSelectPosition)
-      if (sidebarObserver) sidebarObserver.disconnect()
+      if (resizeObserver) resizeObserver.disconnect()
     }
-  }, [isCentered, leftGap, maxWidth])
+  }, [isChatSidebarOpen]) // Re-attach when chat sidebar changes column width
   
   // Keep refs in sync with state
   useEffect(() => {
@@ -571,7 +564,7 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
         }}
       />
       
-      {/* Hide pill - positioned outside hover zone to have its own stacking context, centered on edit menu top edge */}
+      {/* Hide pill — centered on board / edit-bar column width */}
         <div 
           data-edit-pill-context
           onContextMenu={(e) => {
@@ -672,7 +665,7 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
         title={isPillSelectHidden ? 'Show mode selector' : 'Hide mode selector'}
       />
       
-      {/* Floating pill select - centered to prompt box, below top bar - fades in/out */}
+      {/* Floating pill select — centered on board / edit-bar column, below top bar */}
       <div 
         ref={pillSelectRef}
         data-edit-menu-context

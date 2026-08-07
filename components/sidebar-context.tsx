@@ -1,7 +1,16 @@
 'use client'
 
 // Context for board nav popup + right chat sidebar chrome
-import { createContext, useContext, useState, useCallback, useRef, ReactNode } from 'react'
+import {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+  ReactNode,
+} from 'react'
+import { getStoredTopperId, TT_TOPPER_STORAGE_KEY } from './personalize-ai-modal'
 
 /** Width of the right chat sidebar when open (keeps top bar / map shrunk left). Notion-like panel width. */
 export const CHAT_SIDEBAR_WIDTH = 360
@@ -18,6 +27,8 @@ interface SidebarContextType {
   isChatSidebarOpen: boolean // True when right chat sidebar is visible
   toggleChatSidebar: () => void // Toggle right chat sidebar (logo by minimap)
   setChatSidebarOpen: (open: boolean) => void // Explicit open/close for chat sidebar
+  topperId: string | null // AI brand topper (shared by chat + map open icon)
+  setTopperId: (id: string | null) => void // Persist + sync topper across chrome
 }
 
 const SidebarContext = createContext<SidebarContextType | undefined>(undefined)
@@ -26,7 +37,20 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
   const [isMobileMode, setIsMobileMode] = useState(false) // Compact layout flag from board flows
   const [isSidebarOpen, setIsSidebarOpen] = useState(false) // Left nav popup visibility
   const [isChatSidebarOpen, setIsChatSidebarOpen] = useState(false) // Right chat sidebar — hidden by default
+  const [topperId, setTopperIdState] = useState<string | null>(null) // Shared Thinktable AI topper
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Delayed-close handle for left nav
+
+  // Hydrate topper from localStorage after mount
+  useEffect(() => {
+    setTopperIdState(getStoredTopperId())
+  }, [])
+
+  const setTopperId = useCallback((id: string | null) => {
+    setTopperIdState(id) // Sync map open icon + chat brand mark
+    if (typeof window === 'undefined') return
+    if (id) localStorage.setItem(TT_TOPPER_STORAGE_KEY, id)
+    else localStorage.removeItem(TT_TOPPER_STORAGE_KEY)
+  }, [])
 
   const cancelCloseSidebar = useCallback(() => {
     if (closeTimerRef.current) {
@@ -80,6 +104,8 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
         isChatSidebarOpen,
         toggleChatSidebar,
         setChatSidebarOpen,
+        topperId,
+        setTopperId,
       }}
     >
       {children}
@@ -103,6 +129,8 @@ export function useSidebarContext() {
       isChatSidebarOpen: false,
       toggleChatSidebar: () => {},
       setChatSidebarOpen: () => {},
+      topperId: null as string | null,
+      setTopperId: () => {},
     }
   }
   return context

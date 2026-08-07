@@ -3346,7 +3346,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Right Section - always visible, fixed position (Share and Edit Mode) */}
+      {/* Right Section — Notion + Share */}
       <div className="flex items-center gap-1 flex-shrink-0 ml-auto mr-4" data-right-section>
         {/* Reset to Default Button - only show when settings differ from defaults */}
         {hasNonDefaultSettings && (
@@ -3379,85 +3379,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             <Share2 className="h-4 w-4" />
           </Button>
         </div>
-
-        {/* Edit Mode Dropdown */}
-        <DropdownMenu open={openDropdown === 'editMode'} onOpenChange={(open) => handleDropdownOpenChange('editMode', open)}>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className={cn(
-                'h-7 px-2 text-gray-700 dark:text-gray-200 bg-blue-50 dark:bg-[#2a2a3a] hover:bg-gray-100 dark:hover:bg-[#1f1f1f] data-[state=open]:bg-gray-300 dark:data-[state=open]:bg-[#2f2f2f] focus-visible:ring-0 focus-visible:ring-offset-0'
-              )}
-            >
-              {editMode === 'editing' && <span className="text-base">💭</span>}
-              {editMode === 'suggesting' && <span className="text-base">🎵</span>}
-              {editMode === 'viewing' && <span className="text-base">🧠</span>}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-auto min-w-fit">
-            <DropdownMenuItem
-              onClick={() => setEditMode('editing')}
-              className={cn(
-                'flex items-center gap-3 p-3',
-                editMode === 'editing' && 'bg-gray-200'
-              )}
-            >
-              <span className="text-lg">💭</span>
-              <div className="flex flex-col">
-                <span className="text-sm font-semibold">Think</span>
-                <span className="text-xs text-gray-500">Chat directly</span>
-              </div>
-              {editMode === 'editing' && (
-                <div className="ml-auto">
-                  <svg className="h-5 w-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                </div>
-              )}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => setEditMode('suggesting')}
-              className={cn(
-                'flex items-center gap-3 p-3',
-                editMode === 'suggesting' && 'bg-gray-200'
-              )}
-            >
-              <span className="text-lg">🎼</span>
-              <div className="flex flex-col">
-                <span className="text-sm font-semibold">Compose</span>
-                <span className="text-xs text-gray-500">Gain autofill</span>
-              </div>
-              {editMode === 'suggesting' && (
-                <div className="ml-auto">
-                  <svg className="h-5 w-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                </div>
-              )}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => setEditMode('viewing')}
-              className={cn(
-                'flex items-center gap-3 p-3',
-                editMode === 'viewing' && 'bg-gray-200'
-              )}
-            >
-              <span className="text-lg">🧠</span>
-              <div className="flex flex-col">
-                <span className="text-sm font-semibold">Mind<sup>2</sup> ✨</span>
-                <span className="text-xs text-gray-500">Workflow assistant</span>
-              </div>
-              {editMode === 'viewing' && (
-                <div className="ml-auto">
-                  <svg className="h-5 w-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                </div>
-              )}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
       </div>
     </div>
   )

@@ -53,10 +53,11 @@ Thinktable is a spatial mind-map / board product that:
 
 ## Implementation notes
 
-- Board UI top bar: `components/sticky-prompt-panel.tsx` → logo + truncated board title + `components/editor-toolbar.tsx` (no bottom border; bar width = map column only).
+- Board UI top bar: `components/sticky-prompt-panel.tsx` → logo + truncated board title + `components/editor-toolbar.tsx` (no bottom border; bar width = map column only). Home/Insert/Draw/View pill + hide pill (`input-area-with-sticky-prompt.tsx`) stay **centered on the map/edit-bar column** (recalculate on chat sidebar open via ResizeObserver).
 - Board nav: former left `AppSidebar` is a **rounded top-left hover popup** opened from the top-bar logo (`sidebar-context` open/scheduleClose).
 - Right **chat sidebar** (`components/chat-sidebar.tsx`): Notion-like AI panel (header title + actions, empty-state body, bottom composer); **hidden by default**; toggled by brand logo beside the minimap/nav toggle (`isChatSidebarOpen`). When open, map + top edit bar shrink left. Close via header X / chevrons or outside bottom-left `ChevronsRight`.
-- Minimap + Linear/Free nav toggle sit on the **bottom-left** of the map; the **chat sidebar toggle logo** stays on the **bottom-right** of the map column.
+- Chat empty state shows **Thinktable brand mark**; hover reveals **Personalize** (Notion-style). Opens sample modal (`components/personalize-ai-modal.tsx`) to pick a **topper** overlaid on the logo. Selection lives in `sidebar-context` (`topperId`) + `localStorage` (`thinktable-ai-topper`) so the **map chat-open icon** shows the same topper. Custom assets: drop files in `/public/toppers/` and set `src` on entries in `SAMPLE_TOPPERS`.
+- Minimap + Linear/Free nav toggle sit on the **bottom-left** of the map; the **chat sidebar toggle logo** (with topper) stays on the **bottom-right** of the map column.
 - React Flow attribution hidden via `proOptions={{ hideAttribution: true }}` on board/project/study-set flows (Pro license by launch).
 - Notion connect UI entry: top-bar Notion button (right section, near Share).
 - Local content paths stay unchanged when no Notion connection / node is unlinked.

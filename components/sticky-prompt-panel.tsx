@@ -58,6 +58,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
         className={cn(
           'absolute left-0 right-0 z-10 pointer-events-auto flex flex-col items-center'
         )}
+        data-edit-panel-root
         style={{
           // Position at very top of map area - no gap
           top: '0px',
