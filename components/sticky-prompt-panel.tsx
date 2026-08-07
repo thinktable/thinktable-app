@@ -1,12 +1,12 @@
 'use client'
 
-// Edit panel - always visible at top of map area (logo + board title + toolbar)
+// Edit panel - always visible at top of map area (menu + board title + toolbar)
 import { cn } from '@/lib/utils'
 import { EditorToolbar } from './editor-toolbar'
 import { useEditorContext } from './editor-context'
 import { useState } from 'react'
 import { useSidebarContext } from './sidebar-context'
-import Image from 'next/image'
+import { Menu } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useQuery } from '@tanstack/react-query'
 
@@ -81,7 +81,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
             boxSizing: 'border-box', // Ensure padding is included in height
           }}
         >
-          {/* Brand logo — hover/click opens rounded nav popup (former left sidebar) */}
+          {/* Menu icon — hover/click opens rounded nav popup (former left sidebar) */}
           <div
             data-nav-logo-trigger
             className="flex items-center gap-2 flex-shrink-0 min-w-0 mr-2 max-w-[min(240px,32vw)]"
@@ -99,14 +99,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
               title="Open menu"
               aria-label="Open navigation menu"
             >
-              <Image
-                src="/thinktable-logo.svg"
-                alt="ThinkTable"
-                width={24}
-                height={24}
-                className="h-6 w-6 dark:invert"
-                priority
-              />
+              <Menu className="h-5 w-5 text-gray-700 dark:text-gray-300" />
             </button>
             {/* Current board / project name — truncates with ellipsis when too long */}
             <span

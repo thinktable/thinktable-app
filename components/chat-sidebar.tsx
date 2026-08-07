@@ -1,9 +1,18 @@
 'use client'
 
-// Full-height right chat column — prompt input + return-to-bottom slot (hidden by default)
+// Full-height right chat column — Notion-style AI panel layout
 import { ChatInput } from './chat-input'
 import { useSidebarContext, CHAT_SIDEBAR_WIDTH } from './sidebar-context'
 import { cn } from '@/lib/utils'
+import {
+  X,
+  ChevronsRight,
+  ChevronDown,
+  MessageSquarePlus,
+  Search,
+  ListTodo,
+  Sparkles,
+} from 'lucide-react'
 
 interface ChatSidebarProps {
   conversationId?: string
@@ -11,36 +20,132 @@ interface ChatSidebarProps {
 }
 
 export function ChatSidebar({ conversationId, projectId }: ChatSidebarProps) {
-  const { isChatSidebarOpen } = useSidebarContext()
+  const { isChatSidebarOpen, setChatSidebarOpen } = useSidebarContext()
 
-  if (!isChatSidebarOpen) return null // Hidden by default; toggled via logo by minimap
+  if (!isChatSidebarOpen) return null // Hidden by default; opened via board brand logo
 
   return (
-    <aside
-      data-chat-sidebar
-      className={cn(
-        'h-full flex-shrink-0 flex flex-col',
-        // Match board/main area background; keep the left divider border
-        'bg-gray-50 dark:bg-[#0f0f0f]',
-        'border-l border-gray-200 dark:border-[#2f2f2f]'
-      )}
-      style={{ width: CHAT_SIDEBAR_WIDTH }} // Forces map + top edit bar to shrink left
-    >
-      {/* Reserved space for future transcript / fork tree */}
-      <div className="flex-1 min-h-0 overflow-y-auto" />
+    <div className="relative h-full flex-shrink-0 flex">
+      {/* Double-right chevron outside sidebar, bottom-left — closes chat */}
+      <button
+        type="button"
+        data-chat-sidebar-collapse
+        onClick={() => setChatSidebarOpen(false)}
+        className={cn(
+          'absolute z-20 bottom-3 left-0 -translate-x-full',
+          'w-8 h-9 flex items-center justify-center',
+          'bg-transparent border-0 p-0',
+          'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100',
+          'transition-colors'
+        )}
+        title="Hide chat"
+        aria-label="Hide chat sidebar"
+      >
+        <ChevronsRight className="h-5 w-5" />
+      </button>
 
-      {/* Return-to-bottom portals here from BoardFlow */}
-      <div
-        data-chat-return-slot
-        className="flex justify-center items-center pb-2 min-h-[44px] flex-shrink-0"
-      />
+      <aside
+        data-chat-sidebar
+        className={cn(
+          'h-full flex flex-col',
+          // Match board/top-bar surface (reverted from Notion tint)
+          'bg-gray-50 dark:bg-[#0f0f0f]',
+          'border-l border-black/10 dark:border-white/10'
+        )}
+        style={{ width: CHAT_SIDEBAR_WIDTH }}
+      >
+        {/* Header — title left, actions right (Notion AI / agent panel pattern) */}
+        <header className="flex-shrink-0 flex items-center justify-between gap-2 px-3 h-11">
+          <button
+            type="button"
+            className="flex items-center gap-1 min-w-0 rounded-md px-1.5 py-1 text-sm font-medium text-gray-900 dark:text-gray-100 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
+            title="Chat sessions"
+          >
+            <span className="truncate">New AI chat</span>
+            <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-gray-500 dark:text-gray-400" />
+          </button>
 
-      {/* Prompt input anchored to bottom of chat column */}
-      <div className="flex-shrink-0 p-3 pt-0 pointer-events-auto">
-        <div className="shadow-sm rounded-[26px] overflow-hidden">
-          <ChatInput conversationId={conversationId} projectId={projectId} />
+          <div className="flex items-center gap-0.5 flex-shrink-0">
+            <button
+              type="button"
+              className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
+              title="New chat"
+              aria-label="New chat"
+            >
+              <MessageSquarePlus className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setChatSidebarOpen(false)}
+              className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
+              title="Hide chat"
+              aria-label="Hide chat sidebar"
+            >
+              <ChevronsRight className="h-4 w-4" />
+            </button>
+            {/* Top-right X — kept */}
+            <button
+              type="button"
+              onClick={() => setChatSidebarOpen(false)}
+              className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
+              title="Hide chat"
+              aria-label="Close chat sidebar"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        {/* Body — empty state / transcript (Notion-like quiet center) */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-6">
+          <div className="flex flex-col items-start gap-5 max-w-[280px] mx-auto mt-6">
+            <div>
+              <h2 className="text-xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">
+                What&apos;s on your mind?
+              </h2>
+              <p className="mt-1.5 text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
+                Ask anything about this board, or pick a starting point.
+              </p>
+            </div>
+
+            {/* Quick actions — Notion-style list rows */}
+            <ul className="w-full flex flex-col gap-0.5">
+              {[
+                { icon: Sparkles, label: 'Summarize this board' },
+                { icon: ListTodo, label: 'Turn notes into tasks' },
+                { icon: Search, label: 'Search connected pages' },
+              ].map(({ icon: Icon, label }) => (
+                <li key={label}>
+                  <button
+                    type="button"
+                    className={cn(
+                      'w-full flex items-center gap-2.5 rounded-md px-2 py-2 text-left text-sm',
+                      'text-gray-700 dark:text-gray-300',
+                      'hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors'
+                    )}
+                  >
+                    <Icon className="h-4 w-4 flex-shrink-0 text-gray-500 dark:text-gray-400" />
+                    <span className="truncate">{label}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Return-to-bottom portals from BoardFlow */}
+          <div
+            data-chat-return-slot
+            className="flex justify-center items-center min-h-[44px] mt-4"
+          />
         </div>
-      </div>
-    </aside>
+
+        {/* Composer — bottom dock, Notion-like quiet chrome */}
+        <div className="flex-shrink-0 px-3 pb-3 pt-1 pointer-events-auto">
+          <div className="rounded-xl overflow-hidden bg-white dark:bg-[#202020] border border-black/10 dark:border-white/10 shadow-sm">
+            <ChatInput conversationId={conversationId} projectId={projectId} variant="sidebar" />
+          </div>
+        </div>
+      </aside>
+    </div>
   )
 }

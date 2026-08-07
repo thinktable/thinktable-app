@@ -1,7 +1,7 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-07T05:28:08Z
+# snapped_at=2026-08-07T14:20:18Z
 # Note: supabase db dump --linked failed (cli_login_postgres permission); snapshot via Management API + local migrations.
 #
 # Local migration files:

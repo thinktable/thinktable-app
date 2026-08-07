@@ -3,8 +3,8 @@
 // Context for board nav popup + right chat sidebar chrome
 import { createContext, useContext, useState, useCallback, useRef, ReactNode } from 'react'
 
-/** Width of the right chat sidebar when open (keeps top bar / map shrunk left). */
-export const CHAT_SIDEBAR_WIDTH = 320
+/** Width of the right chat sidebar when open (keeps top bar / map shrunk left). Notion-like panel width. */
+export const CHAT_SIDEBAR_WIDTH = 360
 
 interface SidebarContextType {
   isMobileMode: boolean // True when window is too small (minimap auto-hides)

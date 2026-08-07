@@ -1114,6 +1114,8 @@ function ProjectFlowInner({ projectId }: { projectId?: string }) {
   return (
     <div className="h-full w-full relative">
       <ReactFlow
+        // Hide React Flow watermark; Pro license by launch
+        proOptions={{ hideAttribution: true }}
         nodes={nodes}
         edges={edges}
         onNodesChange={handleNodesChange}

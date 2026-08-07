@@ -36,6 +36,8 @@ interface ChatInputProps {
   conversationId?: string // Optional - if provided, sends to existing conversation
   projectId?: string // Optional - if provided, creates new board in this project
   onHeightChange?: (height: number) => void // Callback to notify parent of height changes
+  /** `sidebar` = Notion-like quiet chrome for the right chat panel */
+  variant?: 'default' | 'sidebar'
 }
 
 interface QueuedPrompt {
@@ -44,7 +46,8 @@ interface QueuedPrompt {
   timestamp: number
 }
 
-export function ChatInput({ conversationId, projectId, onHeightChange }: ChatInputProps) {
+export function ChatInput({ conversationId, projectId, onHeightChange, variant = 'default' }: ChatInputProps) {
+  const isSidebar = variant === 'sidebar' // Notion panel composer styling
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [inputHeight, setInputHeight] = useState(52) // Track current input height
@@ -772,7 +775,7 @@ export function ChatInput({ conversationId, projectId, onHeightChange }: ChatInp
   }
 
   return (
-    <div className="w-full max-w-3xl mx-auto flex flex-col gap-2">
+    <div className={cn('w-full flex flex-col gap-2', !isSidebar && 'max-w-3xl mx-auto')}>
       {/* Queued prompts display - above input box */}
       {queuedPrompts.length > 0 && (
         <div className="flex flex-col gap-2 mb-2">
@@ -797,19 +800,21 @@ export function ChatInput({ conversationId, projectId, onHeightChange }: ChatInp
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type your message... (Shift+Enter for new line)"
+            placeholder={isSidebar ? 'Do anything with AI...' : 'Type your message... (Shift+Enter for new line)'}
             style={{
-              borderRadius: '26px',
-              minHeight: '52px',
+              // Sidebar: flush in Notion shell; default: pill chat bar
+              borderRadius: isSidebar ? '0px' : '26px',
+              minHeight: isSidebar ? '44px' : '52px',
               paddingLeft: '40px',
               paddingRight: '40px',
-              paddingTop: '0px',
-              paddingBottom: '0px',
+              paddingTop: isSidebar ? '10px' : '0px',
+              paddingBottom: isSidebar ? '10px' : '0px',
               boxSizing: 'border-box',
             }}
             className={cn(
-              "max-h-[200px] resize-none focus-visible:ring-0 focus-visible:ring-offset-0 transition-all duration-200",
-              (isResearchMode || isFlashcardsMode) ? "border border-blue-200 dark:border-blue-200" : "" // Light blue border for both modes
+              'max-h-[200px] resize-none focus-visible:ring-0 focus-visible:ring-offset-0 transition-all duration-200',
+              isSidebar && 'border-0 bg-transparent shadow-none text-sm placeholder:text-gray-400 dark:placeholder:text-gray-500',
+              !isSidebar && (isResearchMode || isFlashcardsMode) && 'border border-blue-200 dark:border-blue-200' // Light blue border for both modes
             )}
           />
           {/* Plus icon button with dropdown on the left */}
@@ -818,9 +823,15 @@ export function ChatInput({ conversationId, projectId, onHeightChange }: ChatInp
               <Button
                 type="button"
                 size="icon"
-                className="absolute left-2 rounded-full bg-transparent hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200 border-0 shadow-none h-8 w-8"
+                className={cn(
+                  'absolute left-2 bg-transparent border-0 shadow-none h-8 w-8',
+                  'text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200',
+                  isSidebar
+                    ? 'rounded-md hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
+                    : 'rounded-full hover:bg-gray-100 dark:hover:bg-gray-800'
+                )}
                 style={{
-                  borderRadius: '50%', // Perfect circle
+                  borderRadius: isSidebar ? '6px' : '50%', // Notion soft square vs circle
                   // Center at default height (52px), bottom when expanded
                   top: inputHeight <= 52 ? '50%' : 'auto',
                   bottom: inputHeight > 52 ? '8px' : 'auto',
@@ -898,13 +909,16 @@ export function ChatInput({ conversationId, projectId, onHeightChange }: ChatInp
             disabled={isLoading || !input.trim()}
             size="icon"
             className={cn(
-              "absolute right-2 rounded-full h-8 w-8",
+              'absolute right-2 h-8 w-8',
+              isSidebar ? 'rounded-md' : 'rounded-full',
               input.trim()
-                ? "bg-black dark:bg-white hover:bg-gray-900 dark:hover:bg-gray-200 text-white dark:text-black"
-                : "bg-[#cbd5e1] dark:bg-gray-700 hover:bg-[#94a3b8] dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:text-gray-400 dark:disabled:text-gray-500"
+                ? isSidebar
+                  ? 'bg-[#2383e2] hover:bg-[#1a6fc9] text-white' // Notion-blue primary
+                  : 'bg-black dark:bg-white hover:bg-gray-900 dark:hover:bg-gray-200 text-white dark:text-black'
+                : 'bg-[#cbd5e1] dark:bg-gray-700 hover:bg-[#94a3b8] dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:text-gray-400 dark:disabled:text-gray-500'
             )}
             style={{
-              borderRadius: '50%', // Perfect circle
+              borderRadius: isSidebar ? '6px' : '50%',
               // Center at default height (52px), bottom when expanded
               top: inputHeight <= 52 ? '50%' : 'auto',
               bottom: inputHeight > 52 ? '8px' : 'auto',

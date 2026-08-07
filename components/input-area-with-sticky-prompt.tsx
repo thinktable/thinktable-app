@@ -22,8 +22,10 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
   const [isPillSelectHidden, setIsPillSelectHidden] = useState(false) // Track if pill select is hidden
   const [isHoveringPillSelectArea, setIsHoveringPillSelectArea] = useState(false) // Track if mouse is hovering over space between top bar and pill select
   const [isHoveringPill, setIsHoveringPill] = useState(false) // Track if mouse is hovering over the hide pill itself
+  const [isPillExpanded, setIsPillExpanded] = useState(false) // Pill grows only after a very short intentional hover
   const [isHoveringTopBar, setIsHoveringTopBar] = useState(false) // Track if mouse is hovering over top bar
   const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null) // Track hover timeout for showing menu
+  const expandTimeoutRef = useRef<NodeJS.Timeout | null>(null) // Delay before pill width/height expand
   const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null) // Track hide timeout
   const wasShownViaHoverRef = useRef(false) // Track if menu was shown via hover (to re-hide on leave)
   const isPinnedRef = useRef(false) // Track if menu is pinned (permanently open) vs hover mode
@@ -466,8 +468,8 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
 
   // Function to check if menu should be hidden (called when leaving any related area)
   const checkAndHideMenu = useCallback((relatedTarget?: HTMLElement | null) => {
-    // Don't hide if mode is 'shown' or 'hidden' (only hide in 'hover' mode)
-    if (editMenuMode !== 'hover') {
+    // Don't auto-hide when permanently shown; allow hide after temporary hover reveal in hidden/hover modes
+    if (editMenuMode === 'shown') {
       return
     }
     // Clear any existing hide timeout
@@ -481,9 +483,10 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
       const topBarElement = relatedTarget.closest('[style*="top: \'0px\'"]')
       const menuElement = pillSelectRef.current && (relatedTarget === pillSelectRef.current || pillSelectRef.current.contains(relatedTarget))
       const hoverAreaElement = relatedTarget.closest('[style*="top: \'52px\'"]')
+      const pillElement = relatedTarget.closest('[data-edit-pill-context]')
       
       // If moving to another related area, don't hide
-      if (topBarElement || menuElement || hoverAreaElement) {
+      if (topBarElement || menuElement || hoverAreaElement || pillElement) {
         return
       }
     }
@@ -503,14 +506,15 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
       // Also double-check by verifying menu is actually visible
       const menuIsVisible = !isPillSelectHiddenRef.current && pillSelectRef.current
       
-      // If menu was shown via hover and we're not in any related area, hide it (only in hover mode)
+      // If menu was shown via pill hover and we're not in any related area, hide it again
       if (wasShownViaHoverRef.current && 
           !isInAnyArea && 
           menuIsVisible &&
-          editMenuMode === 'hover') {
+          editMenuMode !== 'shown') {
         setIsPillSelectHidden(true)
         isPillSelectHiddenRef.current = true
         wasShownViaHoverRef.current = false
+        setIsPillExpanded(false) // Collapse open/close pill with the menu
       }
     }, 200) // Slightly longer delay to ensure state has settled
   }, [editMenuMode])
@@ -598,19 +602,47 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
             clearTimeout(hideTimeoutRef.current)
             hideTimeoutRef.current = null
           }
-          // If menu is hidden and mode is 'hover', show it after a short delay
-          if (isPillSelectHidden && editMenuMode === 'hover') {
+          // Expand only after a very short intentional hover (not on momentary pass-over)
+          if (expandTimeoutRef.current) {
+            clearTimeout(expandTimeoutRef.current)
+            expandTimeoutRef.current = null
+          }
+          expandTimeoutRef.current = setTimeout(() => {
+            if (!isHoveringPillRef.current) return
+            setIsPillExpanded(true)
+          }, 80) // Very short delay before grow
+          // After a short pill hover, reveal the mode toggle menu (Home / Insert / Draw / View)
+          if (isPillSelectHidden) {
+            if (hoverTimeoutRef.current) {
+              clearTimeout(hoverTimeoutRef.current)
+              hoverTimeoutRef.current = null
+            }
             hoverTimeoutRef.current = setTimeout(() => {
+              // Still hovering the pill after the delay?
+              if (!isHoveringPillRef.current) return
               setIsPillSelectHidden(false)
               isPillSelectHiddenRef.current = false
-              wasShownViaHoverRef.current = true // Mark as shown via hover
-            }, 100) // 100ms delay - quick response
+              wasShownViaHoverRef.current = true // Hide again when pointer leaves pill/menu
+            }, 150) // Short intentional hover before opening
           }
         }}
         onMouseLeave={(e) => {
           setIsHoveringPill(false)
           isHoveringPillRef.current = false
-          // Clear any pending timeout
+          // Clear area hover unless moving into the menu or the pill hover zone
+          const related = e.relatedTarget as HTMLElement | null
+          const movingToMenu = !!(related && pillSelectRef.current && (related === pillSelectRef.current || pillSelectRef.current.contains(related)))
+          const movingToHoverZone = !!(related && related.closest?.('[style*="top: \'52px\'"]'))
+          if (!movingToMenu && !movingToHoverZone) {
+            setIsHoveringPillSelectArea(false)
+            isHoveringPillSelectAreaRef.current = false
+            setIsPillExpanded(false) // Collapse when leaving the pill cluster
+          }
+          // Clear any pending expand / show timeouts
+          if (expandTimeoutRef.current) {
+            clearTimeout(expandTimeoutRef.current)
+            expandTimeoutRef.current = null
+          }
           if (hoverTimeoutRef.current) {
             clearTimeout(hoverTimeoutRef.current)
             hoverTimeoutRef.current = null
@@ -619,13 +651,22 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
           checkAndHideMenu(e.relatedTarget as HTMLElement)
         }}
           className={cn(
-          'absolute w-12 h-1.5 rounded-full cursor-pointer transition-all duration-200 bg-gray-300 dark:bg-gray-600 z-30',
+          // Soft when menu open; medium when hidden; darker on direct pill hover.
+          // Stays compact until hovered briefly, then expands.
+          'absolute rounded-full cursor-pointer transition-all duration-200 z-30',
+          isPillExpanded ? 'w-20 h-2' : 'w-12 h-1.5',
+          isHoveringPill
+            ? 'bg-gray-300 dark:bg-gray-600' // Direct hover: darker
+            : isPillSelectHidden
+              ? 'bg-gray-200 dark:bg-gray-500' // Hidden: medium strength (not as soft as menu, not as strong as hover)
+              : 'bg-[#f7f8f9] dark:bg-[#1c1c24]', // Soft same as edit mode toggle container
           // Hide pill when menu is always shown (mode === 'shown'), show when hovering pill hover area or in hover/hidden mode
           (editMenuMode === 'shown' && !isHoveringPillSelectArea) ? 'opacity-0' : 'opacity-100'
         )}
         style={{
           left: `${pillSelectLeft}px`,
-          top: '49px', // Center pill vertically on top bar bottom edge (top bar bottom at 52px, pill center at 52px = pill top at 49px, since pill is 6px tall)
+          // Keep centered on top bar bottom edge (52px) as height changes
+          top: isPillExpanded ? '48px' : '49px',
           transform: 'translateX(-50%)', // Center on calculated position
         }}
         title={isPillSelectHidden ? 'Show mode selector' : 'Hide mode selector'}
@@ -650,14 +691,17 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
             transform: 'translateX(-50%)', // Center on calculated position
           }}
         onMouseEnter={() => {
-          // When entering pill select menu, don't mark hover area as active (so pill doesn't show)
-          // But cancel any pending hide timeout to keep menu open
+          // Keep menu open while interacting with it; treat as still in the hover cluster
+          setIsHoveringPillSelectArea(true)
+          isHoveringPillSelectAreaRef.current = true
           if (hideTimeoutRef.current) {
             clearTimeout(hideTimeoutRef.current)
             hideTimeoutRef.current = null
           }
         }}
         onMouseLeave={(e) => {
+          setIsHoveringPillSelectArea(false)
+          isHoveringPillSelectAreaRef.current = false
           // Check if menu should hide after leaving menu
           checkAndHideMenu(e.relatedTarget as HTMLElement)
         }}

@@ -5803,6 +5803,8 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
   return (
     <div className="w-full h-full relative" onDoubleClick={handlePaneDoubleClick}>
       <ReactFlow
+        // Hide React Flow watermark; Pro license by launch
+        proOptions={{ hideAttribution: true }}
         nodes={nodes}
         edges={edges}
         onNodesChange={handleNodesChange}
@@ -7091,37 +7093,29 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
         </div>
       </div>
 
-      {/* Brand logo — toggles right chat sidebar (stays on the map's right edge) */}
-      <button
-        type="button"
-        data-chat-sidebar-toggle
-        onClick={() => toggleChatSidebar()}
-        className={cn(
-          'absolute z-10 w-9 h-9 rounded-lg flex items-center justify-center transition-colors',
-          'bg-gray-100 dark:bg-[#2a2a3a] hover:bg-gray-200 dark:hover:bg-[#353545]',
-          'border border-transparent',
-          isChatSidebarOpen && 'ring-2 ring-gray-300 dark:ring-gray-600'
-        )}
-        style={{
-          // Same vertical band as Linear/Free toggle; pinned to the right of the map column
-          bottom: isMinimapHidden
-            ? `${minimapBottom - 12 + 15}px`
-            : `${minimapBottom - 12 + 150 + 4}px`,
-          right: '15px',
-          transition: 'bottom 0.25s ease-in-out',
-        }}
-        title={isChatSidebarOpen ? 'Hide chat' : 'Show chat'}
-        aria-label={isChatSidebarOpen ? 'Hide chat sidebar' : 'Show chat sidebar'}
-        aria-pressed={isChatSidebarOpen}
-      >
-        <Image
-          src="/thinktable-logo.svg"
-          alt="Chat"
-          width={22}
-          height={22}
-          className="h-[22px] w-[22px] dark:invert"
-        />
-      </button>
+      {/* Brand logo — opens chat sidebar; hidden while chat is open; bottom-right of map */}
+      {!isChatSidebarOpen && (
+        <button
+          type="button"
+          data-chat-sidebar-toggle
+          onClick={() => toggleChatSidebar()}
+          className="absolute z-10 flex items-center justify-center bg-transparent hover:opacity-80 transition-opacity p-0 border-0"
+          style={{
+            bottom: '12px',
+            right: '12px',
+          }}
+          title="Show chat"
+          aria-label="Show chat sidebar"
+        >
+          <Image
+            src="/thinktable-logo.svg"
+            alt="Chat"
+            width={36}
+            height={36}
+            className="h-9 w-9 dark:invert"
+          />
+        </button>
+      )}
 
       {/* Context menu for minimap control */}
       {minimapContextMenuPosition && (

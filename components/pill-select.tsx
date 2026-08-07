@@ -22,7 +22,8 @@ export function PillSelect({ options, value, onChange, className }: PillSelectPr
   return (
     <div
       className={cn(
-        'flex items-center gap-0.5 px-1 py-1 rounded-full bg-gray-100 dark:bg-[#2a2a3a] shadow-sm',
+        // Solid soft grey (matches former translucent look over the board, without transparency)
+        'flex items-center gap-0.5 px-1 py-1 rounded-full bg-[#f7f8f9] dark:bg-[#1c1c24] shadow-sm',
         className
       )}
     >
