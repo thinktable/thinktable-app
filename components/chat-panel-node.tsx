@@ -2524,6 +2524,71 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     (promptMessage?.role === 'user' && 
      !responseMessage && 
      (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
+  
+  // Calculate dynamic line-height for note nodes based on height (decreases as height increases)
+  const calculateNoteLineHeight = useCallback(() => {
+    if (!isNote) return '1.7' // Default line-height
+    
+    // Try to get height from React Flow node first (more accurate during resize)
+    let currentHeight: number | null = null
+    const nodes = getNodes()
+    const currentNode = nodes.find((node: any) => node.id === id)
+    if (currentNode && currentNode.height) {
+      currentHeight = currentNode.height
+    }
+    
+    // Fallback to panelRef height if node height not available
+    if (currentHeight === null && panelRef.current) {
+      currentHeight = panelRef.current.offsetHeight
+    }
+    
+    // If still no height, use default
+    if (currentHeight === null || currentHeight <= 0) {
+      return '1.7'
+    }
+    
+    const baseHeight = DEFAULT_PANEL_HEIGHT // Base height for calculation
+    const baseLineHeight = 1.7 // Base line-height
+    
+    // Calculate how much taller the node is compared to base
+    const heightRatio = currentHeight / baseHeight
+    
+    // Decrease line-height as height increases
+    // Formula: lineHeight = baseLineHeight - (heightRatio - 1) * factor
+    // This allows line-height to go negative when height is significantly increased
+    const factor = 0.5 // Adjust this to control how quickly line-height decreases
+    const calculatedLineHeight = baseLineHeight - (heightRatio - 1) * factor
+    
+    return `${calculatedLineHeight}`
+  }, [isNote, id, getNodes])
+  
+  // Get current line-height for notes - update on resize
+  const [noteLineHeight, setNoteLineHeight] = useState('1.7')
+  
+  // Update line-height when note is resized using ResizeObserver
+  useEffect(() => {
+    if (!isNote || !panelRef.current) return
+    
+    const updateLineHeight = () => {
+      const newLineHeight = calculateNoteLineHeight()
+      setNoteLineHeight(newLineHeight)
+    }
+    
+    // Initial calculation
+    updateLineHeight()
+    
+    // Set up ResizeObserver to update line-height when panel is resized
+    const resizeObserver = new ResizeObserver(() => {
+      updateLineHeight()
+    })
+    
+    resizeObserver.observe(panelRef.current)
+    
+    return () => {
+      resizeObserver.disconnect()
+    }
+  }, [isNote, calculateNoteLineHeight])
+  
   // Regular chat panels are those that are not flashcards and not notes
   const isRegularChatPanel = !isFlashcard && !isNote
 
@@ -4518,7 +4583,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 isResponseCollapsed && "h-0 p-0 opacity-0" // Collapsible like response area
               )}
               style={{
-                lineHeight: '1.7',
+                lineHeight: isNote ? noteLineHeight : '1.7',
                 // Use calculated response area background color - same as panel background
                 backgroundColor: responseAreaBackgroundColor,
               }}
@@ -4574,7 +4639,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 shouldFadeIn && "animate-note-fade-in" // Smooth fade-in for inline notes
               )}
               style={{
-                lineHeight: '1.7',
+                lineHeight: isNote ? noteLineHeight : '1.7',
                 // Use calculated response area background color - same as panel background
                 backgroundColor: responseAreaBackgroundColor,
               }}
@@ -4635,7 +4700,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 isResponseCollapsed && "overflow-hidden"
               )}
               style={{
-                lineHeight: '1.7',
+                lineHeight: isNote ? noteLineHeight : '1.7',
                 // Use calculated response area background color - same as panel background
                 backgroundColor: responseAreaBackgroundColor,
               }}
@@ -4864,7 +4929,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             <div
               className="p-1 backdrop-blur-sm rounded-2xl pb-12 relative transition-all duration-500 overflow-visible" // Transparent for map panels - background set via inline style, 4px padding, increased corner radius, slower collapse/expand animation
               style={{
-                lineHeight: '1.7',
+                lineHeight: isNote ? noteLineHeight : '1.7',
                 // Use calculated response area background color - same as panel background
                 backgroundColor: responseAreaBackgroundColor,
               }}

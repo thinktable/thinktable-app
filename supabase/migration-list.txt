@@ -1,0 +1,13 @@
+# Remote Supabase migration/version snapshot
+# project_ref=yhsyhtnnklpkfcpydbst
+# project_name=thinkable
+# snapped_at=2026-08-07T04:03:09Z
+# Note: supabase db dump --linked failed (cli_login_postgres permission); snapshot via Management API + local migrations.
+#
+# Local migration files:
+20251204120000  create_panel_edges
+20251214152553  add_project_tabs_more_menu
+20251228200000  create_canvas_nodes_table
+20260806200000  create_notion_connections
+#
+# Live verify: public.notion_connections exists (Management API, 2026-08-07T04:03:09Z)

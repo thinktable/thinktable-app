@@ -1641,6 +1641,36 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
     }
   }, [conversationId, savedCanvasNodes])
 
+  // After Notion OAuth import: refresh panels, fit the map, clean query params
+  useEffect(() => {
+    if (!searchParams || searchParams.get('notion') !== 'connected') return // Only run on successful connect landing
+    const imported = searchParams.get('imported') // Optional count for logging
+    console.log('📥 Notion connected', { imported, conversationId })
+
+    const run = async () => {
+      if (conversationId) {
+        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] }) // Pull new note nodes
+        await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
+      }
+      // Fit after panels paint
+      window.setTimeout(() => {
+        if (reactFlowInstance) {
+          window.dispatchEvent(new CustomEvent('fit-view-start'))
+          reactFlowInstance.fitView({ padding: 0.2, minZoom: 0.1, maxZoom: 1, duration: 300 })
+          window.setTimeout(() => window.dispatchEvent(new CustomEvent('fit-view-end')), 350)
+        }
+      }, 500)
+      // Strip OAuth feedback params without a full navigation
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href)
+        url.searchParams.delete('notion')
+        url.searchParams.delete('imported')
+        window.history.replaceState({}, '', url.pathname + url.search)
+      }
+    }
+    void run()
+  }, [searchParams, conversationId, queryClient, reactFlowInstance])
+
   // Check if board has flashcards - check messages for isFlashcard metadata
   const hasFlashcardsInBoard = useMemo(() => {
     if (!messages || messages.length === 0) return false

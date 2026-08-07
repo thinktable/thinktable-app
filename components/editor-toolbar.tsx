@@ -69,6 +69,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useQueryClient } from '@tanstack/react-query'
 import { ShapeGridItem } from './shapes/ShapeGridItem'
 import { useTheme } from './theme-provider'
+import { NotionConnectButton } from './notion-connect-button'
 
 interface EditorToolbarProps {
   editor: Editor | null
@@ -3361,6 +3362,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             </Button>
           </div>
         )}
+
+        {/* Notion connect — Mindmap.so-style OAuth (workspace → permissions → select pages) */}
+        <div className="flex items-center px-1 flex-shrink-0">
+          <NotionConnectButton />
+        </div>
 
         {/* Share Button */}
         <div className="flex items-center px-2 flex-shrink-0">

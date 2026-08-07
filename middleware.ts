@@ -72,7 +72,13 @@ export async function middleware(request: NextRequest) {
   if (request.nextUrl.pathname.startsWith('/login') || request.nextUrl.pathname.startsWith('/signup')) {
     if (user) {
       const url = request.nextUrl.clone()
+      // Honor resume targets (e.g. Notion OAuth start) when safe/relative
+      const resume = request.nextUrl.searchParams.get('next') || request.nextUrl.searchParams.get('redirectTo')
+      if (resume && resume.startsWith('/') && !resume.startsWith('//')) {
+        return NextResponse.redirect(new URL(resume, request.url))
+      }
       url.pathname = '/board'
+      url.search = ''
       return NextResponse.redirect(url)
     }
   }
