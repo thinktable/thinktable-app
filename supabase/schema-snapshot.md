@@ -1,7 +1,7 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-07T20:23:54Z`
+- Snapped at: `2026-08-07T22:26:17Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase` access token not available in this environment; use migration files as source of truth.
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`

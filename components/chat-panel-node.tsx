@@ -3346,12 +3346,13 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         // Item panels use fit-content width (grows with text), others use fixed width
         // Page preview expands the item into a board-within-board window
         width: pagePreviewOpen
-          ? '480px'
+          ? '520px'
           : resizeDimensions
             ? `${resizeDimensions.width}px`
             : (usesFitContent ? 'fit-content' : `${panelWidthToUse}px`),
-        height: pagePreviewOpen ? undefined : (resizeDimensions ? `${resizeDimensions.height}px` : undefined),
-        minWidth: pagePreviewOpen ? '480px' : (usesFitContent ? '200px' : (isFlashcard ? '300px' : '200px')),
+        // Preview mode: fixed window — body text is hidden so it can’t sit under the preview chrome
+        height: pagePreviewOpen ? '420px' : (resizeDimensions ? `${resizeDimensions.height}px` : undefined),
+        minWidth: pagePreviewOpen ? '520px' : (usesFitContent ? '200px' : (isFlashcard ? '300px' : '200px')),
         minHeight: pagePreviewOpen ? '420px' : '0px',
         maxWidth: undefined,
         opacity: isInitialShrinkComplete ? 1 : 0,
@@ -3418,8 +3419,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         </>
       )}
 
-      {/* Item title on edge — select shows Add a title; titled items are pages with their own maps */}
-      {isItem && !isProjectBoard && promptMessage?.id && (
+      {/* Edge title chip — hidden while preview fills the card (chrome has title; chip would overlap) */}
+      {isItem && !isProjectBoard && promptMessage?.id && !pagePreviewOpen && (
         <ItemTitleEdge
           selected={!!selected}
           width={itemBoxSize.width}
@@ -3756,65 +3757,78 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       {/* Single text body — no prompt/response sections or collapse */}
       <div
         className={cn(
-          "p-1 backdrop-blur-sm rounded-2xl relative overflow-visible",
-          promptMessage?.metadata?.fadeIn === true && "animate-note-fade-in"
+          'p-1 backdrop-blur-sm rounded-2xl relative overflow-visible',
+          // Preview open: fill the card; body editor is hidden (content lives on the nested page)
+          pagePreviewOpen && 'flex flex-col h-full min-h-0',
+          promptMessage?.metadata?.fadeIn === true && 'animate-note-fade-in'
         )}
         style={{
-          lineHeight: isItem ? noteLineHeight : '1.7',
           backgroundColor: responseAreaBackgroundColor,
         }}
       >
-        <div className="px-3 py-3">
-          <TipTapContent
-            content={promptContent || ''}
-            className="text-gray-900 dark:text-gray-100"
-            originalContent={
-              isProjectBoard
-                ? (data.boardTitle || '')
-                : mergePanelHtml(
-                    promptMessage?.content,
-                    responseMessage?.content ? formatResponseContent(responseMessage.content) : ''
-                  )
-            }
-            onContentChange={handlePromptChange}
-            onHasChangesChange={setPromptHasChanges}
-            onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
-            comments={comments.filter(c => c.section === 'prompt')}
-            editorRef={promptEditorRef}
-            fontScale={fontScale}
-            onCommentHover={(commentId) => {
-              if (commentId) {
-                if (showComments) {
-                  setSelectedCommentId(commentId)
-                } else {
-                  setSelectedCommentId(null)
+        {/* Hide body while previewing — keeps page title (edge chip / preview chrome) from sitting under the map */}
+        {!pagePreviewOpen && (
+          <div
+            className="px-3 py-3"
+            style={{ lineHeight: isItem ? noteLineHeight : '1.7' }}
+          >
+            <TipTapContent
+              content={promptContent || ''}
+              className="text-gray-900 dark:text-gray-100"
+              originalContent={
+                isProjectBoard
+                  ? (data.boardTitle || '')
+                  : mergePanelHtml(
+                      promptMessage?.content,
+                      responseMessage?.content ? formatResponseContent(responseMessage.content) : ''
+                    )
+              }
+              onContentChange={handlePromptChange}
+              onHasChangesChange={setPromptHasChanges}
+              onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
+              comments={comments.filter(c => c.section === 'prompt')}
+              editorRef={promptEditorRef}
+              fontScale={fontScale}
+              onCommentHover={(commentId) => {
+                if (commentId) {
+                  if (showComments) {
+                    setSelectedCommentId(commentId)
+                  } else {
+                    setSelectedCommentId(null)
+                  }
                 }
-              }
-            }}
-            onCommentClick={(commentId) => {
-              if (commentId) {
-                setShowComments(true)
-                setSelectedCommentId(commentId)
-              }
-            }}
-            onAddReaction={handleAddReaction}
-            section="prompt"
-            placeholder=""
-            isFlashcard={isFlashcard}
-            isPanelSelected={selected}
-            isLoading={false}
-            onBlur={handleEditorBlur}
-            onEditorActiveChange={handleEditorActiveChange}
-          />
-        </div>
+              }}
+              onCommentClick={(commentId) => {
+                if (commentId) {
+                  setShowComments(true)
+                  setSelectedCommentId(commentId)
+                }
+              }}
+              onAddReaction={handleAddReaction}
+              section="prompt"
+              placeholder=""
+              isFlashcard={isFlashcard}
+              isPanelSelected={selected}
+              isLoading={false}
+              onBlur={handleEditorBlur}
+              onEditorActiveChange={handleEditorActiveChange}
+            />
+          </div>
+        )}
 
-        {/* Keep iframe mounted after warm/open; NestedBoardPreview parks off-screen (sized) when closed */}
+        {/* Keep iframe mounted after warm/open; fills card while visible */}
         {pagePreviewMounted && linkedPageId && (
-          <div className={cn(pagePreviewOpen && 'px-2 pb-2')}>
+          <div
+            className={cn(
+              pagePreviewOpen ? 'flex-1 min-h-0 min-w-0 flex flex-col p-2 pt-2' : 'hidden'
+            )}
+          >
             <NestedBoardPreview
               conversationId={linkedPageId}
               title={itemTitleLabel}
               visible={pagePreviewOpen}
+              fill={pagePreviewOpen}
+              hostNodeId={id} // Chrome drag moves this host item
               onClose={() => setPagePreviewOpen(false)}
             />
           </div>

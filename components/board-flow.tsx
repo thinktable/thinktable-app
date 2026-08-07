@@ -1668,8 +1668,8 @@ function BoardFlowInner({
     return () => window.cancelAnimationFrame(id)
   }, [embedded, conversationId, embedFlowReady])
 
-  // Embed: RF pane must match the iframe. CSS h-full under min-height-only parents collapses to
-  // content size → dead white body around the map until a pan triggers a redraw. Force store size.
+  // Embed: keep RF pane sized to the iframe. Host zoom scales the portaled shell via CSS —
+  // do NOT fitView on every resize message (that made nested items jump while zooming).
   useEffect(() => {
     if (!embedded) return
     let lastW = 0
@@ -1679,9 +1679,9 @@ function BoardFlowInner({
         (document.querySelector('#tt-embed-root .react-flow') as HTMLElement | null) ||
         (document.querySelector('.react-flow') as HTMLElement | null)
       if (!el) return
-      const rect = el.getBoundingClientRect()
-      const w = Math.round(rect.width)
-      const h = Math.round(rect.height)
+      // Prefer layout size (stable under parent CSS scale) over getBoundingClientRect
+      const w = Math.round(el.clientWidth || el.getBoundingClientRect().width)
+      const h = Math.round(el.clientHeight || el.getBoundingClientRect().height)
       if (w < 16 || h < 16) return
       const grewFromEmpty = lastW < 16 || lastH < 16
       const sizeChanged = Math.abs(w - lastW) > 2 || Math.abs(h - lastH) > 2
@@ -1690,7 +1690,7 @@ function BoardFlowInner({
       if (!forceFit && !grewFromEmpty && !sizeChanged) return
       const prev = rfStore.getState()
       if (prev.width !== w || prev.height !== h) {
-        rfStore.setState({ width: w, height: h }) // Pane / renderer hit targets use these
+        rfStore.setState({ width: w, height: h })
       }
       window.dispatchEvent(new Event('resize'))
       if (forceFit || grewFromEmpty) {
@@ -1699,16 +1699,18 @@ function BoardFlowInner({
     }
     const onMessage = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return
-      if ((event.data as { type?: string } | null)?.type !== PREVIEW_RESIZE_MESSAGE) return
+      const data = event.data as { type?: string; fit?: boolean } | null
+      if (!data || data.type !== PREVIEW_RESIZE_MESSAGE) return
+      const shouldFit = data.fit === true
       window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => remasure(true))
+        window.requestAnimationFrame(() => remasure(shouldFit))
       })
     }
     window.addEventListener('message', onMessage)
+    // ResizeObserver: update pane metrics only — never fitView (avoids zoom jitter)
     const ro = new ResizeObserver(() => remasure(false))
     const root = document.getElementById('tt-embed-root') || document.documentElement
     ro.observe(root)
-    // First paint + after nodes typically land
     remasure(true)
     const t1 = window.setTimeout(() => remasure(true), 50)
     const t2 = window.setTimeout(() => remasure(true), 250)
