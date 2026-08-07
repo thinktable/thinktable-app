@@ -1055,6 +1055,38 @@ span[data-added="true"] {
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1) !important;
   }
 
+  /* Selected items: solid dark mid-side connection dots (mockup) */
+  .react-flow__node-chatPanel.selected [data-item-node="true"] .react-flow__handle.handle-dot:not(.handle-dot-flashcard-large) {
+    background-color: #1f2937 !important; /* Near-black filled node */
+    border: none !important; /* No ring — solid dot */
+    width: 8px !important; /* Slightly tighter than default 10px */
+    height: 8px !important;
+  }
+
+  /* Dark mode: invert connection-dot fill for contrast on dark boards */
+  .dark .react-flow__node-chatPanel.selected [data-item-node="true"] .react-flow__handle.handle-dot:not(.handle-dot-flashcard-large) {
+    background-color: #e5e7eb !important;
+  }
+
+  /* Item corner resize handles — circular white dots (override RF defaults) */
+  .react-flow__node-chatPanel .react-flow__resize-control.handle {
+    border-radius: 50% !important; /* Circles, not RF squares */
+    width: 14px !important; /* Larger hit target so drag resizes instead of moving node */
+    height: 14px !important;
+    min-width: 14px !important;
+    min-height: 14px !important;
+    background-color: #ffffff !important;
+    border: 1.5px solid #9ca3af !important;
+    box-sizing: border-box !important;
+    pointer-events: all !important; /* Must receive drag (nodrag) before node drag */
+    z-index: 60 !important;
+  }
+
+  .dark .react-flow__node-chatPanel .react-flow__resize-control.handle {
+    background-color: #1a1a1a !important; /* Dark fill in dark mode */
+    border-color: #9ca3af !important;
+  }
+
   /* Dark mode shape edge handles */
   .dark .react-flow__node-shape .react-flow__handle.handle-dot {
     border-color: var(--handle-border-color, #2f2f2f) !important; /* Dark border for dark mode */

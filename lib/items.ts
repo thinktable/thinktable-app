@@ -37,6 +37,111 @@ export function newItemMetadata(extra: Record<string, unknown> = {}): Record<str
   }
 }
 
+/** True when HTML/plain content has no visible text. */
+export function isItemContentEmpty(content: string | undefined | null): boolean {
+  if (!content) return true
+  if (content === '<p></p>' || content === '<p><br></p>') return true
+  return content.replace(/<[^>]*>/g, '').trim().length === 0
+}
+
+/** True when this item is the page’s own body on its map (not a nested page card). */
+export function isPageBodyMeta(meta?: Record<string, unknown> | null): boolean {
+  return meta?.isPageBody === true
+}
+
+/**
+ * Ensure a page with content has its body as an item on its own map.
+ * Skips empty pages. Idempotent when a page-body item already exists.
+ */
+export async function ensurePageBodyItem(
+  supabase: SupabaseClient,
+  opts: {
+    pageId: string // Conversation / page whose map we are on
+    userId: string // Owner for insert
+  }
+): Promise<{ created: boolean; messageId: string | null }> {
+  const { pageId, userId } = opts
+
+  // Already has a page-body item on this map → nothing to do
+  const { data: existingBody } = await supabase
+    .from('messages')
+    .select('id')
+    .eq('conversation_id', pageId)
+    .contains('metadata', { isPageBody: true })
+    .limit(1)
+    .maybeSingle()
+  if (existingBody?.id) {
+    return { created: false, messageId: existingBody.id }
+  }
+
+  // Load page metadata for reverse link + title
+  const { data: page } = await supabase
+    .from('conversations')
+    .select('id, title, metadata, user_id')
+    .eq('id', pageId)
+    .maybeSingle()
+  if (!page || page.user_id !== userId) {
+    return { created: false, messageId: null }
+  }
+
+  const pageMeta = (page.metadata as Record<string, unknown>) || {}
+  const sourceItemMessageId =
+    typeof pageMeta.sourceItemMessageId === 'string' ? pageMeta.sourceItemMessageId : null
+
+  // Content lives on the parent-map source item until materialized onto this page
+  let bodyContent = ''
+  if (sourceItemMessageId) {
+    const { data: source } = await supabase
+      .from('messages')
+      .select('content')
+      .eq('id', sourceItemMessageId)
+      .maybeSingle()
+    bodyContent = source?.content || ''
+  }
+
+  // No content yet → leave the page map empty (do not spawn a blank body item)
+  if (isItemContentEmpty(bodyContent)) {
+    return { created: false, messageId: null }
+  }
+
+  const pageTitle = (page.title || '').trim() || 'Untitled'
+  const { data: created, error } = await supabase
+    .from('messages')
+    .insert({
+      conversation_id: pageId,
+      user_id: userId,
+      role: 'user',
+      content: bodyContent, // Page content as an item on this page’s map
+      metadata: newItemMetadata({
+        isPageBody: true, // This item IS the page’s body (not a nested page link)
+        itemTitle: pageTitle, // Match page name in the title chip
+        position: { x: 80, y: 80 }, // Default spawn on the page map
+        fadeIn: true,
+      }),
+    })
+    .select('id')
+    .single()
+
+  if (error || !created) {
+    console.error('Failed to create page-body item:', error)
+    return { created: false, messageId: null }
+  }
+
+  // Mark page contentful + remember the body message for sync
+  await supabase
+    .from('conversations')
+    .update({
+      metadata: {
+        ...pageMeta,
+        hasContent: true,
+        pageBodyMessageId: created.id,
+      },
+    })
+    .eq('id', pageId)
+
+  return { created: true, messageId: created.id }
+}
+
 /** Persist isNote→isItem migration for a batch of messages (idempotent). */
 export async function migrateMessagesToItemFlag(
   supabase: SupabaseClient,

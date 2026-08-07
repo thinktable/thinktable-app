@@ -6,6 +6,7 @@ import { InputAreaWithStickyPrompt } from '@/components/input-area-with-sticky-p
 import { ChatSidebar } from '@/components/chat-sidebar'
 import { EditorProvider } from '@/components/editor-context'
 import { ReactFlowContextProvider } from '@/components/react-flow-context'
+import { PreviewFocusProvider } from '@/lib/preview-focus-context' // Nested preview style selection
 import dynamic from 'next/dynamic'
 import { Suspense } from 'react'
 import { useState, useEffect } from 'react'
@@ -64,16 +65,18 @@ export default function BoardPage() {
   return (
     <EditorProvider>
       <ReactFlowContextProvider conversationId={conversationId}>
-        <div className="h-full flex">
-          <div className="flex-1 relative min-w-0 h-full">
-            <BoardFlow conversationId={conversationId} />
-            <Suspense fallback={null}>
-              <WelcomeText />
-            </Suspense>
-            <InputAreaWithStickyPrompt conversationId={conversationId} />
+        <PreviewFocusProvider>
+          <div className="h-full flex">
+            <div className="flex-1 relative min-w-0 h-full">
+              <BoardFlow conversationId={conversationId} />
+              <Suspense fallback={null}>
+                <WelcomeText />
+              </Suspense>
+              <InputAreaWithStickyPrompt conversationId={conversationId} />
+            </div>
+            <ChatSidebar conversationId={conversationId} />
           </div>
-          <ChatSidebar conversationId={conversationId} />
-        </div>
+        </PreviewFocusProvider>
       </ReactFlowContextProvider>
     </EditorProvider>
   )

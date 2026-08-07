@@ -1,4 +1,5 @@
 // Board chat page - map column + optional full-height right chat sidebar
+// In-item previews use `/embed/{id}` (not this route) so they skip the board sidebar layout.
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { BoardFlow } from '@/components/board-flow'
@@ -6,6 +7,7 @@ import { InputAreaWithStickyPrompt } from '@/components/input-area-with-sticky-p
 import { ChatSidebar } from '@/components/chat-sidebar'
 import { EditorProvider } from '@/components/editor-context'
 import { ReactFlowContextProvider } from '@/components/react-flow-context'
+import { PreviewFocusProvider } from '@/lib/preview-focus-context'
 
 export default async function ConversationPage({
   params,
@@ -13,6 +15,7 @@ export default async function ConversationPage({
   params: Promise<{ conversationId: string }>
 }) {
   const { conversationId } = await params
+
   const supabase = await createClient()
 
   const {
@@ -23,7 +26,6 @@ export default async function ConversationPage({
     redirect('/login')
   }
 
-  // Verify conversation exists and belongs to user
   const { data: conversation, error } = await supabase
     .from('conversations')
     .select('id, title, user_id')
@@ -37,15 +39,15 @@ export default async function ConversationPage({
   return (
     <EditorProvider>
       <ReactFlowContextProvider conversationId={conversationId}>
-        <div className="h-full flex">
-          {/* Map + top edit bar — shrinks when chat column is open */}
-          <div className="flex-1 relative min-w-0 h-full">
-            <BoardFlow conversationId={conversationId} />
-            <InputAreaWithStickyPrompt conversationId={conversationId} />
+        <PreviewFocusProvider>
+          <div className="h-full flex">
+            <div className="flex-1 relative min-w-0 h-full">
+              <BoardFlow conversationId={conversationId} />
+              <InputAreaWithStickyPrompt conversationId={conversationId} />
+            </div>
+            <ChatSidebar conversationId={conversationId} />
           </div>
-          {/* Sibling chat column (hidden by default) */}
-          <ChatSidebar conversationId={conversationId} />
-        </div>
+        </PreviewFocusProvider>
       </ReactFlowContextProvider>
     </EditorProvider>
   )

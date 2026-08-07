@@ -13,6 +13,7 @@ import ReactFlow, {
   ConnectionMode,
   BackgroundVariant,
   useReactFlow,
+  useStoreApi,
   ConnectionLineType,
   BaseEdge,
   getSmoothStepPath,
@@ -44,7 +45,14 @@ import { ChevronDown, ArrowDown, ChevronUp, Trash2, Plus } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
-import { migrateMessagesToItemFlag, newItemMetadata } from '@/lib/items' // isItem-only metadata + legacy migrate
+import { ensurePageBodyItem, migrateMessagesToItemFlag, newItemMetadata } from '@/lib/items' // items + page-body ensure
+import {
+  PREVIEW_READY_MESSAGE,
+  PREVIEW_RESIZE_MESSAGE,
+  PREVIEW_STYLE_MESSAGE,
+  usePreviewFocus,
+} from '@/lib/preview-focus-context' // Style sync + ready/resize handshake for iframe previews
+import { BoardEmbedProvider } from '@/lib/board-embed-context' // Hide nested preview controls inside embed
 import { ThinktableBrandMark } from './personalize-ai-modal'
 import { LeftVerticalMenu } from './left-vertical-menu'
 import { FreehandNode } from './freehand/FreehandNode' // Freehand drawing node component
@@ -83,38 +91,38 @@ interface ChatPanelNodeData {
 // Fetch messages for a conversation and create panels
 // For homepage boards, uses API route (public access via service role)
 // For regular boards, requires authentication and ownership
-async function fetchMessagesForPanels(conversationId: string): Promise<Message[]> {
+async function fetchMessagesForPanels(
+  conversationId: string,
+  options?: { embed?: boolean } // Embed previews skip homepage probe + page-body ensure for speed
+): Promise<Message[]> {
   const supabase = createClient()
-  
-  // Always check if this is the homepage board first (system user's board)
-  // Homepage board should be accessible to everyone (authenticated or not)
-  try {
-    const response = await fetch('/api/homepage-board')
-    if (response.ok) {
-      const data = await response.json()
-      // Check if this is the homepage board
-      if (data.conversation?.id === conversationId) {
-        const homepageMessages = (data.messages || []) as Message[]
-        // Homepage is public; still migrate legacy isNote → isItem when the viewer can write
-        await migrateMessagesToItemFlag(supabase, homepageMessages)
-        return homepageMessages
+  const isEmbed = options?.embed === true
+
+  // Full boards may be the public homepage; embeds are always the user’s own child pages
+  if (!isEmbed) {
+    try {
+      const response = await fetch('/api/homepage-board')
+      if (response.ok) {
+        const data = await response.json()
+        if (data.conversation?.id === conversationId) {
+          const homepageMessages = (data.messages || []) as Message[]
+          await migrateMessagesToItemFlag(supabase, homepageMessages)
+          return homepageMessages
+        }
       }
+    } catch (error) {
+      console.error('Error fetching homepage messages from API:', error)
     }
-  } catch (error) {
-    // If API route fails, continue to normal fetch (might be a regular board)
-    console.error('Error fetching homepage messages from API:', error)
-  }
-  
-  // For non-homepage boards, require authentication
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return [] // Not homepage and not authenticated - no access
   }
 
-  // Authenticated user - fetch their own boards (RLS will enforce ownership)
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    return []
+  }
+
   const { data, error } = await supabase
     .from('messages')
-    .select('id, role, content, created_at, metadata') // Include metadata to detect flashcards
+    .select('id, role, content, created_at, metadata')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: true })
 
@@ -122,9 +130,25 @@ async function fetchMessagesForPanels(conversationId: string): Promise<Message[]
     console.error('Error fetching messages:', error)
     return []
   }
-  const messages = (data || []) as Message[]
-  // One-time switch: persist isNote → isItem on load so old rows leave the legacy flag
+  let messages = (data || []) as Message[]
   await migrateMessagesToItemFlag(supabase, messages)
+
+  // Page-body materialization belongs to full open/promote — not every preview boot
+  if (!isEmbed) {
+    const { created } = await ensurePageBodyItem(supabase, {
+      pageId: conversationId,
+      userId: user.id,
+    })
+    if (created) {
+      const { data: refreshed } = await supabase
+        .from('messages')
+        .select('id, role, content, created_at, metadata')
+        .eq('conversation_id', conversationId)
+        .order('created_at', { ascending: true })
+      messages = (refreshed || []) as Message[]
+      await migrateMessagesToItemFlag(supabase, messages)
+    }
+  }
   return messages
 }
 
@@ -677,8 +701,42 @@ function BoardFlowInner({
   }, [setIsScrollMode, setViewMode])
 
   const reactFlowInstance = useReactFlow()
-  const { setReactFlowInstance, registerSetNodes, isLocked, layoutMode, setLayoutMode, setIsDeterministicMapping, panelWidth: contextPanelWidth, isPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection, boardRule, boardStyle, clickedEdge: contextClickedEdge, setClickedEdge: setContextClickedEdge, fillColor, borderColor, borderWeight, borderStyle, flashcardMode, setFlashcardMode, selectedTag, setSelectedTag, isDrawing, drawTool, drawShape, registerMapUndoRedo, registerMapTakeSnapshot, snapEnabled } = useReactFlowContext()
-  
+  const rfStore = useStoreApi() // Embed: force pane width/height when CSS % height collapses
+  const { setReactFlowInstance, registerSetNodes, isLocked, layoutMode, setLayoutMode, setIsDeterministicMapping, panelWidth: contextPanelWidth, isPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection, boardRule: contextBoardRule, boardStyle: contextBoardStyle, clickedEdge: contextClickedEdge, setClickedEdge: setContextClickedEdge, fillColor, borderColor, borderWeight, borderStyle, flashcardMode, setFlashcardMode, selectedTag, setSelectedTag, isDrawing, drawTool, drawShape, registerMapUndoRedo, registerMapTakeSnapshot, snapEnabled } = useReactFlowContext()
+  const previewFocus = usePreviewFocus() // Host map: View bar may target a focused preview page
+  // Iframe embed: styles arrive via postMessage (no shared React context across frames)
+  const [embedStyleOverride, setEmbedStyleOverride] = useState<{
+    boardRule: 'wide' | 'college' | 'narrow'
+    boardStyle: 'none' | 'dotted' | 'lined' | 'grid'
+  } | null>(null)
+
+  useEffect(() => {
+    if (!embedded) return
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return
+      const data = event.data as {
+        type?: string
+        boardRule?: string
+        boardStyle?: string
+      } | null
+      if (!data || data.type !== PREVIEW_STYLE_MESSAGE) return
+      const rule = data.boardRule
+      const style = data.boardStyle
+      if (
+        (rule === 'wide' || rule === 'college' || rule === 'narrow') &&
+        (style === 'none' || style === 'dotted' || style === 'lined' || style === 'grid')
+      ) {
+        setEmbedStyleOverride({ boardRule: rule, boardStyle: style })
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [embedded])
+
+  const boardRule = embedStyleOverride?.boardRule ?? contextBoardRule
+  const boardStyle = embedStyleOverride?.boardStyle ?? contextBoardStyle
+  const [embedFlowReady, setEmbedFlowReady] = useState(false) // RF onInit fired inside iframe
+
   // Helper lines hook for snap-to-grid functionality
   const { rebuildIndex, updateHelperLines, HelperLines } = useHelperLines(snapEnabled)
   
@@ -1564,32 +1622,112 @@ function BoardFlowInner({
 
   // Fetch messages if conversationId is provided
   const { data: messages = [], refetch: refetchMessages } = useQuery({
-    queryKey: ['messages-for-panels', conversationId],
-    queryFn: () => conversationId ? fetchMessagesForPanels(conversationId) : Promise.resolve([]),
+    // Embed uses lean fetch; still share cache with full board when possible for instant paint
+    queryKey: ['messages-for-panels', conversationId, embedded ? 'embed' : 'full'],
+    queryFn: () =>
+      conversationId
+        ? fetchMessagesForPanels(conversationId, { embed: embedded })
+        : Promise.resolve([]),
     enabled: !!conversationId,
-    refetchInterval: 500, // Refetch every 500ms to pick up new messages (more aggressive for deterministic mapping)
-    refetchOnWindowFocus: true,
-    refetchOnMount: true, // Refetch when component mounts
-    refetchOnReconnect: true, // Refetch when reconnecting
-    // Read from cache even when query is initially disabled (for optimistic updates)
+    refetchInterval: embedded ? false : 500, // Previews: one-shot load (polling fights first-paint nav)
+    refetchOnWindowFocus: !embedded,
+    refetchOnMount: !embedded, // Embed: avoid remount refetch if keep-alive already loaded
+    refetchOnReconnect: !embedded,
     placeholderData: (previousData) => {
-      // If we have cached data for this conversationId, use it
-      if (conversationId) {
-        const cached = queryClient.getQueryData(['messages-for-panels', conversationId])
-        if (cached) return cached as Message[]
-      }
+      if (!conversationId) return previousData
+      // Prefer same-mode cache, then full-board cache (user may have opened the page already)
+      const embedCached = queryClient.getQueryData([
+        'messages-for-panels',
+        conversationId,
+        'embed',
+      ])
+      if (embedCached) return embedCached as Message[]
+      const fullCached = queryClient.getQueryData([
+        'messages-for-panels',
+        conversationId,
+        'full',
+      ])
+      if (fullCached) return fullCached as Message[]
+      // Legacy key (pre embed/full split)
+      const legacy = queryClient.getQueryData(['messages-for-panels', conversationId])
+      if (legacy) return legacy as Message[]
       return previousData
     },
   })
+
+  // Signal host as soon as RF can pan/zoom — don’t wait on messages (that delayed the veil)
+  useEffect(() => {
+    if (!embedded || !conversationId || !embedFlowReady) return
+    if (typeof window === 'undefined' || window.parent === window) return
+    const id = window.requestAnimationFrame(() => {
+      window.parent.postMessage(
+        { type: PREVIEW_READY_MESSAGE, pageId: conversationId },
+        window.location.origin
+      )
+    })
+    return () => window.cancelAnimationFrame(id)
+  }, [embedded, conversationId, embedFlowReady])
+
+  // Embed: RF pane must match the iframe. CSS h-full under min-height-only parents collapses to
+  // content size → dead white body around the map until a pan triggers a redraw. Force store size.
+  useEffect(() => {
+    if (!embedded) return
+    let lastW = 0
+    let lastH = 0
+    const remasure = (forceFit: boolean) => {
+      const el =
+        (document.querySelector('#tt-embed-root .react-flow') as HTMLElement | null) ||
+        (document.querySelector('.react-flow') as HTMLElement | null)
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const w = Math.round(rect.width)
+      const h = Math.round(rect.height)
+      if (w < 16 || h < 16) return
+      const grewFromEmpty = lastW < 16 || lastH < 16
+      const sizeChanged = Math.abs(w - lastW) > 2 || Math.abs(h - lastH) > 2
+      lastW = w
+      lastH = h
+      if (!forceFit && !grewFromEmpty && !sizeChanged) return
+      const prev = rfStore.getState()
+      if (prev.width !== w || prev.height !== h) {
+        rfStore.setState({ width: w, height: h }) // Pane / renderer hit targets use these
+      }
+      window.dispatchEvent(new Event('resize'))
+      if (forceFit || grewFromEmpty) {
+        reactFlowInstance.fitView({ padding: 0.15, minZoom: 0.2, maxZoom: 1.5 })
+      }
+    }
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return
+      if ((event.data as { type?: string } | null)?.type !== PREVIEW_RESIZE_MESSAGE) return
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => remasure(true))
+      })
+    }
+    window.addEventListener('message', onMessage)
+    const ro = new ResizeObserver(() => remasure(false))
+    const root = document.getElementById('tt-embed-root') || document.documentElement
+    ro.observe(root)
+    // First paint + after nodes typically land
+    remasure(true)
+    const t1 = window.setTimeout(() => remasure(true), 50)
+    const t2 = window.setTimeout(() => remasure(true), 250)
+    return () => {
+      window.removeEventListener('message', onMessage)
+      ro.disconnect()
+      window.clearTimeout(t1)
+      window.clearTimeout(t2)
+    }
+  }, [embedded, reactFlowInstance, rfStore])
 
   // Fetch edges (connections) for the conversation - lightweight query
   const { data: savedEdges = [], refetch: refetchEdges } = useQuery({
     queryKey: ['panel-edges', conversationId],
     queryFn: () => conversationId ? fetchEdgesForConversation(conversationId) : Promise.resolve([]),
     enabled: !!conversationId,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: !embedded,
     refetchOnMount: true,
-    refetchOnReconnect: true,
+    refetchOnReconnect: !embedded,
   })
 
   // Fetch canvas nodes (freehand drawings, etc.) for the conversation
@@ -1597,9 +1735,9 @@ function BoardFlowInner({
     queryKey: ['canvas-nodes', conversationId],
     queryFn: () => conversationId ? fetchCanvasNodesForConversation(conversationId) : Promise.resolve([]),
     enabled: !!conversationId,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: !embedded,
     refetchOnMount: true,
-    refetchOnReconnect: true,
+    refetchOnReconnect: !embedded,
   })
 
   // Retry failed canvas node saves when conversation loads or comes back online
@@ -5960,7 +6098,10 @@ function BoardFlowInner({
   }, [embedded])
 
   return (
-    <div className="w-full h-full relative" onDoubleClick={embedded ? undefined : handlePaneDoubleClick}>
+    <div
+      className={cn('relative', embedded ? 'absolute inset-0' : 'w-full h-full')}
+      onDoubleClick={embedded ? undefined : handlePaneDoubleClick}
+    >
       <ReactFlow
         // Hide React Flow watermark; Pro license by launch
         proOptions={{ hideAttribution: true }}
@@ -5968,6 +6109,7 @@ function BoardFlowInner({
         edges={edges}
         onNodesChange={handleNodesChange}
         onEdgesChange={onEdgesState}
+        style={embedded ? { width: '100%', height: '100%' } : undefined}
         onNodeDragStart={(event, node) => {
           // Hide placeholders only when the connected target node is dragged, not when placeholder itself is dragged
           if (!node) return
@@ -6232,12 +6374,19 @@ function BoardFlowInner({
           }
         }}
         onEdgeClick={handleEdgeClick}
-        onNodeClick={() => {
+        onNodeClick={(event) => {
           // Clear I-bar cursor when clicking on a node/panel
           if (iBarPosition) {
             setIBarPosition(null)
           }
           setAddItemMenu(null) // Close empty-page add menu when selecting a panel
+          // Clicking a host item (outside nested preview chrome) clears preview style-focus
+          if (!embedded && previewFocus?.focusedPageId) {
+            const target = event.target as Element | null
+            if (!target?.closest?.('[data-page-preview]')) {
+              previewFocus.clearPreviewFocus()
+            }
+          }
         }}
         onNodeContextMenu={handleNodeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}
@@ -6245,6 +6394,10 @@ function BoardFlowInner({
           // Clear I-bar cursor on single click (dismiss it)
           if (iBarPosition) {
             setIBarPosition(null)
+          }
+          // Empty host pane click drops nested preview style-focus
+          if (!embedded && previewFocus?.focusedPageId) {
+            previewFocus.clearPreviewFocus()
           }
 
           // Left click on empty map only
@@ -6270,28 +6423,32 @@ function BoardFlowInner({
           setRightClickedNode(null) // Don't stack with node action popup
           setAddItemMenu({ screenX, screenY, flowX, flowY }) // Show Item / Flashcard menu at click
         }}
-        defaultViewport={{ x: 0, y: 0, zoom: 0.6 }} // Lower default zoom (0.6 instead of 1.0)
-        fitView={viewMode === 'canvas'} // Only use fitView in Canvas mode to prevent extra space above first panel in Linear mode
-        fitViewOptions={{ padding: 0.2, minZoom: 0.3, maxZoom: 2 }} // Add padding and zoom limits for fitView
+        defaultViewport={{ x: 0, y: 0, zoom: embedded ? 0.8 : 0.6 }}
+        // Embedded previews: no continuous fitView (fights pan/zoom); host keeps canvas fitView
+        fitView={!embedded && viewMode === 'canvas'}
+        fitViewOptions={{ padding: 0.2, minZoom: 0.3, maxZoom: 2 }}
         className="bg-gray-50 dark:bg-[#0f0f0f]"
         onInit={(instance) => {
-          // Ensure viewport values are always valid numbers to prevent NaN errors in Background component
           const currentViewport = instance.getViewport()
           if (!isFinite(currentViewport.x) || !isFinite(currentViewport.y) || !isFinite(currentViewport.zoom)) {
-            instance.setViewport({ x: 0, y: 0, zoom: 0.6 })
+            instance.setViewport({ x: 0, y: 0, zoom: embedded ? 0.8 : 0.6 })
+          } else if (embedded) {
+            instance.fitView({ padding: 0.15, minZoom: 0.2, maxZoom: 1.5 }) // One-shot frame in preview
           }
-          // Share React Flow instance with context for toolbar access
           setReactFlowInstance(instance)
+          if (embedded) setEmbedFlowReady(true) // Host can drop loading veil once messages also resolve
         }}
-        panOnDrag={!isDrawing} // Disable panning when drawing mode is active
-        zoomOnScroll={!isScrollMode && !isDrawing} // Disable zoom on scroll when drawing mode is active
-        zoomOnPinch={true} // Always allow pinch zoom
-        zoomOnDoubleClick={false} // Disabled - double-click now places I-bar cursor for inline note creation
-        minZoom={0.1} // Allow zooming out more
-        maxZoom={2} // Limit maximum zoom
-        autoPanOnNodeDrag={false} // Disable auto-panning when nodes are dragged/selected
-        selectNodesOnDrag={!isDrawing} // Don't select nodes on drag, and disable when drawing
-        multiSelectionKeyCode={['Shift']} // Enable multi-select with Shift key
+        // Embedded: always pan/zoom; host still respects draw/scroll modes
+        panOnDrag={embedded ? true : !isDrawing}
+        zoomOnScroll={embedded ? true : !isScrollMode && !isDrawing}
+        zoomOnPinch={true}
+        zoomOnDoubleClick={false}
+        minZoom={embedded ? 0.15 : 0.1}
+        maxZoom={embedded ? 2.5 : 2}
+        preventScrolling // RF consumes wheel so the host page/map doesn’t scroll
+        autoPanOnNodeDrag={false}
+        selectNodesOnDrag={embedded ? false : !isDrawing} // Preview: drag starts pan, not selection box
+        multiSelectionKeyCode={['Shift']}
         onMove={(event, viewport) => {
           // Update viewport key to trigger re-render for button visibility check (throttled)
           // Only update every 100ms to prevent excessive re-renders
@@ -6469,6 +6626,9 @@ function BoardFlowInner({
             lineWidth={0.5}
           />
         )}
+        {/* Page previews: no minimap — host map owns that chrome */}
+        {!embedded && (
+         <>
          <div
            data-minimap-context
            onContextMenu={(e) => {
@@ -6598,6 +6758,8 @@ function BoardFlowInner({
             }}
           />
         )}
+         </>
+        )}
 
         {/* Freehand drawing overlay - only shown when drawing mode is active and drawTool is pencil */}
         {isDrawing && drawTool === 'pencil' && <Freehand conversationId={conversationId} onBeforeCreate={takeSnapshot} />}
@@ -6631,8 +6793,8 @@ function BoardFlowInner({
         </div>
       )}
 
-      {/* Minimap toggle pill - horizontal below minimap, like top bar and prompt box */}
-      {/* Moved outside ReactFlow to ensure proper z-index stacking above toggle */}
+      {/* Minimap pill + Linear/Free nav — host map only (hidden in page previews) */}
+      {!embedded && (
       <div
         data-minimap-pill-context
         onContextMenu={(e) => {
@@ -6704,6 +6866,7 @@ function BoardFlowInner({
         }}
         title={isMinimapHidden ? 'Show minimap' : 'Hide minimap'}
       />
+      )}
 
       {/* Add item menu — empty page/canvas click (Item / Flashcard at click position) */}
       {addItemMenu && (
@@ -6961,7 +7124,8 @@ function BoardFlowInner({
         </div>
       )}
 
-      {/* Linear/Canvas toggle with Nav dropdown above minimap */}
+      {/* Linear/Canvas toggle with Nav dropdown above minimap — host map only */}
+      {!embedded && (
       <div
         data-minimap-toggle-context
         onContextMenu={(e) => {
@@ -7220,6 +7384,7 @@ function BoardFlowInner({
           </div>
         </div>
       </div>
+      )}
 
       {/* Brand logo + topper — opens chat sidebar; hidden while chat is open; bottom-right of map */}
       {/* Omitted in embedded page-preview boards (chrome belongs to the parent map) */}
@@ -7241,7 +7406,7 @@ function BoardFlowInner({
       )}
 
       {/* Context menu for minimap control */}
-      {minimapContextMenuPosition && (
+      {!embedded && minimapContextMenuPosition && (
         <div
           className="fixed z-50 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] py-1 min-w-[180px]"
           style={{
@@ -7306,7 +7471,7 @@ function BoardFlowInner({
 
       {/* Return to bottom button - visible when most recent panel is not centered */}
       {/* Aligned to prompt box center with same gap as minimap when jumped (16px) */}
-      {messages.length > 0 && (() => {
+      {!embedded && messages.length > 0 && (() => {
         // Check if most recent panel is centered above prompt box
         const filter = viewMode === 'linear' ? linearNavMode : 'all'
         const mostRecentPanel = getMostRecentPanel(filter)
@@ -7383,11 +7548,13 @@ export function BoardFlow({
   embedded?: boolean // Page-within-page: strip outer chrome
 }) {
   return (
-    <ReactFlowProvider>
-      <Suspense fallback={<div className="h-full w-full flex items-center justify-center">Loading...</div>}>
-        <BoardFlowWithSearchParams conversationId={conversationId} embedded={embedded} />
-      </Suspense>
-    </ReactFlowProvider>
+    <BoardEmbedProvider embedded={embedded}>
+      <ReactFlowProvider>
+        <Suspense fallback={<div className="h-full w-full flex items-center justify-center">Loading...</div>}>
+          <BoardFlowWithSearchParams conversationId={conversationId} embedded={embedded} />
+        </Suspense>
+      </ReactFlowProvider>
+    </BoardEmbedProvider>
   )
 }
 

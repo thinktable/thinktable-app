@@ -5,6 +5,7 @@
 import { Editor } from '@tiptap/react'
 import { Button } from './ui/button'
 import { useReactFlowContext } from './react-flow-context'
+import { usePreviewFocus } from '@/lib/preview-focus-context' // Nested preview View-style targeting
 import { useState, useEffect, useRef } from 'react'
 import { Input } from './ui/input'
 import { useRouter } from 'next/navigation'
@@ -77,7 +78,13 @@ interface EditorToolbarProps {
 }
 
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
-  const { reactFlowInstance, isLocked, setIsLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, viewMode, boardRule, setBoardRule, boardStyle, setBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, drawShape: contextDrawShape, setDrawShape: setContextDrawShape, mapUndo, mapRedo, canMapUndo, canMapRedo, snapEnabled, setSnapEnabled } = useReactFlowContext()
+  const { reactFlowInstance, isLocked, setIsLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, viewMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, drawShape: contextDrawShape, setDrawShape: setContextDrawShape, mapUndo, mapRedo, canMapUndo, canMapRedo, snapEnabled, setSnapEnabled } = useReactFlowContext()
+  const previewFocus = usePreviewFocus() // When a nested preview chrome is selected, View styles target that page
+  // Route Board Style controls to the focused preview page (else the host map)
+  const boardRule = previewFocus?.focusedPageId ? previewFocus.boardRule : hostBoardRule
+  const setBoardRule = previewFocus?.focusedPageId ? previewFocus.setBoardRule : setHostBoardRule
+  const boardStyle = previewFocus?.focusedPageId ? previewFocus.boardStyle : hostBoardStyle
+  const setBoardStyle = previewFocus?.focusedPageId ? previewFocus.setBoardStyle : setHostBoardStyle
   const { resolvedTheme } = useTheme() // Get theme for panel-matching opacity values
   const borderStyleButtonRef = useRef<HTMLButtonElement>(null)
   const borderStyleIconRef = useRef<HTMLImageElement>(null)
@@ -1217,7 +1224,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const isItemHidden = (item: string) => hiddenItems.has(item)
 
   return (
-    <div ref={toolbarRef} className="flex items-center gap-1 h-full flex-1 overflow-hidden">
+    <div
+      ref={toolbarRef}
+      data-preview-style-chrome // Clicks here keep nested preview style-focus alive
+      className="flex items-center gap-1 h-full flex-1 overflow-hidden"
+    >
       {/* Left Section - collapsible items */}
       <div ref={leftSectionRef} className="flex items-center gap-1 flex-shrink min-w-0">
         {/* Lock Control Button - toggles node dragging/connecting */}

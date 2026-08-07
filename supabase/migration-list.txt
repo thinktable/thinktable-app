@@ -1,9 +1,9 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-07T19:13:47Z
+# snapped_at=2026-08-07T20:23:54Z
 # postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
-# Note: supabase db dump --linked / migration list failed (cli_login_postgres permission); snapshot via local migrations + .temp versions.
+# Note: supabase CLI not authenticated here; snapshot via local migrations + .temp versions.
 #
 # Local migration files:
 20251203111351_schema_documentation.md
@@ -25,4 +25,4 @@
 20260806200000_create_notion_connections.sql
 20260807160351_nested_pages_chrome.sql
 #
-# No new schema this save (UI: items/pages model, edge titles, nested board preview, college dotted default).
+# No new schema this save (UI: lean /embed page preview iframe, portal hit-testing fix, preview focus styles).

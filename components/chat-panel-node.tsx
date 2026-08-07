@@ -1,7 +1,7 @@
 'use client'
 
 // Custom React Flow node for chat panels (prompt + response)
-import { NodeProps, Handle, Position, useReactFlow, NodeResizeControl } from 'reactflow'
+import { NodeProps, Handle, Position, useReactFlow, NodeResizeControl } from 'reactflow' // RF node primitives + corner resize controls
 import { cn, generateUUID } from '@/lib/utils'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
@@ -12,7 +12,7 @@ import TextAlign from '@tiptap/extension-text-align'
 import Placeholder from '@tiptap/extension-placeholder'
 import { Haze } from '@/lib/tiptap/haze' // Hide-text mark (frosted until click-reveal)
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus } from 'lucide-react'
+import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw } from 'lucide-react' // RotateCw = bottom-left rotation affordance
 
 // Helper to check if content is effectively empty (handling HTML tags)
 const isContentEmpty = (content: string | undefined | null) => {
@@ -62,8 +62,8 @@ import { useReactFlowContext } from './react-flow-context'
 import { useTheme } from './theme-provider'
 import { SelectionFormatPopupAnchor } from './selection-format-popup' // Notion-style selection menu (stable edge anchor)
 import { ItemTitleEdge } from './item-title-edge' // Edge title chip; titled items promote to pages
-import { NestedBoardPreview } from './nested-board-preview' // Page-within-page board preview
-import { deleteLinkedPageForItem, isItemMeta } from '@/lib/items' // Item detection + delete sync
+import { NestedBoardPreview, prefetchPageEmbed } from './nested-board-preview' // Page-within-page board preview
+import { deleteLinkedPageForItem, isItemMeta, isPageBodyMeta } from '@/lib/items' // Item detection + delete sync
 
 interface Message {
   id: string
@@ -1275,6 +1275,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const DEFAULT_PANEL_HEIGHT = 400 // Default panel height estimate
   const [resizeDimensions, setResizeDimensions] = useState<{ width: number; height: number } | null>(null) // Track resized dimensions
   const [fontScale, setFontScale] = useState(1) // Scale factor for text based on resize ratio
+  const [rotation, setRotation] = useState(0) // Degrees of item rotation (persisted in message metadata)
   const isResizingRef = useRef(false) // Track if currently resizing
   const initialResizeWidthRef = useRef<number | null>(null) // Track initial panel width when resize starts (for note panels)
   const initialResizeHeightRef = useRef<number | null>(null) // Track initial panel height when resize starts (for note panels)
@@ -1282,6 +1283,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const isFirstResizeCallRef = useRef(true) // Track if this is the first resize call in the current session
   const initialTextAspectRatioRef = useRef<number | null>(null) // Track text's natural aspect ratio (width/height)
   const hasLoadedResizeStateRef = useRef(false) // Track if we've already loaded and applied resize state from metadata
+  const isRotatingRef = useRef(false) // True while pointer-dragging the rotation handle
+  const rotationDragRef = useRef<{ startAngle: number; startRotation: number } | null>(null) // Pointer math for live rotate
 
   // Helper function to convert hex color to rgba with opacity
   // Maintains transparency by converting hex to rgba with specified opacity
@@ -1499,13 +1502,18 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       if (message?.metadata && typeof message.metadata === 'object') {
         const metadata = message.metadata as Record<string, any>
         
-        // For note panels: load fontScale
+        // For note panels: load fontScale (legacy scale-to-fit)
         if (isItemPanel && metadata.fontScale && typeof metadata.fontScale === 'number') {
           setFontScale(metadata.fontScale)
         }
-        
-        // For non-note panels: load resize dimensions
-        if (!isItemPanel && metadata.resizeDimensions && typeof metadata.resizeDimensions === 'object') {
+
+        // Restore saved rotation for items (degrees around panel center)
+        if (isItemPanel && typeof metadata.rotation === 'number') {
+          setRotation(metadata.rotation) // Apply persisted angle so layout survives reload
+        }
+
+        // Load explicit box size for items + other panels (corner resize baseline)
+        if (metadata.resizeDimensions && typeof metadata.resizeDimensions === 'object') {
           const dims = metadata.resizeDimensions as { width?: number; height?: number }
           if (dims.width && dims.height && dims.width > 0 && dims.height > 0) {
             setResizeDimensions({ width: dims.width, height: dims.height })
@@ -1783,12 +1791,21 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const [itemBoxSize, setItemBoxSize] = useState({ width: 200, height: 120 })
   // In-place nested board for a titled item’s linked page
   const [pagePreviewOpen, setPagePreviewOpen] = useState(false)
+  const [pagePreviewMounted, setPagePreviewMounted] = useState(false) // Keep iframe warm after first open/hover
   const linkedPageId = !isProjectBoard
     ? (promptMessage?.metadata?.linkedPageId as string | undefined)
     : undefined
   const itemTitleLabel =
     (promptMessage?.metadata?.itemTitle as string | undefined) || ''
-  
+
+  // Warm lean embed document (and mount hidden iframe) so first nav isn’t a cold boot
+  const prefetchPagePreview = () => {
+    if (!linkedPageId) return
+    prefetchPageEmbed(linkedPageId)
+    router.prefetch(`/embed/${linkedPageId}`)
+    setPagePreviewMounted(true)
+  }
+
   // Update line-height + item box when note/item is resized using ResizeObserver
   useEffect(() => {
     if (!isItem || !panelRef.current) return
@@ -1822,191 +1839,140 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // Regular chat panels are those that are not flashcards and not notes
   const isRegularChatPanel = !isFlashcard && !isItem
 
-  // Handle resize end - clear resizing flag, reset refs, and save resize state to database
-  // For note panels: save fontScale; for other panels: save resizeDimensions
-  const handleResizeEnd = useCallback(async () => {
-    isResizingRef.current = false
-    isFirstResizeCallRef.current = true
-    
-    // Save resize state to message metadata
-    if (!isProjectBoard && promptMessage) {
-      // Get existing metadata
-      const { data: message, error: fetchError } = await supabase
-        .from('messages')
-        .select('metadata')
-        .eq('id', promptMessage.id)
-        .single()
+  // Keep RF node width/height aligned with the measured item box so NodeResizeControl
+  // starts from real size (fit-content nodes often have width/height 0 → drag looks like move)
+  useEffect(() => {
+    if (!isItem || !panelRef.current || !isInitialShrinkComplete) return // Wait until item has laid out
+    const el = panelRef.current // Panel DOM for measurement
+    const syncNodeSize = () => {
+      if (isResizingRef.current || !el) return // During active resize, RF owns dimensions
+      const width = el.offsetWidth // Measured content box width
+      const height = el.offsetHeight // Measured content box height
+      if (width <= 0 || height <= 0) return // Ignore empty frames
+      const setNodesFunc = getSetNodes() // Board setNodes from context
+      if (!setNodesFunc) return
+      setNodesFunc((nodes: any[]) =>
+        nodes.map((node: any) =>
+          node.id === id && (node.width !== width || node.height !== height)
+            ? { ...node, width, height } // Write baseline for corner-handle math
+            : node
+        )
+      )
+    }
+    syncNodeSize() // Immediate sync on select/mount
+    const ro = new ResizeObserver(syncNodeSize) // Re-sync when text/layout changes size
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [isItem, id, getSetNodes, isInitialShrinkComplete, resizeDimensions, selected])
 
-      if (fetchError) {
-        console.error('Error fetching message for resize save:', fetchError)
-        return
-      }
+  // Handle resize end - clear resizing flag and persist explicit box size from final params
+  const handleResizeEnd = useCallback(async (_event: any, params?: { width: number; height: number }) => {
+    isResizingRef.current = false // Allow size-sync observer again
+    isFirstResizeCallRef.current = true // Reset first-call bookkeeping
 
-      const existingMetadata = (message?.metadata as Record<string, any>) || {}
-      const updatedMetadata: Record<string, any> = { ...existingMetadata }
-      
-      // For note panels: save fontScale
-      if (isItem) {
-        updatedMetadata.fontScale = fontScale
-        // Clear resizeDimensions so fit-content takes over
-        setResizeDimensions(null)
-      } else {
-        // For non-note panels: save resizeDimensions
-        if (resizeDimensions && resizeDimensions.width > 0 && resizeDimensions.height > 0) {
-          updatedMetadata.resizeDimensions = {
-            width: resizeDimensions.width,
-            height: resizeDimensions.height
-          }
-        } else {
-          // If no resize dimensions, remove from metadata
-          delete updatedMetadata.resizeDimensions
-        }
-      }
+    // Prefer RF end params (avoids stale React state); fall back to current state
+    const width = Math.max(params?.width ?? resizeDimensions?.width ?? 0, 200)
+    const height = Math.max(params?.height ?? resizeDimensions?.height ?? 0, 40)
+    if (width > 0 && height > 0) {
+      setResizeDimensions({ width, height }) // Lock final box size into local state
+    }
 
-      // Save to database
-      const { error: updateError } = await supabase
-        .from('messages')
-        .update({ metadata: updatedMetadata })
-        .eq('id', promptMessage.id)
+    if (isProjectBoard || !promptMessage) return // Nothing to persist on project boards
 
-      if (updateError) {
-        console.error('Error saving resize state to database:', updateError)
-      }
-    } else if (isItem) {
-      // For note panels, clear resizeDimensions so fit-content kicks in
-      // The scaled text will determine the panel size
-      setResizeDimensions(null)
+    const { data: message, error: fetchError } = await supabase
+      .from('messages')
+      .select('metadata')
+      .eq('id', promptMessage.id)
+      .single()
+
+    if (fetchError) {
+      console.error('Error fetching message for resize save:', fetchError)
+      return
+    }
+
+    const existingMetadata = (message?.metadata as Record<string, any>) || {}
+    const updatedMetadata: Record<string, any> = {
+      ...existingMetadata,
+      resizeDimensions: { width, height }, // Persist box for reload
+    }
+    if (isItem) updatedMetadata.fontScale = fontScale // Keep legacy scale if present
+
+    const { error: updateError } = await supabase
+      .from('messages')
+      .update({ metadata: updatedMetadata })
+      .eq('id', promptMessage.id)
+
+    if (updateError) {
+      console.error('Error saving resize state to database:', updateError)
     }
   }, [isItem, isProjectBoard, promptMessage, fontScale, resizeDimensions, supabase])
 
-  // Handle panel resize - calculates font scale so text FILLS the panel
-  // For note panels: maintains fit-content behavior (panel collapses to scaled text)
-  // For other panels: sets explicit dimensions
-  const handleResize = useCallback((event: any, params: { width: number; height: number }) => {
-    // Set flag to indicate we're resizing
-    isResizingRef.current = true
-    
-    // On the very first resize call, capture the initial dimensions AND text width
-    if (isFirstResizeCallRef.current && initialTextWidthRef.current === null) {
-      isFirstResizeCallRef.current = false
-      
-      // Capture panel dimensions
-      let panelWidth: number | null = null
-      let panelHeight: number | null = null
-      
-      if (resizeDimensions && resizeDimensions.width > 0 && resizeDimensions.height > 0) {
-        panelWidth = resizeDimensions.width
-        panelHeight = resizeDimensions.height
-      } else if (panelRef.current) {
-        const domWidth = panelRef.current.offsetWidth
-        const domHeight = panelRef.current.offsetHeight
-        if (domWidth > 0 && domHeight > 0) {
-          panelWidth = domWidth
-          panelHeight = domHeight
-        }
-      }
-      
-      if (panelWidth === null || panelHeight === null) {
-        const nodes = getNodes()
-        const currentNode = nodes.find((node: any) => node.id === id)
-        if (currentNode && currentNode.width && currentNode.height) {
-          panelWidth = currentNode.width
-          panelHeight = currentNode.height
-        }
-      }
-      
-      if (panelWidth === null || panelHeight === null) {
-        panelWidth = DEFAULT_PANEL_WIDTH
-        panelHeight = DEFAULT_PANEL_HEIGHT
-      }
-      
-      initialResizeWidthRef.current = panelWidth
-      initialResizeHeightRef.current = panelHeight
-      
-      // Capture actual TEXT content width from the editor DOM
-      // This is crucial for making text fill the panel properly
-      let textWidth: number | null = null
-      
-      // Try to measure text width from the TipTap editor
-      const editor = promptEditorRef.current
-      if (editor && editor.view && editor.view.dom) {
-        const editorDom = editor.view.dom as HTMLElement
-        // Get the actual content width (scrollWidth gives the full content width)
-        // Account for current font scale to get "natural" width at 1x
-        const contentWidth = editorDom.scrollWidth
-        if (contentWidth > 0) {
-          textWidth = contentWidth / fontScale
-        }
-      }
-      
-      // If we couldn't measure text width, use panel width as fallback
-      if (textWidth === null || textWidth <= 0) {
-        textWidth = panelWidth
-      }
-      
-      initialTextWidthRef.current = textWidth
-    } else if (isFirstResizeCallRef.current) {
-      isFirstResizeCallRef.current = false
+  // Corner-drag resize: apply explicit width/height so the box grows/shrinks (not just moves)
+  const handleResize = useCallback((_event: any, params: { width: number; height: number }) => {
+    isResizingRef.current = true // Block observer from fighting live resize
+    const width = Math.max(params.width, 200) // Enforce min width
+    const height = Math.max(params.height, 40) // Enforce min height so handles stay usable
+    setResizeDimensions({ width, height }) // Drive panel style — matches RF dimension changes
+  }, [])
+
+  // Persist item rotation degrees into message metadata after a rotate gesture ends
+  const saveRotation = useCallback(async (nextRotation: number) => {
+    if (isProjectBoard || !promptMessage) return // Project boards / missing message: skip DB write
+    const { data: message, error: fetchError } = await supabase // Fetch current metadata blob
+      .from('messages')
+      .select('metadata')
+      .eq('id', promptMessage.id)
+      .single()
+    if (fetchError) { // Bail if we cannot read existing metadata
+      console.error('Error fetching message for rotation save:', fetchError)
+      return
     }
-    
-    // Calculate font scale based on resize
-    const initialTextWidth = initialTextWidthRef.current || initialResizeWidthRef.current || DEFAULT_PANEL_WIDTH
-    const initialPanelWidth = initialResizeWidthRef.current || DEFAULT_PANEL_WIDTH
-    
-    // For note panels: calculate font scale, then let fit-content determine panel size
-    // The panel will naturally collapse to fit the scaled text
-    if (isItem && initialTextWidth > 0) {
-      // Calculate scale based on how much we've resized relative to initial panel width
-      const resizeRatio = params.width / initialPanelWidth
-      const newScale = fontScale * resizeRatio / (resizeDimensions ? resizeDimensions.width / initialPanelWidth : 1)
-      
-      // Simpler approach: scale = target width / initial text width (accounting for padding)
-      const paddingAllowance = 32
-      const targetTextWidth = Math.max(params.width - paddingAllowance, 50)
-      const calculatedScale = targetTextWidth / initialTextWidth
-      
-      // Apply scale factor
-      setFontScale(calculatedScale)
-      
-      // DON'T set explicit resizeDimensions for notes - let fit-content handle sizing
-      // This maintains the "collapse to text" behavior
-      // The panel will naturally fit the scaled text
-      
-      // Update React Flow node dimensions to match what fit-content will give us
-      // This keeps the resize handle in sync
-      const scaledTextWidth = initialTextWidth * calculatedScale + paddingAllowance
-      const scaledTextHeight = (initialResizeHeightRef.current || DEFAULT_PANEL_HEIGHT) * calculatedScale
-      
-      const setNodesFunc = getSetNodes()
-      if (setNodesFunc) {
-        setNodesFunc((nodes: any[]) =>
-          nodes.map((node: any) =>
-            node.id === id
-              ? { ...node, width: scaledTextWidth, height: scaledTextHeight }
-              : node
-          )
-        )
-      }
-      
-      // Clear resizeDimensions so fit-content takes over
-      // The panel will naturally fit the scaled text
-      setResizeDimensions(null)
-    } else {
-      // For non-note panels: use explicit dimensions
-      let finalWidth = params.width
-      let finalHeight = params.height
-      
-      // Update dimensions state
-      setResizeDimensions({ width: finalWidth, height: finalHeight })
-      
-      if (initialTextWidth > 0) {
-        const paddingAllowance = 32
-        const availableWidth = Math.max(finalWidth - paddingAllowance, 50)
-        const newScale = availableWidth / initialTextWidth
-        setFontScale(newScale)
-      }
-    }
-  }, [resizeDimensions, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT, isItem, id, getSetNodes, getNodes, fontScale])
+    const existingMetadata = (message?.metadata as Record<string, any>) || {} // Keep other metadata keys
+    const { error: updateError } = await supabase // Write rotation alongside existing fields
+      .from('messages')
+      .update({ metadata: { ...existingMetadata, rotation: nextRotation } })
+      .eq('id', promptMessage.id)
+    if (updateError) console.error('Error saving rotation to database:', updateError) // Surface write failures
+  }, [isProjectBoard, promptMessage, supabase])
+
+  // Begin rotate: measure angle from panel center to pointer and lock drag state
+  const handleRotatePointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+    e.stopPropagation() // Do not select/drag the RF node
+    e.preventDefault() // Avoid text selection while rotating
+    if (!panelRef.current) return // Need geometry for center
+    const rect = panelRef.current.getBoundingClientRect() // Screen-space panel bounds
+    const cx = rect.left + rect.width / 2 // Horizontal center in viewport
+    const cy = rect.top + rect.height / 2 // Vertical center in viewport
+    const startAngle = Math.atan2(e.clientY - cy, e.clientX - cx) // Initial pointer angle (radians)
+    isRotatingRef.current = true // Mark active rotate session
+    rotationDragRef.current = { startAngle, startRotation: rotation } // Baseline for delta math
+    e.currentTarget.setPointerCapture(e.pointerId) // Keep events on this handle while dragging
+  }, [rotation])
+
+  // Live-update rotation from pointer deltas relative to panel center
+  const handleRotatePointerMove = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!isRotatingRef.current || !rotationDragRef.current || !panelRef.current) return // Ignore stray moves
+    const rect = panelRef.current.getBoundingClientRect() // Re-measure (zoom/pan may change)
+    const cx = rect.left + rect.width / 2 // Center X
+    const cy = rect.top + rect.height / 2 // Center Y
+    const angle = Math.atan2(e.clientY - cy, e.clientX - cx) // Current pointer angle
+    const deltaDeg = ((angle - rotationDragRef.current.startAngle) * 180) / Math.PI // Radians → degrees
+    let next = rotationDragRef.current.startRotation + deltaDeg // Apply delta to start rotation
+    if (e.shiftKey) next = Math.round(next / 15) * 15 // Hold Shift to snap to 15° increments
+    setRotation(next) // Paint live rotation
+  }, [])
+
+  // End rotate: release capture and persist the final angle
+  const handleRotatePointerUp = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!isRotatingRef.current) return // Only finish an active gesture
+    isRotatingRef.current = false // Clear rotating flag
+    rotationDragRef.current = null // Drop drag baseline
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* already released */ }
+    setRotation((current) => { // Read latest angle then persist
+      void saveRotation(current) // Fire-and-forget metadata save
+      return current // No state change needed
+    })
+  }, [saveRotation])
 
   // Auto-select panel when editor is focused or has selection (text edit mode)
   const handleEditorActiveChange = useCallback((isActive: boolean) => {
@@ -3349,12 +3315,25 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // - Even focused flashcard comments should blur
   const shouldBlurComments = flashcardMode !== null && !isZoomedOutInNavMode
 
+  // Corner resize dots match mockup: white fill, thin gray ring, circular
+  // Slightly larger than the visual ring so the hit target is easier to grab than the node body
+  const itemCornerResizeStyle = {
+    width: 14, // Hit target (CSS paints the inner 10px circle)
+    height: 14, // Keep square so border-radius yields a circle
+    background: resolvedTheme === 'dark' ? '#1a1a1a' : '#ffffff', // Contrast against board
+    border: '1.5px solid #9ca3af', // Neutral ring (not selection blue)
+    borderRadius: '50%', // Circular corner handles
+    boxSizing: 'border-box' as const, // Include border in box size
+    zIndex: 60, // Above title chip / connection dots so drag hits resize, not node drag
+  }
+
   return (
     <div
         ref={panelRef}
         data-panel-container="true" // Data attribute to help find panel container for comment popup
+        data-item-node={isItem ? 'true' : undefined} // Marks items for selected connection-dot styling
         className={cn(
-          'group rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible backdrop-blur-sm transition-all duration-300', // Transparent with backdrop blur for map panels - increased corner radius, group class for hover detection, smooth transition
+          'group rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible backdrop-blur-sm transition-[opacity,box-shadow,background-color,border-color] duration-300', // No transform transition so live rotate stays snappy
           // Always show blue border when selected, otherwise use custom border color or default theme-based color
           selected ? 'border-blue-500 dark:border-blue-400' : (data.borderColor ? '' : 'border-gray-200 dark:border-[#2f2f2f]'),
           isBookmarked
@@ -3380,6 +3359,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         borderColor: selected ? undefined : (data.borderColor || undefined),
         borderStyle: selected ? 'solid' : (data.borderStyle as any || undefined),
         borderWidth: selected ? (data.borderWeight || '1px') : (data.borderWeight || undefined),
+        transform: rotation ? `rotate(${rotation}deg)` : undefined, // Apply persisted/live item rotation
+        transformOrigin: 'center center', // Rotate around panel center (matches drag math)
       }}
       onClick={(e) => {
         // Single-section items: no collapse expand-on-click
@@ -3403,24 +3384,38 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         }
       }}
     >
-      {/* NodeResizeControl - enables aspect-ratio locked resizing for note panels only */}
-      {/* Control is invisible - actual resize handle is rendered as separate toolbar island below */}
-      {isItem && (
-        <NodeResizeControl
-          style={{
-            background: 'transparent',
-            border: 'none',
-            // Position at bottom-right corner but invisible (we render custom button instead)
-            opacity: 0,
-            pointerEvents: 'none',
-          }}
-          minWidth={200}
-          minHeight={0}
-          // Don't use keepAspectRatio - we calculate height based on text's aspect ratio in handleResize
-          keepAspectRatio={false}
-          onResize={handleResize}
-          onResizeEnd={handleResizeEnd}
-        />
+      {/* Selected items: four circular corner resize handles (replaces bottom-right toolbar island) */}
+      {selected && isItem && (
+        <>
+          {(['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const).map((position) => (
+            <NodeResizeControl
+              key={position} // One control per corner
+              position={position} // RF places the handle on that corner
+              className="nopan" // Prevent canvas pan while resizing
+              style={itemCornerResizeStyle} // White circular handle styling
+              minWidth={200} // Match prior item min width
+              minHeight={40} // Keep a usable box; pairs with handleResize clamp
+              keepAspectRatio={false} // Free-form box resize (text reflows)
+              onResize={handleResize} // Apply explicit width/height
+              onResizeEnd={handleResizeEnd} // Persist resizeDimensions
+            />
+          ))}
+          {/* Rotation affordance — bottom-left, outside the box (mockup) */}
+          <button
+            type="button"
+            className="nodrag nopan absolute z-50 flex h-6 w-6 -translate-x-1/2 translate-y-1/2 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
+            style={{ left: 0, bottom: 0, marginLeft: '-18px', marginBottom: '-18px', cursor: 'grab' }} // Offset past corner handle
+            title="Rotate"
+            aria-label="Rotate item"
+            onPointerDown={handleRotatePointerDown} // Start angle tracking
+            onPointerMove={handleRotatePointerMove} // Live rotate
+            onPointerUp={handleRotatePointerUp} // Persist angle
+            onPointerCancel={handleRotatePointerUp} // Treat cancel as end
+            onClick={(e) => e.stopPropagation()} // Never bubble to panel select/drag
+          >
+            <RotateCw className="h-4 w-4 pointer-events-none" /> {/* Curved-arrow icon from mockup */}
+          </button>
+        </>
       )}
 
       {/* Item title on edge — select shows Add a title; titled items are pages with their own maps */}
@@ -3435,7 +3430,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           linkedPageId={linkedPageId}
           titleEdgeT={typeof promptMessage.metadata?.titleEdgeT === 'number' ? promptMessage.metadata.titleEdgeT : null}
           previewOpen={pagePreviewOpen}
-          onTogglePreview={() => setPagePreviewOpen((open) => !open)}
+          onTogglePreview={() => {
+            setPagePreviewMounted(true) // Keep iframe after close for instant reopen
+            setPagePreviewOpen((open) => !open)
+          }}
+          onPrefetchPreview={prefetchPagePreview}
+          isPageBody={isPageBodyMeta(promptMessage.metadata as Record<string, unknown>)}
         />
       )}
       
@@ -3808,12 +3808,13 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           />
         </div>
 
-        {/* Page-within-page: nested board for the linked page map */}
-        {pagePreviewOpen && linkedPageId && (
-          <div className="px-2 pb-2">
+        {/* Keep iframe mounted after warm/open; NestedBoardPreview parks off-screen (sized) when closed */}
+        {pagePreviewMounted && linkedPageId && (
+          <div className={cn(pagePreviewOpen && 'px-2 pb-2')}>
             <NestedBoardPreview
               conversationId={linkedPageId}
               title={itemTitleLabel}
+              visible={pagePreviewOpen}
               onClose={() => setPagePreviewOpen(false)}
             />
           </div>
@@ -4097,74 +4098,6 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         </div>
       )}
       
-      {/* Resize control toolbar island - positioned at bottom right, in line with left toolbar */}
-      {/* Uses NodeResizeControl internally to enable drag-to-resize with aspect ratio lock */}
-      {/* Only show for note panels */}
-      {selected && isItem && (
-        <div 
-          className="absolute right-0 flex items-center gap-1 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 z-50 pointer-events-auto overflow-visible"
-          style={{
-            bottom: '-44px', // Position below the panel, aligned with left toolbar
-          }}
-          onClick={(e) => e.stopPropagation()} // Prevent clicks from propagating to panel
-        >
-          {/* Custom resize control - wraps NodeResizeControl for drag-to-resize functionality */}
-          {/* Use relative positioning to contain the NodeResizeControl */}
-          <div className="relative h-7 w-7 flex items-center justify-center">
-            <NodeResizeControl
-              className="!relative !top-auto !left-auto !right-auto !bottom-auto !m-0"
-              style={{
-                background: 'transparent',
-                border: 'none',
-                width: '100%',
-                height: '100%',
-                minWidth: '28px',
-                minHeight: '28px',
-                maxWidth: '28px',
-                maxHeight: '28px',
-                cursor: 'nwse-resize',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                position: 'relative',
-                margin: 0,
-                padding: 0,
-              }}
-              minWidth={200}
-              minHeight={0}
-              // Don't use keepAspectRatio - we calculate height based on text's aspect ratio in handleResize
-              keepAspectRatio={false}
-              onResize={handleResize}
-              onResizeEnd={handleResizeEnd}
-            >
-              {/* Custom resize icon (diagonal arrows) matching example from React Flow docs */}
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                strokeWidth="2"
-                stroke="currentColor"
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="text-gray-600 dark:text-gray-300 flex-shrink-0"
-                style={{
-                  display: 'block',
-                  marginLeft: '27px',
-                  marginTop: '27px',
-                }}
-              >
-                <path stroke="none" d="M0 0h24v24H0z" fill="none" />
-                <polyline points="16 20 20 20 20 16" />
-                <line x1="14" y1="14" x2="20" y2="20" />
-                <polyline points="8 4 4 4 4 8" />
-                <line x1="4" y1="4" x2="10" y2="10" />
-              </svg>
-            </NodeResizeControl>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

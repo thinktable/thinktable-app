@@ -9,7 +9,11 @@ import { AppWindow, Expand } from 'lucide-react' // Preview (in-place) + open fu
 import { createClient } from '@/lib/supabase/client' // Persist title + create page
 import { useQueryClient } from '@tanstack/react-query' // Refresh Pages menu + panels
 import { cn } from '@/lib/utils' // Class merge for chip chrome
-import { migrateLegacyItemFlags, syncItemAndPageTitle } from '@/lib/items' // Dual-write + drop legacy isNote
+import {
+  ensurePageBodyItem,
+  migrateLegacyItemFlags,
+  syncItemAndPageTitle,
+} from '@/lib/items' // Dual-write, page-body materialize, drop legacy isNote
 import { useBoardEmbed } from '@/lib/board-embed-context' // Hide preview when already inside a nested board
 
 /** Map perimeter parameter t ∈ [0,1) → pixel offset from panel top-left (clockwise from top-left). */
@@ -68,6 +72,8 @@ type ItemTitleEdgeProps = {
   titleEdgeT?: number | null // Saved perimeter position
   previewOpen?: boolean // Whether the in-place nested board is expanded
   onTogglePreview?: () => void // Expand / collapse page-within-page preview
+  onPrefetchPreview?: () => void // Warm /embed/{id} before click (hover)
+  isPageBody?: boolean // This item IS the current page’s content (not a nested page card)
 }
 
 export function ItemTitleEdge({
@@ -81,6 +87,8 @@ export function ItemTitleEdge({
   titleEdgeT,
   previewOpen = false,
   onTogglePreview,
+  onPrefetchPreview,
+  isPageBody = false,
 }: ItemTitleEdgeProps) {
   const router = useRouter() // Navigate into the page’s own map
   const queryClient = useQueryClient() // Invalidate nav + messages after promote/rename
@@ -193,7 +201,13 @@ export function ItemTitleEdge({
         } = await supabase.auth.getUser()
         if (!user) return
 
-        if (localLinkedPageId) {
+        if (isPageBody) {
+          // Page-body item title = this page’s name (no nested page)
+          await supabase.from('conversations').update({ title }).eq('id', conversationId)
+          await persistMetadata({ itemTitle: title, titleEdgeT: edgeT, isPageBody: true })
+          await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+          await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+        } else if (localLinkedPageId) {
           // Rename keeps item card + page menu entry identical
           await syncItemAndPageTitle(supabase, {
             messageId,
@@ -213,7 +227,7 @@ export function ItemTitleEdge({
               metadata: {
                 parent_id: conversationId, // Nest under this map in the Pages menu
                 sourceItemMessageId: messageId, // Reverse link for menu rename/delete sync
-                hasContent: false,
+                hasContent: false, // Flipped true if we materialize a page-body item
               },
             })
             .select('id')
@@ -231,9 +245,12 @@ export function ItemTitleEdge({
             title,
             titleEdgeT: edgeT,
           })
+          // If the item already has content, put that content as an item on the new page’s map
+          await ensurePageBodyItem(supabase, { pageId: child.id, userId: user.id })
           await queryClient.invalidateQueries({ queryKey: ['conversations'] })
           await queryClient.refetchQueries({ queryKey: ['conversations'] })
           await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+          await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', child.id] })
         }
         setDisplayTitle(title)
         setDraft(title)
@@ -244,7 +261,7 @@ export function ItemTitleEdge({
         savingRef.current = false
       }
     },
-    [localLinkedPageId, conversationId, messageId, edgeT, displayTitle, queryClient]
+    [localLinkedPageId, conversationId, messageId, edgeT, displayTitle, queryClient, isPageBody, persistMetadata]
   )
 
   const saveEdgePosition = useCallback(
@@ -372,8 +389,8 @@ export function ItemTitleEdge({
           </button>
         )}
 
-        {/* Preview = board-within-board; Expand = navigate to the page’s own map */}
-        {localLinkedPageId && hasTitle && !editing && (
+        {/* Nested page cards only: preview / open. Page-body items are already on their page. */}
+        {!isPageBody && localLinkedPageId && hasTitle && !editing && (
           <>
             {!embedded && onTogglePreview && (
               <button
@@ -384,6 +401,7 @@ export function ItemTitleEdge({
                   previewOpen && 'text-blue-600 dark:text-blue-400 bg-blue-50/80 dark:bg-blue-950/40'
                 )}
                 title={previewOpen ? 'Close page preview' : 'Preview page in place'}
+                onPointerEnter={() => onPrefetchPreview?.()} // Start iframe warm before click
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation()
