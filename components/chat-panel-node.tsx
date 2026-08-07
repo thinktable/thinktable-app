@@ -4,16 +4,15 @@
 import { NodeProps, Handle, Position, useReactFlow, NodeResizeControl } from 'reactflow'
 import { cn, generateUUID } from '@/lib/utils'
 import { useEditor, EditorContent } from '@tiptap/react'
-import { BubbleMenu } from '@tiptap/react/menus'
 import StarterKit from '@tiptap/starter-kit'
 import Highlight from '@tiptap/extension-highlight'
 import { TextStyle } from '@tiptap/extension-text-style'
 import Color from '@tiptap/extension-color'
 import TextAlign from '@tiptap/extension-text-align'
 import Placeholder from '@tiptap/extension-placeholder'
+import { Haze } from '@/lib/tiptap/haze' // Hide-text mark (frosted until click-reveal)
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { createPortal } from 'react-dom'
-import { Highlighter, RotateCcw, MoreHorizontal, MoreVertical, Trash2, Copy, Loader2, ChevronDown, ChevronUp, MessageSquare, X, Smile, PenSquare, Bookmark, SquarePen, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, Maximize2 } from 'lucide-react'
+import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus } from 'lucide-react'
 
 // Helper to check if content is effectively empty (handling HTML tags)
 const isContentEmpty = (content: string | undefined | null) => {
@@ -47,8 +46,6 @@ const blendHexColors = (fgHex: string, bgHex: string, opacity: number): string =
 
   return `#${r}${g}${b}`
 }
-import Picker from '@emoji-mart/react'
-import data from '@emoji-mart/data'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -63,6 +60,7 @@ import { useRouter } from 'next/navigation'
 import { useEditorContext } from './editor-context'
 import { useReactFlowContext } from './react-flow-context'
 import { useTheme } from './theme-provider'
+import { SelectionFormatPopupAnchor } from './selection-format-popup' // Notion-style selection menu (stable edge anchor)
 
 interface Message {
   id: string
@@ -124,8 +122,14 @@ function isProjectBoardData(data: PanelNodeData): data is ProjectBoardPanelNodeD
   return 'boardId' in data && 'boardTitle' in data
 }
 
-// Default highlight color (yellow)
-const DEFAULT_HIGHLIGHT_COLOR = '#fef08a'
+// Plain-merge legacy prompt + response HTML into one page-item body (no auto-haze)
+function mergePanelHtml(prompt?: string, response?: string): string {
+  const empty = (s?: string) => !s?.trim() || s === '<p></p>' || s === '<p><br></p>' // TipTap empty docs
+  const a = empty(prompt) ? '' : (prompt as string) // Prompt / primary body
+  const b = empty(response) ? '' : (response as string) // Former response section
+  if (a && b) return `${a}${b}` // Concatenate HTML fragments
+  return a || b || '' // Whichever side has content
+}
 
 // Format response content - if it's already HTML, return as-is (TipTap will render it)
 // Only format plain text content
@@ -189,7 +193,6 @@ function TipTapContent({
   placeholder,
   isPanelSelected,
   isLoading,
-  onCommentPopupVisibilityChange,
   onBlur,
   onEditorActiveChange,
   fontScale
@@ -210,7 +213,6 @@ function TipTapContent({
   placeholder?: string
   isPanelSelected?: boolean
   isLoading?: boolean
-  onCommentPopupVisibilityChange?: (isVisible: boolean) => void
   onBlur?: () => void
   onEditorActiveChange?: (isActive: boolean) => void // Called when editor is focused or has selection
   fontScale?: number // Font scale factor for resized panels (defaults to 1)
@@ -225,6 +227,7 @@ function TipTapContent({
     Highlight.configure({
       multicolor: true,
     }),
+    Haze, // Hide-text frost mark (selection menu + click-to-reveal)
     TextStyle,
     Color,
     TextAlign.configure({
@@ -264,6 +267,16 @@ function TipTapContent({
         mousedown: (view, event) => {
           // Prevent React Flow from handling drag when clicking on editor
           event.stopPropagation()
+
+          // Temporary reveal: click a hazed span to clear blur until click-away / blur
+          const hazeTarget = (event.target as HTMLElement | null)?.closest?.('[data-haze="true"]') as HTMLElement | null
+          view.dom.querySelectorAll('.tt-haze-revealed').forEach((el) => {
+            if (el !== hazeTarget) el.classList.remove('tt-haze-revealed') // Hide previously revealed spans
+          })
+          if (hazeTarget) {
+            hazeTarget.classList.add('tt-haze-revealed') // Reveal this hazed block temporarily
+          }
+
           // Focus editor on click to show cursor - access editor from view
           const editorInstance = view.state.doc ? (view as any).editor : null
           if (editorInstance && !editorInstance.isDestroyed) {
@@ -276,6 +289,13 @@ function TipTapContent({
               }
             }, 0)
           }
+          return false
+        },
+        blur: (view) => {
+          // Re-haze any temporarily revealed spans when the editor loses focus
+          view.dom.querySelectorAll('.tt-haze-revealed').forEach((el) => {
+            el.classList.remove('tt-haze-revealed')
+          })
           return false
         },
         paste: (view, event) => {
@@ -675,43 +695,9 @@ function TipTapContent({
         }
       }}
     >
-      {/* BubbleMenu for highlighter only - keeps existing TipTap popup */}
-      <BubbleMenu
-        editor={editor}
-        shouldShow={({ editor, state }) => {
-          const { from, to } = state.selection
-          return from !== to && editor.state.doc.textBetween(from, to).trim().length > 0
-        }}
-        options={{
-          placement: 'top',
-          offset: [0, 8] as [number, number],
-          zIndex: 1000, // High z-index to ensure it's above prompt panel and not clipped
-        } as any}
-      >
-        <div className="bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2 flex items-center gap-1 z-20 relative">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => editor.chain().focus().toggleHighlight({ color: DEFAULT_HIGHLIGHT_COLOR }).run()}
-            className="h-8 w-8 p-0"
-            title="Highlight"
-          >
-            <Highlighter className="h-4 w-4 text-gray-600 dark:text-gray-300" />
-          </Button>
-        </div>
-      </BubbleMenu>
+      {/* Notion-style format popup — outside highlight edge, stays open with selection */}
+      <SelectionFormatPopupAnchor editor={editor} containerRef={containerRef} />
 
-      {/* Comment button popup - separate vertical pill on right edge, rendered by app */}
-      {onComment && (
-        <CommentButtonPopup
-          editor={editor}
-          containerRef={containerRef}
-          onComment={onComment}
-          onAddReaction={onAddReaction}
-          section={section}
-          onVisibilityChange={onCommentPopupVisibilityChange}
-        />
-      )}
       {/* Apply shimmer animation to prompt text when response is loading (not for flashcards) */}
       <div className={cn(isLoading && !isFlashcard && 'shimmer')}>
         <EditorContent editor={editor} />
@@ -1225,760 +1211,6 @@ function TagButton({ responseMessageId }: { responseMessageId: string }) {
   )
 }
 
-// Separate comment button popup component - tracks selection and shows vertical pill on right edge
-function CommentButtonPopup({
-  editor,
-  containerRef,
-  onComment,
-  onAddReaction,
-  section,
-  onVisibilityChange,
-}: {
-  editor: any
-  containerRef: React.RefObject<HTMLDivElement>
-  onComment: (selectedText: string, from: number, to: number) => void
-  onAddReaction?: (selectedText: string, from: number, to: number, emoji: string, section: 'prompt' | 'response') => void
-  section?: 'prompt' | 'response'
-  onVisibilityChange?: (isVisible: boolean) => void
-}) {
-  const [showPopup, setShowPopup] = useState(false)
-  const [popupPosition, setPopupPosition] = useState({ top: 0, left: 0 })
-  const [zoom, setZoom] = useState(1)
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false) // Track if emoji picker is open
-  const [savedSelection, setSavedSelection] = useState<{ from: number; to: number } | null>(null) // Store selection to preserve it
-  const popupRef = useRef<HTMLDivElement>(null)
-  const emojiPickerRef = useRef<HTMLDivElement>(null) // Ref for emoji picker popup
-  const panelContainerRef = useRef<HTMLElement | null>(null)
-  const userClearedSelectionRef = useRef(false) // Track if user just clicked to clear selection
-  const { reactFlowInstance } = useReactFlowContext()
-
-  useEffect(() => {
-    if (!editor || !containerRef.current) return
-
-    const updatePopupPosition = () => {
-      // If emoji picker is open, keep popup open even if selection changes
-      // This prevents the popup from closing when clicking in the emoji picker search bar
-      if (showEmojiPicker && showPopup) {
-        return // Don't update position or close if emoji picker is open
-      }
-
-      // Check if there's a valid selection (don't require focus - show popup whenever text is selected)
-      const { from, to } = editor.state.selection
-
-      // Check if there's a valid selection - must have non-zero length
-      if (from === to || from >= to) {
-        setShowPopup(false)
-        return
-      }
-
-      const selectedText = editor.state.doc.textBetween(from, to).trim()
-      // Ensure there's actual text content (not just whitespace or empty)
-      if (!selectedText || selectedText.length === 0) {
-        setShowPopup(false)
-        return
-      }
-      
-      // Also verify with native selection to ensure consistency
-      const nativeSelection = window.getSelection()
-      if (!nativeSelection || nativeSelection.rangeCount === 0) {
-        setShowPopup(false)
-        return
-      }
-      
-      const nativeRange = nativeSelection.getRangeAt(0)
-      const nativeSelectedText = nativeRange.toString().trim()
-      if (!nativeSelectedText || nativeSelectedText.length === 0) {
-        setShowPopup(false)
-        return
-      }
-
-      // CRITICAL: Only show popup if this editor is focused OR if there's a valid selection
-      // This allows the popup to show when text is selected, even if editor doesn't have focus
-      // But prefer the focused editor if multiple editors have selections
-      const isFocused = editor.view.hasFocus()
-      if (!isFocused) {
-        // If not focused, check if there's another editor with focus that has a selection
-        // If so, don't show this popup (let the focused one show)
-        // Otherwise, show this popup even without focus
-        const allEditors = document.querySelectorAll('.ProseMirror')
-        let hasFocusedEditorWithSelection = false
-        for (const editorEl of allEditors) {
-          if (editorEl === editor.view.dom) continue // Skip this editor
-          // Check if this editor element is focused
-          if (editorEl === document.activeElement || editorEl.contains(document.activeElement)) {
-            // This editor is focused - check if it has a selection
-            const selection = window.getSelection()
-            if (selection && selection.rangeCount > 0) {
-              const range = selection.getRangeAt(0)
-              if (range.toString().trim().length > 0) {
-                hasFocusedEditorWithSelection = true
-                break
-              }
-            }
-          }
-        }
-        // If another editor has focus with selection, don't show this popup
-        if (hasFocusedEditorWithSelection) {
-          setShowPopup(false)
-          return
-        }
-      }
-
-      // Find the panel container (the actual React Flow node) - use data attribute for reliable matching
-      const panelElement = containerRef.current?.closest('[data-panel-container="true"]') as HTMLElement ||
-        containerRef.current?.closest('[class*="bg-white"][class*="rounded-xl"]') as HTMLElement ||
-        containerRef.current?.closest('.bg-white.rounded-xl') as HTMLElement ||
-        containerRef.current?.closest('[class*="backdrop-blur"]') as HTMLElement
-
-      if (!panelElement || !containerRef.current) {
-        setShowPopup(false)
-        return
-      }
-
-      // Use TipTap's coordinate system for accurate text positioning
-      const coords = editor.view.coordsAtPos(from)
-
-      // Also get the native selection for positioning (already validated above)
-      const selection = window.getSelection()
-      if (!selection || selection.rangeCount === 0) {
-        setShowPopup(false)
-        return
-      }
-
-      const range = selection.getRangeAt(0)
-      // Additional check: ensure range has valid dimensions
-      const rangeRect = range.getBoundingClientRect()
-      if (rangeRect.width === 0 && rangeRect.height === 0) {
-        setShowPopup(false)
-        return
-      }
-
-      // Get panel's viewport position
-      const panelRect = panelElement.getBoundingClientRect()
-      
-      // Get TipTapContent container's position relative to panel
-      // The popup will be positioned relative to containerRef, so we need to account for its offset
-      const containerRect = containerRef.current?.getBoundingClientRect()
-      if (!containerRect) {
-        setShowPopup(false)
-        return
-      }
-
-      // Calculate selection center for vertical centering
-      // Use range rect for accurate selection bounds (includes height)
-      const rangeTopRelativeToPanel = rangeRect.top - panelRect.top
-      const rangeBottomRelativeToPanel = rangeRect.bottom - panelRect.top
-      const selectionHeight = rangeRect.height
-      
-      // Calculate center of selection (top + height/2) relative to panel
-      const selectionCenterRelativeToPanel = rangeTopRelativeToPanel + (selectionHeight / 2)
-      
-      // Convert to position relative to TipTapContent container (where popup will be rendered)
-      const containerTopRelativeToPanel = containerRect.top - panelRect.top
-      const selectionCenterRelativeToContainer = selectionCenterRelativeToPanel - containerTopRelativeToPanel
-
-      // Round to avoid sub-pixel issues
-      const selectionCenterRounded = Math.round(selectionCenterRelativeToContainer)
-
-      // Horizontal position: align with panel's right edge
-      // Get panel's width from its style attribute (this is in panel's local coordinate system, before transform)
-      // The panel's width is set via inline style, so it's in the panel's coordinate system
-      const panelStyleWidth = panelElement.style.width
-      const panelWidth = panelStyleWidth ? parseFloat(panelStyleWidth) : panelElement.offsetWidth
-      
-      // Get container's left position relative to panel in panel's local coordinate system
-      // Since both panel and container are in the same transformed coordinate system,
-      // we can use offsetLeft to get the container's position relative to the panel
-      // But offsetLeft might not work if there are intermediate containers, so we calculate from viewport coords
-      // Convert viewport coordinates to panel's local coordinate system by dividing by zoom
-      const zoom = reactFlowInstance?.getViewport().zoom ?? 1
-      const containerLeftRelativeToPanel = (containerRect.left - panelRect.left) / zoom
-      
-      // Calculate panel's right edge relative to container in panel's local coordinate system
-      // panelWidth is the panel's width in its local coordinate system
-      // containerLeftRelativeToPanel is the container's offset from panel's left edge (in local coords)
-      // So: panelWidth - containerLeftRelativeToPanel = distance from container's left to panel's right edge
-      const panelRightRelativeToContainer = panelWidth - containerLeftRelativeToPanel
-      const horizontalOffset = 12 // 12px gap to the left of panel's right edge
-
-      // Store panel element reference for rendering
-      panelContainerRef.current = panelElement
-
-      // Position popup centered vertically with selected text, aligned with panel's right edge
-      // Round the position to ensure pixel-perfect alignment
-      setPopupPosition({
-        top: selectionCenterRounded, // Vertical: center of selection (rounded, relative to container)
-        left: panelRightRelativeToContainer - horizontalOffset, // Horizontal: aligned with panel's right edge (relative to container)
-      })
-      
-      // Save the selection to preserve it when popup appears
-      setSavedSelection({ from, to })
-      
-      // Restore selection if it was lost (preserve text selection when popup appears)
-      requestAnimationFrame(() => {
-        const currentSelection = editor.state.selection
-        if (currentSelection.from === currentSelection.to) {
-          // Selection was lost, restore it
-          editor.commands.setTextSelection({ from, to })
-        }
-      })
-      
-      setShowPopup(true)
-    }
-
-    // Listen to editor selection updates
-    const handleEditorUpdate = () => {
-      requestAnimationFrame(updatePopupPosition)
-    }
-
-    editor.on('selectionUpdate', handleEditorUpdate)
-    editor.on('update', handleEditorUpdate)
-
-    // Also listen for native selection changes (for cases where TipTap doesn't fire)
-    const handleSelectionChange = () => {
-      requestAnimationFrame(updatePopupPosition)
-    }
-
-    document.addEventListener('selectionchange', handleSelectionChange)
-
-    // Listen to React Flow viewport changes (zoom, pan) to update position dynamically
-    const handleViewportChange = () => {
-      requestAnimationFrame(updatePopupPosition)
-    }
-
-    // Use ResizeObserver to detect panel position/size changes (handles zoom/pan) - use data attribute for reliable matching
-    const panelElementForObserver = containerRef.current?.closest('[data-panel-container="true"]') as HTMLElement ||
-      containerRef.current?.closest('[class*="bg-white"][class*="rounded-xl"]') as HTMLElement ||
-      containerRef.current?.closest('.bg-white.rounded-xl') as HTMLElement ||
-      containerRef.current?.closest('[class*="backdrop-blur"]') as HTMLElement
-    let resizeObserver: ResizeObserver | null = null
-    if (panelElementForObserver) {
-      resizeObserver = new ResizeObserver(() => {
-        requestAnimationFrame(updatePopupPosition)
-      })
-      resizeObserver.observe(panelElementForObserver)
-    }
-
-    // Listen to React Flow wheel events (zoom) and window resize
-    const reactFlowElement = document.querySelector('.react-flow')
-    if (reactFlowElement) {
-      // Listen to wheel for zoom
-      reactFlowElement.addEventListener('wheel', handleViewportChange, { passive: true })
-      // Also listen to touch events for pinch zoom
-      reactFlowElement.addEventListener('touchmove', handleViewportChange, { passive: true })
-    }
-    window.addEventListener('resize', handleViewportChange)
-
-    // Only update position on selection/viewport changes, not continuously
-    // The continuous loop was causing timing issues during zoom
-    // Instead, rely on event-driven updates which are more stable
-
-    // Initial check
-    updatePopupPosition()
-
-    return () => {
-      document.removeEventListener('selectionchange', handleSelectionChange)
-      editor.off('selectionUpdate', handleEditorUpdate)
-      editor.off('update', handleEditorUpdate)
-      window.removeEventListener('resize', handleViewportChange)
-      if (resizeObserver) {
-        resizeObserver.disconnect()
-      }
-      if (reactFlowElement) {
-        reactFlowElement.removeEventListener('wheel', handleViewportChange)
-        reactFlowElement.removeEventListener('touchmove', handleViewportChange)
-      }
-    }
-  }, [editor, containerRef, reactFlowInstance, showPopup, showEmojiPicker, onVisibilityChange])
-
-  // Notify parent when popup visibility changes
-  useEffect(() => {
-    onVisibilityChange?.(showPopup)
-  }, [showPopup, onVisibilityChange])
-
-  // Detect when user clicks on editor to clear selection
-  useEffect(() => {
-    if (!showPopup || !savedSelection || !editor) return
-
-    const handleEditorClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement
-      // Check if click is on the editor itself (not on popup or emoji picker)
-      const isInEditor = editor.view.dom.contains(target)
-      const isInPopup = popupRef.current?.contains(target as Node)
-      const isInEmojiPicker = emojiPickerRef.current?.contains(target as Node)
-      
-      if (isInEditor && !isInPopup && !isInEmojiPicker) {
-        // User clicked on editor to clear selection - don't restore it
-        userClearedSelectionRef.current = true
-        setSavedSelection(null) // Clear saved selection so it won't be restored
-        // Reset flag after a short delay
-        setTimeout(() => {
-          userClearedSelectionRef.current = false
-        }, 200)
-      }
-    }
-
-    // Listen for clicks on the editor
-    const editorDom = editor.view.dom
-    editorDom.addEventListener('mousedown', handleEditorClick, true)
-
-    return () => {
-      editorDom.removeEventListener('mousedown', handleEditorClick, true)
-    }
-  }, [showPopup, savedSelection, editor])
-
-  // Preserve selection when popup is visible
-  useEffect(() => {
-    if (!showPopup || !savedSelection) return
-
-    // Periodically check and restore selection if it was lost
-    const checkSelection = () => {
-      // Don't restore if user just clicked to clear selection
-      if (userClearedSelectionRef.current) return
-      
-      const currentSelection = editor.state.selection
-      // If selection was lost (collapsed to a single point), restore it
-      if (currentSelection.from === currentSelection.to && savedSelection.from !== savedSelection.to) {
-        editor.commands.setTextSelection({ from: savedSelection.from, to: savedSelection.to })
-      }
-    }
-
-    // Check selection periodically while popup is open
-    const interval = setInterval(checkSelection, 100)
-    
-    // Also check on selection changes
-    const handleSelectionUpdate = () => {
-      requestAnimationFrame(checkSelection)
-    }
-    
-    editor.on('selectionUpdate', handleSelectionUpdate)
-
-    return () => {
-      clearInterval(interval)
-      editor.off('selectionUpdate', handleSelectionUpdate)
-    }
-  }, [showPopup, savedSelection, editor])
-
-  // Hide popup when clicking outside
-  useEffect(() => {
-    // Don't attach click-away handler if emoji picker is open
-    // This prevents any accidental closes when interacting with the emoji picker
-    if (!showPopup || showEmojiPicker) return
-
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement
-
-      // Check if clicking inside emoji picker container
-      const isInEmojiPicker = emojiPickerRef.current?.contains(target as Node)
-
-      // Check if clicking inside main popup or editor
-      const isInPopup = popupRef.current?.contains(target as Node)
-      const isInEditor = editor.view.dom.contains(target as Node)
-
-      // Only close if clicking outside all of these
-      if (!isInPopup && !isInEditor && !isInEmojiPicker) {
-        setShowPopup(false)
-        setShowEmojiPicker(false)
-        setSavedSelection(null) // Clear saved selection when popup closes
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-    }
-  }, [showPopup, editor, showEmojiPicker])
-
-  // Attach native wheel event listener directly to emoji picker element (runs first)
-  // Also ensure clicks work on shadow DOM elements (category tabs)
-  useEffect(() => {
-    if (!showEmojiPicker || !emojiPickerRef.current) return
-
-    const emojiPickerElement = emojiPickerRef.current
-
-    // Allow clicks to work on shadow DOM elements (category tabs)
-    // The emoji picker uses shadow DOM, so we need to ensure clicks propagate
-    const handleClick = (e: MouseEvent) => {
-      // Don't prevent default or stop propagation - let all clicks work normally
-      // This allows category tabs in shadow DOM to work
-    }
-
-    // Attach click handler to allow shadow DOM clicks
-    emojiPickerElement.addEventListener('click', handleClick, { capture: true })
-
-    return () => {
-      emojiPickerElement.removeEventListener('click', handleClick, { capture: true })
-    }
-  }, [showEmojiPicker])
-
-  // Attach native wheel event listener directly to emoji picker element (runs first)
-  useEffect(() => {
-    if (!showEmojiPicker || !emojiPickerRef.current) return
-
-    const emojiPickerElement = emojiPickerRef.current
-
-    // Function to find the scrollable container - try multiple strategies
-    const findScrollableContainer = (): HTMLElement | null => {
-      // Strategy 1: Try to find the emoji picker web component and access shadow DOM
-      const emojiPickerComponent = emojiPickerElement.querySelector('em-emoji-picker') as HTMLElement & { shadowRoot?: ShadowRoot }
-      if (emojiPickerComponent) {
-        // Try to access shadow root (if it exists)
-        const shadowRoot = emojiPickerComponent.shadowRoot
-        if (shadowRoot) {
-          // Look for scrollable containers in shadow DOM - try multiple selectors
-          const selectors = [
-            '[style*="overflow"]',
-            '[class*="scroll"]',
-            'section',
-            'div[role="listbox"]',
-            'div[role="grid"]',
-            'div',
-          ]
-          for (const selector of selectors) {
-            const scrollable = shadowRoot.querySelector(selector) as HTMLElement
-            if (scrollable && scrollable.scrollHeight > scrollable.clientHeight) {
-              return scrollable
-            }
-          }
-        }
-      }
-
-      // Strategy 2: Look for any element with scrollable content in light DOM
-      const allElements = emojiPickerElement.querySelectorAll('*')
-      for (const el of allElements) {
-        const htmlEl = el as HTMLElement
-        if (htmlEl.scrollHeight > htmlEl.clientHeight && htmlEl.scrollHeight > 0) {
-          return htmlEl
-        }
-      }
-
-      // Strategy 3: Check the emoji picker component itself
-      if (emojiPickerComponent && emojiPickerComponent.scrollHeight > emojiPickerComponent.clientHeight) {
-        return emojiPickerComponent
-      }
-
-      // Strategy 4: Fallback to wrapper
-      return emojiPickerElement
-    }
-
-    // Attach native wheel event listener directly to the element
-    // This runs in capture phase before React Flow can handle it
-    const handleWheel = (e: WheelEvent) => {
-      // Only handle if the event is within the emoji picker bounds
-      const pickerRect = emojiPickerElement.getBoundingClientRect()
-      const isWithinPicker =
-        e.clientX >= pickerRect.left &&
-        e.clientX <= pickerRect.right &&
-        e.clientY >= pickerRect.top &&
-        e.clientY <= pickerRect.bottom
-
-      if (!isWithinPicker) return
-
-      // Stop propagation to React Flow, but allow default scroll behavior
-      // This lets the browser handle scrolling naturally, which will update the scrollbar
-      e.stopPropagation()
-      e.stopImmediatePropagation()
-      // Don't prevent default - let the browser scroll the element with overflow-y: auto
-    }
-
-    // Attach listener immediately and also to window for maximum priority
-    emojiPickerElement.addEventListener('wheel', handleWheel, { capture: true, passive: false })
-
-    // Also attach to window in capture phase to catch events before anything else
-    const handleWindowWheel = (e: WheelEvent) => {
-      if (emojiPickerElement.contains(e.target as Node)) {
-        handleWheel(e)
-      }
-    }
-    window.addEventListener('wheel', handleWindowWheel, { capture: true, passive: false })
-
-    return () => {
-      emojiPickerElement.removeEventListener('wheel', handleWheel, { capture: true })
-      window.removeEventListener('wheel', handleWindowWheel, { capture: true })
-    }
-  }, [showEmojiPicker])
-
-  // Prevent React Flow from capturing scroll events on emoji picker
-  useEffect(() => {
-    if (!showEmojiPicker || !emojiPickerRef.current) return
-
-    const emojiPickerElement = emojiPickerRef.current
-
-    // Find the scrollable container inside the emoji picker
-    // emoji-mart uses a web component, so we need to find the shadow DOM root or internal scrollable area
-    const findScrollableContainer = (): HTMLElement | null => {
-      // Try to find the emoji picker web component
-      const emojiPickerComponent = emojiPickerElement.querySelector('em-emoji-picker')
-      if (!emojiPickerComponent) return null
-
-      // Try to access shadow root (if it exists)
-      const shadowRoot = emojiPickerComponent.shadowRoot
-      if (shadowRoot) {
-        // Look for scrollable containers in shadow DOM
-        const scrollable = shadowRoot.querySelector('[style*="overflow"], [class*="scroll"], section, div[role="listbox"]') as HTMLElement
-        if (scrollable) return scrollable
-      }
-
-      // Fallback: look for scrollable containers in light DOM
-      const scrollable = emojiPickerElement.querySelector('[style*="overflow"], [class*="scroll"], section, div[role="listbox"]') as HTMLElement
-      return scrollable || emojiPickerElement
-    }
-
-    // Attach listeners on the document with capture phase to catch events before React Flow
-    const handleDocumentWheel = (e: WheelEvent) => {
-      // Get emoji picker's bounding box
-      const pickerRect = emojiPickerElement.getBoundingClientRect()
-
-      // Check if mouse coordinates are within the emoji picker bounds
-      const isWithinPicker =
-        e.clientX >= pickerRect.left &&
-        e.clientX <= pickerRect.right &&
-        e.clientY >= pickerRect.top &&
-        e.clientY <= pickerRect.bottom
-
-      // Also check if the event target is within the emoji picker (for shadow DOM cases)
-      const isTargetWithinPicker = emojiPickerElement.contains(e.target as Node) ||
-        emojiPickerElement.contains(e.composedPath()[0] as Node)
-
-      if (isWithinPicker || isTargetWithinPicker) {
-        // Stop propagation to React Flow, but allow default scroll behavior
-        // This lets the browser handle scrolling naturally, which will update the scrollbar
-        e.stopPropagation()
-        e.stopImmediatePropagation()
-        // Don't prevent default - let the browser scroll the element with overflow-y: auto
-      }
-    }
-
-    const handleDocumentTouchMove = (e: TouchEvent) => {
-      // CRITICAL: Always allow pinch zoom (multiple touches) to pass through to React Flow
-      // Prevent browser's default pinch zoom behavior, but let React Flow handle it
-      if (e.touches.length > 1) {
-        // This is a pinch zoom - prevent browser's default zoom, but let React Flow handle it
-        e.preventDefault() // Prevent browser's default pinch zoom
-        // Don't stop propagation - let React Flow receive the event
-        return
-      }
-
-      // Only handle single-touch events (scrolling within emoji picker)
-      // Get emoji picker's bounding box
-      const pickerRect = emojiPickerElement.getBoundingClientRect()
-
-      // Check if touch coordinates are within the emoji picker bounds
-      if (e.touches.length > 0) {
-        const touch = e.touches[0]
-        const isWithinPicker =
-          touch.clientX >= pickerRect.left &&
-          touch.clientX <= pickerRect.right &&
-          touch.clientY >= pickerRect.top &&
-          touch.clientY <= pickerRect.bottom
-
-        // Also check if the event target is within the emoji picker
-        const isTargetWithinPicker = emojiPickerElement.contains(e.target as Node) ||
-          emojiPickerElement.contains(e.composedPath()[0] as Node)
-
-        if (isWithinPicker || isTargetWithinPicker) {
-          e.stopPropagation() // Stop event from reaching React Flow
-          e.stopImmediatePropagation() // Also stop other listeners
-          // Allow default touch scrolling within the picker
-        }
-      }
-    }
-
-    // Also attach listeners directly to the React Flow element to catch events before React Flow handles them
-    const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
-    if (reactFlowElement) {
-      reactFlowElement.addEventListener('wheel', handleDocumentWheel, { capture: true, passive: false })
-      reactFlowElement.addEventListener('touchmove', handleDocumentTouchMove, { capture: true, passive: false })
-    }
-
-    // Use capture phase on document to catch events before React Flow
-    // For touchmove, we check for pinch zoom first and let it pass through completely
-    document.addEventListener('wheel', handleDocumentWheel, { capture: true, passive: false })
-    document.addEventListener('touchmove', handleDocumentTouchMove, { capture: true, passive: false })
-
-    return () => {
-      document.removeEventListener('wheel', handleDocumentWheel, { capture: true })
-      document.removeEventListener('touchmove', handleDocumentTouchMove, { capture: true })
-      if (reactFlowElement) {
-        reactFlowElement.removeEventListener('wheel', handleDocumentWheel, { capture: true })
-        reactFlowElement.removeEventListener('touchmove', handleDocumentTouchMove, { capture: true })
-      }
-    }
-  }, [showEmojiPicker])
-
-  const handleCommentClick = () => {
-    if (!editor) return
-
-    // Use saved selection if current selection is lost
-    const { from, to } = savedSelection && editor.state.selection.from === editor.state.selection.to
-      ? savedSelection
-      : editor.state.selection
-    const selectedText = editor.state.doc.textBetween(from, to)
-    if (selectedText.trim()) {
-      onComment(selectedText, from, to)
-      // Clear selection after commenting
-      editor.chain().blur().run()
-      setShowPopup(false)
-      setSavedSelection(null) // Clear saved selection
-    }
-  }
-
-  const handleEmojiClick = (e: React.MouseEvent) => {
-    e.stopPropagation() // Prevent closing the main popup
-    setShowEmojiPicker(!showEmojiPicker) // Toggle emoji picker
-  }
-
-  const handleEmojiSelect = (emoji: any) => {
-    // emoji-mart returns an object with native (emoji character) and other properties
-    const emojiChar = emoji.native || emoji
-
-    if (!editor) return
-
-    // Use saved selection if current selection is lost
-    const { from, to } = savedSelection && editor.state.selection.from === editor.state.selection.to
-      ? savedSelection
-      : editor.state.selection
-    const selectedText = editor.state.doc.textBetween(from, to).trim()
-
-    if (selectedText && onAddReaction && section) {
-      onAddReaction(selectedText, from, to, emojiChar, section)
-      // Clear selection after adding reaction
-      editor.chain().blur().run()
-      setShowPopup(false)
-      setShowEmojiPicker(false)
-      setSavedSelection(null) // Clear saved selection
-    }
-  }
-
-  const handleSuggestEditClick = () => {
-    // TODO: Implement suggest edit functionality
-    console.log('Suggest edit button clicked')
-  }
-
-  if (!showPopup || !panelContainerRef.current) return null
-
-  // Render inside panel container so it scales with zoom (like panels do)
-  // Position relative to panel container, not viewport
-  const relativeTop = popupPosition.top
-  const relativeLeft = popupPosition.left
-
-  // Render directly inside panel container (not via portal) so it's in the same stacking context as panel
-  // This allows it to scale with React Flow's transform on the panel
-  return (
-    <div
-      ref={popupRef}
-      className="absolute pointer-events-auto z-[1000]"
-      style={{
-        top: `${relativeTop}px`,
-        left: `${relativeLeft}px`,
-        transform: 'translateY(-50%)', // Center vertically with selected text
-      }}
-    >
-      {/* Vertical pill container with three buttons: comment, emoji, suggest edit */}
-      {/* Match flashcard handle width (w-6 = 24px) and styling */}
-      <div className="bg-white dark:bg-[#1f1f1f] rounded-full shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-0.5 flex flex-col gap-0.5 w-6 items-center justify-center">
-        {/* Comment button - top */}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleCommentClick}
-          className="h-6 w-6 p-0 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
-          title="Add comment"
-        >
-          <MessageSquare className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
-        </Button>
-
-        {/* Emoji button - middle */}
-        <div className="relative">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleEmojiClick}
-            className="h-6 w-6 p-0 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
-            title="Add emoji"
-          >
-            <Smile className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
-          </Button>
-
-          {/* Emoji picker popup - appears to the right of the button */}
-          {showEmojiPicker && (
-            <div
-              ref={emojiPickerRef}
-              className="absolute left-full ml-2 top-0 z-[200] bg-white rounded-lg shadow-lg"
-              style={{
-                pointerEvents: 'auto',
-                height: '400px',
-                maxHeight: '400px'
-              }} // Ensure pointer events work
-              onClick={(e) => {
-                // Don't stop propagation - let all clicks work normally inside the emoji picker
-                // The click-away handler will check if the click is outside the picker
-              }} // Allow all clicks to work normally
-              onMouseDown={(e) => {
-                // Don't stop propagation - let all clicks work normally inside the emoji picker
-                // The click-away handler will check if the click is outside the picker
-              }} // Allow all clicks to work normally
-              onMouseUp={(e) => {
-                e.stopPropagation()
-                // Don't prevent default - allow clicks to work
-              }} // Prevent closing on mouseup
-              onFocus={(e) => {
-                e.stopPropagation()
-              }} // Prevent closing on focus
-              onTouchMove={(e) => {
-                // Allow pinch zoom (multiple touches) to pass through to React Flow
-                if (e.touches.length > 1) {
-                  // This is a pinch zoom - let it pass through to React Flow
-                  return
-                }
-                e.stopPropagation() // Prevent React Flow from panning on single touch scroll
-                // Don't prevent default - allow scrolling
-              }} // Prevent map pan on touch scroll, but allow pinch zoom
-            >
-              <div
-                className="emoji-picker-wrapper"
-                onWheel={(e) => {
-                  e.stopPropagation() // Prevent React Flow from panning/zooming when scrolling emoji list
-                  // Don't prevent default - allow scrolling
-                }} // Prevent map pan/zoom on scroll
-                onTouchMove={(e) => {
-                  // Allow pinch zoom (multiple touches) to pass through to React Flow
-                  if (e.touches.length > 1) {
-                    // This is a pinch zoom - let it pass through to React Flow
-                    return
-                  }
-                  e.stopPropagation() // Prevent React Flow from panning on single touch scroll
-                  // Don't prevent default - allow scrolling
-                }} // Prevent map pan on single touch scroll, but allow pinch zoom
-              >
-                <Picker
-                  data={data}
-                  onEmojiSelect={handleEmojiSelect}
-                  theme="light"
-                  previewPosition="none"
-                  skinTonePosition="none"
-                  locale="en"
-                />
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Suggest edit button - bottom */}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleSuggestEditClick}
-          className="h-6 w-6 p-0 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
-          title="Suggest edit"
-        >
-          <PenSquare className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
-        </Button>
-      </div>
-    </div>
-  )
-}
-
 export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) {
   // Handle both ChatPanelNodeData and ProjectBoardPanelNodeData
   const isProjectBoard = isProjectBoardData(data)
@@ -2000,7 +1232,13 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const { setNodes, getNodes } = useReactFlow() // Get setNodes and getNodes for NodeToolbar actions
   const [promptHasChanges, setPromptHasChanges] = useState(false)
   const [responseHasChanges, setResponseHasChanges] = useState(false)
-  const [promptContent, setPromptContent] = useState(promptMessage?.content || '')
+  // Single text body: plain-merge legacy prompt + response (no section split)
+  const [promptContent, setPromptContent] = useState(() => {
+    if (isProjectBoard) return data.boardTitle || ''
+    const responseRaw = data.responseMessage?.content
+    const responseHtml = responseRaw ? formatResponseContent(responseRaw) : ''
+    return mergePanelHtml(data.promptMessage?.content, responseHtml)
+  })
   const [responseContent, setResponseContent] = useState(responseMessage?.content || '')
   const [isDeleting, setIsDeleting] = useState(false)
   const [isResponseCollapsed, setIsResponseCollapsed] = useState(dataCollapsed || false) // Track if response is collapsed
@@ -2018,7 +1256,6 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const [newCommentText, setNewCommentText] = useState('') // New comment input text
   const [emojiReactions, setEmojiReactions] = useState<EmojiReaction[]>([]) // Store all emoji reactions for this panel
   const [isBookmarked, setIsBookmarked] = useState(false) // Track if panel is bookmarked
-  const [hasCommentPopupVisible, setHasCommentPopupVisible] = useState(false) // Track if comment popup is visible (to hide right handle)
   const panelRef = useRef<HTMLDivElement>(null) // Ref to panel container for positioning comment box
   const commentPanelsRef = useRef<HTMLDivElement>(null) // Ref to comment panels container for click-away detection
   const hasInitialShrunkRef = useRef<string | null>(null) // Track which panel ID we've done initial shrink for
@@ -2293,30 +1530,6 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isProjectBoard, promptMessage?.id]) // Load once on mount - only depend on promptMessage.id
 
-
-  // Handle bookmark toggle (only for regular panels, not project boards)
-  const handleBookmark = async () => {
-    if (isProjectBoard || !responseMessage) return
-
-    const newBookmarkState = !isBookmarked
-    setIsBookmarked(newBookmarkState)
-
-    // Get existing metadata
-    const { data: message } = await supabase
-      .from('messages')
-      .select('metadata')
-      .eq('id', responseMessage.id)
-      .single()
-
-    const existingMetadata = (message?.metadata as Record<string, any>) || {}
-    const updatedMetadata = { ...existingMetadata, bookmarked: newBookmarkState }
-
-    // Update message metadata
-    await supabase
-      .from('messages')
-      .update({ metadata: updatedMetadata })
-      .eq('id', responseMessage.id)
-  }
 
   // Update node data when collapse state changes
   const handleCollapseChange = useCallback((collapsed: boolean) => {
@@ -2777,49 +1990,6 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       }
     }
   }, [resizeDimensions, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT, isNote, id, getSetNodes, getNodes, fontScale])
-
-  // NodeToolbar handler to toggle collapse state for this specific node
-  // Uses useReactFlow's setNodes to update the node's data directly
-  const handleToolbarCondense = useCallback(() => {
-    const newCollapsedState = !isResponseCollapsed // Toggle the current collapse state
-    setIsResponseCollapsed(newCollapsedState) // Update local state
-    
-    // Hide prompt more menu immediately when collapsing
-    if (newCollapsedState) {
-      setShowPromptMoreMenu(false)
-    } else {
-      // Show prompt more menu after 0.2s delay when expanding to prevent flash
-      setTimeout(() => {
-        setShowPromptMoreMenu(true)
-      }, 200)
-    }
-    
-    // Update the node's data in React Flow state
-    setNodes((nodes) =>
-      nodes.map((node) =>
-        node.id === id
-          ? { ...node, data: { ...node.data, isResponseCollapsed: newCollapsedState } }
-          : node
-      )
-    )
-  }, [id, isResponseCollapsed, setNodes])
-
-  // NodeToolbar handler to copy panel content to clipboard
-  // Copies prompt content for notes, or prompt + response for other panels
-  const handleToolbarCopy = useCallback(async () => {
-    try {
-      // For notes, only copy prompt content (they don't have responses)
-      if (isNote) {
-        await navigator.clipboard.writeText(promptContent || '')
-      } else {
-        // For chat panels, copy both prompt and response
-        const textToCopy = `${promptContent || ''}\n\n${responseContent || ''}`.trim()
-        await navigator.clipboard.writeText(textToCopy)
-      }
-    } catch (error) {
-      console.error('Failed to copy to clipboard:', error)
-    }
-  }, [isNote, promptContent, responseContent])
 
   // Auto-select panel when editor is focused or has selection (text edit mode)
   const handleEditorActiveChange = useCallback((isActive: boolean) => {
@@ -3740,46 +2910,41 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     }, 100) // Small delay to ensure content is measured after blur
   }, [measureTextWidthFromContent, promptContent, responseContent, usesFitContent, isFlashcard, isRegularChatPanel])
 
-  // Sync promptContent when promptMessage changes (or boardTitle for project boards)
+  // Sync single text body when underlying messages change (plain-merge prompt + response)
   useEffect(() => {
     if (isProjectBoard) {
-      // For project boards, sync from boardTitle
       if (data.boardTitle !== promptContent && !promptHasChanges) {
         setPromptContent(data.boardTitle)
       }
-    } else {
-      // For regular panels, sync from promptMessage
-      if (promptMessage && promptMessage.content !== promptContent && !promptHasChanges) {
-        setPromptContent(promptMessage.content)
+    } else if (!promptHasChanges) {
+      const responseHtml = responseMessage?.content
+        ? formatResponseContent(responseMessage.content)
+        : ''
+      const merged = mergePanelHtml(promptMessage?.content, responseHtml)
+      if (merged !== promptContent) {
+        setPromptContent(merged)
       }
     }
     // Reset auto-focus ref when prompt message changes (new note created)
     hasAutoFocusedRef.current = false
-  }, [isProjectBoard, isProjectBoard ? data.boardTitle : promptMessage?.content, promptContent, promptHasChanges, data, promptMessage?.id])
+  }, [isProjectBoard, isProjectBoard ? data.boardTitle : promptMessage?.content, responseMessage?.content, promptContent, promptHasChanges, data, promptMessage?.id])
 
-  // Sync responseContent when responseMessage changes (e.g., when AI response loads)
+  // Keep responseContent mirror for width-measurement helpers that still read it
   useEffect(() => {
     if (responseMessage && responseMessage.content) {
-      const newContent = responseMessage.content
-      // Always update if content changed, unless user has manually edited it
-      if (newContent !== responseContent && !responseHasChanges) {
-        // If content is already HTML, use it directly; otherwise format it
-        const formattedContent = formatResponseContent(newContent)
+      const formattedContent = formatResponseContent(responseMessage.content)
+      if (formattedContent !== responseContent && !responseHasChanges) {
         setResponseContent(formattedContent)
-        
-        // Trigger expansion to fit response width when response loads
-        // Use a small delay to ensure content is set before measuring
         setTimeout(() => {
           if (!usesFitContent) {
-            expandPanelWidth() // Measure both prompt and response to expand panel
+            expandPanelWidth()
           }
         }, 100)
       }
     } else if (!responseMessage) {
-      // If responseMessage becomes undefined, clear content
       setResponseContent('')
     }
-  }, [responseMessage?.id, responseMessage?.content, responseContent, responseHasChanges, usesFitContent, expandPanelWidth]) // Use responseMessage.id to detect when a new message is added
+  }, [responseMessage?.id, responseMessage?.content, responseContent, responseHasChanges, usesFitContent, expandPanelWidth])
 
   // For fit-content panels (notes), show immediately - no shrinking needed
   useEffect(() => {
@@ -4197,34 +3362,19 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         // Font scaling is applied directly to Tiptap editor's DOM element (see TipTapContent component)
       }}
       onClick={(e) => {
-        // For flashcards, expand on single click anywhere (except interactive elements)
-        if (isFlashcard && isResponseCollapsed) {
-          const target = e.target as HTMLElement
-          // Don't expand if clicking on interactive elements
-          if (!target.closest('button, a, [contenteditable="true"], input, textarea, select')) {
-            e.stopPropagation()
-            handleCollapseChange(false)
-          }
-        }
+        // Single-section items: no collapse expand-on-click
       }}
       onDoubleClick={(e) => {
-        // Double-click anywhere on panel focuses the appropriate editor
+        // Double-click anywhere on panel focuses the single text editor
         const target = e.target as HTMLElement
-        // Don't interfere if clicking on interactive elements or already in an editor
         if (target.closest('button, a, [contenteditable="true"], input, textarea, select')) {
           return
         }
         e.stopPropagation()
-        // Check if click is within prompt area (grey area) - focus prompt editor
-        // Otherwise focus response editor (white area)
-        const isInPromptArea = target.closest('[data-prompt-area="true"]')
-        const editorToFocus = isInPromptArea 
-          ? (promptEditorRef.current || responseEditorRef.current)
-          : (responseEditorRef.current || promptEditorRef.current)
+        const editorToFocus = promptEditorRef.current
         if (editorToFocus && !editorToFocus.isDestroyed) {
           setTimeout(() => {
             editorToFocus.commands.focus()
-            // Place cursor at end of content
             const docSize = editorToFocus.state.doc.content.size
             if (docSize > 1) {
               editorToFocus.commands.setTextSelection(docSize - 1)
@@ -4567,595 +3717,65 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         </>
       )}
 
-      {/* Response section - wraps prompt area for nested structure */}
-      {/* For component panels (empty prompt), show white editable area only (no grey prompt, no loading spinner) */}
-      {/* For project boards, show recent user message; for regular panels, show response message */}
-      {/* Use the top-level isComponentPanel check for consistency */}
-      {(() => {
-
-        // For flashcards (component panels with flashcard flag) WITHOUT response message, show collapsible white area (like response area)
-        // Flashcards WITH response message should render like regular prompt+response panels (handled below)
-        if (isFlashcard && isComponentPanel && !responseMessage) {
-          return (
-            <div
-              className={cn(
-                "p-1 backdrop-blur-sm rounded-b-2xl pb-12 relative transition-all duration-500 overflow-visible", // Transparent for map panels - background set via inline style, 4px padding, increased corner radius, slower collapse/expand animation
-                isResponseCollapsed && "h-0 p-0 opacity-0" // Collapsible like response area
-              )}
-              style={{
-                lineHeight: isNote ? noteLineHeight : '1.7',
-                // Use calculated response area background color - same as panel background
-                backgroundColor: responseAreaBackgroundColor,
-              }}
-            >
-              <TipTapContent
-                content={promptContent || ''}
-                className="text-gray-900 dark:text-gray-100"
-                originalContent={promptContentValue || ''}
-                onContentChange={handlePromptChange}
-                onHasChangesChange={setPromptHasChanges}
-                onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
-                comments={comments.filter(c => c.section === 'prompt')}
-                editorRef={promptEditorRef}
-                onCommentHover={(commentId) => {
-                  if (commentId) {
-                    if (showComments) {
-                      setSelectedCommentId(commentId)
-                    } else {
-                      setSelectedCommentId(null)
-                    }
-                  }
-                }}
-                onCommentClick={(commentId) => {
-                  if (commentId) {
-                    setShowComments(true)
-                    setSelectedCommentId(commentId)
-                  }
-                }}
-                onAddReaction={handleAddReaction}
-                section="prompt"
-                isFlashcard={isFlashcard}
-                isPanelSelected={selected}
-                isLoading={isLoading}
-                onCommentPopupVisibilityChange={setHasCommentPopupVisible}
-                onBlur={handleEditorBlur}
-                onEditorActiveChange={handleEditorActiveChange}
-              />
-            </div>
-          )
-        }
-
-        // For regular component panels (not flashcards) OR notes, show editable white area only (no grey prompt area, no loading spinner)
-        // Component panels are just white text panels - no grey, no loading
-        // Notes are always component panels
-        // Check if this is a newly created inline note that should fade in
-        const shouldFadeIn = promptMessage?.metadata?.fadeIn === true
-        
-        if ((isComponentPanel && !isFlashcard) || isNote) {
-          return (
-            <div
-              className={cn(
-                "p-1 backdrop-blur-sm rounded-2xl relative transition-all duration-500 overflow-visible",
-                shouldFadeIn && "animate-note-fade-in" // Smooth fade-in for inline notes
-              )}
-              style={{
-                lineHeight: isNote ? noteLineHeight : '1.7',
-                // Use calculated response area background color - same as panel background
-                backgroundColor: responseAreaBackgroundColor,
-              }}
-            >
-              {/* Note text - px-3 py-3 inner padding + p-1 outer = same as prompt panel py-4 */}
-              <div className="px-3 py-3">
-                <TipTapContent
-                content={promptContent || promptMessage?.content || ''}
-                  className="text-gray-900 dark:text-gray-100"
-                  originalContent={promptMessage?.content || ''}
-                  onContentChange={handlePromptChange}
-                  onHasChangesChange={setPromptHasChanges}
-                  onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
-                  comments={comments.filter(c => c.section === 'prompt')}
-                  editorRef={promptEditorRef}
-                  fontScale={fontScale}
-                  onCommentHover={(commentId) => {
-                    if (commentId) {
-                      if (showComments) {
-                        setSelectedCommentId(commentId)
-                      } else {
-                        setSelectedCommentId(null)
-                      }
-                    }
-                  }}
-                  onCommentClick={(commentId) => {
-                    if (commentId) {
-                      setShowComments(true)
-                      setSelectedCommentId(commentId)
-                    }
-                  }}
-                  onAddReaction={handleAddReaction}
-                  section="prompt"
-                  placeholder=""
-                isPanelSelected={selected}
-                isLoading={isLoading}
-                onBlur={handleEditorBlur}
-                onEditorActiveChange={handleEditorActiveChange}
-                />
-              </div>
-              
-            </div>
-          )
-        }
-
-        // For regular panels with response content (NOT component panels)
-        // Also include flashcards - they should render like regular prompt+response panels even when empty
-        // Flashcards with response message should always render nested prompt+response structure
-        // Show nested structure when responseMessage exists (even if content is empty during streaming) - prompt panel should show nested on response load
-        if ((isProjectBoard && responseMessage) ||
-          (!isProjectBoard && responseMessage) ||
-          (isFlashcard && responseMessage)) {
-          return (
-            <div
-              className={cn(
-                "p-1 backdrop-blur-sm rounded-2xl relative transition-all duration-500 overflow-visible", // Transparent for map panels - background set via inline style, rounded-2xl for all corners, p-1 padding (4px) for background and content spacing, slower collapse/expand animation
-                // When collapsed, response content is hidden but container remains for prompt expansion
-                isResponseCollapsed && "overflow-hidden"
-              )}
-              style={{
-                lineHeight: isNote ? noteLineHeight : '1.7',
-                // Use calculated response area background color - same as panel background
-                backgroundColor: responseAreaBackgroundColor,
-              }}
-            >
-              {/* Prompt section - nested inside response area, affected by response panel padding */}
-              {shouldShowGreyArea && (
-                <div
-                  data-prompt-area="true"
-                  className={cn(
-                    "relative z-10 overflow-visible group/prompt transition-all duration-500 ease-in-out cursor-text", // Transparent grey area - background set via inline style, slower collapse/expand animation with synchronized easing, named group for prompt panel hover
-                    // When expanded: no margin - prompt area is inside response padding (p-1 = 4px), so it starts at response padding position
-                    // When collapsed: negative margin (-m-1 = -4px) to extend beyond response padding and fill entire response area
-                    isResponseCollapsed ? "-m-1 rounded-2xl" : "m-0 rounded-xl",
-                    // Shadow to layer above response content
-                    "shadow-sm",
-                    // 12px padding (px-3) for prompt text - aligns with response text which also has 12px padding (4px more than before)
-                    // When collapsed, use full padding to fill space while keeping text in place
-                    isResponseCollapsed ? "p-4" : "px-3 py-4"
-                  )}
-                  style={{
-                    // Use calculated prompt area background color - darker than panel background
-                    backgroundColor: promptAreaBackgroundColor,
-                  }}
-                  onClick={(e) => {
-                    // If panel is selected, allow single click to focus; otherwise require double click
-                    if (!selected && e.detail < 2) {
-                      return // Single click on unselected panel - don't focus
-                    }
-                    // If panel is selected, single click focuses the editor
-                    if (selected && promptEditorRef.current) {
-                      const target = e.target as HTMLElement
-                      if (!target.closest('button') && !target.closest('a')) {
-                        promptEditorRef.current?.commands.focus()
-                      }
-                    }
-                  }}
-                  onDoubleClick={(e) => {
-                    // Double click focuses the editor (for unselected panels)
-                    if (!selected && promptEditorRef.current) {
-                      e.stopPropagation()
-                      setTimeout(() => {
-                        promptEditorRef.current?.commands.focus()
-                        const isEmpty = !promptEditorRef.current?.getHTML() || promptEditorRef.current?.getHTML() === '<p></p>' || promptEditorRef.current?.getHTML() === '<p><br></p>'
-                        if (isEmpty) {
-                          promptEditorRef.current?.commands.setTextSelection(0)
-                        }
-                      }, 0)
-                    }
-                  }}
-                >
-                  {/* For project boards, show board title with open board button inline */}
-                  {isProjectBoard ? (
-                    <div className="inline-flex items-center gap-1.5">
-                      <TipTapContent
-                        content={promptContent}
-                        className="text-gray-900 dark:text-gray-100 inline"
-                        originalContent={data.boardTitle}
-                        onContentChange={handlePromptChange}
-                        onHasChangesChange={setPromptHasChanges}
-                        onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
-                        comments={comments.filter(c => c.section === 'prompt')}
-                        editorRef={promptEditorRef}
-                        onCommentHover={(commentId) => {
-                          if (commentId) {
-                            if (showComments) {
-                              setSelectedCommentId(commentId)
-                            } else {
-                              setSelectedCommentId(null)
-                            }
-                          }
-                        }}
-                        onCommentClick={(commentId) => {
-                          if (commentId) {
-                            setShowComments(true)
-                            setSelectedCommentId(commentId)
-                          }
-                        }}
-                        onAddReaction={handleAddReaction}
-                        section="prompt"
-                        isPanelSelected={selected}
-                        isLoading={isLoading}
-                        onCommentPopupVisibilityChange={setHasCommentPopupVisible}
-                        onBlur={handleEditorBlur}
-                        onEditorActiveChange={handleEditorActiveChange}
-                      />
-                      {/* Open board button - appears inline after title text */}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 flex-shrink-0 hover:bg-transparent"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          router.push(`/board/${data.boardId}`)
-                        }}
-                        title="Open board"
-                      >
-                        <ChevronRight className="h-4 w-4 text-gray-600 dark:text-gray-300" />
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="relative inline-block">
-                      <TipTapContent
-                        content={promptContent}
-                        className="text-gray-900 dark:text-gray-100 inline"
-                        originalContent={promptMessage?.content || ''}
-                        onContentChange={handlePromptChange}
-                        onHasChangesChange={setPromptHasChanges}
-                        onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
-                        comments={comments.filter(c => c.section === 'prompt')}
-                        editorRef={promptEditorRef}
-                        onCommentHover={(commentId) => {
-                          if (commentId) {
-                            // Only auto-select if comments are already visible
-                            // Comments should be shown by clicking on commented text, not by cursor movement
-                            if (showComments) {
-                              setSelectedCommentId(commentId)
-                            } else {
-                              // If comments are hidden, clear selection
-                              setSelectedCommentId(null)
-                            }
-                          } else {
-                            // Cursor moved away from commented text - don't deselect automatically
-                            // Only deselect on click away or toggle button
-                          }
-                        }}
-                        onCommentClick={(commentId) => {
-                          // When commented text is clicked, show comments and select the comment
-                          if (commentId) {
-                            setShowComments(true)
-                            setSelectedCommentId(commentId)
-                          }
-                        }}
-                        onAddReaction={handleAddReaction}
-                        section="prompt"
-                        isFlashcard={isFlashcard}
-                        isPanelSelected={selected}
-                        isLoading={isLoading}
-                        onCommentPopupVisibilityChange={setHasCommentPopupVisible}
-                        onBlur={handleEditorBlur}
-                        onEditorActiveChange={handleEditorActiveChange}
-                      />
-                    </div>
-                  )}
-
-                </div>
-              )}
-
-              {/* Response content - appears below prompt area with spacing */}
-              {/* When collapsed, response content is hidden behind prompt */}
-              {/* Separate div for response text with 8px padding to align with prompt text */}
-              <div
-                className={cn(
-                  // Add top margin when prompt area is visible to create gap between prompt and response (increased gap)
-                  shouldShowGreyArea && !isResponseCollapsed && "mt-4",
-                  // Collapse response content with top as anchor (smooth transition)
-                  // Use overflow-visible to allow BubbleMenu to escape, but wrap content for collapse animation
-                  "transition-all duration-500 ease-in-out",
-                  isResponseCollapsed && "opacity-0 overflow-hidden"
-                )}
-                style={{
-                  // Use max-height for smooth collapse from top anchor (large value allows any content height)
-                  // Only apply max-height when collapsed to allow popups to escape
-                  maxHeight: isResponseCollapsed ? '0px' : 'none',
-                }}
-              >
-                {/* Separate div for response text with 12px horizontal padding and 16px bottom padding (same as note panel) */}
-                <div className="px-3 pb-4 group overflow-visible">
-                  <div className="inline-flex items-center gap-1">
-                    <TipTapContent
-                      key={`response-${responseMessage.id}`} // Force re-render when message ID changes
-                      content={responseContent || responseMessage.content || ''}
-                      className="text-gray-700 dark:text-gray-100 inline"
-                      originalContent={responseMessage.content || ''}
-                      onContentChange={isProjectBoard ? undefined : handleResponseChange} // Project boards: read-only
-                      onHasChangesChange={isProjectBoard ? undefined : setResponseHasChanges} // Project boards: read-only
-                      onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'response')}
-                      comments={comments.filter(c => c.section === 'response')}
-                      editorRef={responseEditorRef}
-                      onCommentHover={(commentId) => {
-                        if (commentId) {
-                          // Only auto-select if comments are already visible
-                          // Comments should be shown by clicking on commented text, not by cursor movement
-                          if (showComments) {
-                            setSelectedCommentId(commentId)
-                          } else {
-                            // If comments are hidden, clear selection
-                            setSelectedCommentId(null)
-                          }
-                        } else {
-                          // Cursor moved away from commented text - don't deselect automatically
-                          // Only deselect on click away or toggle button
-                        }
-                      }}
-                      onCommentClick={(commentId) => {
-                        // When commented text is clicked, show comments and select the comment
-                        if (commentId) {
-                          setShowComments(true)
-                          setSelectedCommentId(commentId)
-                        }
-                      }}
-                      onAddReaction={handleAddReaction}
-                      section="response"
-                      isFlashcard={isFlashcard}
-                      isPanelSelected={selected}
-                      onCommentPopupVisibilityChange={setHasCommentPopupVisible}
-                      onBlur={handleEditorBlur}
-                      onEditorActiveChange={handleEditorActiveChange}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )
-        }
-
-        // Loading state - show nested structure with prompt panel and loading spinner in response area
-        // ONLY for regular panels (NOT component panels - they already returned above)
-        // Show when: no responseMessage, or responseMessage exists but has no content yet
-        // Component panels never reach here because they return early above
-        // IMPORTANT: Also check if this is a component panel here as a safety check
-        // Use the top-level isComponentPanel variable for consistency
-        // UNLESS it's a flashcard - flashcards show grey area even if empty
-        if (isComponentPanel && !isFlashcard) {
-          // This is a component panel - show white editable area (should have been caught above, but safety check)
-          return (
-            <div
-              className="p-1 backdrop-blur-sm rounded-2xl pb-12 relative transition-all duration-500 overflow-visible" // Transparent for map panels - background set via inline style, 4px padding, increased corner radius, slower collapse/expand animation
-              style={{
-                lineHeight: isNote ? noteLineHeight : '1.7',
-                // Use calculated response area background color - same as panel background
-                backgroundColor: responseAreaBackgroundColor,
-              }}
-            >
-              <TipTapContent
-                content={promptContent || ''}
-                className="text-gray-900 dark:text-gray-100"
-                originalContent={promptContentValue || ''}
-                onContentChange={handlePromptChange}
-                onHasChangesChange={setPromptHasChanges}
-                onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
-                comments={comments.filter(c => c.section === 'prompt')}
-                editorRef={promptEditorRef}
-                onCommentHover={(commentId) => {
-                  if (commentId) {
-                    if (showComments) {
-                      setSelectedCommentId(commentId)
-                    } else {
-                      setSelectedCommentId(null)
-                    }
-                  }
-                }}
-                onCommentClick={(commentId) => {
-                  if (commentId) {
-                    setShowComments(true)
-                    setSelectedCommentId(commentId)
-                  }
-                }}
-                onAddReaction={handleAddReaction}
-                section="prompt"
-                isFlashcard={isFlashcard}
-                isPanelSelected={selected}
-                isLoading={isLoading}
-                onCommentPopupVisibilityChange={setHasCommentPopupVisible}
-                onEditorActiveChange={handleEditorActiveChange}
-              />
-            </div>
-          )
-        }
-
-        // Regular panel loading state (NOT component panel) - show nested structure with prompt panel and loading spinner
-        // Prompt panel should show nested on response load, even during loading
-        // No bottom padding during loading - buttons space only appears after response loads
-        return (
-          <div
-            className={cn(
-              "p-1 backdrop-blur-sm rounded-2xl relative transition-all duration-500 overflow-visible" // Transparent for map panels - background set via inline style, rounded-2xl for all corners, p-1 padding (4px) for background and content spacing, slower collapse/expand animation
-            )}
-            style={{
-              lineHeight: '1.7',
-              // Use calculated response area background color - same as panel background
-              backgroundColor: responseAreaBackgroundColor,
+      {/* Single text body — no prompt/response sections or collapse */}
+      <div
+        className={cn(
+          "p-1 backdrop-blur-sm rounded-2xl relative overflow-visible",
+          promptMessage?.metadata?.fadeIn === true && "animate-note-fade-in"
+        )}
+        style={{
+          lineHeight: isNote ? noteLineHeight : '1.7',
+          backgroundColor: responseAreaBackgroundColor,
+        }}
+      >
+        <div className="px-3 py-3">
+          <TipTapContent
+            content={promptContent || ''}
+            className="text-gray-900 dark:text-gray-100"
+            originalContent={
+              isProjectBoard
+                ? (data.boardTitle || '')
+                : mergePanelHtml(
+                    promptMessage?.content,
+                    responseMessage?.content ? formatResponseContent(responseMessage.content) : ''
+                  )
+            }
+            onContentChange={handlePromptChange}
+            onHasChangesChange={setPromptHasChanges}
+            onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
+            comments={comments.filter(c => c.section === 'prompt')}
+            editorRef={promptEditorRef}
+            fontScale={fontScale}
+            onCommentHover={(commentId) => {
+              if (commentId) {
+                if (showComments) {
+                  setSelectedCommentId(commentId)
+                } else {
+                  setSelectedCommentId(null)
+                }
+              }
             }}
-          >
-            {/* Prompt section - nested inside response area, affected by response panel padding */}
-            {shouldShowGreyArea && (
-              <div
-                className={cn(
-                  "relative z-10 overflow-visible group transition-all duration-500 ease-in-out cursor-text", // Transparent grey area - background set via inline style, slower collapse/expand animation with synchronized easing
-                  // When expanded: no margin - prompt area is inside response padding (p-1 = 4px), so it starts at response padding position
-                  // When collapsed: negative margin (-m-1 = -4px) to extend beyond response padding and fill entire response area
-                  isResponseCollapsed ? "-m-1 rounded-2xl" : "m-0 rounded-xl",
-                  // Shadow to layer above response content
-                  "shadow-sm",
-                  // 12px padding (px-3) for prompt text - aligns with response text which also has 12px padding (4px more than before)
-                  // When collapsed, use full padding to fill space while keeping text in place
-                  isResponseCollapsed ? "p-4" : "px-3 py-4",
-                )}
-                style={{
-                  // Use calculated prompt area background color - darker than panel background
-                  backgroundColor: promptAreaBackgroundColor,
-                }}
-                onClick={(e) => {
-                  // If panel is selected, allow single click to focus; otherwise require double click
-                  if (!selected && e.detail < 2) {
-                    return // Single click on unselected panel - don't focus
-                  }
-                  // If panel is selected, single click focuses the editor
-                  if (selected && promptEditorRef.current) {
-                    const target = e.target as HTMLElement
-                    if (!target.closest('button') && !target.closest('a')) {
-                      promptEditorRef.current?.commands.focus()
-                    }
-                  }
-                }}
-                onDoubleClick={(e) => {
-                  // Double click focuses the editor (for unselected panels)
-                  if (!selected && promptEditorRef.current) {
-                    e.stopPropagation()
-                    setTimeout(() => {
-                      promptEditorRef.current?.commands.focus()
-                      const isEmpty = !promptEditorRef.current?.getHTML() || promptEditorRef.current?.getHTML() === '<p></p>' || promptEditorRef.current?.getHTML() === '<p><br></p>'
-                      if (isEmpty) {
-                        promptEditorRef.current?.commands.setTextSelection(0)
-                      }
-                    }, 0)
-                  }
-                }}
-              >
-                {/* For project boards, show board title with open board button inline */}
-                {isProjectBoard ? (
-                  <div className="inline-flex items-center gap-1.5">
-                    <TipTapContent
-                      content={promptContent}
-                      className="text-gray-900 dark:text-gray-100 inline"
-                      originalContent={data.boardTitle}
-                      onContentChange={handlePromptChange}
-                      onHasChangesChange={setPromptHasChanges}
-                      onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
-                      comments={comments.filter(c => c.section === 'prompt')}
-                      editorRef={promptEditorRef}
-                      onCommentHover={(commentId) => {
-                        if (commentId) {
-                          if (showComments) {
-                            setSelectedCommentId(commentId)
-                          } else {
-                            setSelectedCommentId(null)
-                          }
-                        }
-                      }}
-                      onCommentClick={(commentId) => {
-                        if (commentId) {
-                          setShowComments(true)
-                          setSelectedCommentId(commentId)
-                        }
-                      }}
-                      onAddReaction={handleAddReaction}
-                      section="prompt"
-                      isPanelSelected={selected}
-                      isLoading={isLoading}
-                      onCommentPopupVisibilityChange={setHasCommentPopupVisible}
-                      onBlur={handleEditorBlur}
-                      onEditorActiveChange={handleEditorActiveChange}
-                    />
-                    {/* Open board button - appears inline after title text */}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 flex-shrink-0 hover:bg-transparent"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        router.push(`/board/${data.boardId}`)
-                      }}
-                      title="Open board"
-                    >
-                      <ChevronRight className="h-4 w-4 text-gray-600 dark:text-gray-300" />
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="relative inline-block">
-                    <TipTapContent
-                      content={promptContent}
-                      className="text-gray-900 dark:text-gray-100 inline"
-                      originalContent={promptMessage?.content || ''}
-                      onContentChange={handlePromptChange}
-                      onHasChangesChange={setPromptHasChanges}
-                      onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
-                      comments={comments.filter(c => c.section === 'prompt')}
-                      editorRef={promptEditorRef}
-                      onCommentHover={(commentId) => {
-                        if (commentId) {
-                          // Only auto-select if comments are already visible
-                          // Comments should be shown by clicking on commented text, not by cursor movement
-                          if (showComments) {
-                            setSelectedCommentId(commentId)
-                          } else {
-                            // If comments are hidden, clear selection
-                            setSelectedCommentId(null)
-                          }
-                        } else {
-                          // Cursor moved away from commented text - don't deselect automatically
-                          // Only deselect on click away or toggle button
-                        }
-                      }}
-                      onCommentClick={(commentId) => {
-                        // When commented text is clicked, show comments and select the comment
-                        if (commentId) {
-                          setShowComments(true)
-                          setSelectedCommentId(commentId)
-                        }
-                      }}
-                      onAddReaction={handleAddReaction}
-                      section="prompt"
-                      isFlashcard={isFlashcard}
-                      isPanelSelected={selected}
-                      isLoading={isLoading}
-                      onCommentPopupVisibilityChange={setHasCommentPopupVisible}
-                        onBlur={handleEditorBlur}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Response content area - show loading spinner when no response yet (but not for notes) */}
-            {!isNote && (
-            <div
-              className={cn(
-                // Add top margin when prompt area is visible to create gap between prompt and response (increased gap)
-                shouldShowGreyArea && !isResponseCollapsed && "mt-4",
-                // Collapse response content with top as anchor (smooth transition)
-                // Use overflow-visible to allow BubbleMenu to escape, but wrap content for collapse animation
-                "transition-all duration-500 ease-in-out",
-                isResponseCollapsed && "opacity-0 overflow-hidden"
-              )}
-              style={{
-                // Use max-height for smooth collapse from top anchor (large value allows any content height)
-                // Only apply max-height when collapsed to allow popups to escape
-                maxHeight: isResponseCollapsed ? '0px' : 'none',
-              }}
-            >
-                {/* Loading spinner in response area - only show if loading and not a note */}
-                {isLoading && (
-              <div className="px-3 pb-0 flex items-center justify-center min-h-[100px]">
-                <Loader2 className="h-6 w-6 text-gray-400 dark:text-gray-500 animate-spin" />
-              </div>
-                )}
-            </div>
-            )}
-          </div>
-        )
-      })()}
+            onCommentClick={(commentId) => {
+              if (commentId) {
+                setShowComments(true)
+                setSelectedCommentId(commentId)
+              }
+            }}
+            onAddReaction={handleAddReaction}
+            section="prompt"
+            placeholder=""
+            isFlashcard={isFlashcard}
+            isPanelSelected={selected}
+            isLoading={false}
+            onBlur={handleEditorBlur}
+            onEditorActiveChange={handleEditorActiveChange}
+          />
+        </div>
+      </div>
 
       {/* Right handle with flashcard navigation */}
       {/* Hide handle when comment popup is visible */}
-      {!hasCommentPopupVisible && isFlashcard && (hasMultipleFlashcards || hasFlashcardsInOtherBoards) && nextBoardWithFlashcards && isAtLastFlashcardInBoard && selected ? (
+      {isFlashcard && (hasMultipleFlashcards || hasFlashcardsInOtherBoards) && nextBoardWithFlashcards && isAtLastFlashcardInBoard && selected ? (
         // Expanded pill with two buttons when cross-board navigation is available and flashcard is selected
         <div
           className={cn(
@@ -5192,7 +3812,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             </button>
           </div>
         </div>
-      ) : !hasCommentPopupVisible && isFlashcard && (hasMultipleFlashcards || hasFlashcardsInOtherBoards) ? (
+      ) : isFlashcard && (hasMultipleFlashcards || hasFlashcardsInOtherBoards) ? (
         <div
           className={cn(
             'absolute right-0 top-1/2 z-20 flex items-center justify-center translate-x-1/2 -translate-y-1/2 cursor-pointer'
@@ -5227,7 +3847,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             <ChevronRight className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
           </div>
         </div>
-      ) : !hasCommentPopupVisible && !shouldHideHandles ? (
+      ) : !shouldHideHandles ? (
         <Handle
           type="source"
           position={Position.Right}
@@ -5415,9 +4035,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         </div>
       )}
       
-      {/* Panel toolbar - positioned at bottom left, outside the panel but part of the node DOM so it scales with zoom */}
-      {/* Rendered inside the panel div so it naturally scales as a map object */}
-      {selected && (
+      {/* Flashcard tags only — copy / collapse / more under-item menu removed */}
+      {selected && isFlashcard && responseMessage?.id && tagsLoaded && (
         <div 
           className="absolute left-0 flex items-start gap-1 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 z-50 pointer-events-auto"
           style={{
@@ -5426,70 +4045,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           }}
           onClick={(e) => e.stopPropagation()} // Prevent clicks from propagating to panel
         >
-          {/* Collapse/Expand caret - far left, only show if panel has response message (can be collapsed) */}
-          {(responseMessage || isResponseCollapsed) && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={handleToolbarCondense}
-              title={isResponseCollapsed ? "Expand" : "Collapse"}
-            >
-              {isResponseCollapsed ? (
-                <ChevronUp className="h-4 w-4 text-gray-600 dark:text-gray-300" />
-              ) : (
-                <ChevronDown className="h-4 w-4 text-gray-600 dark:text-gray-300" />
-              )}
-            </Button>
-          )}
-          
-          {/* Copy button - for notes shows "Copy note", for others shows "Copy" */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={handleToolbarCopy}
-            title={isNote ? "Copy note" : "Copy"}
-          >
-            <Copy className="h-4 w-4 text-gray-600 dark:text-gray-300" />
-          </Button>
-          
-          {/* More menu with Bookmark and Delete options */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                title="More options"
-              >
-                <MoreHorizontal className="h-4 w-4 text-gray-600 dark:text-gray-300" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuItem
-                onClick={() => setIsBookmarked(!isBookmarked)}
-              >
-                <Bookmark className={cn("h-4 w-4 mr-2", isBookmarked && "fill-yellow-400 text-yellow-400")} />
-                {isBookmarked ? "Remove bookmark" : "Bookmark"}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={handleDeletePanel}
-                className="text-red-600 focus:text-red-600 focus:bg-red-50"
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          
-          {/* Tag to study set button - only for flashcards with response message, wait for tags to load */}
-          {isFlashcard && responseMessage?.id && tagsLoaded && (
-            <>
-              <TagButton responseMessageId={responseMessage.id} />
-              <TagBoxes responseMessageId={responseMessage.id} initialTagIds={tagIds} />
-            </>
-          )}
+          <TagButton responseMessageId={responseMessage.id} />
+          <TagBoxes responseMessageId={responseMessage.id} initialTagIds={tagIds} />
         </div>
       )}
       

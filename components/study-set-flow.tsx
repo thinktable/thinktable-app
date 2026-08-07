@@ -41,6 +41,7 @@ import {
 import { ChevronDown, ArrowDown, ChevronUp, Trash2 } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
+import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
 import { ThinktableBrandMark } from './personalize-ai-modal'
 import { LeftVerticalMenu } from './left-vertical-menu'
 
@@ -567,6 +568,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
     return null // Default to none
   }, [boardStyle])
   const { setIsMobileMode, isChatSidebarOpen, toggleChatSidebar, topperId } = useSidebarContext()
+  useChatSidebarViewportAdjust(reactFlowInstance, isChatSidebarOpen) // Shrink/grow map zoom with chat column
   const originalPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map()) // Store original positions for Linear mode
   const isLinearModeRef = useRef(false) // Track if we're currently in Linear mode
 

@@ -43,6 +43,7 @@ import {
 import { ChevronDown, ArrowDown, ChevronUp, Trash2, Plus } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
+import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
 import { ThinktableBrandMark } from './personalize-ai-modal'
 import { LeftVerticalMenu } from './left-vertical-menu'
 import { FreehandNode } from './freehand/FreehandNode' // Freehand drawing node component
@@ -1031,6 +1032,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
     return null // Default to none
   }, [boardStyle])
   const { setIsMobileMode, isChatSidebarOpen, toggleChatSidebar, topperId } = useSidebarContext()
+  useChatSidebarViewportAdjust(reactFlowInstance, isChatSidebarOpen) // Shrink/grow map zoom with chat column
   const originalPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map()) // Store original positions for Linear mode
   const isLinearModeRef = useRef(false) // Track if we're currently in Linear mode
 
@@ -1259,6 +1261,13 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
   const [edgePopupPosition, setEdgePopupPosition] = useState({ x: 0, y: 0 }) // Position for edge popup
   const [rightClickedNode, setRightClickedNode] = useState<Node<ChatPanelNodeData> | null>(null) // Track right-clicked node for popup
   const [nodePopupPosition, setNodePopupPosition] = useState({ x: 0, y: 0 }) // Position for node popup
+  // Empty-page click menu: screen + flow coords so items spawn where the user clicked
+  const [addItemMenu, setAddItemMenu] = useState<{
+    screenX: number
+    screenY: number
+    flowX: number
+    flowY: number
+  } | null>(null)
   const [isMinimapManuallyHidden, setIsMinimapManuallyHidden] = useState(false) // Track if minimap was manually hidden (vs auto-hidden)
   const [isMinimapHovering, setIsMinimapHovering] = useState(false) // Track if mouse is hovering over minimap area
   const [isPillHoverAreaHovering, setIsPillHoverAreaHovering] = useState(false) // Track if mouse is hovering over pill hover area specifically
@@ -3769,13 +3778,11 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
         const baseNodeId = `panel-${message.id}`
         let storedPos = originalPositionsRef.current.get(baseNodeId)
         
-        // Check if this is an inline note with a saved position in metadata
-        // Inline notes store their position in metadata.position when created via double-click
-        const isInlineNote = message.metadata?.isInlineNote === true
+        // Prefer explicit metadata.position (inline note / add-item menu spawn at click)
         const metadataPosition = message.metadata?.position as { x: number; y: number } | undefined
-        
-        if (isInlineNote && metadataPosition && !storedPos) {
-          // Use the position from metadata for inline notes (where user double-clicked)
+
+        if (metadataPosition && !storedPos) {
+          // Use click/spawn position from metadata when nothing is cached yet
           storedPos = metadataPosition
           originalPositionsRef.current.set(baseNodeId, metadataPosition) // Cache in memory
         }
@@ -5016,6 +5023,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
   const handleNodeContextMenu = useCallback((event: React.MouseEvent, node: Node<ChatPanelNodeData>) => {
     event.preventDefault() // Prevent default browser context menu
     event.stopPropagation() // Prevent other handlers
+    setAddItemMenu(null) // Close empty-page add menu when acting on a node
 
     // If node is not selected, select it first
     if (!node.selected) {
@@ -5061,6 +5069,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
     if (selectedNodes.length === 0) return
     event.preventDefault()
     event.stopPropagation()
+    setAddItemMenu(null) // Don't keep empty-page add menu open over a selection menu
     const firstSelectedNode = selectedNodes[0]
     const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
     if (reactFlowInstance && reactFlowElement) {
@@ -5076,6 +5085,139 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
     }
     setRightClickedNode(firstSelectedNode)
   }, [reactFlowInstance, nodes])
+
+  // Create a note or flashcard at the add-item menu's flow position (empty page click)
+  const handleAddItemFromMenu = useCallback(async (kind: 'note' | 'flashcard') => {
+    if (!addItemMenu) return // Need a spawn point from the open menu
+    const notePosition = { x: addItemMenu.flowX, y: addItemMenu.flowY } // Panel top-left at click
+    setAddItemMenu(null) // Close menu immediately so a slow insert doesn't leave it stuck open
+
+    try {
+      const supabase = createClient() // Browser Supabase client for insert
+      const { data: { user } } = await supabase.auth.getUser() // Require signed-in user
+      if (!user) return
+
+      let currentConversationId = conversationId // Prefer the open board
+
+      // Boot a conversation when the user adds the first item on a blank /board route
+      if (!currentConversationId) {
+        const { data: newConversation, error: convError } = await supabase
+          .from('conversations')
+          .insert({
+            user_id: user.id,
+            title: 'New Conversation',
+            metadata: { position: -1 }, // Appear at top of Pages list
+          })
+          .select()
+          .single()
+
+        if (convError || !newConversation) {
+          console.error('Error creating conversation for add-item:', convError)
+          return
+        }
+
+        currentConversationId = newConversation.id
+        router.replace(`/board/${currentConversationId}`) // Match toolbar Component create UX
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('conversation-created', { detail: { conversationId: currentConversationId } }))
+        }
+      }
+
+      if (kind === 'note') {
+        // Empty editable note at the click position (same flags as double-click I-bar notes)
+        const { error } = await supabase
+          .from('messages')
+          .insert({
+            conversation_id: currentConversationId,
+            user_id: user.id,
+            role: 'user',
+            content: '',
+            metadata: {
+              isInlineNote: true, // Position path treats this as a placed note
+              isNote: true, // Note styling (single body, no chat chrome)
+              position: notePosition, // Spawn at click
+              fadeIn: true,
+            },
+          })
+          .select()
+          .single()
+
+        if (error) {
+          console.error('Error creating note from add-item menu:', error)
+          return
+        }
+      } else {
+        // Flashcard = empty user prompt + empty assistant response, positioned at click
+        const { data: promptMessage, error: promptError } = await supabase
+          .from('messages')
+          .insert({
+            conversation_id: currentConversationId,
+            user_id: user.id,
+            role: 'user',
+            content: '',
+            metadata: {
+              isFlashcard: true,
+              position: notePosition, // Spawn at click (honored via metadata.position)
+              fadeIn: true,
+            },
+          })
+          .select()
+          .single()
+
+        if (promptError || !promptMessage) {
+          console.error('Error creating flashcard prompt from add-item menu:', promptError)
+          return
+        }
+
+        const { error: responseError } = await supabase
+          .from('messages')
+          .insert({
+            conversation_id: currentConversationId,
+            user_id: user.id,
+            role: 'assistant',
+            content: '',
+          })
+          .select()
+          .single()
+
+        if (responseError) {
+          console.error('Error creating flashcard response from add-item menu:', responseError)
+          return
+        }
+      }
+
+      refetchMessages() // Pull the new panel onto the map
+    } catch (error) {
+      console.error('Error creating item from add-item menu:', error)
+    }
+  }, [addItemMenu, conversationId, router, refetchMessages])
+
+  // Dismiss add-item menu on outside click / Escape
+  useEffect(() => {
+    if (!addItemMenu) return
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement
+      if (target.closest('.add-item-menu')) return // Keep open when interacting with the menu
+      setAddItemMenu(null)
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAddItemMenu(null)
+    }
+
+    // Capture so we close before other handlers; delay one tick so the opening click doesn't instantly close
+    const timeoutId = setTimeout(() => {
+      document.addEventListener('mousedown', handlePointerDown, true)
+      document.addEventListener('keydown', handleKeyDown)
+    }, 0)
+
+    return () => {
+      clearTimeout(timeoutId)
+      document.removeEventListener('mousedown', handlePointerDown, true)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [addItemMenu])
 
   // Close popup when right-clicking on background or different node
   useEffect(() => {
@@ -6078,6 +6220,7 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
           if (iBarPosition) {
             setIBarPosition(null)
           }
+          setAddItemMenu(null) // Close empty-page add menu when selecting a panel
         }}
         onNodeContextMenu={handleNodeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}
@@ -6086,110 +6229,29 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
           if (iBarPosition) {
             setIBarPosition(null)
           }
-          
-          // Left click on map: zoom to 100% at click position (only when no panel is selected)
-          // If a panel is selected, allow normal deselection (React Flow handles it)
-          if (!reactFlowInstance || event.button !== 0) return // Only handle left click (button 0)
 
-          const viewport = reactFlowInstance.getViewport()
-          
-          // Check if any panel is currently selected
+          // Left click on empty map only
+          if (!reactFlowInstance || event.button !== 0) return
+
+          // If a panel is selected, let React Flow deselect — don't open add menu on that click
           const hasSelectedPanel = selectedNodeIdsRef.current.length > 0
-          
-          // Only zoom to 100% if no panel is selected
-          // If a panel is selected, React Flow will handle deselection normally
-          if (!hasSelectedPanel) {
-            const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
-            if (!reactFlowElement) return
-
-            const reactFlowRect = reactFlowElement.getBoundingClientRect()
-            // Get click position relative to React Flow container
-            const screenX = event.clientX - reactFlowRect.left
-            const screenY = event.clientY - reactFlowRect.top
-
-            // Convert screen coordinates to flow coordinates at current zoom
-            const flowX = (screenX - viewport.x) / viewport.zoom
-            const flowY = (screenY - viewport.y) / viewport.zoom
-
-            // Set flag to prevent onMove from interfering
-            isZoomingTo100Ref.current = true
-
-            if (false) {
-              // In linear mode: zoom to 100% on vertical position of click, center horizontally to prompt box
-              const newViewportY = screenY - flowY * 1 // zoom = 1 (100%)
-
-              // Calculate horizontal position to center content to prompt input box (same logic as onMove)
-              let targetViewportX: number
-              if (nodes && Array.isArray(nodes) && nodes.length > 0) {
-                const currentPanelX = nodes[0]?.position.x || 0
-                const panelWidth = 768 // Same width as prompt box
-
-                // Try to get the actual prompt box position for perfect alignment
-                const chatTextarea = document.querySelector('textarea[placeholder*="Type"], textarea[placeholder*="message"]') as HTMLElement
-                const promptBox = chatTextarea?.closest('[class*="pointer-events-auto"]') as HTMLElement
-
-                if (promptBox) {
-                  // Get prompt box position relative to React Flow container
-                  const promptBoxRect = promptBox.getBoundingClientRect()
-                  const promptBoxCenterX = (promptBoxRect.left + promptBoxRect.right) / 2 - reactFlowRect.left
-
-                  // Position panels so their center aligns with prompt box center at zoom 1
-                  // Formula: screenX = worldX * zoom + viewportX
-                  // We want: (currentPanelX + panelWidth/2) * zoom + viewportX = promptBoxCenterX
-                  // So: viewportX = promptBoxCenterX - (currentPanelX + panelWidth/2) * zoom
-                  targetViewportX = promptBoxCenterX - (currentPanelX + panelWidth / 2) * 1 // zoom = 1
-                } else {
-                  // Fallback: calculate based on sidebar and minimap positions
-                  const mapAreaWidth = reactFlowElement.clientWidth
-                  const expandedSidebarWidth = 256
-                  const collapsedSidebarWidth = 64
-                  const minimapWidth = 179
-                  const minimapMargin = 15
-
-                  const sidebarElement = document.querySelector('[class*="w-16"], [class*="w-64"]') as HTMLElement
-                  const isSidebarExpanded = sidebarElement?.classList.contains('w-64') ?? false
-                  const currentSidebarWidth = isSidebarExpanded ? expandedSidebarWidth : collapsedSidebarWidth
-
-                  const fullWindowWidth = window.innerWidth
-                  const fullMapAreaWidth = fullWindowWidth - currentSidebarWidth
-                  const minimapLeftEdge = fullMapAreaWidth - minimapWidth - minimapMargin
-                  const gapFromSidebarToMinimap = minimapLeftEdge
-                  const calculatedLeftGap = Math.max(0, (1 / 2) * (gapFromSidebarToMinimap - panelWidth))
-                  const rightGapWhenLeftAligned = mapAreaWidth - calculatedLeftGap - panelWidth
-
-                  let promptBoxCenterX: number
-                  if (rightGapWhenLeftAligned < calculatedLeftGap) {
-                    promptBoxCenterX = mapAreaWidth / 2
-                  } else {
-                    promptBoxCenterX = calculatedLeftGap + (panelWidth / 2)
-                  }
-
-                  targetViewportX = promptBoxCenterX - (currentPanelX + panelWidth / 2) * 1 // zoom = 1
-                }
-
-                if (isFinite(targetViewportX)) {
-                  reactFlowInstance.setViewport({ x: targetViewportX, y: newViewportY, zoom: 1 }, { duration: 200 })
-                } else {
-                  // Fallback: keep current X if calculation fails
-                  reactFlowInstance.setViewport({ x: viewport.x, y: newViewportY, zoom: 1 }, { duration: 200 })
-                }
-              } else {
-                // No nodes: just zoom at vertical position, keep horizontal
-                reactFlowInstance.setViewport({ x: viewport.x, y: newViewportY, zoom: 1 }, { duration: 200 })
-              }
-            } else {
-              // In canvas mode: zoom to 100% at both X and Y positions of click
-              const newViewportX = screenX - flowX * 1 // zoom = 1 (100%)
-              const newViewportY = screenY - flowY * 1 // zoom = 1 (100%)
-              reactFlowInstance.setViewport({ x: newViewportX, y: newViewportY, zoom: 1 }, { duration: 200 })
-            }
-
-            // Clear flag after animation completes
-            setTimeout(() => {
-              isZoomingTo100Ref.current = false
-            }, 250) // Slightly longer than animation duration (200ms)
+          if (hasSelectedPanel) {
+            setAddItemMenu(null) // Close any leftover add menu when clearing selection
+            return
           }
-          // If a panel is selected, React Flow will handle deselection normally - no zoom to 100%
+
+          const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
+          if (!reactFlowElement) return
+
+          const reactFlowRect = reactFlowElement.getBoundingClientRect()
+          const screenX = event.clientX - reactFlowRect.left // Menu position in RF container coords
+          const screenY = event.clientY - reactFlowRect.top
+          const viewport = reactFlowInstance.getViewport()
+          const flowX = (screenX - viewport.x) / viewport.zoom // Spawn point in world space
+          const flowY = (screenY - viewport.y) / viewport.zoom
+
+          setRightClickedNode(null) // Don't stack with node action popup
+          setAddItemMenu({ screenX, screenY, flowX, flowY }) // Show Note / Flashcard menu at click
         }}
         defaultViewport={{ x: 0, y: 0, zoom: 0.6 }} // Lower default zoom (0.6 instead of 1.0)
         fitView={viewMode === 'canvas'} // Only use fitView in Canvas mode to prevent extra space above first panel in Linear mode
@@ -6625,6 +6687,55 @@ function BoardFlowInner({ conversationId, searchParams }: { conversationId?: str
         }}
         title={isMinimapHidden ? 'Show minimap' : 'Hide minimap'}
       />
+
+      {/* Add item menu — empty page/canvas click (Note / Flashcard at click position) */}
+      {addItemMenu && (
+        <div
+          className="add-item-menu absolute z-[1000] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[140px]"
+          style={{
+            left: `${addItemMenu.screenX}px`,
+            top: `${addItemMenu.screenY}px`,
+            transform: 'translate(0, 0)', // Anchor at click; no zoom scale so menu stays readable
+          }}
+          onClick={(e) => {
+            e.stopPropagation()
+            e.preventDefault()
+          }}
+          onMouseDown={(e) => {
+            e.stopPropagation()
+            e.preventDefault()
+          }}
+        >
+          <div className="flex flex-col gap-0.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                void handleAddItemFromMenu('note')
+              }}
+              className="justify-start text-sm h-8 px-2"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Note
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                void handleAddItemFromMenu('flashcard')
+              }}
+              className="justify-start text-sm h-8 px-2"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Flashcard
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Node popup - shows delete and condense options */}
       {rightClickedNode && reactFlowInstance && (

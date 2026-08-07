@@ -1070,4 +1070,24 @@ span[data-added="true"] {
     z-index: 10;
     pointer-events: none;
   }
+
+  /* TipTap Hide text (haze) mark — frosted until click-reveal */
+  .ProseMirror span.tt-haze[data-haze="true"] {
+    filter: blur(5px);
+    opacity: 0.85;
+    cursor: pointer;
+    border-radius: 2px;
+    background: rgba(120, 120, 120, 0.12);
+    transition: filter 120ms ease, opacity 120ms ease, background 120ms ease;
+  }
+
+  .ProseMirror span.tt-haze[data-haze="true"].tt-haze-revealed {
+    filter: none;
+    opacity: 1;
+    background: transparent;
+  }
+
+  .dark .ProseMirror span.tt-haze[data-haze="true"] {
+    background: rgba(255, 255, 255, 0.08);
+  }
 }

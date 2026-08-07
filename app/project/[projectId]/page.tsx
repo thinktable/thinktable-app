@@ -37,8 +37,8 @@ export default async function ProjectPage({
   return (
     <EditorProvider>
       <ReactFlowContextProvider projectId={projectId}>
-        <div className="h-full relative">
-          <div className="h-full relative min-w-0">
+        <div className="h-full flex">
+          <div className="flex-1 relative min-w-0 h-full">
             <ProjectFlow projectId={projectId} />
             <InputAreaWithStickyPrompt projectId={projectId} />
           </div>

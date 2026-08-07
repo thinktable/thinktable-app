@@ -40,6 +40,7 @@ import {
 import { ChevronDown, ArrowDown, ChevronUp, Trash2 } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
+import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
 
 interface Message {
   id: string
@@ -240,7 +241,8 @@ function ProjectFlowInner({ projectId }: { projectId?: string }) {
 
   const reactFlowInstance = useReactFlow()
   const { setReactFlowInstance, registerSetNodes, isLocked, layoutMode, setLayoutMode, setIsDeterministicMapping, panelWidth: contextPanelWidth, isPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection } = useReactFlowContext()
-  const { setIsMobileMode } = useSidebarContext()
+  const { setIsMobileMode, isChatSidebarOpen } = useSidebarContext()
+  useChatSidebarViewportAdjust(reactFlowInstance, isChatSidebarOpen) // Shrink/grow map zoom with chat column
   const originalPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map())
   const isLinearModeRef = useRef(false)
   const isSwitchingToLinearRef = useRef(false) // Track when switching to Linear mode
