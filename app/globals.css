@@ -625,16 +625,15 @@ span[data-added="true"] {
     top: var(--handle-top, 50%) !important;
   }
 
-  /* Custom minimap size — width matches nav menu; shorter height; border matches nav gray-100 */
+  /* Custom minimap — pin inside our wrapper; kill RF panel's 15px margin (causes first-paint jump) */
+  .minimap-custom-size.react-flow__panel,
   .minimap-custom-size {
+    margin: 0 !important;
     width: 179px !important;
-    height: 120px !important; /* Shorter than former 160px */
-    margin: 0 !important; /* Kill RF panel default 15px margin so nav sits flush on top */
-    bottom: 0 !important; /* Stay pinned inside wrapper (RF panel classes also set bottom) */
-    left: 0 !important;
-    overflow: hidden !important; /* Ensure content stays within bounds */
-    border: none !important; /* No outer border — nav chrome sits above */
-    background-color: white !important; /* Light mode background */
+    height: 120px !important;
+    overflow: hidden !important;
+    border: none !important;
+    background-color: white !important;
   }
 
   /* Dark mode minimap */

@@ -2,10 +2,11 @@
 
 // Fix viewport height for mobile Safari/iPad
 // Updates CSS variable --vh when viewport height changes (address bar show/hide)
-import { useEffect } from 'react'
+import { useLayoutEffect } from 'react'
 
 export function ViewportHeightFix() {
-  useEffect(() => {
+  // useLayoutEffect: set --vh before paint so board chrome (minimap/nav/brand) doesn't start high then jump
+  useLayoutEffect(() => {
     function setViewportHeight() {
       // Calculate 1% of actual viewport height
       const vh = window.innerHeight * 0.01
@@ -13,7 +14,7 @@ export function ViewportHeightFix() {
       document.documentElement.style.setProperty('--vh', `${vh}px`)
     }
 
-    // Set initial height
+    // Set initial height before first paint
     setViewportHeight()
 
     // Update on window resize

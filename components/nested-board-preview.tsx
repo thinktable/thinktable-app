@@ -303,7 +303,8 @@ export function NestedBoardPreview({
           // Scale with host zoom; origin top-left so top/left stay glued to the spacer
           transform: frameBox.scale !== 1 ? `scale(${frameBox.scale})` : undefined,
           transformOrigin: 'top left',
-          zIndex: visible ? 40 : -1,
+          // Above map content; below page chrome (top bar / minimap / nav / brand = z-10+)
+          zIndex: visible ? 5 : -1,
           opacity: visible ? 1 : 0,
           pointerEvents: visible ? 'auto' : 'none',
         }}

@@ -1,6 +1,6 @@
 'use client'
 
-// Mindmap.so-style Notion page picker — tree structure with Add as card / Generate mindmap
+// Mindmap.so-style Notion page picker — tree with Add frame (body in one frame) / Generate mindmap
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, CornerDownLeft, FileText, Search, X } from 'lucide-react'
@@ -218,7 +218,7 @@ export function NotionImportModal({ open, onOpenChange, onImport }: NotionImport
       >
         <DialogTitle className="sr-only">Import Notion pages</DialogTitle>
         <DialogDescription className="sr-only">
-          Search and pick Notion pages to add as cards or generate a mindmap
+          Search and pick Notion pages to add as frames (with page contents) or generate a mindmap
         </DialogDescription>
 
         <div className="p-4 pb-3 border-b border-gray-100">
@@ -325,7 +325,7 @@ export function NotionImportModal({ open, onOpenChange, onImport }: NotionImport
                       onClick={() => void runImport(node.id, 'card')}
                       className="text-xs text-gray-500 hover:text-gray-800 px-1.5 py-1"
                     >
-                      {isBusy ? 'Adding…' : 'Add as card'}
+                      {isBusy ? 'Adding…' : 'Add frame'}
                     </button>
                     <button
                       type="button"

@@ -1,6 +1,9 @@
-// Import selected Notion page titles onto a Thinktable board as note nodes
+// Import selected Notion pages onto a Thinktable page as frames (title + body in one frame)
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { newBlockMetadata } from '@/lib/blocks'
+import { fetchNotionPageBlockTree } from './blocks'
+import { notionPageBodyToHtml } from './blocks-to-html'
 import {
   collectPageAndDescendants,
   filterTopLevelSharedPages,
@@ -9,17 +12,22 @@ import {
   type NotionSearchPage,
 } from './pages'
 
-const COLS = 3 // Grid columns for card layout
-const GAP_X = 320 // Horizontal spacing between imported notes
-const GAP_Y = 180 // Vertical spacing between imported notes
+const COLS = 3 // Grid columns for frame layout
+const GAP_X = 320 // Horizontal spacing between imported frames
+const GAP_Y = 180 // Vertical spacing between imported frames
 const START_X = 80 // Left origin for the import grid
 const START_Y = 80 // Top origin for the import grid
 const TREE_GAP_X = 280 // Mindmap horizontal indent per depth
 const TREE_GAP_Y = 140 // Mindmap vertical spacing between siblings
 
+/** Escape text used inside fallback HTML titles. */
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
 export type ImportNotionResult = {
-  conversationId: string // Board that received the nodes
-  importedCount: number // Newly created notes
+  conversationId: string // Page that received the frames
+  importedCount: number // Newly created frames
   skippedCount: number // Already-linked Notion pages skipped
   pages: NotionSearchPage[] // Pages that were considered for import
   nestedPageCount?: number // Child Thinktable pages created in the nav
@@ -67,6 +75,9 @@ async function resolveConversationId(opts: {
     conversationId = created.id // New board id
   }
 
+  if (!conversationId) {
+    throw new Error('Failed to resolve page for Notion import') // Should be unreachable
+  }
   return conversationId
 }
 
@@ -133,17 +144,17 @@ export async function importNotionPagesToBoard(opts: {
   returnTo?: string // Path user started connect from
   workspaceName?: string | null // Optional board title seed
   pageIds?: string[] // Explicit picks from the import modal
-  mode?: 'card' | 'mindmap' // card = titles only for picks; mindmap = pick + descendants
+  mode?: 'card' | 'mindmap' // card = one frame per pick; mindmap = pick + descendants
 }): Promise<ImportNotionResult> {
   const admin = createAdminClient() // Service role for tokens + inserts
   const allPages = await searchAllAccessibleNotionPages(opts.accessToken) // Full accessible set
-  const mode = opts.mode || 'card' // Default: add as card(s)
+  const mode = opts.mode || 'card' // Default: add as frame(s)
 
-  let pages: NotionSearchPage[] // Pages whose titles become notes
+  let pages: NotionSearchPage[] // Pages that become frames
   if (opts.pageIds && opts.pageIds.length > 0) {
     const wanted = new Set(opts.pageIds.map(normalizeNotionId)) // Selected ids
     if (mode === 'mindmap' && opts.pageIds.length === 1) {
-      pages = collectPageAndDescendants(opts.pageIds[0], allPages) // Root + nested titles
+      pages = collectPageAndDescendants(opts.pageIds[0], allPages) // Root + nested pages
     } else {
       pages = allPages.filter((p) => wanted.has(normalizeNotionId(p.id))) // Exact picks only
     }
@@ -161,9 +172,9 @@ export async function importNotionPagesToBoard(opts: {
   const { data: existingMessages } = await admin
     .from('messages')
     .select('id, metadata')
-    .eq('conversation_id', conversationId) // Existing nodes on this board
+    .eq('conversation_id', conversationId) // Existing frames on this page
 
-  const alreadyLinked = new Set<string>() // notionPageIds already on the board
+  const alreadyLinked = new Set<string>() // notionPageIds already on the page
   for (const msg of existingMessages || []) {
     const notionPageId = (msg.metadata as { notionPageId?: string } | null)?.notionPageId
     if (notionPageId) alreadyLinked.add(normalizeNotionId(notionPageId)) // Skip duplicates
@@ -172,29 +183,61 @@ export async function importNotionPagesToBoard(opts: {
   const toImport = pages.filter((p) => !alreadyLinked.has(normalizeNotionId(p.id))) // Only new
   const positions = layoutPositions(toImport, mode, allPages) // Canvas coordinates
 
+  // Fetch each Notion page body once — all TipTap blocks land in that page’s single frame
+  const bodyByNotionId = new Map<string, string>() // notion id → TipTap HTML
+  await Promise.all(
+    toImport.map(async (page) => {
+      if (page.object !== 'page') {
+        // Databases have no page body; keep the title as the frame content
+        bodyByNotionId.set(normalizeNotionId(page.id), `<p>${escapeHtml(page.title || 'Untitled database')}</p>`)
+        return
+      }
+      try {
+        const tree = await fetchNotionPageBlockTree(opts.accessToken, page.id) // Nested block tree
+        bodyByNotionId.set(normalizeNotionId(page.id), notionPageBodyToHtml(tree)) // One HTML doc
+      } catch (err) {
+        console.error('Failed to fetch Notion page body:', page.id, err)
+        // Fall back to title so import still creates a usable frame
+        bodyByNotionId.set(normalizeNotionId(page.id), `<p>${escapeHtml(page.title || 'Untitled')}</p>`)
+      }
+    })
+  )
+
   const rows = toImport.map((page) => {
     const position = positions.get(page.id) || { x: START_X, y: START_Y } // Fallback origin
+    const body =
+      bodyByNotionId.get(normalizeNotionId(page.id)) ||
+      `<p>${escapeHtml(page.title || 'Untitled')}</p>` // Safety fallback
     return {
-      conversation_id: conversationId, // Target board
+      conversation_id: conversationId, // Target page
       user_id: opts.userId, // Owner
-      role: 'user', // Notes are user-role messages in this app
-      content: page.title, // Node label = Notion page/database name only
-      metadata: {
-        isBlock: true, // Map block card
-        isInlineBlock: true, // Honor metadata.position
+      role: 'user', // Frames are user-role messages in this app
+      content: body, // Full Notion page body as TipTap HTML (one frame)
+      metadata: newBlockMetadata({
         position, // Canvas coordinates
+        blockTitle: page.title || 'Untitled', // Frame title chip = Notion page name
         notionPageId: page.id, // Link back for sync later
         notionObject: page.object, // page vs database
         notionUrl: page.url ?? null, // Deep link
         notionIcon: page.icon ?? null, // Optional icon payload
-      },
+      }),
     }
   })
 
+  // notion id → inserted message id (for linking nested Thinktable pages)
+  const notionIdToMessageId = new Map<string, string>()
+
   if (rows.length > 0) {
-    const { error: insertError } = await admin.from('messages').insert(rows) // Bulk create note nodes
+    const { data: inserted, error: insertError } = await admin
+      .from('messages')
+      .insert(rows)
+      .select('id, metadata') // Need ids to link child pages
     if (insertError) {
-      throw new Error(insertError.message || 'Failed to import Notion pages as notes')
+      throw new Error(insertError.message || 'Failed to import Notion pages as frames')
+    }
+    for (const msg of inserted || []) {
+      const notionPageId = (msg.metadata as { notionPageId?: string } | null)?.notionPageId
+      if (notionPageId) notionIdToMessageId.set(normalizeNotionId(notionPageId), msg.id)
     }
   }
 
@@ -241,6 +284,12 @@ export async function importNotionPagesToBoard(opts: {
             : null
       : null
 
+    const sourceBlockMessageId = notionIdToMessageId.get(normalizeNotionId(page.id)) || null // Frame on parent page
+    const body =
+      bodyByNotionId.get(normalizeNotionId(page.id)) ||
+      `<p>${escapeHtml(page.title || 'Untitled')}</p>` // Same body as the map frame
+    const hasBody = body.replace(/<[^>]*>/g, '').trim().length > 0 // Visible text?
+
     const { data: createdChild, error: childError } = await admin
       .from('conversations')
       .insert({
@@ -253,7 +302,8 @@ export async function importNotionPagesToBoard(opts: {
           notionUrl: page.url ?? null,
           icon: iconMeta, // Show Notion emoji/file icon in the Pages menu
           source: 'notion',
-          hasContent: true, // Imported Notion pages count as contentful
+          hasContent: hasBody, // True when Notion body (or title fallback) has text
+          ...(sourceBlockMessageId ? { sourceBlockMessageId } : {}), // Dual-link with map frame
         },
       })
       .select('id')
@@ -264,11 +314,53 @@ export async function importNotionPagesToBoard(opts: {
       continue
     }
     notionIdToConvId.set(normalizeNotionId(page.id), createdChild.id)
+
+    // Point the parent-page frame at this child page (title chip / preview / expand)
+    if (sourceBlockMessageId) {
+      const { data: frameRow } = await admin
+        .from('messages')
+        .select('metadata')
+        .eq('id', sourceBlockMessageId)
+        .maybeSingle()
+      const existingMeta = (frameRow?.metadata as Record<string, unknown>) || {}
+      await admin
+        .from('messages')
+        .update({
+          metadata: {
+            ...existingMeta,
+            linkedPageId: createdChild.id, // Frame ↔ nested page
+            blockTitle: page.title || 'Untitled',
+          },
+        })
+        .eq('id', sourceBlockMessageId)
+    }
+
+    // Materialize the same Notion body as the page-body frame on the child page
+    if (hasBody) {
+      const { error: bodyError } = await admin.from('messages').insert({
+        conversation_id: createdChild.id, // Child page’s map
+        user_id: opts.userId,
+        role: 'user',
+        content: body, // Same TipTap HTML as the parent map frame
+        metadata: newBlockMetadata({
+          isPageBody: true, // This frame IS the page’s body
+          blockTitle: page.title || 'Untitled',
+          position: { x: START_X, y: START_Y },
+          notionPageId: page.id,
+          notionObject: page.object,
+          notionUrl: page.url ?? null,
+          notionIcon: page.icon ?? null,
+        }),
+      })
+      if (bodyError) {
+        console.error('Failed to create page-body frame for Notion import:', bodyError)
+      }
+    }
   }
 
   return {
-    conversationId, // Board to open after redirect
-    importedCount: rows.length, // How many new notes
+    conversationId, // Page to open after redirect
+    importedCount: rows.length, // How many new frames
     skippedCount: pages.length - rows.length, // Already present
     pages, // Pages considered
     nestedPageCount: notionIdToConvId.size, // Child pages added to the Pages menu

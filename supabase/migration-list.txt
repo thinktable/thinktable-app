@@ -1,7 +1,7 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-08T03:26:00Z
+# snapped_at=2026-08-08T05:24:55Z
 # postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
 # Note: supabase db dump --linked needs SUPABASE_DB_PASSWORD (cli_login_postgres alter denied);
 # snapshot via local migrations + .temp service versions. Access token OK for projects list.
@@ -30,5 +30,7 @@
 20260808024153_locked_frame_hug_block_groups.sql
 20260808025712_content_block_drag.sql
 20260808032600_official_definitions_page_frame_block.sql
+20260808043513_free_nav_zoom_minimap_chrome.sql
+20260808052455_map_fill_preview_zindex_notion_body_import.sql
 #
-# No new schema this save (docs: DEFINITIONS.md official terms).
+# No new schema this save (frontend: map RF fill-to-bottom, preview z-index, Notion body import).

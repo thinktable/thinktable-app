@@ -1,0 +1,9 @@
+-- Frontend-only snapshot marker (no schema DDL).
+-- Map: <ReactFlow> fills root via position:absolute; inset:0 (percentage height:100% was
+--   collapsing, so the pane + dotted <Background> only covered the top of the page and the
+--   bottom band was un-navigable / missing dots). Minimap/Free-nav/brand render outside RF.
+-- Page preview: portaled shell z-index 40 -> 5 so it sits above map content but below the
+--   top bar / minimap / nav / brand chrome (was overlapping them).
+-- Frames: default fill/border transparent (react-flow-context defaults '').
+-- Notion import: bring page body into one frame (blocks.ts fetch tree + blocks-to-html.ts).
+-- Persistence unchanged (messages.content + messages.metadata JSON / profiles.metadata prefs).

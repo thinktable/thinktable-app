@@ -110,7 +110,9 @@ interface ChatPanelNodeData {
 }
 
 const MINIMAP_HEIGHT = 120 // Keep in sync with .minimap-custom-size height in globals.css
-const MINIMAP_BOTTOM = 8 // Sit near map bottom (brand icon uses 12px; minimap reads high at that offset)
+const MINIMAP_BOTTOM = 8 // Inset from map column bottom edge
+const MINIMAP_LEFT = 8 // Match top-bar menu button (sticky-prompt-panel paddingLeft 0.5rem)
+const BRAND_RIGHT = 12 // Inset from map column right edge
 
 // Fetch messages for a conversation and create panels
 // For homepage boards, uses API route (public access via service role)
@@ -1433,14 +1435,20 @@ function BoardFlowInner({
 
   const prevViewportWidthRef = useRef<number>(0) // Track previous viewport width to detect changes
   const [isAtBottom, setIsAtBottom] = useState(true) // Track if scrolled to bottom in linear mode
-  const [minimapBottom, setMinimapBottom] = useState<number>(MINIMAP_BOTTOM) // CSS bottom px — same as brand icon
-  const [minimapLeft, setMinimapLeft] = useState<number>(8) // Match top-bar menu button (sticky-prompt-panel paddingLeft 0.5rem)
+  const [minimapBottom, setMinimapBottom] = useState<number>(MINIMAP_BOTTOM) // Legacy hover-zone jump checks
+  const [minimapLeft, setMinimapLeft] = useState<number>(MINIMAP_LEFT)
+  const [navBottomTransition, setNavBottomTransition] = useState(false) // Gate bottom animation until after load settle
+  const boardRootRef = useRef<HTMLDivElement>(null) // Map column box — chrome is absolute on this (outside RF)
   const [minimapHoverLeft, setMinimapHoverLeft] = useState<number>(0) // Left position for hover zone to align with minimap left edge
   const [minimapPillCenter, setMinimapPillCenter] = useState<number>(0) // Center position for pill to center on minimap
   const [minimapPillBottom, setMinimapPillBottom] = useState<number>(8) // Bottom position for pill to center on minimap bottom edge
   const [minimapHoverBottom, setMinimapHoverBottom] = useState<number>(0) // Bottom position for hover area when jumped
   const [minimapHoverHeight, setMinimapHoverHeight] = useState<number>(28) // Height for hover area
-  const [isMinimapHidden, setIsMinimapHidden] = useState(false) // Track if minimap is hidden
+  // Sync from localStorage on first client render so nav bottom isn't wrong before effects run
+  const [isMinimapHidden, setIsMinimapHidden] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return localStorage.getItem('thinktable-minimap-hidden') === 'true'
+  })
   const [isScrollingToBottom, setIsScrollingToBottom] = useState(false) // Track if we're currently scrolling to bottom (for minimap flash prevention)
   const [clickedEdge, setClickedEdge] = useState<Edge | null>(null) // Track clicked edge for popup (local state for popup logic)
 
@@ -1990,10 +1998,11 @@ function BoardFlowInner({
   // Determine if menu should be shown - show if board has flashcards OR project has flashcards
   const shouldShowMenu = hasFlashcardsInBoard || hasFlashcardsInProject
 
-  // Left-anchored minimap + nav — left matches top-bar menu; bottom matches brand icon
+  // Gate nav bottom transition after mount — prefs flipping isMinimapHidden would animate from wrong spot
   useEffect(() => {
-    setMinimapBottom(MINIMAP_BOTTOM)
-    setMinimapLeft(8) // Match sticky-prompt-panel paddingLeft 0.5rem
+    setMinimapLeft(MINIMAP_LEFT)
+    const t = window.setTimeout(() => setNavBottomTransition(true), 400)
+    return () => window.clearTimeout(t)
   }, [])
 
   // Calculate hover zone left position to align with minimap left edge
@@ -6379,7 +6388,9 @@ function BoardFlowInner({
 
   return (
     <div
-      className={cn('relative', embedded ? 'absolute inset-0' : 'w-full h-full')}
+      ref={boardRootRef}
+      // absolute inset-0 fills the map column (chrome uses getBoundingClientRect of this box)
+      className="absolute inset-0"
       onDoubleClick={embedded ? undefined : handlePaneDoubleClick}
     >
       <ReactFlow
@@ -6389,7 +6400,10 @@ function BoardFlowInner({
         edges={edges}
         onNodesChange={handleNodesChange}
         onEdgesChange={onEdgesState}
-        style={embedded ? { width: '100%', height: '100%' } : undefined}
+        // Fill the (positioned) BoardFlow root via absolute insets — percentage height:100%
+        // was resolving short, so the pane/dotted <Background> only covered the top of the map
+        // (nodes/chrome still painted lower). inset:0 gives a definite full-height box.
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
         onNodeDragStart={(event, node) => {
           // Hide placeholders only when the connected target node is dragged, not when placeholder itself is dragged
           if (!node) return
@@ -6708,7 +6722,7 @@ function BoardFlowInner({
         // Embedded previews: no continuous fitView (fights pan/zoom); host keeps canvas fitView
         fitView={!embedded && viewMode === 'canvas'}
         fitViewOptions={{ padding: 0.2, minZoom: 0.3, maxZoom: 2 }}
-        className="bg-gray-50 dark:bg-[#0f0f0f]"
+        className="h-full w-full bg-gray-50 dark:bg-[#0f0f0f]"
         onInit={(instance) => {
           const currentViewport = instance.getViewport()
           if (!isFinite(currentViewport.x) || !isFinite(currentViewport.y) || !isFinite(currentViewport.zoom)) {
@@ -6907,141 +6921,6 @@ function BoardFlowInner({
             lineWidth={0.5}
           />
         )}
-        {/* Page previews: no minimap — host map owns that chrome */}
-        {!embedded && (
-         <>
-         <div
-           data-minimap-context
-           onContextMenu={(e) => {
-             e.preventDefault()
-             e.stopPropagation()
-             setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
-           }}
-           onMouseEnter={() => {
-             // Keep minimap visible when hovering over it in hover mode
-             setIsMinimapHovering(true)
-             isMinimapHoveringRef.current = true
-             // Cancel any pending hide timeout
-             if (minimapHideTimeoutRef.current) {
-               clearTimeout(minimapHideTimeoutRef.current)
-               minimapHideTimeoutRef.current = null
-             }
-           }}
-           onMouseLeave={(e) => {
-             // Check if minimap should hide after leaving minimap
-             setIsMinimapHovering(false)
-             isMinimapHoveringRef.current = false
-             checkAndHideMinimap(e.relatedTarget as HTMLElement)
-           }}
-           style={{
-             position: 'absolute',
-             bottom: `${minimapBottom}px`, // Align with brand icon bottom (12px)
-             left: `${minimapLeft}px`, // Same left as nav + top-bar menu button
-             width: 179,
-             height: MINIMAP_HEIGHT, // Match .minimap-custom-size (globals.css)
-             opacity: isScrollingToBottom ? 0 : (isMinimapHidden ? 0 : 1),
-             transition: `opacity ${isMinimapHidden ? '0.15s' : '0.5s'} ease-in-out`, // Faster fade out (0.15s), slower fade in (0.5s)
-             pointerEvents: isMinimapHidden ? 'none' : 'auto',
-           }}
-         >
-           <MiniMap
-             position="bottom-left"
-             // placeholder_attr removed
-             nodeColor={(node) => {
-               // Light grey by default, dark grey when selected
-               return node.selected ? '#9ca3af' : '#e5e7eb' // Dark grey if selected, light grey otherwise
-             }}
-             maskColor={resolvedTheme === 'dark'
-               ? 'rgba(42, 42, 58, 0.45)' // Dark mode: match nav #2a2a3a
-               : 'rgba(243, 244, 246, 0.75)'} // Light mode: gray-100 cover (same as nav menu)
-             pannable={true} // Allow panning (horizontal movement restricted via onMove in linear mode)
-             zoomable={true}
-             className="minimap-custom-size shadow-sm"
-             style={{
-               borderTopLeftRadius: '0px',
-               borderTopRightRadius: '0px',
-               borderBottomLeftRadius: '8px',
-               borderBottomRightRadius: '8px',
-               overflow: 'hidden',
-               cursor: 'pointer', // Indicate clickability
-               width: 179,
-               height: MINIMAP_HEIGHT, // Match .minimap-custom-size so nav sits flush on top
-               position: 'absolute',
-               bottom: 0, // Anchor to bottom of container
-               left: 0,
-               margin: 0, // Override .react-flow__panel { margin: 15px } — that gap floated the minimap up
-             }}
-           />
-         </div>
-
-        {/* Hover zone for minimap collapse pill - limited to minimap width (179px) */}
-        {/* Show hover zone even when minimap is hidden, so pill can be shown on hover */}
-        {!isMinimapHidden && (
-          // eslint-disable-next-line react/jsx-no-duplicate-props
-          <div
-            style={{
-              position: 'absolute',
-              pointerEvents: 'auto',
-              bottom: minimapBottom > 17 ? `${minimapHoverBottom}px` : '0px', // Between minimap and prompt box when jumped, otherwise at bottom
-              left: `${minimapHoverLeft}px`, // Align with minimap left edge
-              width: '179px', // Minimap width
-              height: minimapBottom > 17 ? `${minimapHoverHeight}px` : '28px', // Space between minimap and prompt box when jumped, otherwise default height
-              zIndex: 9, // Below pill but above other elements
-            }}
-            onMouseEnter={() => {
-              // Track pill hover area specifically
-              setIsPillHoverAreaHovering(true)
-              setIsMinimapHovering(true)
-              isMinimapHoveringRef.current = true
-              // Cancel any pending hide timeout
-              if (minimapHideTimeoutRef.current) {
-                clearTimeout(minimapHideTimeoutRef.current)
-                minimapHideTimeoutRef.current = null
-              }
-            }}
-            onMouseLeave={(e) => {
-              setIsPillHoverAreaHovering(false)
-              setIsMinimapHovering(false)
-              isMinimapHoveringRef.current = false
-              // Check if minimap should hide after leaving hover area
-              checkAndHideMinimap(e.relatedTarget as HTMLElement)
-            }}
-          />
-        )}
-        {/* Hover zone when minimap is hidden - same area as when minimap is shown */}
-        {isMinimapHidden && (
-          // eslint-disable-next-line react/jsx-no-duplicate-props
-          <div
-            className="absolute pointer-events-auto"
-            style={{
-              bottom: '0px', // Extended lower for easier hovering
-              left: `${minimapHoverLeft}px`, // Align with minimap/toggle left edge
-              width: '179px', // Minimap/toggle width
-              height: `${minimapPillBottom + 20}px`, // Height extends from bottom to above pill
-              zIndex: 9, // Below pill but above other elements
-            }}
-            onMouseEnter={() => {
-              // Track pill hover area specifically
-              setIsPillHoverAreaHovering(true)
-              setIsMinimapHovering(true)
-              isMinimapHoveringRef.current = true
-              // Cancel any pending hide timeout
-              if (minimapHideTimeoutRef.current) {
-                clearTimeout(minimapHideTimeoutRef.current)
-                minimapHideTimeoutRef.current = null
-              }
-            }}
-            onMouseLeave={(e) => {
-              setIsPillHoverAreaHovering(false)
-              setIsMinimapHovering(false)
-              isMinimapHoveringRef.current = false
-              // Check if minimap should hide after leaving hover area
-              checkAndHideMinimap(e.relatedTarget as HTMLElement)
-            }}
-          />
-        )}
-         </>
-        )}
 
         {/* Freehand drawing overlay - only shown when drawing mode is active and drawTool is pencil */}
         {isDrawing && drawTool === 'pencil' && <Freehand conversationId={conversationId} onBeforeCreate={takeSnapshot} />}
@@ -7050,6 +6929,245 @@ function BoardFlowInner({
         <HelperLines />
 
       </ReactFlow>
+    {/* Minimap + nav + brand — outside RF, absolute on BoardFlow root (same box as flashcard menu) */}
+      {!embedded && (
+       <>
+       <div
+         data-minimap-context
+         onContextMenu={(e) => {
+           e.preventDefault()
+           e.stopPropagation()
+           setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
+         }}
+         onMouseEnter={() => {
+           // Keep minimap visible when hovering over it in hover mode
+           setIsMinimapHovering(true)
+           isMinimapHoveringRef.current = true
+           // Cancel any pending hide timeout
+           if (minimapHideTimeoutRef.current) {
+             clearTimeout(minimapHideTimeoutRef.current)
+             minimapHideTimeoutRef.current = null
+           }
+         }}
+         onMouseLeave={(e) => {
+           // Check if minimap should hide after leaving minimap
+           setIsMinimapHovering(false)
+           isMinimapHoveringRef.current = false
+           checkAndHideMinimap(e.relatedTarget as HTMLElement)
+         }}
+         style={{
+           position: 'absolute', // BoardFlow root — not RF's late-sized box
+           zIndex: 10,
+           bottom: `${MINIMAP_BOTTOM}px`,
+           left: `${MINIMAP_LEFT}px`,
+           width: 179,
+           height: MINIMAP_HEIGHT,
+           opacity: isScrollingToBottom ? 0 : (isMinimapHidden ? 0 : 1),
+           transition: navBottomTransition
+             ? `opacity ${isMinimapHidden ? '0.15s' : '0.5s'} ease-in-out`
+             : 'none',
+           pointerEvents: isMinimapHidden ? 'none' : 'auto',
+         }}
+       >
+         <MiniMap
+           position="bottom-left"
+           nodeColor={(node) => {
+             // Light grey by default, dark grey when selected
+             return node.selected ? '#9ca3af' : '#e5e7eb'
+           }}
+         maskColor={resolvedTheme === 'dark'
+           ? 'rgba(42, 42, 58, 0.35)' // Dark mode: subtle nav-matching veil
+           : 'rgba(156, 163, 175, 0.2)'} // Light mode: light gray veil (not opaque white)
+         pannable={true}
+         zoomable={true}
+         className="minimap-custom-size shadow-sm"
+         style={{
+           borderTopLeftRadius: '0px',
+           borderTopRightRadius: '0px',
+           borderBottomLeftRadius: '8px',
+           borderBottomRightRadius: '8px',
+           overflow: 'hidden',
+           cursor: 'pointer',
+           width: 179,
+           height: MINIMAP_HEIGHT,
+           position: 'absolute',
+           bottom: 0,
+           left: 0,
+           margin: 0,
+         }}
+       />
+       </div>
+
+      {/* Hover zone for minimap collapse pill - limited to minimap width (179px) */}
+      {/* Show hover zone even when minimap is hidden, so pill can be shown on hover */}
+      {!isMinimapHidden && (
+        // eslint-disable-next-line react/jsx-no-duplicate-props
+        <div
+          style={{
+            position: 'absolute',
+            pointerEvents: 'auto',
+            bottom: minimapBottom > 17 ? `${minimapHoverBottom}px` : '0px', // Between minimap and prompt box when jumped, otherwise at bottom
+            left: `${minimapHoverLeft}px`, // Align with minimap left edge
+            width: '179px', // Minimap width
+            height: minimapBottom > 17 ? `${minimapHoverHeight}px` : '28px', // Space between minimap and prompt box when jumped, otherwise default height
+            zIndex: 9, // Below pill but above other elements
+          }}
+          onMouseEnter={() => {
+            // Track pill hover area specifically
+            setIsPillHoverAreaHovering(true)
+            setIsMinimapHovering(true)
+            isMinimapHoveringRef.current = true
+            // Cancel any pending hide timeout
+            if (minimapHideTimeoutRef.current) {
+              clearTimeout(minimapHideTimeoutRef.current)
+              minimapHideTimeoutRef.current = null
+            }
+          }}
+          onMouseLeave={(e) => {
+            setIsPillHoverAreaHovering(false)
+            setIsMinimapHovering(false)
+            isMinimapHoveringRef.current = false
+            // Check if minimap should hide after leaving hover area
+            checkAndHideMinimap(e.relatedTarget as HTMLElement)
+          }}
+        />
+      )}
+      {/* Hover zone when minimap is hidden - same area as when minimap is shown */}
+      {isMinimapHidden && (
+        // eslint-disable-next-line react/jsx-no-duplicate-props
+        <div
+          className="absolute pointer-events-auto"
+          style={{
+            bottom: '0px', // Extended lower for easier hovering
+            left: `${minimapHoverLeft}px`, // Align with minimap/toggle left edge
+            width: '179px', // Minimap/toggle width
+            height: `${minimapPillBottom + 20}px`, // Height extends from bottom to above pill
+            zIndex: 9, // Below pill but above other elements
+          }}
+          onMouseEnter={() => {
+            // Track pill hover area specifically
+            setIsPillHoverAreaHovering(true)
+            setIsMinimapHovering(true)
+            isMinimapHoveringRef.current = true
+            // Cancel any pending hide timeout
+            if (minimapHideTimeoutRef.current) {
+              clearTimeout(minimapHideTimeoutRef.current)
+              minimapHideTimeoutRef.current = null
+            }
+          }}
+          onMouseLeave={(e) => {
+            setIsPillHoverAreaHovering(false)
+            setIsMinimapHovering(false)
+            isMinimapHoveringRef.current = false
+            // Check if minimap should hide after leaving hover area
+            checkAndHideMinimap(e.relatedTarget as HTMLElement)
+          }}
+        />
+      )}
+      </>
+      )}
+
+      {/* Free nav: Scroll/Zoom select (left) + zoom % (right) — host map only */}
+      {!embedded && (
+      <div
+        data-minimap-toggle-context
+        onContextMenu={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
+        }}
+        onMouseEnter={() => {
+          // Only track hover, don't show minimap (only pill hover shows it)
+          setIsMinimapHovering(true)
+          isMinimapHoveringRef.current = true
+          // Cancel any pending hide timeout
+          if (minimapHideTimeoutRef.current) {
+            clearTimeout(minimapHideTimeoutRef.current)
+            minimapHideTimeoutRef.current = null
+          }
+        }}
+        onMouseLeave={(e) => {
+          // Check if minimap should hide after leaving toggle
+          setIsMinimapHovering(false)
+          isMinimapHoveringRef.current = false
+          checkAndHideMinimap(e.relatedTarget as HTMLElement)
+        }}
+        className="z-10"
+        style={{
+          position: 'absolute', // Same BoardFlow root as minimap / brand
+          bottom: isMinimapHidden
+            ? `${MINIMAP_BOTTOM}px`
+            : `${MINIMAP_BOTTOM + MINIMAP_HEIGHT}px`,
+          left: `${MINIMAP_LEFT}px`,
+          transition: navBottomTransition ? 'bottom 0.25s ease-in-out' : 'none',
+        }}
+      >
+        <div
+          className={cn(
+            // Flat bottom sits on minimap (minimap top corners are square); round only when minimap is hidden
+            "bg-gray-100 dark:bg-[#2a2a3a] p-1 flex items-center gap-1 relative w-[179px]",
+            isMinimapHidden ? "rounded-lg shadow-sm" : "rounded-t-lg rounded-b-none"
+          )}
+        >
+          {/* Nav select — slightly over half; label is the active wheel mode (Scroll or Zoom) */}
+          <div className="flex-[1.25] basis-0 min-w-0">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full h-auto py-1 px-0 text-xs rounded-lg bg-transparent text-gray-900 dark:text-gray-100 hover:bg-gray-200/60 dark:hover:bg-gray-700/60 focus-visible:ring-0 focus-visible:ring-offset-0 justify-evenly"
+                >
+                  <span>{isScrollMode ? 'Scroll' : 'Zoom'}</span>
+                  <ChevronDown className="h-3 w-3 shrink-0 text-gray-700 dark:text-gray-300" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" side="top" className="w-32">
+                <DropdownMenuLabel>Navigation</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={isScrollMode ? 'scroll' : 'zoom'}
+                  onValueChange={(value) => {
+                    setIsScrollMode(value === 'scroll') // Wheel pans (scroll) vs zooms
+                    if (viewMode !== 'canvas') setViewMode('canvas') // Free-only nav; leave Linear behind
+                  }}
+                >
+                  <DropdownMenuRadioItem value="scroll">Scroll</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="zoom">Zoom</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          {/* Same hairline divider as top-bar toolbar */}
+          <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-1 flex-shrink-0" />
+          {/* Zoom % — remaining space, no chip background */}
+          <div className="flex-1 basis-0 flex items-center justify-center min-w-0">
+            <NavZoomControl />
+          </div>
+        </div>
+      </div>
+      )}
+
+      {/* Brand logo + topper — opens chat sidebar; hidden while chat is open; bottom-right of map */}
+      {/* Omitted in embedded page-preview boards (chrome belongs to the parent map) */}
+      {!embedded && !isChatSidebarOpen && (
+        <button
+          type="button"
+          data-chat-sidebar-toggle
+          onClick={() => toggleChatSidebar()}
+          className="z-10 flex items-center justify-center bg-transparent hover:opacity-80 transition-opacity p-0 border-0 overflow-visible"
+          style={{
+            position: 'absolute', // Same BoardFlow root as minimap / nav
+            bottom: `${MINIMAP_BOTTOM}px`,
+            right: `${BRAND_RIGHT}px`,
+          }}
+          title="Show chat"
+          aria-label="Show chat sidebar"
+        >
+          <ThinktableBrandMark topperId={topperId} size={36} />
+        </button>
+      )}
+
+
 
       {/* I-bar + grip — empty page/canvas click (or double-click); type or click grip to create block */}
       {iBarPosition && (
@@ -7337,107 +7455,6 @@ function BoardFlowInner({
             </Button>
           </div>
         </div>
-      )}
-
-      {/* Free nav: Scroll/Zoom select (left) + zoom % (right) — host map only */}
-      {!embedded && (
-      <div
-        data-minimap-toggle-context
-        onContextMenu={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
-        }}
-        onMouseEnter={() => {
-          // Only track hover, don't show minimap (only pill hover shows it)
-          setIsMinimapHovering(true)
-          isMinimapHoveringRef.current = true
-          // Cancel any pending hide timeout
-          if (minimapHideTimeoutRef.current) {
-            clearTimeout(minimapHideTimeoutRef.current)
-            minimapHideTimeoutRef.current = null
-          }
-        }}
-        onMouseLeave={(e) => {
-          // Check if minimap should hide after leaving toggle
-          setIsMinimapHovering(false)
-          isMinimapHoveringRef.current = false
-          checkAndHideMinimap(e.relatedTarget as HTMLElement)
-        }}
-        className="absolute z-10"
-        style={{
-          // Position toggle above minimap - slides down smoothly when minimap collapses
-          // Both positions use minimapBottom which already accounts for the jump when prompt box gets close
-          bottom: isMinimapHidden
-            ? `${minimapBottom}px` // Same bottom as brand when minimap collapsed
-            : `${minimapBottom + MINIMAP_HEIGHT}px`, // Flush on minimap top
-          // Same left as minimap / top-bar menu button
-          left: `${minimapLeft}px`,
-          transition: 'bottom 0.25s ease-in-out', // Smooth slide animation, slightly faster
-        }}
-      >
-        <div
-          className={cn(
-            // Flat bottom sits on minimap (minimap top corners are square); round only when minimap is hidden
-            "bg-gray-100 dark:bg-[#2a2a3a] p-1 flex items-center gap-1 relative w-[179px]",
-            isMinimapHidden ? "rounded-lg shadow-sm" : "rounded-t-lg rounded-b-none"
-          )}
-        >
-          {/* Nav select — slightly over half; label is the active wheel mode (Scroll or Zoom) */}
-          <div className="flex-[1.25] basis-0 min-w-0">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full h-auto py-1 px-0 text-xs rounded-lg bg-transparent text-gray-900 dark:text-gray-100 hover:bg-gray-200/60 dark:hover:bg-gray-700/60 focus-visible:ring-0 focus-visible:ring-offset-0 justify-evenly"
-                >
-                  <span>{isScrollMode ? 'Scroll' : 'Zoom'}</span>
-                  <ChevronDown className="h-3 w-3 shrink-0 text-gray-700 dark:text-gray-300" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" side="top" className="w-32">
-                <DropdownMenuLabel>Navigation</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  value={isScrollMode ? 'scroll' : 'zoom'}
-                  onValueChange={(value) => {
-                    setIsScrollMode(value === 'scroll') // Wheel pans (scroll) vs zooms
-                    if (viewMode !== 'canvas') setViewMode('canvas') // Free-only nav; leave Linear behind
-                  }}
-                >
-                  <DropdownMenuRadioItem value="scroll">Scroll</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="zoom">Zoom</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          {/* Same hairline divider as top-bar toolbar */}
-          <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-1 flex-shrink-0" />
-          {/* Zoom % — remaining space, no chip background */}
-          <div className="flex-1 basis-0 flex items-center justify-center min-w-0">
-            <NavZoomControl />
-          </div>
-        </div>
-      </div>
-      )}
-
-      {/* Brand logo + topper — opens chat sidebar; hidden while chat is open; bottom-right of map */}
-      {/* Omitted in embedded page-preview boards (chrome belongs to the parent map) */}
-      {!embedded && !isChatSidebarOpen && (
-        <button
-          type="button"
-          data-chat-sidebar-toggle
-          onClick={() => toggleChatSidebar()}
-          className="absolute z-10 flex items-center justify-center bg-transparent hover:opacity-80 transition-opacity p-0 border-0 overflow-visible"
-          style={{
-            bottom: `${MINIMAP_BOTTOM}px`, // Same bottom as minimap
-            right: '12px',
-          }}
-          title="Show chat"
-          aria-label="Show chat sidebar"
-        >
-          <ThinktableBrandMark topperId={topperId} size={36} />
-        </button>
       )}
 
       {/* Context menu for minimap control */}

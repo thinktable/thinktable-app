@@ -1,7 +1,7 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-08T04:35:13Z`
+- Snapped at: `2026-08-08T05:24:55Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` failed without `SUPABASE_DB_PASSWORD` (cli_login_postgres permission). Access token works for `projects list`; migration files remain source of truth.
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
@@ -41,6 +41,6 @@ Columns:
 
 ## This save
 
-- Marker: `20260808032600_official_definitions_page_frame_block.sql`
-- App: official terms in `DEFINITIONS.md` (page, frame, block, thread, connection point); CONTEXT + Cursor rule updated.
+- Marker: `20260808052455_map_fill_preview_zindex_notion_body_import.sql`
+- App: `<ReactFlow>` fills root via `position:absolute; inset:0` (fixes bottom of page not navigable / missing dots — percentage height collapsed); page-preview portaled shell z-index 40→5 (no longer overlaps top bar/minimap/nav/brand); frame default fill/border transparent; Notion import brings page body into one frame (`lib/notion/blocks.ts` + `blocks-to-html.ts`).
 - Schema: no DDL.

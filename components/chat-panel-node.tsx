@@ -3416,17 +3416,18 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         data-block-node={isBlock ? 'true' : undefined} // Marks blocks for selected connection-dot styling
         data-block-resized={undefined} // Blocks stay nowrap; unlocked clip hides overflow instead of wrapping
         className={cn(
-          'group rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible backdrop-blur-sm transition-[opacity,box-shadow,background-color,border-color] duration-300', // Chrome sits outside; clip only inner body
+          'group rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible transition-[opacity,box-shadow,background-color,border-color] duration-300', // Chrome sits outside; clip only inner body
+          !isFillTransparent && 'backdrop-blur-sm', // Frost only when a fill is set — blur alone looks like a tinted plate
           // Always show blue border when selected, otherwise use custom border color or default theme-based color
           // Selection uses the connected resize rectangle (not a rounded card border)
           selected && isBlock
-            ? (data.borderColor ? '' : 'border-transparent')
+            ? (data.borderColor ? '' : 'border-transparent') // Selection chrome is the resize rect, not the frame border
             : selected
               ? 'border-blue-500 dark:border-blue-400'
-              : (data.borderColor ? '' : 'border-gray-200 dark:border-[#2f2f2f]'),
+              : (data.borderColor ? '' : 'border-transparent'), // Default frame: no visible border until styled
           isBookmarked
             ? 'shadow-[0_0_8px_rgba(250,204,21,0.6)] dark:shadow-[0_0_8px_rgba(250,204,21,0.4)]'
-            : (data.borderStyle === 'none' ? 'shadow-none' : 'shadow-sm'),
+            : (data.borderStyle === 'none' || !data.borderStyle ? 'shadow-none' : 'shadow-sm'), // No card shadow on default/unstyled frames
           // Blur non-flashcard panels when flashcard study mode is active
           shouldBlur && 'blur-sm opacity-40 pointer-events-none'
         )}
@@ -3893,7 +3894,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       {/* Single text body — no prompt/response sections or collapse */}
       <div
         className={cn(
-          'backdrop-blur-sm rounded-2xl relative',
+          'rounded-2xl relative',
+          !isFillTransparent && 'backdrop-blur-sm', // Same as outer: no frost when fill is fully transparent
           !isBlock && 'p-1', // Chat/flashcards keep outer pad; blocks pad inside the scaled wrapper
           // Preview open: fill the card; body editor is hidden (content lives on the nested page)
           pagePreviewOpen && 'flex flex-col h-full min-h-0',
