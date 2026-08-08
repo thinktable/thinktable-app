@@ -1,0 +1,5 @@
+-- Frontend-only snapshot marker (no schema DDL).
+-- Locked frames hug scaled text (intrinsic × frameScale + border; padding inside scale).
+-- Block groups are RF siblings (no parentId); membership is metadata.blockGroupId.
+-- Persistence remains messages.metadata JSON
+-- (frameUnlocked, frameScale, resizeDimensions, collapsedFrameSize, blockGroupId, position).

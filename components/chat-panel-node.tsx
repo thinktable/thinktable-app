@@ -19,6 +19,24 @@ const isContentEmpty = (content: string | undefined | null) => {
   return stripped.length === 0
 }
 
+const BLOCK_MIN_FRAME_W = 48 // Unlocked free-resize floor
+const BLOCK_MIN_FRAME_H = 40 // Keep a usable box when shrinking
+const BLOCK_LOCKED_MIN_W = 80 // Locked proportional floor (matches NodeResizeControl)
+
+// Visual frame = unscaled content × frameScale + 1px border each side (border-box)
+function scaledFrameSize(
+  intrinsic: { width: number; height: number },
+  scale: number,
+  minWidth = BLOCK_MIN_FRAME_W,
+) {
+  const safeScale = Math.max(0.15, scale) // Same floor as locked corner-drag
+  const border = 2 // Card border occupies layout width/height
+  return {
+    width: Math.max(minWidth, Math.ceil(intrinsic.width * safeScale) + border),
+    height: Math.max(BLOCK_MIN_FRAME_H, Math.ceil(intrinsic.height * safeScale) + border),
+  }
+}
+
 // Helper to blend a foreground hex color with a background hex color using opacity
 const blendHexColors = (fgHex: string, bgHex: string, opacity: number): string => {
   // Simple hex parsing (assumes 6-digit hex)
@@ -1284,20 +1302,22 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const hasAutoFocusedRef = useRef(false) // Track if note editor has been auto-focused
   const { resolvedTheme } = useTheme() // Get theme to set transparent background color
   
-  // Resize state for panel scaling - default dimensions for calculating scale factor
-  const DEFAULT_PANEL_WIDTH = 768 // Default panel width (max-width)
-  const DEFAULT_PANEL_HEIGHT = 400 // Default panel height estimate
+  // Resize state for panel scaling
   const [resizeDimensions, setResizeDimensions] = useState<{ width: number; height: number } | null>(null) // Track resized dimensions
   const [isUserResized, setIsUserResized] = useState(false) // True only after corner-drag or saved resizeDimensions — not auto line-grow
   const [fontScale, setFontScale] = useState(1) // Legacy editor font-size scale (blocks use frameScale instead)
   const [frameUnlocked, setFrameUnlocked] = useState(false) // Unlocked: free resize; locked: content scales with frame
   const [frameScale, setFrameScale] = useState(1) // Uniform content scale while frame is locked
   const [intrinsicSize, setIntrinsicSize] = useState({ width: 160, height: 48 }) // Unscaled content box (max-content)
+  const [intrinsicMeasured, setIntrinsicMeasured] = useState(false) // True after first contentFit measure (avoid hug flash)
   const [isFrameHovering, setIsFrameHovering] = useState(false) // Hover chrome (overflow chevron when unselected)
   const [collapsedFrameSize, setCollapsedFrameSize] = useState<{ width: number; height: number } | null>(null) // Pre-expand box for collapse toggle
   const [rotation, setRotation] = useState(0) // Degrees of item rotation (persisted in message metadata)
   const isResizingRef = useRef(false) // Track if currently resizing
   const contentFitRef = useRef<HTMLDivElement>(null) // Inner unscaled content wrapper for intrinsic measure
+  const frameScaleRef = useRef(1) // Latest scale — resize-end must not close over a stale render
+  frameScaleRef.current = frameScale // Keep ref in sync every render
+  const persistFrameMetaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Debounce hug-to-text saves
   const lockedResizeStartRef = useRef<{ width: number; height: number; scale: number } | null>(null) // Locked drag baseline
   const initialResizeWidthRef = useRef<number | null>(null) // Track initial panel width when resize starts (for note panels)
   const initialResizeHeightRef = useRef<number | null>(null) // Track initial panel height when resize starts (for note panels)
@@ -1809,45 +1829,6 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       : {}),
   }) as React.CSSProperties
   
-  // Calculate dynamic line-height for note nodes based on height (decreases as height increases)
-  const calculateNoteLineHeight = useCallback(() => {
-    if (!isBlock) return '1.7' // Default line-height
-    
-    // Try to get height from React Flow node first (more accurate during resize)
-    let currentHeight: number | null = null
-    const nodes = getNodes()
-    const currentNode = nodes.find((node: any) => node.id === id)
-    if (currentNode && currentNode.height) {
-      currentHeight = currentNode.height
-    }
-    
-    // Fallback to panelRef height if node height not available
-    if (currentHeight === null && panelRef.current) {
-      currentHeight = panelRef.current.offsetHeight
-    }
-    
-    // If still no height, use default
-    if (currentHeight === null || currentHeight <= 0) {
-      return '1.7'
-    }
-    
-    const baseHeight = DEFAULT_PANEL_HEIGHT // Base height for calculation
-    const baseLineHeight = 1.7 // Base line-height
-    
-    // Calculate how much taller the node is compared to base
-    const heightRatio = currentHeight / baseHeight
-    
-    // Decrease line-height as height increases
-    // Formula: lineHeight = baseLineHeight - (heightRatio - 1) * factor
-    // This allows line-height to go negative when height is significantly increased
-    const factor = 0.5 // Adjust this to control how quickly line-height decreases
-    const calculatedLineHeight = baseLineHeight - (heightRatio - 1) * factor
-    
-    return `${calculatedLineHeight}`
-  }, [isBlock, id, getNodes])
-  
-  // Get current line-height for notes - update on resize
-  const [noteLineHeight, setNoteLineHeight] = useState('1.7')
   // Measured item box for edge-title perimeter math (items = former notes)
   const [itemBoxSize, setItemBoxSize] = useState({ width: 200, height: 120 })
   // In-place nested board for a titled item’s linked page
@@ -1867,35 +1848,21 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     setPagePreviewMounted(true)
   }
 
-  // Update line-height + item box when note/item is resized using ResizeObserver
+  // Update title-chip perimeter when the note/item box changes size
   useEffect(() => {
     if (!isBlock || !panelRef.current) return
-    
     const updateFromSize = () => {
-      const newLineHeight = calculateNoteLineHeight() // Keep note typography in sync with height
-      setNoteLineHeight(newLineHeight)
-      if (panelRef.current) {
-        setItemBoxSize({
-          width: panelRef.current.offsetWidth || 200, // Perimeter width for title chip
-          height: panelRef.current.offsetHeight || 120, // Perimeter height for title chip
-        })
-      }
+      if (!panelRef.current) return
+      setItemBoxSize({
+        width: panelRef.current.offsetWidth || 200, // Perimeter width for title chip
+        height: panelRef.current.offsetHeight || 120, // Perimeter height for title chip
+      })
     }
-    
-    // Initial calculation
     updateFromSize()
-    
-    // Set up ResizeObserver to update line-height when panel is resized
-    const resizeObserver = new ResizeObserver(() => {
-      updateFromSize()
-    })
-    
+    const resizeObserver = new ResizeObserver(updateFromSize)
     resizeObserver.observe(panelRef.current)
-    
-    return () => {
-      resizeObserver.disconnect()
-    }
-  }, [isBlock, calculateNoteLineHeight])
+    return () => resizeObserver.disconnect()
+  }, [isBlock])
 
   // Unscaled content box — used for overflow detection + lock scale baseline
   useEffect(() => {
@@ -1905,6 +1872,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     const measure = () => {
       const width = Math.max(1, el.offsetWidth) // Transform does not affect offsetWidth
       const height = Math.max(1, el.offsetHeight)
+      setIntrinsicMeasured(true) // Safe to hug locked frames to this box
       setIntrinsicSize((prev) =>
         prev.width === width && prev.height === height ? prev : { width, height }
       )
@@ -1989,10 +1957,15 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     setIsUserResized(true) // Persist mode: explicit frame box
     lockedResizeStartRef.current = null // Drop drag baseline
 
-    // Prefer RF end params (avoids stale React state); fall back to current state
-    const minW = frameUnlocked ? 48 : 80
-    const width = Math.max(params?.width ?? resizeDimensions?.width ?? 0, minW)
-    const height = Math.max(params?.height ?? resizeDimensions?.height ?? 0, 40)
+    const minW = frameUnlocked ? BLOCK_MIN_FRAME_W : BLOCK_LOCKED_MIN_W
+    let width = Math.max(params?.width ?? resizeDimensions?.width ?? 0, minW)
+    let height = Math.max(params?.height ?? resizeDimensions?.height ?? 0, BLOCK_MIN_FRAME_H)
+    const finalScale = frameScaleRef.current // Latest scale from the drag (avoid stale closure)
+    if (!frameUnlocked) {
+      const hugged = scaledFrameSize(intrinsicSize, finalScale, BLOCK_LOCKED_MIN_W) // Snap to scaled text
+      width = hugged.width
+      height = hugged.height
+    }
     if (width > 0 && height > 0) {
       setResizeDimensions({ width, height }) // Lock final box size into local state
     }
@@ -2000,17 +1973,17 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     await persistFrameMeta({
       resizeDimensions: { width, height },
       frameUnlocked,
-      frameScale,
+      frameScale: finalScale,
       fontScale,
     })
-  }, [resizeDimensions, frameUnlocked, frameScale, fontScale, persistFrameMeta])
+  }, [resizeDimensions, frameUnlocked, fontScale, persistFrameMeta, intrinsicSize])
 
   // Corner-drag: locked → proportional content scale; unlocked → free frame (content stays)
   const handleResize = useCallback((_event: any, params: { width: number; height: number }) => {
     if (!isResizingRef.current) return // Ignore mount/select noise — only after handleResizeStart
-    const minW = frameUnlocked ? 48 : 80
+    const minW = frameUnlocked ? BLOCK_MIN_FRAME_W : BLOCK_LOCKED_MIN_W
     const width = Math.max(params.width, minW)
-    const height = Math.max(params.height, 40)
+    const height = Math.max(params.height, BLOCK_MIN_FRAME_H)
     setResizeDimensions({ width, height }) // Drive panel style — matches RF dimension changes
     if (!frameUnlocked && lockedResizeStartRef.current) {
       const start = lockedResizeStartRef.current
@@ -2078,44 +2051,55 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     })
   }, [saveRotation])
 
-  // Toggle frame lock: locked = content scales with frame; unlocked = free frame, keep current visual size
+  // Toggle frame lock: lock hugs scaled text; unlock keeps current visual size
   const handleToggleFrameLock = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
     e.preventDefault()
     const nextUnlocked = !frameUnlocked
     setFrameUnlocked(nextUnlocked)
-    // Snapshot current box so unlock doesn’t snap back to fit-content
-    const el = panelRef.current
-    const nextDims = resizeDimensions ?? {
-      width: Math.max(48, el?.offsetWidth ?? intrinsicSize.width),
-      height: Math.max(40, el?.offsetHeight ?? intrinsicSize.height),
+    if (nextUnlocked) {
+      // Snapshot current box so unlock doesn’t snap back to fit-content
+      const el = panelRef.current
+      const nextDims = resizeDimensions ?? {
+        width: Math.max(BLOCK_MIN_FRAME_W, el?.offsetWidth ?? intrinsicSize.width),
+        height: Math.max(BLOCK_MIN_FRAME_H, el?.offsetHeight ?? intrinsicSize.height),
+      }
+      if (!resizeDimensions) setResizeDimensions(nextDims)
+      setIsUserResized(true)
+      void persistFrameMeta({
+        frameUnlocked: true,
+        frameScale,
+        resizeDimensions: nextDims,
+        collapsedFrameSize,
+      })
+      return
     }
-    if (!resizeDimensions) setResizeDimensions(nextDims)
+    // Relock: snap the frame to scaled text (padding is inside the scaled wrapper)
+    const nextDims = scaledFrameSize(intrinsicSize, frameScale, BLOCK_LOCKED_MIN_W)
+    setResizeDimensions(nextDims)
     setIsUserResized(true)
-    if (!nextUnlocked) setCollapsedFrameSize(null) // Lock mode doesn’t use expand/collapse
-    // Keep frameScale — unlocking must not reset content size
+    setCollapsedFrameSize(null) // Lock mode doesn’t use expand/collapse
     void persistFrameMeta({
-      frameUnlocked: nextUnlocked,
+      frameUnlocked: false,
       frameScale,
       resizeDimensions: nextDims,
-      collapsedFrameSize: nextUnlocked ? collapsedFrameSize : null,
+      collapsedFrameSize: null,
     })
-  }, [frameUnlocked, frameScale, resizeDimensions, intrinsicSize.width, intrinsicSize.height, collapsedFrameSize, persistFrameMeta])
+  }, [frameUnlocked, frameScale, resizeDimensions, intrinsicSize, collapsedFrameSize, persistFrameMeta])
 
   // Expand clipped frame to content, or collapse back to the pre-expand box
   const handleToggleOverflow = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
     e.preventDefault()
-    const expandedW = Math.max(48, Math.ceil(intrinsicSize.width * frameScale))
-    const expandedH = Math.max(40, Math.ceil(intrinsicSize.height * frameScale))
+    const expanded = scaledFrameSize(intrinsicSize, frameScale, BLOCK_MIN_FRAME_W) // Full scaled text + border
     const current = resizeDimensions ?? {
-      width: panelRef.current?.offsetWidth ?? expandedW,
-      height: panelRef.current?.offsetHeight ?? expandedH,
+      width: panelRef.current?.offsetWidth ?? expanded.width,
+      height: panelRef.current?.offsetHeight ?? expanded.height,
     }
     const isExpanded =
       !!collapsedFrameSize &&
-      current.width + 2 >= expandedW &&
-      current.height + 2 >= expandedH // Already showing full scaled content
+      current.width + 2 >= expanded.width &&
+      current.height + 2 >= expanded.height // Already showing full scaled content
 
     if (isExpanded && collapsedFrameSize) {
       setResizeDimensions(collapsedFrameSize) // Return to pre-expand size
@@ -2130,15 +2114,51 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     }
 
     setCollapsedFrameSize(current) // Remember clipped size for collapse
-    setResizeDimensions({ width: expandedW, height: expandedH })
+    setResizeDimensions(expanded)
     setIsUserResized(true)
     void persistFrameMeta({
-      resizeDimensions: { width: expandedW, height: expandedH },
+      resizeDimensions: expanded,
       frameUnlocked: true,
       frameScale,
       collapsedFrameSize: current,
     })
-  }, [intrinsicSize.width, intrinsicSize.height, frameScale, resizeDimensions, collapsedFrameSize, persistFrameMeta])
+  }, [intrinsicSize, frameScale, resizeDimensions, collapsedFrameSize, persistFrameMeta])
+
+  // Locked + resized: keep the frame hugging scaled text as the user types
+  useEffect(() => {
+    if (!isBlock || frameUnlocked || !isUserResized || pagePreviewOpen) return // Unlocked / unresized use other sizing
+    if (!intrinsicMeasured || isResizingRef.current) return // Wait for a real measure; don’t fight a live drag
+    const next = scaledFrameSize(intrinsicSize, frameScale, BLOCK_LOCKED_MIN_W)
+    let changed = true // Assume we need a persist unless the box already matches
+    setResizeDimensions((prev) => {
+      if (prev && prev.width === next.width && prev.height === next.height) {
+        changed = false // Already hugging — skip DB write
+        return prev
+      }
+      return next
+    })
+    if (!changed) return // No size change
+    if (persistFrameMetaTimerRef.current) clearTimeout(persistFrameMetaTimerRef.current)
+    persistFrameMetaTimerRef.current = setTimeout(() => {
+      void persistFrameMeta({
+        resizeDimensions: next,
+        frameUnlocked: false,
+        frameScale,
+      })
+    }, 250) // Debounce DB writes while typing
+    return () => {
+      if (persistFrameMetaTimerRef.current) clearTimeout(persistFrameMetaTimerRef.current)
+    }
+  }, [
+    isBlock,
+    frameUnlocked,
+    isUserResized,
+    pagePreviewOpen,
+    intrinsicMeasured,
+    intrinsicSize,
+    frameScale,
+    persistFrameMeta,
+  ])
 
   // Auto-select panel when editor is focused or has selection (text edit mode)
   const handleEditorActiveChange = useCallback((isActive: boolean) => {
@@ -2695,17 +2715,19 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const hasBlockContent = isBlock && !isBlockContentEmpty(promptContent) // Lock only when a content block exists
   const clipUnlocked =
     isBlock && frameUnlocked && isUserResized && !!resizeDimensions && !pagePreviewOpen // Free frame may hide overflow
-  const scaledContentW = intrinsicSize.width * frameScale // Visual content size (scale kept on unlock)
-  const scaledContentH = intrinsicSize.height * frameScale
+  const huggedSize = scaledFrameSize(intrinsicSize, frameScale, BLOCK_MIN_FRAME_W) // Scaled text + border
+  const applyFrameScale = isBlock && isUserResized && frameScale !== 1 // Layout spacer + CSS scale
+  const scaledLayoutW = Math.ceil(intrinsicSize.width * Math.max(0.15, frameScale)) // Visual content width (no border)
+  const scaledLayoutH = Math.ceil(intrinsicSize.height * Math.max(0.15, frameScale)) // Visual content height (no border)
   const contentOverflows =
     clipUnlocked &&
-    (resizeDimensions!.width + 2 < scaledContentW ||
-      resizeDimensions!.height + 2 < scaledContentH) // Frame smaller than current visual content
+    (resizeDimensions!.width + 2 < huggedSize.width ||
+      resizeDimensions!.height + 2 < huggedSize.height) // Frame smaller than current visual content
   const frameExpanded =
     clipUnlocked &&
     !!collapsedFrameSize &&
-    resizeDimensions!.width + 2 >= scaledContentW &&
-    resizeDimensions!.height + 2 >= scaledContentH // Expand toggle flipped to collapse
+    resizeDimensions!.width + 2 >= huggedSize.width &&
+    resizeDimensions!.height + 2 >= huggedSize.height // Expand toggle flipped to collapse
   // Blocks start narrow; chat/flashcards use their fixed starting widths
   const initialWidth = isFlashcard ? 600 : (usesFitContent ? 200 : 768)
   const [panelWidthToUse, setPanelWidthToUse] = useState(initialWidth)
@@ -3478,8 +3500,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               position={position}
               variant="line" // RF line control (rectangle edges that meet the corner dots)
               className="nopan tt-frame-resize-line" // Styled as continuous blue border
-              minWidth={frameUnlocked ? 48 : 80}
-              minHeight={40}
+              minWidth={frameUnlocked ? BLOCK_MIN_FRAME_W : BLOCK_LOCKED_MIN_W}
+              minHeight={BLOCK_MIN_FRAME_H}
               keepAspectRatio={!frameUnlocked && hasBlockContent}
               onResizeStart={handleResizeStart}
               onResize={handleResize}
@@ -3492,8 +3514,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               position={position} // RF places the handle on that corner
               className="nopan" // Prevent canvas pan while resizing
               style={itemCornerResizeStyle} // White circular handle styling
-              minWidth={frameUnlocked ? 48 : 80} // Unlocked can shrink below content; locked keeps a usable scaled box
-              minHeight={40} // Keep a usable box; pairs with handleResize clamp
+              minWidth={frameUnlocked ? BLOCK_MIN_FRAME_W : BLOCK_LOCKED_MIN_W} // Unlocked can shrink below content; locked keeps a usable scaled box
+              minHeight={BLOCK_MIN_FRAME_H} // Keep a usable box; pairs with handleResize clamp
               keepAspectRatio={!frameUnlocked && hasBlockContent} // Locked + content: proportional only
               onResizeStart={handleResizeStart} // Arm user-resize mode (line-grow off)
               onResize={handleResize} // Apply explicit width/height while dragging
@@ -3503,7 +3525,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         </>
       )}
 
-      {/* Frame chrome — lock (if content) · rotate · overflow expand/collapse; hover / clipped / selected */}
+      {/* Frame chrome — rotate · lock (if content) · overflow expand/collapse; hover / clipped / selected */}
       {isBlock && !pagePreviewOpen && (selected || isFrameHovering || contentOverflows || frameExpanded) && (
         <div
           data-frame-chrome
@@ -3517,6 +3539,20 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           }}
           onMouseDown={(e) => e.stopPropagation()} // Don’t start node drag
         >
+          <button
+            type="button"
+            className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
+            style={{ cursor: 'grab' }}
+            title="Rotate"
+            aria-label="Rotate item"
+            onPointerDown={handleRotatePointerDown}
+            onPointerMove={handleRotatePointerMove}
+            onPointerUp={handleRotatePointerUp}
+            onPointerCancel={handleRotatePointerUp}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <RotateCw className="h-4 w-4 pointer-events-none" />
+          </button>
           {hasBlockContent && (
             <button
               type="button"
@@ -3532,20 +3568,6 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               )}
             </button>
           )}
-          <button
-            type="button"
-            className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
-            style={{ cursor: 'grab' }}
-            title="Rotate"
-            aria-label="Rotate item"
-            onPointerDown={handleRotatePointerDown}
-            onPointerMove={handleRotatePointerMove}
-            onPointerUp={handleRotatePointerUp}
-            onPointerCancel={handleRotatePointerUp}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <RotateCw className="h-4 w-4 pointer-events-none" />
-          </button>
           {(contentOverflows || frameExpanded) && (
             <button
               type="button"
@@ -3846,7 +3868,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       {/* Single text body — no prompt/response sections or collapse */}
       <div
         className={cn(
-          'p-1 backdrop-blur-sm rounded-2xl relative',
+          'backdrop-blur-sm rounded-2xl relative',
+          !isBlock && 'p-1', // Chat/flashcards keep outer pad; blocks pad inside the scaled wrapper
           // Preview open: fill the card; body editor is hidden (content lives on the nested page)
           pagePreviewOpen && 'flex flex-col h-full min-h-0',
           clipUnlocked ? 'h-full overflow-hidden' : 'overflow-visible', // Clip when unlocked frame < content
@@ -3859,12 +3882,18 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         {/* Hide body while previewing — keeps page title (edge chip / preview chrome) from sitting under the map */}
         {!pagePreviewOpen && (
           <div
+            style={
+              applyFrameScale
+                ? { width: scaledLayoutW, height: scaledLayoutH, overflow: clipUnlocked ? 'hidden' : 'visible' } // CSS scale doesn’t affect layout — spacer holds visual size
+                : undefined
+            }
+          >
+          <div
             ref={contentFitRef} // Unscaled content box (offsetWidth ignores CSS scale)
-            className="px-3 py-3 w-max"
+            className={cn('w-max', isBlock ? 'p-4' : 'px-3 py-3')} // Blocks: former p-1 + px-3/py-3, inside scale
             style={{
-              lineHeight: isBlock ? noteLineHeight : '1.7',
-              // Keep visual scale after unlock (don’t snap back to 1); locked resize still updates it
-              ...(isBlock && isUserResized && frameScale !== 1
+              lineHeight: '1.7', // Stable typography — height-based line-height broke lock-to-text
+              ...(applyFrameScale
                 ? { transform: `scale(${frameScale})`, transformOrigin: 'top left' }
                 : {}),
             }}
@@ -3946,6 +3975,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 }
               }}
             />
+          </div>
           </div>
         )}
 

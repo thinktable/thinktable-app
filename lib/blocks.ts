@@ -2,6 +2,17 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js' // Typed client for sync helpers
 
+/** RF node id for a block-group message (`block-group-{messageId}`). */
+export function blockGroupNodeId(groupMessageId: string): string {
+  return `block-group-${groupMessageId}` // Stable id so children can parentId this node
+}
+
+/** Message id from a block-group RF node id, or null if not a group node. */
+export function blockGroupMessageIdFromNodeId(nodeId: string): string | null {
+  if (!nodeId.startsWith('block-group-')) return null // Only group wrappers use this prefix
+  return nodeId.slice('block-group-'.length) // Strip prefix → messages.id
+}
+
 /**
  * One-shot cutover: isNote / isItem / itemTitle / inline* → isBlock / blockTitle / isInlineBlock.
  * Drops legacy keys. Runtime after migrate only checks isBlock.
@@ -505,13 +516,82 @@ export async function ungroupBlocks(
   }
 
   // Drop group containers that no longer have children (best-effort)
-  for (const groupId of groupIds) {
+  await deleteEmptyBlockGroups(supabase, [...groupIds])
+}
+
+/**
+ * Write absolute map position + optional group membership on a block message.
+ * Position is always flow-absolute (load converts to relative when parented).
+ */
+export async function persistBlockPlacement(
+  supabase: SupabaseClient,
+  opts: {
+    messageId: string // Block message to update
+    position: { x: number; y: number } // Absolute flow coords
+    blockGroupId?: string | null // Group message id, or null to stand alone on the page
+  }
+): Promise<void> {
+  const { data: row } = await supabase
+    .from('messages')
+    .select('metadata')
+    .eq('id', opts.messageId)
+    .maybeSingle()
+  if (!row) return
+  const { meta: migrated } = migrateLegacyBlockFlags((row.metadata as Record<string, unknown>) || {})
+  const next: Record<string, unknown> = {
+    ...migrated,
+    isBlock: true, // Keep canonical block flag
+    position: opts.position, // Absolute; RF subtracts group origin when parented
+  }
+  if (opts.blockGroupId) next.blockGroupId = opts.blockGroupId // Join / stay in this group
+  else delete next.blockGroupId // Standalone on the page
+  await supabase.from('messages').update({ metadata: next }).eq('id', opts.messageId)
+}
+
+/** Persist group frame position/size (after drag or expand-to-fit on attach). */
+export async function persistBlockGroupFrame(
+  supabase: SupabaseClient,
+  opts: {
+    groupMessageId: string // isBlockGroup message id
+    position: { x: number; y: number } // Frame origin in flow coords
+    size: { width: number; height: number } // Frame size
+  }
+): Promise<void> {
+  const { data: row } = await supabase
+    .from('messages')
+    .select('metadata')
+    .eq('id', opts.groupMessageId)
+    .maybeSingle()
+  if (!row) return
+  const existing = { ...((row.metadata as Record<string, unknown>) || {}) }
+  await supabase
+    .from('messages')
+    .update({
+      metadata: {
+        ...existing,
+        isBlockGroup: true, // Keep group flag
+        position: opts.position,
+        resizeDimensions: opts.size,
+      },
+    })
+    .eq('id', opts.groupMessageId)
+}
+
+/** Delete group messages that no longer have any children. Returns deleted ids. */
+export async function deleteEmptyBlockGroups(
+  supabase: SupabaseClient,
+  groupMessageIds: string[]
+): Promise<string[]> {
+  const deleted: string[] = []
+  for (const groupId of groupMessageIds) {
     const { data: stillGrouped } = await supabase
       .from('messages')
       .select('id')
       .contains('metadata', { blockGroupId: groupId })
       .limit(1)
-    if (stillGrouped && stillGrouped.length > 0) continue
+    if (stillGrouped && stillGrouped.length > 0) continue // Still has children
     await supabase.from('messages').delete().eq('id', groupId)
+    deleted.push(groupId)
   }
+  return deleted
 }

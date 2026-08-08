@@ -54,6 +54,7 @@ import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
 import {
   BLOCK_GROUP_PADDING,
+  blockGroupNodeId,
   createBlockGroup,
   deleteLinkedPageForBlock,
   duplicateBlockMetadata,
@@ -61,8 +62,10 @@ import {
   isBlockGroupMeta,
   migrateMessagesToBlockFlag,
   newBlockMetadata,
+  persistBlockPlacement,
   ungroupBlocks,
 } from '@/lib/blocks' // blocks, groups, page-body ensure
+import { absFlowPosition, useBlockGroupDrag } from './use-block-group-drag' // Drag attach/detach between groups / page
 import {
   PREVIEW_READY_MESSAGE,
   PREVIEW_RESIZE_MESSAGE,
@@ -432,6 +435,7 @@ function BoardFlowInner({
   const prevMessagesKeyRef = useRef<string>('')
   const prevCollapseStatesRef = useRef<Map<string, boolean>>(new Map()) // Track previous collapse states
   const dragSnapshotTakenRef = useRef<Set<string>>(new Set()) // Track if snapshot taken for current drag session per node
+  const unparentedGroupsRef = useRef<string | null>(null) // One-shot unparent per conversation (avoid double abs offset)
 
   // Initialize with consistent defaults to avoid hydration mismatch
   // Then update from localStorage in useEffect after hydration
@@ -752,6 +756,60 @@ function BoardFlowInner({
   const reactFlowInstance = useReactFlow()
   const rfStore = useStoreApi() // Embed: force pane width/height when CSS % height collapses
   const { setReactFlowInstance, registerSetNodes, isLocked, layoutMode, setLayoutMode, setIsDeterministicMapping, panelWidth: contextPanelWidth, isPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection, boardRule: contextBoardRule, boardStyle: contextBoardStyle, clickedEdge: contextClickedEdge, setClickedEdge: setContextClickedEdge, fillColor, borderColor, borderWeight, borderStyle, flashcardMode, setFlashcardMode, selectedTag, setSelectedTag, isDrawing, drawTool, drawShape, registerMapUndoRedo, registerMapTakeSnapshot, snapEnabled } = useReactFlowContext()
+  const { onNodeDrag: onBlockGroupNodeDrag, onNodeDragStop: onBlockGroupNodeDragStop } = useBlockGroupDrag({
+    conversationId, // Persist attach/detach to this map
+    getNodes: () => reactFlowInstance.getNodes(), // Live RF nodes during drag (not a stale closure)
+    setNodes, // Reparent + clear drop-target class
+    isLocked, // Locked board: move only, no group change
+  })
+
+  // One-shot: existing boards still have RF-parented cards + zIndex:-1 groups (messagesKey doesn’t rebuild).
+  // Unparent immediately and restore a visible dashed sibling frame.
+  useEffect(() => {
+    const key = conversationId || 'none'
+    if (unparentedGroupsRef.current === key) return // Already converted this board
+    if (!nodes.length) return // Wait until panels exist
+    const hasParented = nodes.some((n) => Boolean(n.parentId || (n as { parentNode?: string }).parentNode))
+    const hasHiddenGroup = nodes.some(
+      (n) =>
+        n.type === 'blockGroup' &&
+        ((n.zIndex ?? 0) < 0 || Boolean(n.dragHandle) || (n.style as { pointerEvents?: string } | undefined)?.pointerEvents === 'none')
+    )
+    if (!hasParented && !hasHiddenGroup) {
+      unparentedGroupsRef.current = key // Clean already
+      return
+    }
+    unparentedGroupsRef.current = key
+    setNodes((nds) => {
+      const groupPos = new Map(
+        nds.filter((n) => n.type === 'blockGroup').map((g) => [g.id, g.position])
+      )
+      return nds.map((n) => {
+        if (n.type === 'blockGroup') {
+          const { dragHandle: _dh, parentId: _pid, parentNode: _pn, ...rest } = n as Node & {
+            dragHandle?: string
+            parentNode?: string
+          }
+          return {
+            ...rest,
+            zIndex: 0, // Visible above the canvas, behind cards
+            style: { width: n.style?.width, height: n.style?.height }, // Drop pointerEvents:none
+          }
+        }
+        const pid = n.parentId || (n as { parentNode?: string }).parentNode
+        const { parentId: _pid, parentNode: _pn, extent: _ex, ...rest } = n as Node & {
+          parentNode?: string
+        }
+        if (!pid) return { ...rest, zIndex: 1 } // Cards above the dashed frame
+        const gp = groupPos.get(pid)
+        return {
+          ...rest,
+          position: { x: n.position.x + (gp?.x ?? 0), y: n.position.y + (gp?.y ?? 0) }, // Rel → abs
+          zIndex: 1,
+        }
+      })
+    })
+  }, [conversationId, nodes, setNodes])
   const previewFocus = usePreviewFocus() // Host map: View bar may target a focused preview page
   // Iframe embed: styles arrive via postMessage (no shared React context across frames)
   const [embedStyleOverride, setEmbedStyleOverride] = useState<{
@@ -3873,10 +3931,7 @@ function BoardFlowInner({
         if (!nodes || !Array.isArray(nodes)) return
         const positions: Record<string, { x: number; y: number }> = {}
         nodes.forEach((node) => {
-          positions[node.id] = {
-            x: node.position.x,
-            y: node.position.y,
-          }
+          positions[node.id] = absFlowPosition(node, nodes) // Always page-absolute (grouped nodes are relative in RF)
         })
         localStorage.setItem(`thinktable-canvas-positions-${conversationId}`, JSON.stringify(positions))
       } catch (error) {
@@ -3891,10 +3946,7 @@ function BoardFlowInner({
     if (nodes && Array.isArray(nodes) && nodes.length > 0) {
       // Update stored positions with current positions in both modes
       nodes.forEach((node) => {
-        originalPositionsRef.current.set(node.id, {
-          x: node.position.x,
-          y: node.position.y,
-        })
+        originalPositionsRef.current.set(node.id, absFlowPosition(node, nodes)) // Cache absolute so reload doesn’t double-subtract group origin
       })
 
       // Save to localStorage (debounced) - works for both canvas and linear modes
@@ -4016,12 +4068,13 @@ function BoardFlowInner({
         const baseNodeId = `panel-${message.id}`
         let storedPos = originalPositionsRef.current.get(baseNodeId)
         
-        // Prefer explicit metadata.position (inline block / add-block menu spawn at click)
+        // Prefer explicit metadata.position (inline block / add-block menu spawn at click).
+        // Always-absolute; required for grouped blocks so localStorage relative leftovers don’t double-subtract.
         const metadataPosition = message.metadata?.position as { x: number; y: number } | undefined
+        const hasGroup = typeof (message.metadata as Record<string, unknown> | undefined)?.blockGroupId === 'string'
 
-        if (metadataPosition && !storedPos) {
-          // Use click/spawn position from metadata when nothing is cached yet
-          storedPos = metadataPosition
+        if (metadataPosition && (!storedPos || hasGroup)) {
+          storedPos = metadataPosition // Source of truth after persist / for grouped cards
           originalPositionsRef.current.set(baseNodeId, metadataPosition) // Cache in memory
         }
 
@@ -4282,7 +4335,7 @@ function BoardFlowInner({
     // Build visual block-group frames from isBlockGroup messages
     for (const message of messagesToUse) {
       if (!isBlockGroupMeta(message.metadata as Record<string, unknown>)) continue
-      const nodeId = `block-group-${message.id}`
+      const nodeId = blockGroupNodeId(message.id)
       const meta = (message.metadata || {}) as Record<string, unknown>
       const metaPos = meta.position as { x: number; y: number } | undefined
       const storedPos = originalPositionsRef.current.get(nodeId)
@@ -4295,34 +4348,30 @@ function BoardFlowInner({
         id: nodeId,
         type: 'blockGroup',
         position,
-        style: { width: dims.width, height: dims.height },
+        style: { width: dims.width, height: dims.height }, // Visible dashed frame (sibling of cards)
         data: { conversationId: conversationId || '' },
         draggable: !isLocked,
-        zIndex: -1, // Sit behind child blocks
+        zIndex: 0, // Behind child cards, still above the canvas
       })
       originalPositionsRef.current.set(nodeId, position)
     }
 
-    // Parent child blocks into their group (relative positions for RF subflows)
+    // Groups are visual siblings of cards (no RF parentId) — keep page-absolute positions.
+    // Convert any leftover RF-parented coords so a reload doesn’t jump.
     const groupPosById = new Map(blockGroupNodes.map((g) => [g.id, g.position]))
     for (const node of newNodes) {
-      const groupId = node.data.promptMessage?.metadata?.blockGroupId as string | undefined
-      if (!groupId) continue
-      const parentId = `block-group-${groupId}`
-      const groupPos = groupPosById.get(parentId)
-      if (!groupPos) continue
       const existing = nodes?.find((n) => n.id === node.id)
-      // Prefer already-relative positions when the node was already parented
-      if (existing?.parentId === parentId) {
-        node.position = existing.position
-      } else {
+      if (existing?.parentId) {
+        const groupPos = groupPosById.get(existing.parentId)
         node.position = {
-          x: node.position.x - groupPos.x,
-          y: node.position.y - groupPos.y,
+          x: existing.position.x + (groupPos?.x ?? 0), // Relative → absolute
+          y: existing.position.y + (groupPos?.y ?? 0),
         }
       }
-      node.parentId = parentId
-      node.extent = 'parent'
+      delete (node as { parentId?: string }).parentId // RF treats the key as parented even if undefined
+      delete (node as { parentNode?: string }).parentNode
+      delete (node as { extent?: unknown }).extent
+      node.zIndex = 1 // Cards above the dashed group frame
     }
 
     // Deduplicate nodes by ID to prevent duplicate key errors
@@ -4365,6 +4414,7 @@ function BoardFlowInner({
         // Also refresh when group membership / frame geometry changes
         const groupChanged =
           existingNode.parentId !== n.parentId ||
+          Boolean(existingNode.parentId) || // Drop leftover RF parenting
           existingNode.type === 'blockGroup' ||
           n.type === 'blockGroup'
         return existingResponseId !== newResponseId || groupChanged
@@ -4393,6 +4443,7 @@ function BoardFlowInner({
           parentId: node.parentId,
           extent: node.extent,
           style: node.style ?? existingNode?.style,
+          zIndex: node.zIndex ?? existingNode?.zIndex, // Cards above group frame
           draggable: existingNode?.draggable ?? node.draggable, // Keep existing draggable state
         }
       })
@@ -5555,15 +5606,8 @@ function BoardFlowInner({
       for (const node of selected) {
         const prompt = node.data.promptMessage
         if (!prompt?.id) continue
-        const absPos = node.parentId
-          ? (() => {
-              const parent = nodes.find((n) => n.id === node.parentId)
-              return {
-                x: (parent?.position.x ?? 0) + node.position.x + 40,
-                y: (parent?.position.y ?? 0) + node.position.y + 40,
-              }
-            })()
-          : { x: node.position.x + 40, y: node.position.y + 40 }
+        const abs = absFlowPosition(node, nodes) // Group-relative → page-absolute
+        const absPos = { x: abs.x + 40, y: abs.y + 40 } // Offset so the copy doesn’t sit on the original
         const meta = duplicateBlockMetadata(
           (prompt.metadata as Record<string, unknown>) || {},
           absPos
@@ -5614,9 +5658,9 @@ function BoardFlowInner({
       let maxX = -Infinity
       let maxY = -Infinity
       for (const node of selected) {
-        const parent = node.parentId ? nodes.find((n) => n.id === node.parentId) : null
-        const absX = (parent?.position.x ?? 0) + node.position.x
-        const absY = (parent?.position.y ?? 0) + node.position.y
+        const abs = absFlowPosition(node, nodes) // Bounds in page space even if already grouped
+        const absX = abs.x
+        const absY = abs.y
         const w = (node.width as number) || (node.style?.width as number) || 280
         const h = (node.height as number) || (node.style?.height as number) || 160
         minX = Math.min(minX, absX)
@@ -5633,18 +5677,12 @@ function BoardFlowInner({
       }
       // Persist absolute child positions before parenting
       for (const node of selected) {
-        const parent = node.parentId ? nodes.find((n) => n.id === node.parentId) : null
-        const abs = {
-          x: (parent?.position.x ?? 0) + node.position.x,
-          y: (parent?.position.y ?? 0) + node.position.y,
-        }
         const msgId = node.data.promptMessage!.id
-        const { data: row } = await supabase.from('messages').select('metadata').eq('id', msgId).single()
-        const existing = (row?.metadata as Record<string, unknown>) || {}
-        await supabase
-          .from('messages')
-          .update({ metadata: { ...existing, position: abs, isBlock: true } })
-          .eq('id', msgId)
+        await persistBlockPlacement(supabase, {
+          messageId: msgId,
+          position: absFlowPosition(node, nodes), // Absolute before parenting
+          blockGroupId: null, // createBlockGroup writes the new group id next
+        })
       }
       await createBlockGroup(supabase, {
         conversationId,
@@ -5674,21 +5712,11 @@ function BoardFlowInner({
       // Write absolute positions before clearing parent
       for (const node of targets) {
         if (node.type !== 'chatPanel' || !node.data?.promptMessage?.id) continue
-        const parent = node.parentId ? nodes.find((n) => n.id === node.parentId) : null
-        const abs = {
-          x: (parent?.position.x ?? 0) + node.position.x,
-          y: (parent?.position.y ?? 0) + node.position.y,
-        }
-        const { data: row } = await supabase
-          .from('messages')
-          .select('metadata')
-          .eq('id', node.data.promptMessage.id)
-          .single()
-        const existing = (row?.metadata as Record<string, unknown>) || {}
-        await supabase
-          .from('messages')
-          .update({ metadata: { ...existing, position: abs, isBlock: true } })
-          .eq('id', node.data.promptMessage.id)
+        await persistBlockPlacement(supabase, {
+          messageId: node.data.promptMessage.id,
+          position: absFlowPosition(node, nodes), // Absolute before clearing parent
+          blockGroupId: null, // Standalone on the page
+        })
       }
       await ungroupBlocks(supabase, { childMessageIds: childIds })
       await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
@@ -6484,6 +6512,24 @@ function BoardFlowInner({
           if (node.type === 'placeholder' || currentNode?.type === 'placeholder') {
             return
           }
+
+          // ⋮⋮ / card drag must not also move a selected group; group drag must not double-move selected kids
+          if (node.type === 'chatPanel') {
+            setNodes((nds) =>
+              nds.map((n) =>
+                n.type === 'blockGroup' && n.selected ? { ...n, selected: false } : n
+              )
+            )
+          } else if (node.type === 'blockGroup') {
+            const groupMessageId = node.id.replace(/^block-group-/, '')
+            setNodes((nds) =>
+              nds.map((n) => {
+                const inGroup =
+                  n.data?.promptMessage?.metadata?.blockGroupId === groupMessageId
+                return inGroup && n.selected ? { ...n, selected: false } : n // Hook translates members; RF must not also
+              })
+            )
+          }
           
           // Check if this node is the target of any placeholder (the node the placeholder is connected to)
           const placeholderNodes = nodes.filter((n) => n.type === 'placeholder')
@@ -6518,14 +6564,17 @@ function BoardFlowInner({
           if (isTargetNode && (node.selected || currentNode?.selected)) {
             setIsSelectedNodeDragging(true)
           }
+
+          onBlockGroupNodeDrag(event, node) // Highlight group drop target while dragging a block
         }}
-        onNodeDragStop={() => {
+        onNodeDragStop={(event, node) => {
           // Clear drag state when drag stops
           setIsSelectedNodeDragging(false)
           // Rebuild helper lines index when drag stops
           if (snapEnabled) {
             rebuildIndex(nodes)
           }
+          void onBlockGroupNodeDragStop(event, node) // Attach to group / detach onto the page + persist
         }}
         nodeTypes={memoizedNodeTypes}
         edgeTypes={memoizedEdgeTypes}

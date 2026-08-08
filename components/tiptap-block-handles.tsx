@@ -2,7 +2,7 @@
 
 // Notion-style ⋮⋮ handles per TipTap content block (not the map-card frame).
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { Editor } from '@tiptap/react'
 import { GripVertical } from 'lucide-react'
@@ -106,6 +106,8 @@ export function TipTapBlockHandles({
   const focusRef = useRef<HandleLayout | null>(null)
   hoverRef.current = hover
   focusRef.current = focusLayout
+  // Click vs drag on the ⋮⋮ grip — click opens menu; drag moves the map card (RF node)
+  const gripPointerRef = useRef<{ x: number; y: number; dragged: boolean } | null>(null)
 
   // Clear highlight when menu closes
   const closeMenu = useCallback(() => {
@@ -268,6 +270,26 @@ export function TipTapBlockHandles({
     [editor]
   )
 
+  // Click vs drag: window listeners survive RF capturing the pointer after node-drag starts
+  const onGripPointerDown = useCallback((e: ReactPointerEvent) => {
+    if (e.button !== 0) return // Left button only
+    gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false } // Baseline
+    const onMove = (ev: PointerEvent) => {
+      const start = gripPointerRef.current
+      if (!start || start.dragged) return
+      const dx = ev.clientX - start.x
+      const dy = ev.clientY - start.y
+      if (dx * dx + dy * dy > 16) start.dragged = true // ~4px → node drag, not menu
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove, true)
+      window.removeEventListener('pointerup', onUp, true)
+    }
+    window.addEventListener('pointermove', onMove, true) // Capture even after RF takes the pointer
+    window.addEventListener('pointerup', onUp, true)
+    // Do not stopPropagation — React Flow needs this pointerdown/mousedown to drag the map card
+  }, [])
+
   const onAction = useCallback(
     (action: BlockActionId, payload?: BlockActionPayload) => {
       if (!editor || !menu) return
@@ -317,29 +339,37 @@ export function TipTapBlockHandles({
   return (
     <>
       {layout && active && (
-        <button
-          type="button"
+        <div
+          role="button"
+          tabIndex={0}
           data-tt-block-handle
           className={cn(
-            'nodrag nopan absolute z-[60] w-5 h-6 flex items-center justify-center rounded',
+            'nopan absolute z-[60] w-5 h-6 flex items-center justify-center rounded', // Div, not button — RF ignores drag starts on BUTTON
             'text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/10',
-            'pointer-events-auto cursor-grab'
+            'pointer-events-auto cursor-grab active:cursor-grabbing select-none'
           )}
           style={{
             left: 0,
             top: layout.top, // Align grip to top of the content block (not vertically centered)
           }}
-          title="Block actions"
-          onPointerDown={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
+          title="Drag to move · click for actions"
+          onPointerDown={onGripPointerDown}
           onClick={(e) => {
             e.stopPropagation()
             e.preventDefault()
-            openForBlock(layout.block, e.clientX, e.clientY)
+            const start = gripPointerRef.current
+            gripPointerRef.current = null
+            if (start?.dragged) return // Drag moved the card — don’t open the menu
+            openForBlock(layout.block, e.clientX, e.clientY) // Click → content-block actions
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return
+            e.preventDefault()
+            openForBlock(layout.block, e.currentTarget.getBoundingClientRect().right, e.currentTarget.getBoundingClientRect().top)
           }}
         >
-          <GripVertical className="h-4 w-4" />
-        </button>
+          <GripVertical className="h-4 w-4 pointer-events-none" />
+        </div>
       )}
 
       {menu &&

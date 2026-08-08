@@ -1277,3 +1277,21 @@ span[data-added="true"] {
     margin-top: 0.2em;
   }
 }
+
+/* Group frame sits behind cards; cards stay independently draggable (no RF parentId) */
+.react-flow__node-blockGroup {
+  z-index: 0 !important;
+}
+.react-flow__node-chatPanel {
+  z-index: 1 !important;
+}
+
+/* Drop-target highlight while dragging a block onto a group */
+.react-flow__node-blockGroup.drop-target [data-block-group="true"] {
+  border-color: #3b82f6; /* blue-500 */
+  background-color: rgba(59, 130, 246, 0.12);
+}
+.dark .react-flow__node-blockGroup.drop-target [data-block-group="true"] {
+  border-color: #60a5fa; /* blue-400 */
+  background-color: rgba(37, 99, 235, 0.22);
+}
