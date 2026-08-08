@@ -1,14 +1,14 @@
 'use client'
 
 // Custom React Flow node for chat panels (prompt + response)
-import { NodeProps, Handle, Position, useReactFlow, NodeResizeControl } from 'reactflow' // RF node primitives + corner resize controls
+import { NodeProps, Handle, Position, useReactFlow, NodeResizeControl } from 'reactflow' // RF node primitives + corner/line resize
 import { cn, generateUUID } from '@/lib/utils'
 import { useEditor, EditorContent } from '@tiptap/react'
 import { createPanelExtensions } from '@/lib/tiptap/extensions' // StarterKit + Turn into nodes
 import { TipTapBlockHandles } from '@/components/tiptap-block-handles' // Per-content-block ⋮⋮ (Notion)
 import type { PageInTarget } from '@/components/block-actions-menu'
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw } from 'lucide-react' // RotateCw = rotation
+import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, Lock, Unlock, ChevronDown, ChevronUp } from 'lucide-react' // Rotate + frame lock / overflow expand·collapse
 
 // Helper to check if content is effectively empty (handling HTML tags)
 const isContentEmpty = (content: string | undefined | null) => {
@@ -59,7 +59,7 @@ import { useTheme } from './theme-provider'
 import { SelectionFormatPopupAnchor } from './selection-format-popup' // Notion-style selection menu (stable edge anchor)
 import { BlockTitleEdge } from './block-title-edge' // Edge title chip; titled blocks promote to pages
 import { NestedBoardPreview, prefetchPageEmbed } from './nested-board-preview' // Page-within-page board preview
-import { deleteLinkedPageForBlock, isBlockMeta, isPageBodyMeta } from '@/lib/blocks' // Block detection + delete sync
+import { deleteLinkedPageForBlock, isBlockContentEmpty, isBlockMeta, isPageBodyMeta } from '@/lib/blocks' // Block detection + empty check + delete sync
 import { applyTurnInto } from '@/lib/blocks/turn-into' // Page / Page in from content-block menu
 
 interface Message {
@@ -197,6 +197,7 @@ function TipTapContent({
   onEditorActiveChange,
   fontScale,
   enableBlockHandles = false, // Notion ⋮⋮ on each content block (not the card frame)
+  singleLineUntilEnter = false, // Unresized blocks: one visual line per TipTap block
   hostNodeId,
   pageInTargets,
   onPageTurnInto,
@@ -221,6 +222,7 @@ function TipTapContent({
   onEditorActiveChange?: (isActive: boolean) => void // Called when editor is focused or has selection
   fontScale?: number // Font scale factor for resized panels (defaults to 1)
   enableBlockHandles?: boolean
+  singleLineUntilEnter?: boolean // Unresized map blocks: grow width; Enter starts a new line
   hostNodeId?: string
   pageInTargets?: PageInTarget[]
   onPageTurnInto?: (blockType: 'page' | 'pageIn', pageInParentId?: string | null) => void
@@ -250,6 +252,7 @@ function TipTapContent({
           'prose max-w-none focus:outline-none min-h-[20px] cursor-text',
           isFlashcard && 'text-xl' // Increase font size for flashcards
         ),
+        ...(singleLineUntilEnter ? { 'data-single-line': 'true' } : {}), // CSS nowrap until Enter
       },
       handleDOMEvents: {
         mousedown: (view, event) => {
@@ -377,6 +380,19 @@ function TipTapContent({
       editorDOM.style.fontSize = `${scale}em`
     }
   }, [editor, fontScale])
+
+  // Keep single-line mode in sync (unresized map blocks grow until Enter)
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return
+    const editorDOM = editor.view.dom as HTMLElement
+    if (singleLineUntilEnter) {
+      editorDOM.setAttribute('data-single-line', 'true') // nowrap + max-content via CSS
+      editorDOM.style.width = 'max-content'
+    } else {
+      editorDOM.removeAttribute('data-single-line')
+      editorDOM.style.width = ''
+    }
+  }, [editor, singleLineUntilEnter])
 
   // Apply blue highlights to commented text when comments change
   useEffect(() => {
@@ -520,9 +536,9 @@ function TipTapContent({
   useEffect(() => {
     if (editor) {
       const currentContent = editor.getHTML()
-      // Always sync content, even if empty (to clear editor when content is removed)
-      // Use empty paragraph to ensure cursor is always visible
+      // Sync prop → editor, but never clobber an active typing session with a stale prop
       if (currentContent !== content) {
+        if (editor.isFocused) return // Caret owns the doc while typing; parent catches up on blur/save
         editor.commands.setContent(content || '<p></p>')
         // Ensure cursor is visible by focusing if editor is empty
         if (!content || content.trim() === '' || content === '<p></p>') {
@@ -1272,9 +1288,17 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const DEFAULT_PANEL_WIDTH = 768 // Default panel width (max-width)
   const DEFAULT_PANEL_HEIGHT = 400 // Default panel height estimate
   const [resizeDimensions, setResizeDimensions] = useState<{ width: number; height: number } | null>(null) // Track resized dimensions
-  const [fontScale, setFontScale] = useState(1) // Scale factor for text based on resize ratio
+  const [isUserResized, setIsUserResized] = useState(false) // True only after corner-drag or saved resizeDimensions — not auto line-grow
+  const [fontScale, setFontScale] = useState(1) // Legacy editor font-size scale (blocks use frameScale instead)
+  const [frameUnlocked, setFrameUnlocked] = useState(false) // Unlocked: free resize; locked: content scales with frame
+  const [frameScale, setFrameScale] = useState(1) // Uniform content scale while frame is locked
+  const [intrinsicSize, setIntrinsicSize] = useState({ width: 160, height: 48 }) // Unscaled content box (max-content)
+  const [isFrameHovering, setIsFrameHovering] = useState(false) // Hover chrome (overflow chevron when unselected)
+  const [collapsedFrameSize, setCollapsedFrameSize] = useState<{ width: number; height: number } | null>(null) // Pre-expand box for collapse toggle
   const [rotation, setRotation] = useState(0) // Degrees of item rotation (persisted in message metadata)
   const isResizingRef = useRef(false) // Track if currently resizing
+  const contentFitRef = useRef<HTMLDivElement>(null) // Inner unscaled content wrapper for intrinsic measure
+  const lockedResizeStartRef = useRef<{ width: number; height: number; scale: number } | null>(null) // Locked drag baseline
   const initialResizeWidthRef = useRef<number | null>(null) // Track initial panel width when resize starts (for note panels)
   const initialResizeHeightRef = useRef<number | null>(null) // Track initial panel height when resize starts (for note panels)
   const initialTextWidthRef = useRef<number | null>(null) // Track initial TEXT content width (for proper fill scaling)
@@ -1510,11 +1534,30 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           setRotation(metadata.rotation) // Apply persisted angle so layout survives reload
         }
 
+        // Frame lock: default locked; unlocked lets the box resize independently of content
+        if (isBlockPanel && typeof metadata.frameUnlocked === 'boolean') {
+          setFrameUnlocked(metadata.frameUnlocked)
+        }
+        if (isBlockPanel && typeof metadata.frameScale === 'number' && metadata.frameScale > 0) {
+          setFrameScale(metadata.frameScale) // Locked proportional scale
+        }
+        if (
+          isBlockPanel &&
+          metadata.collapsedFrameSize &&
+          typeof metadata.collapsedFrameSize === 'object'
+        ) {
+          const snap = metadata.collapsedFrameSize as { width?: number; height?: number }
+          if (snap.width && snap.height && snap.width > 0 && snap.height > 0) {
+            setCollapsedFrameSize({ width: snap.width, height: snap.height }) // Restore expand/collapse toggle
+          }
+        }
+
         // Load explicit box size for items + other panels (corner resize baseline)
         if (metadata.resizeDimensions && typeof metadata.resizeDimensions === 'object') {
           const dims = metadata.resizeDimensions as { width?: number; height?: number }
           if (dims.width && dims.height && dims.width > 0 && dims.height > 0) {
             setResizeDimensions({ width: dims.width, height: dims.height })
+            setIsUserResized(true) // Persisted resize → wrap in fixed box; skip line-grow
             
             // Update React Flow node dimensions to match saved resize
             const setNodesFunc = getSetNodes()
@@ -1745,6 +1788,26 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     (promptMessage?.role === 'user' && 
      !responseMessage && 
      (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
+
+  // Offset nodules outside the resize rectangle via inline style so RF handleBounds match the visual dots
+  const noduleOut = isBlock && selected ? 14 : 0 // Match CSS offset outside the blue frame
+  const noduleHandleStyle = (side: 'left' | 'right' | 'top' | 'bottom'): React.CSSProperties => ({
+    width: '10px',
+    height: '10px',
+    backgroundColor: handleColor,
+    border: `1px solid ${handleBorderColor}`,
+    '--handle-color': handleColor,
+    '--handle-hover-color': handleHoverColor,
+    ...(noduleOut
+      ? side === 'left'
+        ? { left: -noduleOut, top: '50%', transform: 'translate(-50%, -50%)' }
+        : side === 'right'
+          ? { right: -noduleOut, top: '50%', transform: 'translate(50%, -50%)' }
+          : side === 'top'
+            ? { top: -noduleOut, left: '50%', transform: 'translate(-50%, -50%)' }
+            : { bottom: -noduleOut, left: '50%', transform: 'translate(-50%, 50%)' }
+      : {}),
+  }) as React.CSSProperties
   
   // Calculate dynamic line-height for note nodes based on height (decreases as height increases)
   const calculateNoteLineHeight = useCallback(() => {
@@ -1833,28 +1896,55 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       resizeObserver.disconnect()
     }
   }, [isBlock, calculateNoteLineHeight])
+
+  // Unscaled content box — used for overflow detection + lock scale baseline
+  useEffect(() => {
+    if (!isBlock) return
+    const el = contentFitRef.current
+    if (!el) return
+    const measure = () => {
+      const width = Math.max(1, el.offsetWidth) // Transform does not affect offsetWidth
+      const height = Math.max(1, el.offsetHeight)
+      setIntrinsicSize((prev) =>
+        prev.width === width && prev.height === height ? prev : { width, height }
+      )
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [isBlock, promptContent, frameUnlocked])
   
   // Regular chat panels are those that are not flashcards and not notes
   const isRegularChatPanel = !isFlashcard && !isBlock
 
-  // Keep RF node width/height aligned with the measured item box so NodeResizeControl
-  // starts from real size (fit-content nodes often have width/height 0 → drag looks like move)
+  // Keep RF node box = panel content box so selection/resize frame hugs the card
   useEffect(() => {
     if (!isBlock || !panelRef.current || !isInitialShrinkComplete) return // Wait until block has laid out
     const el = panelRef.current // Panel DOM for measurement
     const syncNodeSize = () => {
       if (isResizingRef.current || !el) return // During active resize, RF owns dimensions
-      const width = el.offsetWidth // Measured content box width
-      const height = el.offsetHeight // Measured content box height
+      const width = Math.ceil(el.offsetWidth) // Content-fitted width
+      const height = Math.ceil(el.offsetHeight) // Content-fitted height
       if (width <= 0 || height <= 0) return // Ignore empty frames
       const setNodesFunc = getSetNodes() // Board setNodes from context
       if (!setNodesFunc) return
       setNodesFunc((nodes: any[]) =>
-        nodes.map((node: any) =>
-          node.id === id && (node.width !== width || node.height !== height)
-            ? { ...node, width, height } // Write baseline for corner-handle math
-            : node
-        )
+        nodes.map((node: any) => {
+          if (node.id !== id) return node
+          const styleW = typeof node.style?.width === 'number' ? node.style.width : parseFloat(node.style?.width)
+          const styleH = typeof node.style?.height === 'number' ? node.style.height : parseFloat(node.style?.height)
+          if (node.width === width && node.height === height && styleW === width && styleH === height) {
+            return node // Already fitted
+          }
+          // Write width/height + style so RF frame matches content (stale style left empty chrome)
+          return {
+            ...node,
+            width,
+            height,
+            style: { ...node.style, width, height },
+          }
+        })
       )
     }
     syncNodeSize() // Immediate sync on select/mount
@@ -1863,55 +1953,71 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     return () => ro.disconnect()
   }, [isBlock, id, getSetNodes, isInitialShrinkComplete, resizeDimensions, selected])
 
-  // Handle resize end - clear resizing flag and persist explicit box size from final params
-  const handleResizeEnd = useCallback(async (_event: any, params?: { width: number; height: number }) => {
-    isResizingRef.current = false // Allow size-sync observer again
-    isFirstResizeCallRef.current = true // Reset first-call bookkeeping
-
-    // Prefer RF end params (avoids stale React state); fall back to current state
-    const width = Math.max(params?.width ?? resizeDimensions?.width ?? 0, 200)
-    const height = Math.max(params?.height ?? resizeDimensions?.height ?? 0, 40)
-    if (width > 0 && height > 0) {
-      setResizeDimensions({ width, height }) // Lock final box size into local state
-    }
-
+  // Persist frame lock / scale / box size (resize end + lock toggle + overflow expand)
+  const persistFrameMeta = useCallback(async (patch: Record<string, unknown>) => {
     if (isProjectBoard || !promptMessage) return // Nothing to persist on project boards
-
     const { data: message, error: fetchError } = await supabase
       .from('messages')
       .select('metadata')
       .eq('id', promptMessage.id)
       .single()
-
     if (fetchError) {
-      console.error('Error fetching message for resize save:', fetchError)
+      console.error('Error fetching message for frame save:', fetchError)
       return
     }
-
     const existingMetadata = (message?.metadata as Record<string, any>) || {}
-    const updatedMetadata: Record<string, any> = {
-      ...existingMetadata,
-      resizeDimensions: { width, height }, // Persist box for reload
-    }
-    if (isBlock) updatedMetadata.fontScale = fontScale // Keep legacy scale if present
-
     const { error: updateError } = await supabase
       .from('messages')
-      .update({ metadata: updatedMetadata })
+      .update({ metadata: { ...existingMetadata, ...patch } })
       .eq('id', promptMessage.id)
+    if (updateError) console.error('Error saving frame metadata:', updateError)
+  }, [isProjectBoard, promptMessage, supabase])
 
-    if (updateError) {
-      console.error('Error saving resize state to database:', updateError)
-    }
-  }, [isBlock, isProjectBoard, promptMessage, fontScale, resizeDimensions, supabase])
-
-  // Corner-drag resize: apply explicit width/height so the box grows/shrinks (not just moves)
-  const handleResize = useCallback((_event: any, params: { width: number; height: number }) => {
+  // Corner pointer down — only then treat size changes as a user resize (ignore spurious RF callbacks)
+  const handleResizeStart = useCallback(() => {
     isResizingRef.current = true // Block observer from fighting live resize
-    const width = Math.max(params.width, 200) // Enforce min width
-    const height = Math.max(params.height, 40) // Enforce min height so handles stay usable
+    setIsUserResized(true) // Switch from line-grow to explicit frame box
+    const startW = resizeDimensions?.width ?? panelRef.current?.offsetWidth ?? 200
+    const startH = resizeDimensions?.height ?? panelRef.current?.offsetHeight ?? 40
+    lockedResizeStartRef.current = { width: startW, height: startH, scale: frameScale } // Locked proportional baseline
+  }, [resizeDimensions, frameScale])
+
+  // Handle resize end - clear resizing flag and persist explicit box size from final params
+  const handleResizeEnd = useCallback(async (_event: any, params?: { width: number; height: number }) => {
+    isResizingRef.current = false // Allow size-sync observer again
+    isFirstResizeCallRef.current = true // Reset first-call bookkeeping
+    setIsUserResized(true) // Persist mode: explicit frame box
+    lockedResizeStartRef.current = null // Drop drag baseline
+
+    // Prefer RF end params (avoids stale React state); fall back to current state
+    const minW = frameUnlocked ? 48 : 80
+    const width = Math.max(params?.width ?? resizeDimensions?.width ?? 0, minW)
+    const height = Math.max(params?.height ?? resizeDimensions?.height ?? 0, 40)
+    if (width > 0 && height > 0) {
+      setResizeDimensions({ width, height }) // Lock final box size into local state
+    }
+
+    await persistFrameMeta({
+      resizeDimensions: { width, height },
+      frameUnlocked,
+      frameScale,
+      fontScale,
+    })
+  }, [resizeDimensions, frameUnlocked, frameScale, fontScale, persistFrameMeta])
+
+  // Corner-drag: locked → proportional content scale; unlocked → free frame (content stays)
+  const handleResize = useCallback((_event: any, params: { width: number; height: number }) => {
+    if (!isResizingRef.current) return // Ignore mount/select noise — only after handleResizeStart
+    const minW = frameUnlocked ? 48 : 80
+    const width = Math.max(params.width, minW)
+    const height = Math.max(params.height, 40)
     setResizeDimensions({ width, height }) // Drive panel style — matches RF dimension changes
-  }, [])
+    if (!frameUnlocked && lockedResizeStartRef.current) {
+      const start = lockedResizeStartRef.current
+      const ratio = width / Math.max(1, start.width) // keepAspectRatio → width tracks height
+      setFrameScale(Math.max(0.15, start.scale * ratio)) // Blocks scale with the frame
+    }
+  }, [frameUnlocked])
 
   // Persist item rotation degrees into message metadata after a rotate gesture ends
   const saveRotation = useCallback(async (nextRotation: number) => {
@@ -1971,6 +2077,68 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       return current // No state change needed
     })
   }, [saveRotation])
+
+  // Toggle frame lock: locked = content scales with frame; unlocked = free frame, keep current visual size
+  const handleToggleFrameLock = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const nextUnlocked = !frameUnlocked
+    setFrameUnlocked(nextUnlocked)
+    // Snapshot current box so unlock doesn’t snap back to fit-content
+    const el = panelRef.current
+    const nextDims = resizeDimensions ?? {
+      width: Math.max(48, el?.offsetWidth ?? intrinsicSize.width),
+      height: Math.max(40, el?.offsetHeight ?? intrinsicSize.height),
+    }
+    if (!resizeDimensions) setResizeDimensions(nextDims)
+    setIsUserResized(true)
+    if (!nextUnlocked) setCollapsedFrameSize(null) // Lock mode doesn’t use expand/collapse
+    // Keep frameScale — unlocking must not reset content size
+    void persistFrameMeta({
+      frameUnlocked: nextUnlocked,
+      frameScale,
+      resizeDimensions: nextDims,
+      collapsedFrameSize: nextUnlocked ? collapsedFrameSize : null,
+    })
+  }, [frameUnlocked, frameScale, resizeDimensions, intrinsicSize.width, intrinsicSize.height, collapsedFrameSize, persistFrameMeta])
+
+  // Expand clipped frame to content, or collapse back to the pre-expand box
+  const handleToggleOverflow = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const expandedW = Math.max(48, Math.ceil(intrinsicSize.width * frameScale))
+    const expandedH = Math.max(40, Math.ceil(intrinsicSize.height * frameScale))
+    const current = resizeDimensions ?? {
+      width: panelRef.current?.offsetWidth ?? expandedW,
+      height: panelRef.current?.offsetHeight ?? expandedH,
+    }
+    const isExpanded =
+      !!collapsedFrameSize &&
+      current.width + 2 >= expandedW &&
+      current.height + 2 >= expandedH // Already showing full scaled content
+
+    if (isExpanded && collapsedFrameSize) {
+      setResizeDimensions(collapsedFrameSize) // Return to pre-expand size
+      setIsUserResized(true)
+      void persistFrameMeta({
+        resizeDimensions: collapsedFrameSize,
+        frameUnlocked: true,
+        frameScale,
+        collapsedFrameSize,
+      })
+      return
+    }
+
+    setCollapsedFrameSize(current) // Remember clipped size for collapse
+    setResizeDimensions({ width: expandedW, height: expandedH })
+    setIsUserResized(true)
+    void persistFrameMeta({
+      resizeDimensions: { width: expandedW, height: expandedH },
+      frameUnlocked: true,
+      frameScale,
+      collapsedFrameSize: current,
+    })
+  }, [intrinsicSize.width, intrinsicSize.height, frameScale, resizeDimensions, collapsedFrameSize, persistFrameMeta])
 
   // Auto-select panel when editor is focused or has selection (text edit mode)
   const handleEditorActiveChange = useCallback((isActive: boolean) => {
@@ -2520,17 +2688,31 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
 
   // Get current zoom level and update panel width when zoom is 100% or less
   const [currentZoom, setCurrentZoom] = useState(reactFlowInstance?.getViewport().zoom ?? 1)
-  // Item panels use fit-content width
+  // Block panels grow with the longest TipTap line until manually resized
   const isBlockPanel = isBlockMeta(promptMessage?.metadata)
-  // Items use fit-content width, flashcards and regular panels use fixed width
-  const usesFitContent = isBlockPanel
-  // Regular chat panels start at max width (768), flashcards start at 600, notes use fit-content
-  const initialWidth = isFlashcard ? 600 : (isRegularChatPanel ? 768 : 768) // Regular panels start at max, flashcards at 600
+  const usesFitContent = isBlockPanel // Legacy name: block auto-width (measured px, not CSS fit-content)
+  const growsWithLine = usesFitContent && !isUserResized && !pagePreviewOpen // Line runs until Enter / corner resize
+  const hasBlockContent = isBlock && !isBlockContentEmpty(promptContent) // Lock only when a content block exists
+  const clipUnlocked =
+    isBlock && frameUnlocked && isUserResized && !!resizeDimensions && !pagePreviewOpen // Free frame may hide overflow
+  const scaledContentW = intrinsicSize.width * frameScale // Visual content size (scale kept on unlock)
+  const scaledContentH = intrinsicSize.height * frameScale
+  const contentOverflows =
+    clipUnlocked &&
+    (resizeDimensions!.width + 2 < scaledContentW ||
+      resizeDimensions!.height + 2 < scaledContentH) // Frame smaller than current visual content
+  const frameExpanded =
+    clipUnlocked &&
+    !!collapsedFrameSize &&
+    resizeDimensions!.width + 2 >= scaledContentW &&
+    resizeDimensions!.height + 2 >= scaledContentH // Expand toggle flipped to collapse
+  // Blocks start narrow; chat/flashcards use their fixed starting widths
+  const initialWidth = isFlashcard ? 600 : (usesFitContent ? 200 : 768)
   const [panelWidthToUse, setPanelWidthToUse] = useState(initialWidth)
   // Ref to track current width (avoids stale closures in callbacks)
   const panelWidthRef = useRef(initialWidth)
   // Track maximum width panel has been (so it doesn't grow beyond current width)
-  const [maxPanelWidth, setMaxPanelWidth] = useState(isFlashcard ? 600 : 768)
+  const [maxPanelWidth, setMaxPanelWidth] = useState(isFlashcard ? 600 : (usesFitContent ? 100000 : 768))
   // Track if panel has been manually shrunk (so zoom effect doesn't override it)
   const [isManuallyShrunk, setIsManuallyShrunk] = useState(false)
   // Track if note panel uses fit-content (to prevent zoom-based width updates)
@@ -2652,249 +2834,167 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     panelWidthRef.current = panelWidthToUse
   }, [panelWidthToUse, maxPanelWidth])
 
-  // Ensure DOM width stays in sync after any re-render (prevents wrapping on selection change)
-  // Skip for fit-content panels - CSS handles their width automatically
+  // Keep measured width on the DOM after re-renders (chat/flashcards + user-resized blocks)
   useEffect(() => {
-    if (usesFitContent) return // Don't set width for fit-content panels
-    
+    if (pagePreviewOpen) return
+    if (growsWithLine) {
+      // Unresized blocks: CSS max-content owns size — clear any stale inline px width
+      if (panelRef.current) {
+        panelRef.current.style.width = 'max-content'
+        panelRef.current.style.height = 'fit-content'
+      }
+      return
+    }
+    if (isUserResized && resizeDimensions) return // Explicit box owns width
     if (panelRef.current && panelWidthRef.current) {
       panelRef.current.style.width = `${panelWidthRef.current}px`
     }
   })
 
-  // Measure text content width as single line (before wrapping) to expand panel before text wraps
-  const measureTextWidth = useCallback(() => {
-    if (!panelRef.current) return null
+  // Horizontal chrome around TipTap text: padding + border + optional ⋮⋮ gutter
+  const blockWidthChrome = useCallback(() => {
+    // px-3 (24) + border (2) + buffer (10) + p-1 (8) + pl-6 gutter when block handles on
+    return 24 + 2 + 10 + 8 + (usesFitContent ? 24 : 0)
+  }, [usesFitContent])
 
-    const panelElement = panelRef.current
-    
-    // Get all prose content elements (prompt and response)
-    const proseElements = panelElement.querySelectorAll('.prose')
-    if (proseElements.length === 0) {
-      // Fallback: check for any text content in the panel
-      const textContent = panelElement.textContent?.trim() || ''
-      if (!textContent) return null
-      // If there's text but no prose elements, measure using a temporary element
-      const tempDiv = document.createElement('div')
-      tempDiv.style.position = 'absolute'
-      tempDiv.style.visibility = 'hidden'
-      tempDiv.style.whiteSpace = 'nowrap' // Measure as single line (before wrapping)
-      tempDiv.style.fontSize = window.getComputedStyle(panelElement).fontSize || '16px'
-      tempDiv.style.fontFamily = window.getComputedStyle(panelElement).fontFamily || 'inherit'
-      tempDiv.style.fontWeight = window.getComputedStyle(panelElement).fontWeight || 'normal'
-      tempDiv.style.lineHeight = window.getComputedStyle(panelElement).lineHeight || 'normal'
-      tempDiv.textContent = textContent
-      document.body.appendChild(tempDiv)
-      const textWidth = tempDiv.offsetWidth
-      document.body.removeChild(tempDiv)
-      return Math.max(200, Math.min(textWidth + 24 + 2, maxPanelWidth))
-    }
-
-    // Create a temporary element to measure text width with nowrap
-    const tempMeasureDiv = document.createElement('div')
-    tempMeasureDiv.style.position = 'absolute'
-    tempMeasureDiv.style.visibility = 'hidden'
-    tempMeasureDiv.style.whiteSpace = 'nowrap' // Measure as single line (before wrapping)
-    tempMeasureDiv.style.fontSize = window.getComputedStyle(panelElement).fontSize || '16px'
-    tempMeasureDiv.style.fontFamily = window.getComputedStyle(panelElement).fontFamily || 'inherit'
-    tempMeasureDiv.style.fontWeight = window.getComputedStyle(panelElement).fontWeight || 'normal'
-    tempMeasureDiv.style.lineHeight = window.getComputedStyle(panelElement).lineHeight || 'normal'
-    document.body.appendChild(tempMeasureDiv)
-    
-    try {
-      // Find the maximum width needed by measuring text as single-line (before wrapping)
-      let maxContentWidth = 0
-      
-      proseElements.forEach((proseEl) => {
-        const proseElement = proseEl as HTMLElement
-        
-        // Get all block-level text elements (p, h1-h6, li, blockquote)
-        const blockElements = proseElement.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote')
-        
-        if (blockElements.length > 0) {
-          // Measure each block element's text as a single line
-          blockElements.forEach((blockEl) => {
-            const element = blockEl as HTMLElement
-            // Get plain text content (without HTML tags)
-            const textContent = element.textContent?.trim() || ''
-            if (textContent) {
-              // Set text content and measure width as single line
-              tempMeasureDiv.textContent = textContent
-              const contentWidth = tempMeasureDiv.offsetWidth
-              maxContentWidth = Math.max(maxContentWidth, contentWidth)
-            }
-          })
-        } else {
-          // Fallback: measure the prose element's text content directly
-          const textContent = proseElement.textContent?.trim() || ''
-          if (textContent) {
-            tempMeasureDiv.textContent = textContent
-            const contentWidth = tempMeasureDiv.offsetWidth
-            maxContentWidth = Math.max(maxContentWidth, contentWidth)
-          }
-        }
-      })
-
-      if (maxContentWidth === 0) return null
-
-      // Add panel padding (px-3 = 12px on each side = 24px total) and border (1px each side = 2px total)
-      const totalWidth = maxContentWidth + 24 + 2
-      
-      // Return minimum width (at least 200px for usability, but not more than max width)
-      return Math.max(200, Math.min(totalWidth, maxPanelWidth))
-    } finally {
-      // Clean up temporary element
-      document.body.removeChild(tempMeasureDiv)
-    }
-  }, [maxPanelWidth])
-
-  // Measure text width directly from HTML content string (before rendering) - prevents wrapping
+  // Measure longest TipTap line as nowrap (Enter = new block, not wrap)
   const measureTextWidthFromContent = useCallback((content: string) => {
     if (!content || !panelRef.current) return null
 
     const panelElement = panelRef.current
-    
-    // Try to get styles from existing prose element (more accurate)
     const proseElement = panelElement.querySelector('.prose') as HTMLElement
     const stylesSource = proseElement || panelElement
-    
-    // Get computed styles from the element where text is actually rendered
     const computedStyle = window.getComputedStyle(stylesSource)
-    
-    // Create a temporary element to measure text width
+
     const tempDiv = document.createElement('div')
     tempDiv.style.position = 'absolute'
     tempDiv.style.visibility = 'hidden'
-    tempDiv.style.whiteSpace = 'nowrap' // Measure as single line (before wrapping)
+    tempDiv.style.whiteSpace = 'nowrap' // One visual line
     tempDiv.style.fontSize = computedStyle.fontSize || '16px'
     tempDiv.style.fontFamily = computedStyle.fontFamily || 'inherit'
     tempDiv.style.fontWeight = computedStyle.fontWeight || 'normal'
     tempDiv.style.lineHeight = computedStyle.lineHeight || 'normal'
     tempDiv.style.letterSpacing = computedStyle.letterSpacing || 'normal'
-    
-    // Strip HTML tags to get plain text for measurement
-    const tempTextDiv = document.createElement('div')
-    tempTextDiv.innerHTML = content
-    const plainText = tempTextDiv.textContent || tempTextDiv.innerText || ''
-    
-    if (!plainText.trim()) return null
-    
-    tempDiv.textContent = plainText
     document.body.appendChild(tempDiv)
-    
-    const textWidth = tempDiv.offsetWidth
-    document.body.removeChild(tempDiv)
-    
-    // Add panel padding (px-3 = 12px on each side = 24px total), border (1px each side = 2px total),
-    // and a small buffer (10px) to prevent edge-case wrapping due to font rendering differences
-    const totalWidth = textWidth + 24 + 2 + 10
-    
-    // Return minimum width (at least 200px for usability, but not more than max width)
-    return Math.max(200, Math.min(totalWidth, maxPanelWidth))
-  }, [maxPanelWidth])
 
-  // Expand or shrink panel width as text changes
-  // Regular chat panels only expand (never shrink), flashcards can expand and shrink
-  // Always measures both prompt and response to get the maximum width needed
-  // Wrapping should not happen if panel is not at max width
-  // CRITICAL: Sets DOM width directly (synchronously) to prevent wrapping before React re-renders
+    const tempHtml = document.createElement('div')
+    tempHtml.innerHTML = content
+    // Measure each block separately — concatenated text would over-widen multi-line cards
+    const blocks = tempHtml.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote')
+    let maxTextWidth = 0
+    if (blocks.length > 0) {
+      blocks.forEach((el) => {
+        const line = el.textContent?.replace(/\u00a0/g, ' ') || ''
+        if (!line.trim()) return
+        tempDiv.textContent = line
+        maxTextWidth = Math.max(maxTextWidth, tempDiv.offsetWidth)
+      })
+    } else {
+      const plain = (tempHtml.textContent || '').replace(/\u00a0/g, ' ')
+      for (const line of plain.split(/\n/)) {
+        if (!line.trim()) continue
+        tempDiv.textContent = line
+        maxTextWidth = Math.max(maxTextWidth, tempDiv.offsetWidth)
+      }
+    }
+    document.body.removeChild(tempDiv)
+
+    if (maxTextWidth === 0) return null
+    const totalWidth = maxTextWidth + blockWidthChrome()
+    // Blocks: no wrap cap; chat/flashcards keep maxPanelWidth
+    const cap = usesFitContent ? Number.POSITIVE_INFINITY : maxPanelWidth
+    return Math.max(200, Math.min(totalWidth, cap))
+  }, [maxPanelWidth, usesFitContent, blockWidthChrome])
+
+  // Expand/shrink panel width from longest line — sync DOM before React paint to avoid wrap
   const expandPanelWidth = useCallback((newContent?: string) => {
-    // Skip for fit-content panels (notes) - CSS handles their width automatically
-    if (usesFitContent) return
-    
-    // Always measure both prompt and response to get the maximum width needed
-    // If newContent is provided (prompt change), use it; otherwise use current promptContent
+    if (pagePreviewOpen) return
+    // Unresized blocks: max-content + nowrap hug the line — don’t force oversized px widths
+    if (growsWithLine) {
+      if (panelRef.current) {
+        panelRef.current.style.width = 'max-content'
+        panelRef.current.style.height = 'fit-content'
+      }
+      return
+    }
+    if (isUserResized && resizeDimensions) return // Fixed resized box
+
     const promptToMeasure = newContent !== undefined ? newContent : promptContent
     const promptWidth = measureTextWidthFromContent(promptToMeasure) || 0
     const responseWidth = measureTextWidthFromContent(responseContent) || 0
-    
-    // Use the maximum of prompt and response widths
     const minWidth = isFlashcard ? 300 : 200
     const measuredTotalWidth = Math.max(promptWidth, responseWidth, minWidth)
-    
-    if (measuredTotalWidth) {
-      // Use ref to get current width (avoids stale closure issues)
-      const currentWidth = panelWidthRef.current
-      
-      // Regular chat panels: only expand (never shrink from max width)
-      // Flashcards: expand or shrink to fit content
-      if (isRegularChatPanel) {
-        // Only expand if text is wider than current width
-        if (measuredTotalWidth > currentWidth) {
-          const newWidth = Math.min(measuredTotalWidth, maxPanelWidth)
-          
-          // CRITICAL: Set width on DOM element FIRST (synchronously) to prevent wrapping
-          // React state update is async, so text would wrap before state is applied
-          if (panelRef.current) {
-            panelRef.current.style.width = `${newWidth}px`
-          }
-          
-          // Update ref immediately (synchronous)
-          panelWidthRef.current = newWidth
-          
-          // Then update state to keep it in sync (async, but DOM is already updated)
-          setPanelWidthToUse(newWidth)
-          setIsManuallyShrunk(true) // Mark as manually adjusted to prevent zoom effect from overriding
-        }
-      } else {
-        // Flashcards: expand or shrink to fit content
-        if (measuredTotalWidth !== currentWidth) {
-          const newWidth = Math.min(measuredTotalWidth, maxPanelWidth)
-          
-          // CRITICAL: Set width on DOM element FIRST (synchronously) to prevent wrapping
-          // React state update is async, so text would wrap before state is applied
-          if (panelRef.current) {
-            panelRef.current.style.width = `${newWidth}px`
-          }
-          
-          // Update ref immediately (synchronous)
-          panelWidthRef.current = newWidth
-          
-          // Then update state to keep it in sync (async, but DOM is already updated)
-          setPanelWidthToUse(newWidth)
-          setIsManuallyShrunk(true) // Mark as manually adjusted to prevent zoom effect from overriding
-        }
-      }
-    }
-  }, [measureTextWidthFromContent, maxPanelWidth, usesFitContent, isFlashcard, isRegularChatPanel, promptContent, responseContent])
+    if (!measuredTotalWidth) return
 
-  // Handle blur to shrink panel to fit text content
-  // Regular chat panels don't shrink - they stay at max width
+    const currentWidth = panelWidthRef.current
+    // Chat panels: only grow; flashcards: grow and shrink with content
+    const shouldUpdate = isRegularChatPanel
+      ? measuredTotalWidth > currentWidth
+      : measuredTotalWidth !== currentWidth
+    if (!shouldUpdate) return
+
+    const newWidth = Math.min(measuredTotalWidth, maxPanelWidth)
+
+    if (panelRef.current) {
+      panelRef.current.style.width = `${newWidth}px` // Sync before paint
+    }
+    panelWidthRef.current = newWidth
+    setPanelWidthToUse(newWidth)
+    setIsManuallyShrunk(true)
+  }, [
+    measureTextWidthFromContent,
+    maxPanelWidth,
+    isFlashcard,
+    isRegularChatPanel,
+    promptContent,
+    responseContent,
+    isUserResized,
+    resizeDimensions,
+    pagePreviewOpen,
+    growsWithLine,
+  ])
+
+  // Shrink block/flashcard to longest line on blur
   const handleEditorBlur = useCallback(() => {
-    // Skip fit-content panels - CSS handles their width automatically
-    if (usesFitContent) return
-    
-    // Skip regular chat panels - they stay at max width and don't shrink
-    if (isRegularChatPanel) return
-    
-    // Use setTimeout to ensure DOM has updated after blur
+    if (isRegularChatPanel) return // Chat stays wide
+    if ((isUserResized && resizeDimensions) || pagePreviewOpen) return
+
     setTimeout(() => {
-      // Measure both prompt and response content as single-line (not from DOM which might be wrapped)
       const promptWidth = measureTextWidthFromContent(promptContent) || 0
       const responseWidth = measureTextWidthFromContent(responseContent) || 0
-      // Min width: flashcards need 300px for placeholder
       const minWidth = isFlashcard ? 300 : 200
       const measuredWidth = Math.max(promptWidth, responseWidth, minWidth)
-      
       const currentWidth = panelWidthRef.current
-      
-      // Only shrink if measured width is less than current width
       if (measuredWidth < currentWidth) {
-        // Set DOM directly to avoid flicker
         if (panelRef.current) {
           panelRef.current.style.width = `${measuredWidth}px`
         }
         panelWidthRef.current = measuredWidth
         setPanelWidthToUse(measuredWidth)
-        setIsManuallyShrunk(true) // Mark as manually shrunk to prevent zoom effect from overriding
+        setIsManuallyShrunk(true)
       }
-    }, 100) // Small delay to ensure content is measured after blur
-  }, [measureTextWidthFromContent, promptContent, responseContent, usesFitContent, isFlashcard, isRegularChatPanel])
+    }, 100)
+  }, [
+    measureTextWidthFromContent,
+    promptContent,
+    responseContent,
+    isFlashcard,
+    isRegularChatPanel,
+    isUserResized,
+    resizeDimensions,
+    pagePreviewOpen,
+  ])
 
   // Sync single text body when underlying messages change (plain-merge prompt + response)
-  // Also force-sync after Turn into (metadata.blockType / content rewrite from outside)
+  // Force-sync only when Turn into changes metadata.blockType — not on every keystroke.
+  // (All blocks have blockType: 'text'; treating that as “always remote” wiped local typing.)
   const remoteBlockType = promptMessage?.metadata?.blockType as string | undefined
+  const prevRemoteBlockTypeRef = useRef(remoteBlockType) // Detect Turn into flips only
+  const prevPromptMessageIdRef = useRef(promptMessage?.id) // Reset autofocus only on new message
   useEffect(() => {
+    const blockTypeChanged = remoteBlockType !== prevRemoteBlockTypeRef.current
+    prevRemoteBlockTypeRef.current = remoteBlockType
+
     if (isProjectBoard) {
       if (data.boardTitle !== promptContent && !promptHasChanges) {
         setPromptContent(data.boardTitle)
@@ -2904,13 +3004,18 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         ? formatResponseContent(responseMessage.content)
         : ''
       const merged = mergePanelHtml(promptMessage?.content, responseHtml)
-      if (merged !== promptContent && (!promptHasChanges || remoteBlockType)) {
+      // Accept server content when idle, or when Turn into rewrote blockType + HTML
+      if (merged !== promptContent && (!promptHasChanges || blockTypeChanged)) {
         setPromptContent(merged)
-        if (remoteBlockType) setPromptHasChanges(false) // Accept server Turn into rewrite
+        if (blockTypeChanged) setPromptHasChanges(false)
       }
     }
-    // Reset auto-focus ref when prompt message changes (new note created)
-    hasAutoFocusedRef.current = false
+
+    // Autofocus once per new message — not on every content sync (that steals the caret)
+    if (promptMessage?.id !== prevPromptMessageIdRef.current) {
+      prevPromptMessageIdRef.current = promptMessage?.id
+      hasAutoFocusedRef.current = false
+    }
   }, [isProjectBoard, isProjectBoard ? data.boardTitle : promptMessage?.content, responseMessage?.content, promptContent, promptHasChanges, data, promptMessage?.id, remoteBlockType])
 
   // Keep responseContent mirror for width-measurement helpers that still read it
@@ -2920,136 +3025,85 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       if (formattedContent !== responseContent && !responseHasChanges) {
         setResponseContent(formattedContent)
         setTimeout(() => {
-          if (!usesFitContent) {
-            expandPanelWidth()
-          }
+          expandPanelWidth() // Grow for longest line (blocks + chat/flashcards)
         }, 100)
       }
     } else if (!responseMessage) {
       setResponseContent('')
     }
-  }, [responseMessage?.id, responseMessage?.content, responseContent, responseHasChanges, usesFitContent, expandPanelWidth])
+  }, [responseMessage?.id, responseMessage?.content, responseContent, responseHasChanges, expandPanelWidth])
 
-  // For fit-content panels (notes), show immediately - no shrinking needed
+  // Initial width fit on mount — blocks + flashcards measure longest line; chat stays max width
   useEffect(() => {
-    if (usesFitContent) {
-      setIsInitialShrinkComplete(true)
-    }
-  }, [usesFitContent])
-  
-  // Initial shrink on mount - ensures panels shrink to fit content when first created
-  // This is especially important for flashcards which start at 600px
-  // Regular chat panels stay at max width, only flashcards shrink
-  // Panel is hidden until shrink is complete to prevent visual jump
-  useEffect(() => {
-    // Skip fit-content panels - CSS handles their width
-    if (usesFitContent) return
-    
-    // Skip regular chat panels - they start at max width and don't shrink
     if (isRegularChatPanel) {
-      setIsInitialShrinkComplete(true) // Show immediately, no shrinking needed
+      setIsInitialShrinkComplete(true)
       return
     }
-    
-    // Get panel ID to track if we've shrunk this specific panel
+    if ((isUserResized && resizeDimensions) || pagePreviewOpen) {
+      setIsInitialShrinkComplete(true)
+      return
+    }
+
     const panelId = promptMessage?.id || id
-    
-    // If already shrunk for this panel, show it immediately
     if (hasInitialShrunkRef.current === panelId) {
       setIsInitialShrinkComplete(true)
       return
     }
-    
-    // Wait for DOM to be ready and content to be available
+
     const timeoutId = setTimeout(() => {
       if (!panelRef.current) {
-        setIsInitialShrinkComplete(true) // Show even if ref not ready
+        setIsInitialShrinkComplete(true)
         return
       }
-      
-      // Measure both prompt and response content as single-line
       const promptWidth = measureTextWidthFromContent(promptContent) || 0
       const responseWidth = measureTextWidthFromContent(responseContent) || 0
-      // Min width: flashcards need 300px for placeholder
       const minWidth = isFlashcard ? 300 : 200
       const measuredWidth = Math.max(promptWidth, responseWidth, minWidth)
-      
-      const currentWidth = panelWidthRef.current
-      
-      // Shrink if measured width is less than current width (or if empty, shrink to min)
-      if (measuredWidth < currentWidth || (!promptContent && !responseContent)) {
-        const targetWidth = (!promptContent && !responseContent) ? minWidth : measuredWidth
-        // Set DOM directly to avoid flicker
-        if (panelRef.current) {
-          panelRef.current.style.width = `${targetWidth}px`
-        }
-        panelWidthRef.current = targetWidth
-        setPanelWidthToUse(targetWidth)
-        setIsManuallyShrunk(true) // Mark as adjusted to prevent zoom effect from overriding
-        hasInitialShrunkRef.current = panelId
-      } else {
-        hasInitialShrunkRef.current = panelId
+      const targetWidth = (!promptContent && !responseContent) ? minWidth : measuredWidth
+      if (panelRef.current) {
+        panelRef.current.style.width = `${targetWidth}px`
       }
-      
-      // Show panel after shrink is complete
+      panelWidthRef.current = targetWidth
+      setPanelWidthToUse(targetWidth)
+      setIsManuallyShrunk(true)
+      hasInitialShrunkRef.current = panelId
       setIsInitialShrinkComplete(true)
-    }, 300) // Longer delay on mount to ensure DOM is ready
-    
+    }, 300)
+
     return () => clearTimeout(timeoutId)
-  }, [promptContent, responseContent, measureTextWidthFromContent, usesFitContent, isFlashcard, isRegularChatPanel, promptMessage?.id, id]) // Include deps but use ref to prevent re-running
-  
-  // Auto-expand/shrink panel width when content changes (continuously)
-  // Regular chat panels only expand (never shrink), flashcards can expand and shrink
-  // Skip for fit-content panels (notes) - CSS handles their width automatically
+  }, [
+    promptContent,
+    responseContent,
+    measureTextWidthFromContent,
+    isFlashcard,
+    isRegularChatPanel,
+    promptMessage?.id,
+    id,
+    isUserResized,
+    resizeDimensions,
+    pagePreviewOpen,
+  ])
+
+  // Debounced width adjust when content changes (blocks grow/shrink with longest line)
   useEffect(() => {
-    // Skip fit-content panels - CSS handles their width
-    if (usesFitContent) return
-    
-    // Wait for content to be available
+    if ((isUserResized && resizeDimensions) || pagePreviewOpen) return
     if (!promptContent && !responseContent) return
-    
-    // Use a debounced timeout to adjust width after content changes
+    if (isRegularChatPanel && !promptContent && !responseContent) return
+
     const timeoutId = setTimeout(() => {
-      // Measure both prompt and response content as single-line to get maximum width needed
-      const promptWidth = measureTextWidthFromContent(promptContent) || 0
-      const responseWidth = measureTextWidthFromContent(responseContent) || 0
-      // Min width: flashcards need 300px for placeholder, others need 200px
-      const minWidth = isFlashcard ? 300 : 200
-      const measuredWidth = Math.max(promptWidth, responseWidth, minWidth)
-      
-      const currentWidth = panelWidthRef.current
-      
-      // Regular chat panels: only expand (never shrink from max width)
-      // Flashcards: expand or shrink to fit content
-      if (isRegularChatPanel) {
-        // Only expand if content is wider than current width
-        if (measuredWidth > currentWidth) {
-          const newWidth = Math.min(measuredWidth, maxPanelWidth) // Cap at max width
-          // Set DOM directly to avoid flicker
-          if (panelRef.current) {
-            panelRef.current.style.width = `${newWidth}px`
-          }
-          panelWidthRef.current = newWidth
-          setPanelWidthToUse(newWidth)
-          setIsManuallyShrunk(true) // Mark as adjusted to prevent zoom effect from overriding
-        }
-      } else {
-        // Flashcards: expand or shrink to fit content
-        if (measuredWidth !== currentWidth) {
-          const newWidth = Math.min(measuredWidth, maxPanelWidth) // Cap at max width
-          // Set DOM directly to avoid flicker
-          if (panelRef.current) {
-            panelRef.current.style.width = `${newWidth}px`
-          }
-          panelWidthRef.current = newWidth
-          setPanelWidthToUse(newWidth)
-          setIsManuallyShrunk(true) // Mark as adjusted to prevent zoom effect from overriding
-        }
-      }
-    }, 150) // Debounce delay - shorter than blur delay for more responsive adjustment
-    
+      expandPanelWidth()
+    }, 150)
+
     return () => clearTimeout(timeoutId)
-  }, [promptContent, responseContent, measureTextWidthFromContent, usesFitContent, isFlashcard, isRegularChatPanel, maxPanelWidth])
+  }, [
+    promptContent,
+    responseContent,
+    expandPanelWidth,
+    isRegularChatPanel,
+    isUserResized,
+    resizeDimensions,
+    pagePreviewOpen,
+  ])
 
   const handlePromptChange = async (newContent: string) => {
     // Expand panel width FIRST (before content update) to prevent wrapping
@@ -3319,8 +3373,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // Corner resize dots match mockup: white fill, thin gray ring, circular
   // Slightly larger than the visual ring so the hit target is easier to grab than the node body
   const itemCornerResizeStyle = {
-    width: 14, // Hit target (CSS paints the inner 10px circle)
-    height: 14, // Keep square so border-radius yields a circle
+    width: 10, // Circle sits on the connected blue rectangle
+    height: 10,
     background: resolvedTheme === 'dark' ? '#1a1a1a' : '#ffffff', // Contrast against board
     border: '1.5px solid #9ca3af', // Neutral ring (not selection blue)
     borderRadius: '50%', // Circular corner handles
@@ -3334,10 +3388,16 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         ref={panelRef}
         data-panel-container="true" // Data attribute to help find panel container for comment popup
         data-block-node={isBlock ? 'true' : undefined} // Marks blocks for selected connection-dot styling
+        data-block-resized={undefined} // Blocks stay nowrap; unlocked clip hides overflow instead of wrapping
         className={cn(
-          'group rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible backdrop-blur-sm transition-[opacity,box-shadow,background-color,border-color] duration-300', // No transform transition so live rotate stays snappy
+          'group rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible backdrop-blur-sm transition-[opacity,box-shadow,background-color,border-color] duration-300', // Chrome sits outside; clip only inner body
           // Always show blue border when selected, otherwise use custom border color or default theme-based color
-          selected ? 'border-blue-500 dark:border-blue-400' : (data.borderColor ? '' : 'border-gray-200 dark:border-[#2f2f2f]'),
+          // Selection uses the connected resize rectangle (not a rounded card border)
+          selected && isBlock
+            ? (data.borderColor ? '' : 'border-transparent')
+            : selected
+              ? 'border-blue-500 dark:border-blue-400'
+              : (data.borderColor ? '' : 'border-gray-200 dark:border-[#2f2f2f]'),
           isBookmarked
             ? 'shadow-[0_0_8px_rgba(250,204,21,0.6)] dark:shadow-[0_0_8px_rgba(250,204,21,0.4)]'
             : (data.borderStyle === 'none' ? 'shadow-none' : 'shadow-sm'),
@@ -3345,16 +3405,32 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           shouldBlur && 'blur-sm opacity-40 pointer-events-none'
         )}
       style={{
-        // Item panels use fit-content width (grows with text), others use fixed width
+        // Unresized blocks: max-content × fit-content so the frame hugs text (nowrap until Enter)
         // Page preview expands the item into a board-within-board window
         width: pagePreviewOpen
           ? '520px'
-          : resizeDimensions
+          : isUserResized && resizeDimensions
             ? `${resizeDimensions.width}px`
-            : (usesFitContent ? 'fit-content' : `${panelWidthToUse}px`),
+            : growsWithLine
+              ? 'max-content'
+              : `${panelWidthToUse}px`,
         // Preview mode: fixed window — body text is hidden so it can’t sit under the preview chrome
-        height: pagePreviewOpen ? '420px' : (resizeDimensions ? `${resizeDimensions.height}px` : undefined),
-        minWidth: pagePreviewOpen ? '520px' : (usesFitContent ? '200px' : (isFlashcard ? '300px' : '200px')),
+        height: pagePreviewOpen
+          ? '420px'
+          : isUserResized && resizeDimensions
+            ? `${resizeDimensions.height}px`
+            : growsWithLine
+              ? 'fit-content'
+              : undefined,
+        minWidth: pagePreviewOpen
+          ? '520px'
+          : growsWithLine
+            ? '160px' // Empty/short blocks stay usable; grow with longest line
+            : usesFitContent
+              ? '200px'
+              : isFlashcard
+                ? '300px'
+                : '200px',
         minHeight: pagePreviewOpen ? '420px' : '0px',
         maxWidth: undefined,
         opacity: isInitialShrinkComplete ? 1 : 0,
@@ -3364,6 +3440,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         borderWidth: selected ? (data.borderWeight || '1px') : (data.borderWeight || undefined),
         transform: rotation ? `rotate(${rotation}deg)` : undefined, // Apply persisted/live item rotation
         transformOrigin: 'center center', // Rotate around panel center (matches drag math)
+      }}
+      onMouseEnter={() => setIsFrameHovering(true)} // Overflow chevron on hover even when unselected
+      onMouseLeave={(e) => {
+        const related = e.relatedTarget as HTMLElement | null
+        if (related?.closest?.('[data-frame-chrome]')) return // Moving onto lock/rotate/expand
+        setIsFrameHovering(false)
       }}
       onClick={(e) => {
         // Single-section items: no collapse expand-on-click
@@ -3387,38 +3469,99 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         }
       }}
     >
-      {/* Selected blocks: four circular corner resize handles (replaces bottom-right toolbar island) */}
+      {/* Selected blocks: connected blue rectangle + circular corner handles */}
       {selected && isBlock && (
         <>
+          {(['top', 'right', 'bottom', 'left'] as const).map((position) => (
+            <NodeResizeControl
+              key={`line-${position}`} // Side line that joins the four corners
+              position={position}
+              variant="line" // RF line control (rectangle edges that meet the corner dots)
+              className="nopan tt-frame-resize-line" // Styled as continuous blue border
+              minWidth={frameUnlocked ? 48 : 80}
+              minHeight={40}
+              keepAspectRatio={!frameUnlocked && hasBlockContent}
+              onResizeStart={handleResizeStart}
+              onResize={handleResize}
+              onResizeEnd={handleResizeEnd}
+            />
+          ))}
           {(['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const).map((position) => (
             <NodeResizeControl
               key={position} // One control per corner
               position={position} // RF places the handle on that corner
               className="nopan" // Prevent canvas pan while resizing
               style={itemCornerResizeStyle} // White circular handle styling
-              minWidth={200} // Match prior item min width
+              minWidth={frameUnlocked ? 48 : 80} // Unlocked can shrink below content; locked keeps a usable scaled box
               minHeight={40} // Keep a usable box; pairs with handleResize clamp
-              keepAspectRatio={false} // Free-form box resize (text reflows)
-              onResize={handleResize} // Apply explicit width/height
+              keepAspectRatio={!frameUnlocked && hasBlockContent} // Locked + content: proportional only
+              onResizeStart={handleResizeStart} // Arm user-resize mode (line-grow off)
+              onResize={handleResize} // Apply explicit width/height while dragging
               onResizeEnd={handleResizeEnd} // Persist resizeDimensions
             />
           ))}
-          {/* Rotation affordance — bottom-left, outside the box (mockup) */}
+        </>
+      )}
+
+      {/* Frame chrome — lock (if content) · rotate · overflow expand/collapse; hover / clipped / selected */}
+      {isBlock && !pagePreviewOpen && (selected || isFrameHovering || contentOverflows || frameExpanded) && (
+        <div
+          data-frame-chrome
+          className="nodrag nopan absolute z-50 flex items-center gap-0.5"
+          style={{ left: 0, bottom: 0, marginLeft: '-8px', marginBottom: '-28px' }} // Outside bottom-left corner
+          onMouseEnter={() => setIsFrameHovering(true)} // Keep hover while on chrome
+          onMouseLeave={(e) => {
+            const related = e.relatedTarget as HTMLElement | null
+            if (related?.closest?.('[data-panel-container="true"]') === panelRef.current) return
+            setIsFrameHovering(false)
+          }}
+          onMouseDown={(e) => e.stopPropagation()} // Don’t start node drag
+        >
+          {hasBlockContent && (
+            <button
+              type="button"
+              className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
+              title={frameUnlocked ? 'Lock frame to content' : 'Unlock frame (free resize)'}
+              aria-label={frameUnlocked ? 'Lock frame' : 'Unlock frame'}
+              onClick={handleToggleFrameLock}
+            >
+              {frameUnlocked ? (
+                <Unlock className="h-4 w-4 pointer-events-none" />
+              ) : (
+                <Lock className="h-4 w-4 pointer-events-none" />
+              )}
+            </button>
+          )}
           <button
             type="button"
-            className="nodrag nopan absolute z-50 flex h-6 w-6 -translate-x-1/2 translate-y-1/2 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
-            style={{ left: 0, bottom: 0, marginLeft: '-18px', marginBottom: '-18px', cursor: 'grab' }} // Offset past corner handle
+            className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
+            style={{ cursor: 'grab' }}
             title="Rotate"
             aria-label="Rotate item"
-            onPointerDown={handleRotatePointerDown} // Start angle tracking
-            onPointerMove={handleRotatePointerMove} // Live rotate
-            onPointerUp={handleRotatePointerUp} // Persist angle
-            onPointerCancel={handleRotatePointerUp} // Treat cancel as end
-            onClick={(e) => e.stopPropagation()} // Never bubble to panel select/drag
+            onPointerDown={handleRotatePointerDown}
+            onPointerMove={handleRotatePointerMove}
+            onPointerUp={handleRotatePointerUp}
+            onPointerCancel={handleRotatePointerUp}
+            onClick={(e) => e.stopPropagation()}
           >
-            <RotateCw className="h-4 w-4 pointer-events-none" /> {/* Curved-arrow icon from mockup */}
+            <RotateCw className="h-4 w-4 pointer-events-none" />
           </button>
-        </>
+          {(contentOverflows || frameExpanded) && (
+            <button
+              type="button"
+              className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
+              title={frameExpanded ? 'Collapse to previous size' : 'Show hidden content'}
+              aria-label={frameExpanded ? 'Collapse frame' : 'Expand frame to content'}
+              onClick={handleToggleOverflow}
+            >
+              {frameExpanded ? (
+                <ChevronUp className="h-4 w-4 pointer-events-none" />
+              ) : (
+                <ChevronDown className="h-4 w-4 pointer-events-none" />
+              )}
+            </button>
+          )}
+        </div>
       )}
 
       {/* Edge title chip — hidden while preview fills the card (chrome has title; chip would overlap) */}
@@ -3528,14 +3671,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               'handle-dot',
               selected ? 'handle-dot-selected' : 'handle-dot-default'
             )}
-            style={{
-              width: '10px',
-              height: '10px',
-              backgroundColor: handleColor,
-              border: `1px solid ${handleBorderColor}`,
-              '--handle-color': handleColor,
-              '--handle-hover-color': handleHoverColor,
-            } as React.CSSProperties}
+            style={noduleHandleStyle('left')}
           />
           {/* Left handle - source (can send connections) */}
           <Handle
@@ -3547,14 +3683,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               'handle-dot',
               selected ? 'handle-dot-selected' : 'handle-dot-default'
             )}
-            style={{
-              width: '10px',
-              height: '10px',
-              backgroundColor: handleColor,
-              border: `1px solid ${handleBorderColor}`,
-              '--handle-color': handleColor,
-              '--handle-hover-color': handleHoverColor,
-            } as React.CSSProperties}
+            style={noduleHandleStyle('left')}
           />
           {/* Top handle - target (can receive connections) */}
           <Handle
@@ -3566,14 +3695,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               'handle-dot',
               selected ? 'handle-dot-selected' : 'handle-dot-default'
             )}
-            style={{
-              width: '10px',
-              height: '10px',
-              backgroundColor: handleColor,
-              border: `1px solid ${handleBorderColor}`,
-              '--handle-color': handleColor,
-              '--handle-hover-color': handleHoverColor,
-            } as React.CSSProperties}
+            style={noduleHandleStyle('top')}
           />
           {/* Top handle - source (can send connections) */}
           <Handle
@@ -3585,14 +3707,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               'handle-dot',
               selected ? 'handle-dot-selected' : 'handle-dot-default'
             )}
-            style={{
-              width: '10px',
-              height: '10px',
-              backgroundColor: handleColor,
-              border: `1px solid ${handleBorderColor}`,
-              '--handle-color': handleColor,
-              '--handle-hover-color': handleHoverColor,
-            } as React.CSSProperties}
+            style={noduleHandleStyle('top')}
           />
           {/* Bottom handle - target (can receive connections) */}
           <Handle
@@ -3604,14 +3719,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               'handle-dot',
               selected ? 'handle-dot-selected' : 'handle-dot-default'
             )}
-            style={{
-              width: '10px',
-              height: '10px',
-              backgroundColor: handleColor,
-              border: `1px solid ${handleBorderColor}`,
-              '--handle-color': handleColor,
-              '--handle-hover-color': handleHoverColor,
-            } as React.CSSProperties}
+            style={noduleHandleStyle('bottom')}
           />
           {/* Bottom handle - source (can send connections) */}
           <Handle
@@ -3623,14 +3731,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               'handle-dot',
               selected ? 'handle-dot-selected' : 'handle-dot-default'
             )}
-            style={{
-              width: '10px',
-              height: '10px',
-              backgroundColor: handleColor,
-              border: `1px solid ${handleBorderColor}`,
-              '--handle-color': handleColor,
-              '--handle-hover-color': handleHoverColor,
-            } as React.CSSProperties}
+            style={noduleHandleStyle('bottom')}
           />
           {/* Right handle - target (can receive connections) */}
           <Handle
@@ -3642,14 +3743,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               'handle-dot',
               selected ? 'handle-dot-selected' : 'handle-dot-default'
             )}
-            style={{
-              width: '10px',
-              height: '10px',
-              backgroundColor: handleColor,
-              border: `1px solid ${handleBorderColor}`,
-              '--handle-color': handleColor,
-              '--handle-hover-color': handleHoverColor,
-            } as React.CSSProperties}
+            style={noduleHandleStyle('right')}
           />
           {/* Right handle - source (can send connections) */}
           <Handle
@@ -3661,14 +3755,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               'handle-dot',
               selected ? 'handle-dot-selected' : 'handle-dot-default'
             )}
-            style={{
-              width: '10px',
-              height: '10px',
-              backgroundColor: handleColor,
-              border: `1px solid ${handleBorderColor}`,
-              '--handle-color': handleColor,
-              '--handle-hover-color': handleHoverColor,
-            } as React.CSSProperties}
+            style={noduleHandleStyle('right')}
           />
         </>
       ) : null}
@@ -3759,9 +3846,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       {/* Single text body — no prompt/response sections or collapse */}
       <div
         className={cn(
-          'p-1 backdrop-blur-sm rounded-2xl relative overflow-visible',
+          'p-1 backdrop-blur-sm rounded-2xl relative',
           // Preview open: fill the card; body editor is hidden (content lives on the nested page)
           pagePreviewOpen && 'flex flex-col h-full min-h-0',
+          clipUnlocked ? 'h-full overflow-hidden' : 'overflow-visible', // Clip when unlocked frame < content
           promptMessage?.metadata?.fadeIn === true && 'animate-note-fade-in'
         )}
         style={{
@@ -3771,8 +3859,15 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         {/* Hide body while previewing — keeps page title (edge chip / preview chrome) from sitting under the map */}
         {!pagePreviewOpen && (
           <div
-            className="px-3 py-3"
-            style={{ lineHeight: isBlock ? noteLineHeight : '1.7' }}
+            ref={contentFitRef} // Unscaled content box (offsetWidth ignores CSS scale)
+            className="px-3 py-3 w-max"
+            style={{
+              lineHeight: isBlock ? noteLineHeight : '1.7',
+              // Keep visual scale after unlock (don’t snap back to 1); locked resize still updates it
+              ...(isBlock && isUserResized && frameScale !== 1
+                ? { transform: `scale(${frameScale})`, transformOrigin: 'top left' }
+                : {}),
+            }}
           >
             <TipTapContent
               content={promptContent || ''}
@@ -3790,7 +3885,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               onComment={(selectedText, from, to) => handleComment(selectedText, from, to, 'prompt')}
               comments={comments.filter(c => c.section === 'prompt')}
               editorRef={promptEditorRef}
-              fontScale={fontScale}
+              fontScale={isBlock ? 1 : fontScale} // Blocks use frameScale CSS; chat/flashcards keep fontScale
               onCommentHover={(commentId) => {
                 if (commentId) {
                   if (showComments) {
@@ -3815,6 +3910,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               onBlur={handleEditorBlur}
               onEditorActiveChange={handleEditorActiveChange}
               enableBlockHandles={isBlock && !isFlashcard} // ⋮⋮ on each TipTap block, not the card frame
+              singleLineUntilEnter={isBlock && !isFlashcard} // nowrap; unlocked clip hides overflow instead of wrapping
               hostNodeId={id}
               pageInTargets={(() => {
                 const convs =

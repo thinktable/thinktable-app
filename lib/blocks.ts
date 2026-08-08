@@ -70,6 +70,7 @@ export function newBlockMetadata(extra: Record<string, unknown> = {}): Record<st
     isBlock: true, // Canonical block flag
     isInlineBlock: true, // Placed block (honor metadata.position)
     blockType: 'text', // Baseline Turn into kind (menu + future render)
+    frameUnlocked: false, // Default: content scales with frame (proportional resize)
     ...extra, // Caller position / fadeIn / Notion fields / override blockType
   }
 }

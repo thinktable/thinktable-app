@@ -1,0 +1,5 @@
+-- Frontend-only snapshot marker (no schema DDL).
+-- Block typing (nowrap / frame hug), frame lock+scale, overflow expand/collapse,
+-- connected resize rectangle, nodule offset outside frame, pointer connection line.
+-- Persistence remains messages.metadata JSON
+-- (frameUnlocked, frameScale, resizeDimensions, collapsedFrameSize).

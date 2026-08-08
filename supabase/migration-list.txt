@@ -1,7 +1,7 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-07T23:24:50Z
+# snapped_at=2026-08-08T01:50:59Z
 # postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
 # Note: supabase db dump --linked needs SUPABASE_DB_PASSWORD (cli_login_postgres alter denied);
 # snapshot via local migrations + .temp service versions. Access token OK for projects list.
@@ -26,5 +26,6 @@
 20260806200000_create_notion_connections.sql
 20260807160351_nested_pages_chrome.sql
 20260807232450_blocks_model_frontend_only.sql
+20260808015059_block_frame_lock_chrome.sql
 #
-# No new schema this save (UI: items→blocks, TipTap block handles, block groups, RF Pro vault).
+# No new schema this save (UI: block typing, frame lock, resize chrome, connection line).

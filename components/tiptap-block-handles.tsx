@@ -2,7 +2,7 @@
 
 // Notion-style ⋮⋮ handles per TipTap content block (not the map-card frame).
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Editor } from '@tiptap/react'
 import { GripVertical } from 'lucide-react'
@@ -15,6 +15,7 @@ import {
   type PageInTarget,
 } from '@/components/block-actions-menu'
 import {
+  findEditorBlockAtClientY,
   findEditorBlockAtPos,
   refineListBlockType,
   setEditorBlockHighlight,
@@ -23,7 +24,7 @@ import {
 } from '@/lib/tiptap/block-selection'
 
 type HandleLayout = {
-  top: number // px relative to editor container
+  top: number // CSS px relative to editor gutter container (local, not screen)
   height: number
   block: EditorBlockRef
 }
@@ -36,6 +37,55 @@ type TipTapBlockHandlesProps = {
   onPageTurnInto?: (blockType: 'page' | 'pageIn', pageInParentId?: string | null) => void
 }
 
+/** Resolve the DOM element for a ProseMirror block (handles sit beside this). */
+function blockDom(editor: Editor, block: EditorBlockRef): HTMLElement | null {
+  const node = editor.view.nodeDOM(block.from)
+  if (node instanceof HTMLElement) return node
+  if (node?.parentElement instanceof HTMLElement) return node.parentElement
+  return null
+}
+
+/**
+ * Measure handle Y/height in the gutter container’s local CSS pixels.
+ * Must divide out React Flow viewport scale — getBoundingClientRect is screen-space,
+ * but position:absolute top is pre-transform CSS px inside .react-flow__viewport.
+ */
+function layoutForBlock(
+  editor: Editor,
+  container: HTMLElement,
+  block: EditorBlockRef
+): HandleLayout | null {
+  try {
+    const el = blockDom(editor, block)
+    const containerRect = container.getBoundingClientRect()
+    // Visual scale from RF zoom (and any nested transforms)
+    const scaleY =
+      container.offsetHeight > 0 ? containerRect.height / container.offsetHeight : 1
+    const safeScale = scaleY > 0.01 ? scaleY : 1
+
+    if (el) {
+      const blockRect = el.getBoundingClientRect()
+      const top = (blockRect.top - containerRect.top) / safeScale
+      const height = Math.max(22, blockRect.height / safeScale)
+      return { top, height, block }
+    }
+
+    // Fallback: coordsAtPos is also screen-space — same scale correction
+    const start = editor.view.coordsAtPos(block.from + 1)
+    const end = editor.view.coordsAtPos(Math.max(block.from + 1, block.to - 1))
+    const top = (start.top - containerRect.top) / safeScale
+    const height = Math.max(22, (end.bottom - start.top) / safeScale)
+    return { top, height, block }
+  } catch {
+    return null
+  }
+}
+
+/** Map-card frame that owns this editor (full width hover target). */
+function frameForEditor(dom: HTMLElement): HTMLElement {
+  return (dom.closest('.react-flow__node') as HTMLElement | null) ?? dom.parentElement ?? dom
+}
+
 export function TipTapBlockHandles({
   editor,
   enabled = true,
@@ -44,12 +94,18 @@ export function TipTapBlockHandles({
   onPageTurnInto,
 }: TipTapBlockHandlesProps) {
   const [hover, setHover] = useState<HandleLayout | null>(null) // Handle beside hovered block
+  const [focusLayout, setFocusLayout] = useState<HandleLayout | null>(null) // Handle beside focused/caret block
   const [menu, setMenu] = useState<{
     x: number // viewport
     y: number
     block: EditorBlockRef
     blockType: BlockTypeId
   } | null>(null)
+  // Keep latest layouts in refs so transaction refresh doesn’t need stale state
+  const hoverRef = useRef<HandleLayout | null>(null)
+  const focusRef = useRef<HandleLayout | null>(null)
+  hoverRef.current = hover
+  focusRef.current = focusLayout
 
   // Clear highlight when menu closes
   const closeMenu = useCallback(() => {
@@ -57,53 +113,134 @@ export function TipTapBlockHandles({
     setMenu(null)
   }, [editor])
 
-  // Track hovered block → position handle in the left gutter
+  // Show handle when pointer Y is in a block’s band — anywhere across the full frame width
   useEffect(() => {
     if (!editor || !enabled || editor.isDestroyed) return
     const dom = editor.view.dom
     const container = dom.parentElement
     if (!container) return
+    const frame = frameForEditor(dom)
 
-    const onMove = (event: MouseEvent) => {
+    const resolveFromPoint = (clientX: number, clientY: number, target: EventTarget | null) => {
       if (menu) return // Keep handle on the open-menu block
-      const pos = editor.view.posAtCoords({ left: event.clientX, top: event.clientY })
-      if (pos == null) {
-        setHover(null)
-        return
+      const el = target as HTMLElement | null
+      // Pointer on the grip / menu — keep current hover
+      if (el?.closest?.('[data-tt-block-handle], .block-actions-menu')) return
+
+      // Only while over this map-card frame (full width)
+      if (!frame.contains(el) && el !== frame) {
+        // Still allow coords that fall inside the frame rect (child may be null mid-move)
+        const fr = frame.getBoundingClientRect()
+        if (
+          clientX < fr.left ||
+          clientX > fr.right ||
+          clientY < fr.top ||
+          clientY > fr.bottom
+        ) {
+          setHover(null)
+          return
+        }
       }
-      const block = findEditorBlockAtPos(editor, pos.pos)
+
+      const block = findEditorBlockAtClientY(editor, clientY)
       if (!block) {
         setHover(null)
         return
       }
-      try {
-        const start = editor.view.coordsAtPos(block.from + 1)
-        const end = editor.view.coordsAtPos(Math.max(block.from + 1, block.to - 1))
-        const containerRect = container.getBoundingClientRect()
-        const top = start.top - containerRect.top
-        const height = Math.max(22, end.bottom - start.top)
-        setHover({ top, height, block })
-      } catch {
-        setHover(null)
-      }
+      setHover(layoutForBlock(editor, container, block))
+    }
+
+    const onMove = (event: MouseEvent) => {
+      resolveFromPoint(event.clientX, event.clientY, event.target)
     }
 
     const onLeave = (event: MouseEvent) => {
       if (menu) return
       const related = event.relatedTarget as HTMLElement | null
+      // Leaving into grip / menu keeps hover so the control stays clickable
       if (related?.closest?.('[data-tt-block-handle], .block-actions-menu')) return
+      // Leaving to another node inside the same frame — mousemove will re-resolve
+      if (related && frame.contains(related)) return
       setHover(null)
     }
 
-    container.addEventListener('mousemove', onMove)
-    container.addEventListener('mouseleave', onLeave)
+    // Listen on the frame so empty padding / right side of short lines still count
+    frame.addEventListener('mousemove', onMove)
+    frame.addEventListener('mouseleave', onLeave)
     return () => {
-      container.removeEventListener('mousemove', onMove)
-      container.removeEventListener('mouseleave', onLeave)
+      frame.removeEventListener('mousemove', onMove)
+      frame.removeEventListener('mouseleave', onLeave)
     }
   }, [editor, enabled, menu])
 
-  // Close menu on outside click / Escape is handled by menu; clear when editor destroyed
+  // Keep a handle beside the block that owns the caret (cursor placed → handle stays without hover)
+  useEffect(() => {
+    if (!editor || !enabled || editor.isDestroyed) return
+    const container = editor.view.dom.parentElement
+    if (!container) return
+
+    const syncFocus = () => {
+      if (menu) return
+      if (!editor.isFocused) return // blur handler decides whether to clear
+      const block = findEditorBlockAtPos(editor, editor.state.selection.from)
+      if (!block) {
+        setFocusLayout(null)
+        return
+      }
+      setFocusLayout(layoutForBlock(editor, container, block))
+    }
+
+    const onBlur = ({ event }: { event?: FocusEvent }) => {
+      if (menu) return
+      const related = event?.relatedTarget as HTMLElement | null
+      // Keep handle when focus moves to the grip / actions menu
+      if (related?.closest?.('[data-tt-block-handle], .block-actions-menu')) return
+      setFocusLayout(null)
+    }
+
+    // Re-measure after typing / Enter / zoom-driven reflow so grips stay glued to lines
+    const refreshLayouts = () => {
+      if (menu) {
+        const next = layoutForBlock(editor, container, menu.block)
+        if (next) {
+          setHover(next)
+          setFocusLayout(next)
+        }
+        return
+      }
+      const h = hoverRef.current
+      if (h) {
+        const next = layoutForBlock(editor, container, h.block)
+        if (next) setHover(next)
+        else setHover(null)
+      }
+      syncFocus()
+    }
+
+    editor.on('selectionUpdate', syncFocus)
+    editor.on('focus', syncFocus)
+    editor.on('blur', onBlur)
+    editor.on('transaction', refreshLayouts)
+    syncFocus()
+
+    // RF zoom / panel grow changes getBoundingClientRect without a TipTap transaction
+    const ro = new ResizeObserver(() => {
+      refreshLayouts()
+    })
+    ro.observe(container)
+    const frame = frameForEditor(editor.view.dom)
+    if (frame !== container) ro.observe(frame)
+
+    return () => {
+      editor.off('selectionUpdate', syncFocus)
+      editor.off('focus', syncFocus)
+      editor.off('blur', onBlur)
+      editor.off('transaction', refreshLayouts)
+      ro.disconnect()
+    }
+  }, [editor, enabled, menu])
+
+  // Close menu on outside click
   useEffect(() => {
     if (!menu) return
     const onDoc = (event: MouseEvent) => {
@@ -121,13 +258,14 @@ export function TipTapBlockHandles({
       setEditorBlockHighlight(editor, { from: block.from, to: block.to })
       const blockType = refineListBlockType(editor, block)
       setMenu({ x: clientX, y: clientY, block, blockType })
-      setHover({
-        top: hover?.top ?? 0,
-        height: hover?.height ?? 24,
-        block,
-      })
+      const container = editor.view.dom.parentElement
+      const layout = container ? layoutForBlock(editor, container, block) : null
+      if (layout) {
+        setHover(layout)
+        setFocusLayout(layout)
+      }
     },
-    [editor, hover]
+    [editor]
   )
 
   const onAction = useCallback(
@@ -165,7 +303,6 @@ export function TipTapBlockHandles({
         closeMenu()
         return
       }
-      // Stubs / map-card-only actions
       closeMenu()
     },
     [editor, menu, closeMenu, onPageTurnInto, hostNodeId]
@@ -173,14 +310,12 @@ export function TipTapBlockHandles({
 
   if (!editor || !enabled) return null
 
-  const active = menu?.block ?? hover?.block
-  const layout = hover
+  // Hover (full-frame Y band) wins; else caret’s block
+  const layout = hover ?? focusLayout
+  const active = menu?.block ?? layout?.block
 
   return (
     <>
-      {/* Left gutter for handles (Notion margin) */}
-      <div className="pointer-events-none absolute inset-y-0 left-0 w-6 z-[5]" aria-hidden />
-
       {layout && active && (
         <button
           type="button"
@@ -192,7 +327,7 @@ export function TipTapBlockHandles({
           )}
           style={{
             left: 0,
-            top: layout.top + Math.max(0, (layout.height - 24) / 2),
+            top: layout.top, // Align grip to top of the content block (not vertically centered)
           }}
           title="Block actions"
           onPointerDown={(e) => e.stopPropagation()}

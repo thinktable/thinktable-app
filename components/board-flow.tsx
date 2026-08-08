@@ -48,7 +48,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { ChevronDown, ArrowDown, ChevronUp, Trash2, Plus } from 'lucide-react'
+import { ChevronDown, ArrowDown, ChevronUp, Trash2, Plus, GripVertical } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
@@ -330,6 +330,37 @@ const edgeTypes = Object.freeze({
   animatedDotted: AnimatedDottedEdge,
   placeholder: PlaceholderEdge, // Placeholder edge for dynamic layouting
 })
+
+/** Drag thread follows the pointer (toX/toY), not a stale handle-bound offset. */
+function PointerConnectionLine({
+  fromX,
+  fromY,
+  toX,
+  toY,
+}: {
+  fromX: number
+  fromY: number
+  toX: number
+  toY: number
+}) {
+  const [path] = getSmoothStepPath({
+    sourceX: fromX,
+    sourceY: fromY,
+    targetX: toX,
+    targetY: toY,
+  })
+  return (
+    <g className="react-flow__connectionline">
+      <path
+        d={path}
+        fill="none"
+        className="react-flow__connectionline-path"
+        stroke="#b1b1b7"
+        strokeWidth={2}
+      />
+    </g>
+  )
+}
 
 // Return to bottom — portals into the right chat sidebar above the prompt
 function ReturnToBottomButton({ onClick, isVisible }: { onClick: () => void; isVisible: boolean }) {
@@ -1360,13 +1391,7 @@ function BoardFlowInner({
       })
     )
   }, [rightClickedNode])
-  // Empty-page click menu: screen + flow coords so items spawn where the user clicked
-  const [addBlockMenu, setAddBlockMenu] = useState<{
-    screenX: number
-    screenY: number
-    flowX: number
-    flowY: number
-  } | null>(null)
+  // (Empty-page click places an I-bar + grip; typing / grip creates the block — no Item/Flashcard menu)
   const [isMinimapManuallyHidden, setIsMinimapManuallyHidden] = useState(false) // Track if minimap was manually hidden (vs auto-hidden)
   const [isMinimapHovering, setIsMinimapHovering] = useState(false) // Track if mouse is hovering over minimap area
   const [isPillHoverAreaHovering, setIsPillHoverAreaHovering] = useState(false) // Track if mouse is hovering over pill hover area specifically
@@ -2643,20 +2668,26 @@ function BoardFlowInner({
     const targetWidth = targetNode.width || 400
     const targetHeight = targetNode.height || 400
 
+    // Nodules sit 12px outside selected block frames (Handle style offset)
+    const sourceOut =
+      sourceNode.selected && sourceNode.data?.promptMessage?.metadata?.isBlock === true ? 14 : 0
+    const targetOut =
+      targetNode.selected && targetNode.data?.promptMessage?.metadata?.isBlock === true ? 14 : 0
+
     // Calculate all 4 handle positions for source node (top, bottom, left, right)
     const sourceHandles = {
-      top: { x: sourcePos.x + sourceWidth / 2, y: sourcePos.y },
-      bottom: { x: sourcePos.x + sourceWidth / 2, y: sourcePos.y + sourceHeight },
-      left: { x: sourcePos.x, y: sourcePos.y + sourceHeight / 2 },
-      right: { x: sourcePos.x + sourceWidth, y: sourcePos.y + sourceHeight / 2 },
+      top: { x: sourcePos.x + sourceWidth / 2, y: sourcePos.y - sourceOut },
+      bottom: { x: sourcePos.x + sourceWidth / 2, y: sourcePos.y + sourceHeight + sourceOut },
+      left: { x: sourcePos.x - sourceOut, y: sourcePos.y + sourceHeight / 2 },
+      right: { x: sourcePos.x + sourceWidth + sourceOut, y: sourcePos.y + sourceHeight / 2 },
     }
 
     // Calculate all 4 handle positions for target node (top, bottom, left, right)
     const targetHandles = {
-      top: { x: targetPos.x + targetWidth / 2, y: targetPos.y },
-      bottom: { x: targetPos.x + targetWidth / 2, y: targetPos.y + targetHeight },
-      left: { x: targetPos.x, y: targetPos.y + targetHeight / 2 },
-      right: { x: targetPos.x + targetWidth, y: targetPos.y + targetHeight / 2 },
+      top: { x: targetPos.x + targetWidth / 2, y: targetPos.y - targetOut },
+      bottom: { x: targetPos.x + targetWidth / 2, y: targetPos.y + targetHeight + targetOut },
+      left: { x: targetPos.x - targetOut, y: targetPos.y + targetHeight / 2 },
+      right: { x: targetPos.x + targetWidth + targetOut, y: targetPos.y + targetHeight / 2 },
     }
 
     // Calculate distances between all handle combinations (4x4 = 16 combinations)
@@ -3119,9 +3150,9 @@ function BoardFlowInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes?.length ?? 0, isPromptBoxCentered, contextPanelWidth]) // Re-run when nodes change, prompt box centering changes, or panel width changes
 
-  // Create a stable key from message IDs
+  // Structural key only (ids + roles) — do NOT include content; content edits must not remount panels mid-typing
   const messagesKey = useMemo(() => {
-    return messages.map(m => `${m.id}-${m.content.slice(0, 10)}`).join(',')
+    return messages.map(m => `${m.id}:${m.role}`).join(',')
   }, [messages])
 
   // Calculate bottom scroll limit for linear mode (last panel + padding for input box)
@@ -3890,7 +3921,8 @@ function BoardFlowInner({
       return
     }
 
-    const messagesKeyToUse = messagesToUse.map(m => `${m.id}-${m.content.slice(0, 10)}`).join(',')
+    // Ids + roles only — content saves must not rebuild/remount panels (wipes the TipTap caret)
+    const messagesKeyToUse = messagesToUse.map(m => `${m.id}:${m.role}`).join(',')
     console.log('🔄 BoardFlow: Creating panels from messages, count:', messagesToUse.length, 'messagesKey:', messagesKeyToUse, 'prevKey:', prevMessagesKeyRef.current)
 
     // Skip if messages haven't actually changed
@@ -5290,7 +5322,7 @@ function BoardFlowInner({
   const handleNodeContextMenu = useCallback((event: React.MouseEvent, node: Node<ChatPanelNodeData>) => {
     event.preventDefault() // Prevent default browser context menu
     event.stopPropagation() // Prevent other handlers
-    setAddBlockMenu(null) // Close empty-page add menu when acting on a node
+    setIBarPosition(null) // Dismiss empty-page I-bar when acting on a node
 
     // If node is not selected, select it first
     if (!node.selected) {
@@ -5336,7 +5368,7 @@ function BoardFlowInner({
     if (selectedNodes.length === 0) return
     event.preventDefault()
     event.stopPropagation()
-    setAddBlockMenu(null) // Don't keep empty-page add menu open over a selection menu
+    setIBarPosition(null) // Don't keep empty-page I-bar over a selection menu
     const firstSelectedNode = selectedNodes[0]
     const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
     if (reactFlowInstance && reactFlowElement) {
@@ -5353,11 +5385,13 @@ function BoardFlowInner({
     setRightClickedNode(firstSelectedNode)
   }, [reactFlowInstance, nodes])
 
-  // Create an item or flashcard at the add-block menu's flow position (empty page click)
-  const handleAddBlockFromMenu = useCallback(async (kind: 'block' | 'flashcard') => {
-    if (!addBlockMenu) return // Need a spawn point from the open menu
-    const itemPosition = { x: addBlockMenu.flowX, y: addBlockMenu.flowY } // Panel top-left at click
-    setAddBlockMenu(null) // Close menu immediately so a slow insert doesn't leave it stuck open
+  // Create an empty block at a flow position (I-bar grip click — cursor lands with TipTap handle)
+  const createBlockAtFlowPosition = useCallback(async (flowX: number, flowY: number) => {
+    // Align panel so the text caret sits where the I-bar was (gutter pl-6 + panel padding)
+    const cursorOffsetX = 40 // p-1+px-3 (16) + TipTap handle gutter (24)
+    const cursorOffsetY = 20 // p-1 + pt padding to first line
+    const itemPosition = { x: flowX - cursorOffsetX, y: flowY - cursorOffsetY }
+    setIBarPosition(null) // Clear pre-create cursor
 
     try {
       const supabase = createClient() // Browser Supabase client for insert
@@ -5379,7 +5413,7 @@ function BoardFlowInner({
           .single()
 
         if (convError || !newConversation) {
-          console.error('Error creating conversation for add-item:', convError)
+          console.error('Error creating conversation for add-block:', convError)
           return
         }
 
@@ -5390,99 +5424,31 @@ function BoardFlowInner({
         }
       }
 
-      if (kind === 'block') {
-        // Empty editable block at the click position (untitled until titled → page)
-        const { error } = await supabase
-          .from('messages')
-          .insert({
-            conversation_id: currentConversationId,
-            user_id: user.id,
-            role: 'user',
-            content: '',
-            metadata: newBlockMetadata({
-              position: itemPosition, // Spawn at click
-              fadeIn: true,
-            }),
-          })
-          .select()
-          .single()
+      const { error } = await supabase
+        .from('messages')
+        .insert({
+          conversation_id: currentConversationId,
+          user_id: user.id,
+          role: 'user',
+          content: '',
+          metadata: newBlockMetadata({
+            position: itemPosition, // Spawn aligned to I-bar
+            fadeIn: true,
+          }),
+        })
+        .select()
+        .single()
 
-        if (error) {
-          console.error('Error creating block from add-block menu:', error)
-          return
-        }
-      } else {
-        // Flashcard = empty user prompt + empty assistant response, positioned at click
-        const { data: promptMessage, error: promptError } = await supabase
-          .from('messages')
-          .insert({
-            conversation_id: currentConversationId,
-            user_id: user.id,
-            role: 'user',
-            content: '',
-            metadata: {
-              isFlashcard: true,
-              position: itemPosition, // Spawn at click (honored via metadata.position)
-              fadeIn: true,
-            },
-          })
-          .select()
-          .single()
-
-        if (promptError || !promptMessage) {
-          console.error('Error creating flashcard prompt from add-block menu:', promptError)
-          return
-        }
-
-        const { error: responseError } = await supabase
-          .from('messages')
-          .insert({
-            conversation_id: currentConversationId,
-            user_id: user.id,
-            role: 'assistant',
-            content: '',
-          })
-          .select()
-          .single()
-
-        if (responseError) {
-          console.error('Error creating flashcard response from add-block menu:', responseError)
-          return
-        }
+      if (error) {
+        console.error('Error creating block at flow position:', error)
+        return
       }
 
       refetchMessages() // Pull the new panel onto the map
     } catch (error) {
-      console.error('Error creating block from add-block menu:', error)
+      console.error('Error creating block at flow position:', error)
     }
-  }, [addBlockMenu, conversationId, router, refetchMessages])
-
-  // Dismiss add-block menu on outside click / Escape
-  useEffect(() => {
-    if (!addBlockMenu) return
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as HTMLElement
-      if (target.closest('.add-item-menu')) return // Keep open when interacting with the menu
-      setAddBlockMenu(null)
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setAddBlockMenu(null)
-    }
-
-    // Capture so we close before other handlers; delay one tick so the opening click doesn't instantly close
-    const timeoutId = setTimeout(() => {
-      document.addEventListener('mousedown', handlePointerDown, true)
-      document.addEventListener('keydown', handleKeyDown)
-    }, 0)
-
-    return () => {
-      clearTimeout(timeoutId)
-      document.removeEventListener('mousedown', handlePointerDown, true)
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [addBlockMenu])
+  }, [conversationId, router, refetchMessages])
 
   // Close popup when right-clicking on background or different node
   useEffect(() => {
@@ -5834,7 +5800,7 @@ function BoardFlowInner({
       if (!detail?.nodeId || !reactFlowInstance) return
       const node = nodes.find((n) => n.id === detail.nodeId)
       if (!node) return
-      setAddBlockMenu(null)
+      setIBarPosition(null)
       if (!node.selected) {
         setNodes((nds) => nds.map((n) => (n.id === node.id ? { ...n, selected: true } : n)))
       }
@@ -6314,9 +6280,9 @@ function BoardFlowInner({
       event.preventDefault()
       
       // Calculate panel position so text cursor aligns with I-bar
-      // Note panel has: p-1 (4px) + px-3 (12px) = 16px left padding to cursor
-      //                 p-1 (4px) + pt-4 (16px) = 20px top padding to cursor
-      const cursorOffsetX = 16 // Left padding to where cursor sits
+      // Note panel: p-1+px-3 (16) + TipTap handle gutter pl-6 (24) = 40px to caret
+      //             p-1 + top padding ≈ 20px to first line
+      const cursorOffsetX = 40 // Left padding + gutter to where cursor sits
       const cursorOffsetY = 20 // Top padding to where cursor sits
       const notePosition = { 
         x: iBarPosition.x - cursorOffsetX, // Panel left edge
@@ -6565,6 +6531,7 @@ function BoardFlowInner({
         edgeTypes={memoizedEdgeTypes}
         connectionMode={ConnectionMode.Loose}
         connectionLineType={ConnectionLineType.SmoothStep}
+        connectionLineComponent={PointerConnectionLine} // Thread end tracks the cursor
         connectionRadius={20}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
@@ -6776,7 +6743,6 @@ function BoardFlowInner({
           if (iBarPosition) {
             setIBarPosition(null)
           }
-          setAddBlockMenu(null) // Close empty-page add menu when selecting a panel
           // Clicking a host block (outside nested preview chrome) clears preview style-focus
           if (!embedded && previewFocus?.focusedPageId) {
             const target = event.target as Element | null
@@ -6788,10 +6754,6 @@ function BoardFlowInner({
         onNodeContextMenu={handleNodeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}
         onPaneClick={(event) => {
-          // Clear I-bar cursor on single click (dismiss it)
-          if (iBarPosition) {
-            setIBarPosition(null)
-          }
           // Empty host pane click drops nested preview style-focus
           if (!embedded && previewFocus?.focusedPageId) {
             previewFocus.clearPreviewFocus()
@@ -6800,10 +6762,10 @@ function BoardFlowInner({
           // Left click on empty map only
           if (!reactFlowInstance || event.button !== 0) return
 
-          // If a panel is selected, let React Flow deselect — don't open add menu on that click
+          // If a panel is selected, let React Flow deselect — don't place I-bar on that click
           const hasSelectedPanel = selectedNodeIdsRef.current.length > 0
           if (hasSelectedPanel) {
-            setAddBlockMenu(null) // Close any leftover add menu when clearing selection
+            setIBarPosition(null)
             return
           }
 
@@ -6811,14 +6773,16 @@ function BoardFlowInner({
           if (!reactFlowElement) return
 
           const reactFlowRect = reactFlowElement.getBoundingClientRect()
-          const screenX = event.clientX - reactFlowRect.left // Menu position in RF container coords
+          const screenX = event.clientX - reactFlowRect.left
           const screenY = event.clientY - reactFlowRect.top
           const viewport = reactFlowInstance.getViewport()
-          const flowX = (screenX - viewport.x) / viewport.zoom // Spawn point in world space
+          const flowX = (screenX - viewport.x) / viewport.zoom // Caret point in world space
           const flowY = (screenY - viewport.y) / viewport.zoom
 
           setRightClickedNode(null) // Don't stack with node action popup
-          setAddBlockMenu({ screenX, screenY, flowX, flowY }) // Show Block / Flashcard menu at click
+          // Place blinking cursor + grip (type or click grip to create block) — not Item/Flashcard menu
+          setIBarPosition({ x: flowX, y: flowY })
+          setIBarViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom })
         }}
         defaultViewport={{ x: 0, y: 0, zoom: embedded ? 0.8 : 0.6 }}
         // Embedded previews: no continuous fitView (fights pan/zoom); host keeps canvas fitView
@@ -7166,24 +7130,45 @@ function BoardFlowInner({
 
       </ReactFlow>
 
-      {/* I-bar cursor overlay - appears when user double-clicks on map */}
-      {/* Styled to match the text cursor in note panel editors, scales with zoom */}
+      {/* I-bar + grip — empty page/canvas click (or double-click); type or click grip to create block */}
       {iBarPosition && (
         <div
-          className="absolute pointer-events-none"
+          className="absolute flex items-center"
           style={{
-            // Convert flow coordinates back to screen coordinates
+            // Convert flow coordinates back to screen coordinates; grip sits left of caret
             left: `${iBarPosition.x * iBarViewport.zoom + iBarViewport.x}px`,
             top: `${iBarPosition.y * iBarViewport.zoom + iBarViewport.y}px`,
             zIndex: 1000,
+            transform: `translateX(-${22 * iBarViewport.zoom}px)`, // Room for ⋮⋮ left of cursor
+            gap: `${4 * iBarViewport.zoom}px`,
           }}
         >
-          {/* Simple blinking vertical line - scales with map zoom to stay relative */}
-          <div 
-            className="bg-gray-800 dark:bg-gray-100"
+          <button
+            type="button"
+            className="nodrag nopan flex items-center justify-center rounded text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/10 pointer-events-auto cursor-grab"
             style={{
-              width: `${1 * iBarViewport.zoom}px`, // Scale width with zoom
-              height: `${18 * iBarViewport.zoom}px`, // ~1.2em at 100% zoom, scales with map
+              width: `${20 * iBarViewport.zoom}px`,
+              height: `${24 * iBarViewport.zoom}px`,
+            }}
+            title="Create block"
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              e.preventDefault()
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              e.preventDefault()
+              void createBlockAtFlowPosition(iBarPosition.x, iBarPosition.y)
+            }}
+          >
+            <GripVertical style={{ width: `${16 * iBarViewport.zoom}px`, height: `${16 * iBarViewport.zoom}px` }} />
+          </button>
+          {/* Blinking vertical line — scales with map zoom */}
+          <div
+            className="bg-gray-800 dark:bg-gray-100 pointer-events-none"
+            style={{
+              width: `${1 * iBarViewport.zoom}px`,
+              height: `${18 * iBarViewport.zoom}px`,
               animation: 'blink 1s step-end infinite',
             }}
           />
@@ -7263,55 +7248,6 @@ function BoardFlowInner({
         }}
         title={isMinimapHidden ? 'Show minimap' : 'Hide minimap'}
       />
-      )}
-
-      {/* Add block menu — empty page/canvas click (Block / Flashcard at click position) */}
-      {addBlockMenu && (
-        <div
-          className="add-item-menu absolute z-[1000] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[140px]"
-          style={{
-            left: `${addBlockMenu.screenX}px`,
-            top: `${addBlockMenu.screenY}px`,
-            transform: 'translate(0, 0)', // Anchor at click; no zoom scale so menu stays readable
-          }}
-          onClick={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-          }}
-          onMouseDown={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-          }}
-        >
-          <div className="flex flex-col gap-0.5">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                void handleAddBlockFromMenu('block')
-              }}
-              className="justify-start text-sm h-8 px-2"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Item
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                void handleAddBlockFromMenu('flashcard')
-              }}
-              className="justify-start text-sm h-8 px-2"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Flashcard
-            </Button>
-          </div>
-        </div>
       )}
 
       {/* Block actions menu — handle click or right-click on a node */}

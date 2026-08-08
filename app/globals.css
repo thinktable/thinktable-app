@@ -1063,18 +1063,80 @@ span[data-added="true"] {
     height: 8px !important;
   }
 
+  /* Sit fully outside the connected resize rectangle (beats global left/top: 0 !important) */
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot[data-handlepos="left"]:not(.handle-dot-flashcard-large),
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.react-flow__handle-left:not(.handle-dot-flashcard-large) {
+    left: -14px !important;
+    transform: translate(-50%, -50%) !important;
+  }
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot[data-handlepos="right"]:not(.handle-dot-flashcard-large),
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.react-flow__handle-right:not(.handle-dot-flashcard-large) {
+    right: -14px !important;
+    transform: translate(50%, -50%) !important;
+  }
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot[data-handlepos="top"]:not(.handle-dot-flashcard-large),
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.react-flow__handle-top:not(.handle-dot-flashcard-large) {
+    top: -14px !important;
+    transform: translate(-50%, -50%) !important;
+  }
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot[data-handlepos="bottom"]:not(.handle-dot-flashcard-large),
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.react-flow__handle-bottom:not(.handle-dot-flashcard-large) {
+    bottom: -14px !important;
+    transform: translate(-50%, 50%) !important;
+  }
+
   /* Dark mode: invert connection-dot fill for contrast on dark boards */
   .dark .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot:not(.handle-dot-flashcard-large) {
     background-color: #e5e7eb !important;
   }
 
+  /* Connected selection rectangle — RF line controls meet the corner dots */
+  .react-flow__node-chatPanel .react-flow__resize-control.line,
+  .react-flow__node-chatPanel .tt-frame-resize-line {
+    border: none !important;
+    background: transparent !important;
+    z-index: 55 !important;
+  }
+  .react-flow__node-chatPanel .react-flow__resize-control.line.top,
+  .react-flow__node-chatPanel .tt-frame-resize-line.top {
+    border-top: 1.5px solid #3b82f6 !important; /* Continuous top edge */
+    height: 6px !important; /* Hit target; visual is the 1.5px border */
+  }
+  .react-flow__node-chatPanel .react-flow__resize-control.line.bottom,
+  .react-flow__node-chatPanel .tt-frame-resize-line.bottom {
+    border-bottom: 1.5px solid #3b82f6 !important;
+    height: 6px !important;
+  }
+  .react-flow__node-chatPanel .react-flow__resize-control.line.left,
+  .react-flow__node-chatPanel .tt-frame-resize-line.left {
+    border-left: 1.5px solid #3b82f6 !important;
+    width: 6px !important;
+  }
+  .react-flow__node-chatPanel .react-flow__resize-control.line.right,
+  .react-flow__node-chatPanel .tt-frame-resize-line.right {
+    border-right: 1.5px solid #3b82f6 !important;
+    width: 6px !important;
+  }
+  .dark .react-flow__node-chatPanel .react-flow__resize-control.line.top,
+  .dark .react-flow__node-chatPanel .tt-frame-resize-line.top,
+  .dark .react-flow__node-chatPanel .react-flow__resize-control.line.bottom,
+  .dark .react-flow__node-chatPanel .tt-frame-resize-line.bottom {
+    border-color: #60a5fa !important;
+  }
+  .dark .react-flow__node-chatPanel .react-flow__resize-control.line.left,
+  .dark .react-flow__node-chatPanel .tt-frame-resize-line.left,
+  .dark .react-flow__node-chatPanel .react-flow__resize-control.line.right,
+  .dark .react-flow__node-chatPanel .tt-frame-resize-line.right {
+    border-color: #60a5fa !important;
+  }
+
   /* Item corner resize handles — circular white dots (override RF defaults) */
   .react-flow__node-chatPanel .react-flow__resize-control.handle {
     border-radius: 50% !important; /* Circles, not RF squares */
-    width: 14px !important; /* Larger hit target so drag resizes instead of moving node */
-    height: 14px !important;
-    min-width: 14px !important;
-    min-height: 14px !important;
+    width: 10px !important; /* Visual size matches mockup; hit still easy */
+    height: 10px !important;
+    min-width: 10px !important;
+    min-height: 10px !important;
     background-color: #ffffff !important;
     border: 1.5px solid #9ca3af !important;
     box-sizing: border-box !important;
@@ -1121,6 +1183,21 @@ span[data-added="true"] {
 
   .dark .ProseMirror span.tt-haze[data-haze="true"] {
     background: rgba(255, 255, 255, 0.08);
+  }
+
+  /* Unresized map blocks: one visual line per TipTap block; card width is measured in JS */
+  .ProseMirror[data-single-line="true"] {
+    width: max-content !important;
+    max-width: none !important;
+  }
+  .ProseMirror[data-single-line="true"] p,
+  .ProseMirror[data-single-line="true"] h1,
+  .ProseMirror[data-single-line="true"] h2,
+  .ProseMirror[data-single-line="true"] h3,
+  .ProseMirror[data-single-line="true"] h4,
+  .ProseMirror[data-single-line="true"] li,
+  .ProseMirror[data-single-line="true"] blockquote {
+    white-space: nowrap !important; /* Line runs until Enter creates the next block */
   }
 
   /* Active content-block highlight (⋮⋮ menu open) — Notion blue wash on that block only */

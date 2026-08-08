@@ -33,6 +33,53 @@ export function isHandleBlockType(name: string): boolean {
   )
 }
 
+/**
+ * Resolve the content block whose vertical band contains clientY (any X — full frame width).
+ * Prefers listItem/taskItem over inner paragraphs; otherwise the tightest matching block.
+ */
+export function findEditorBlockAtClientY(editor: Editor, clientY: number): EditorBlockRef | null {
+  const { doc } = editor.state
+  let best: { ref: EditorBlockRef; height: number } | null = null
+
+  doc.descendants((node, pos) => {
+    const name = node.type.name
+    // Descend into lists so each item is its own handle target
+    if (name === 'bulletList' || name === 'orderedList' || name === 'taskList') return true
+    if (!isHandleBlockType(name)) return true
+
+    try {
+      const start = editor.view.coordsAtPos(pos + 1) // Top of block
+      const endPos = Math.max(pos + 1, pos + node.nodeSize - 1)
+      const end = editor.view.coordsAtPos(endPos) // Bottom of block
+      const top = start.top
+      const bottom = Math.max(start.bottom, end.bottom)
+      if (clientY < top || clientY > bottom) {
+        // Skip children of list items — the item itself is the handle unit
+        return name !== 'listItem' && name !== 'taskItem'
+      }
+      const height = Math.max(1, bottom - top)
+      const ref: EditorBlockRef = { from: pos, to: pos + node.nodeSize, node, typeName: name }
+      // Prefer list/task items; else prefer the tighter (more nested) match
+      const prefer =
+        !best ||
+        name === 'listItem' ||
+        name === 'taskItem' ||
+        (best.ref.typeName !== 'listItem' &&
+          best.ref.typeName !== 'taskItem' &&
+          height <= best.height)
+      if (prefer) best = { ref, height }
+    } catch {
+      // coordsAtPos can throw for odd positions — skip
+    }
+
+    // Don’t treat nested paragraphs inside a list item as separate handles
+    if (name === 'listItem' || name === 'taskItem') return false
+    return true
+  })
+
+  return best?.ref ?? null
+}
+
 /** Resolve the content block for a document position (prefer list/task item over the list). */
 export function findEditorBlockAtPos(editor: Editor, pos: number): EditorBlockRef | null {
   const { doc } = editor.state
