@@ -625,18 +625,21 @@ span[data-added="true"] {
     top: var(--handle-top, 50%) !important;
   }
 
-  /* Custom minimap size - reduced from 200px to 179px width, maintaining aspect ratio */
+  /* Custom minimap size — width matches nav menu; shorter height; border matches nav gray-100 */
   .minimap-custom-size {
-    width: 179px !important; /* Reduced from 200px by 21px */
-    height: 160px !important; /* Increased height for better vertical visibility */
+    width: 179px !important;
+    height: 120px !important; /* Shorter than former 160px */
+    margin: 0 !important; /* Kill RF panel default 15px margin so nav sits flush on top */
+    bottom: 0 !important; /* Stay pinned inside wrapper (RF panel classes also set bottom) */
+    left: 0 !important;
     overflow: hidden !important; /* Ensure content stays within bounds */
-    border: 1px solid rgb(239, 246, 255) !important; /* Light blue border matching selected board tab (bg-blue-50) */
+    border: none !important; /* No outer border — nav chrome sits above */
     background-color: white !important; /* Light mode background */
   }
 
   /* Dark mode minimap */
   .dark .minimap-custom-size {
-    border: 1px solid rgb(55, 65, 81) !important; /* gray-700 border for dark mode */
+    border: none !important;
     background-color: #171717 !important; /* Dark background matching sidebar */
   }
 
@@ -645,12 +648,12 @@ span[data-added="true"] {
     width: 100% !important;
     height: 100% !important;
     max-width: 179px !important;
-    max-height: 160px !important;
+    max-height: 120px !important;
   }
 
-  /* Dark mode minimap mask fill */
+  /* Dark mode minimap mask fill — match nav #2a2a3a */
   .dark .minimap-custom-size .react-flow__minimap-mask {
-    fill: rgba(96, 165, 250, 0.25) !important; /* Blue-400 with opacity for dark mode */
+    fill: rgba(42, 42, 58, 0.45) !important;
   }
 
   /* Ensure minimap SVG and viewport indicator are properly scaled */
@@ -658,7 +661,7 @@ span[data-added="true"] {
     width: 100% !important;
     height: 100% !important;
     max-width: 179px !important;
-    max-height: 160px !important;
+    max-height: 120px !important;
     background-color: white !important; /* Light mode background */
   }
 
@@ -667,16 +670,15 @@ span[data-added="true"] {
     background-color: #171717 !important; /* Dark background matching sidebar */
   }
 
-  /* Ensure viewport indicator rectangle stays within minimap bounds */
+  /* Viewport indicator stroke — gray to match nav (not blue) */
   .minimap-custom-size .react-flow__minimap-mask rect {
-    /* The mask rect should be constrained by the parent SVG */
-    stroke: rgb(191, 219, 254) !important; /* Blue-200 border - darker than blue-50 for better visibility */
-    stroke-width: 2px !important; /* Make border visible */
+    stroke: rgb(209, 213, 219) !important; /* gray-300 */
+    stroke-width: 2px !important;
   }
 
-  /* Dark mode minimap mask */
+  /* Dark mode viewport indicator stroke */
   .dark .minimap-custom-size .react-flow__minimap-mask rect {
-    stroke: rgb(96, 165, 250) !important; /* Blue-400 border for dark mode */
+    stroke: rgb(75, 85, 99) !important; /* gray-600 */
     stroke-width: 2px !important;
   }
 

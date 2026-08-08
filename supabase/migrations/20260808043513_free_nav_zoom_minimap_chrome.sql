@@ -1,0 +1,4 @@
+-- Frontend-only snapshot marker (no schema DDL).
+-- Free nav menu: Scroll/Zoom select + zoom % (moved from top bar); Linear toggle removed.
+-- Minimap shorter (120px), gray mask, no border; left aligns top-bar menu; bottom aligns brand icon.
+-- Persistence unchanged (messages.content + messages.metadata JSON / profiles.metadata prefs).

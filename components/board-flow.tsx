@@ -74,6 +74,7 @@ import {
 } from '@/lib/preview-focus-context' // Style sync + ready/resize handshake for iframe previews
 import { BoardEmbedProvider } from '@/lib/board-embed-context' // Hide nested preview controls inside embed
 import { ThinktableBrandMark } from './personalize-ai-modal'
+import { NavZoomControl } from './nav-zoom-control' // Zoom % lives in bottom nav (not top bar)
 import { LeftVerticalMenu } from './left-vertical-menu'
 import { FreehandNode } from './freehand/FreehandNode' // Freehand drawing node component
 import { Freehand, retryFailedSaves } from './freehand/Freehand' // Freehand drawing overlay component and retry function
@@ -107,6 +108,9 @@ interface ChatPanelNodeData {
   borderStyle?: string // Panel border style (solid, dashed, dotted)
   borderWeight?: string // Panel border thickness (1px, 2px, 4px)
 }
+
+const MINIMAP_HEIGHT = 120 // Keep in sync with .minimap-custom-size height in globals.css
+const MINIMAP_BOTTOM = 8 // Sit near map bottom (brand icon uses 12px; minimap reads high at that offset)
 
 // Fetch messages for a conversation and create panels
 // For homepage boards, uses API route (public access via service role)
@@ -447,11 +451,12 @@ function BoardFlowInner({
   const [focusedPanelIndex, setFocusedPanelIndex] = useState<number | null>(null) // Currently focused panel index in linear mode
   const [viewportKey, setViewportKey] = useState(0) // Force re-render when viewport changes to update button visibility
   
-  // Allow linear mode - no longer disabled
+  // Free-only nav UI — Linear toggle removed; coerce any 'linear' preference to canvas
   const setViewMode = (mode: 'linear' | 'canvas') => {
-    setViewModeState(mode)
+    const next = mode === 'linear' ? 'canvas' : mode
+    setViewModeState(next)
     if (typeof window !== 'undefined') {
-      localStorage.setItem('thinktable-view-mode', mode)
+      localStorage.setItem('thinktable-view-mode', next)
     }
   }
   
@@ -1428,8 +1433,8 @@ function BoardFlowInner({
 
   const prevViewportWidthRef = useRef<number>(0) // Track previous viewport width to detect changes
   const [isAtBottom, setIsAtBottom] = useState(true) // Track if scrolled to bottom in linear mode
-  const [minimapBottom, setMinimapBottom] = useState<number>(17) // Default position 2px higher
-  const [minimapLeft, setMinimapLeft] = useState<number>(15) // Dynamic left position — mirrored from former right-side minimap (default: 15px)
+  const [minimapBottom, setMinimapBottom] = useState<number>(MINIMAP_BOTTOM) // CSS bottom px — same as brand icon
+  const [minimapLeft, setMinimapLeft] = useState<number>(8) // Match top-bar menu button (sticky-prompt-panel paddingLeft 0.5rem)
   const [minimapHoverLeft, setMinimapHoverLeft] = useState<number>(0) // Left position for hover zone to align with minimap left edge
   const [minimapPillCenter, setMinimapPillCenter] = useState<number>(0) // Center position for pill to center on minimap
   const [minimapPillBottom, setMinimapPillBottom] = useState<number>(8) // Bottom position for pill to center on minimap bottom edge
@@ -1985,137 +1990,11 @@ function BoardFlowInner({
   // Determine if menu should be shown - show if board has flashcards OR project has flashcards
   const shouldShowMenu = hasFlashcardsInBoard || hasFlashcardsInProject
 
-  // Handle responsive minimap positioning (left-anchored) — move up when prompt approaches from the right
-  // This also affects toggle position even when minimap is hidden
+  // Left-anchored minimap + nav — left matches top-bar menu; bottom matches brand icon
   useEffect(() => {
-    const checkMinimapPosition = () => {
-      // Skip minimap position updates during scroll to bottom to prevent flashing
-      if (isScrollingToBottomRef.current) {
-        return
-      }
-
-      // Get React Flow container element
-      const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
-
-      // Get actual prompt box element - find the input container at the bottom
-      // Look for the chat input textarea or its parent container
-      const chatInputElement = document.querySelector('textarea[placeholder*="Type"], textarea[placeholder*="message"]') as HTMLElement
-
-      if (!chatInputElement || !reactFlowElement) {
-        // Fallback: use default position if elements not found
-        setMinimapBottom(17) // Default position 2px higher
-        setMinimapLeft(15)
-        return
-      }
-
-      // Get the prompt box container (parent of the input)
-      const promptBoxContainer = chatInputElement.closest('[class*="pointer-events-auto"]') as HTMLElement
-      if (!promptBoxContainer) {
-        setMinimapBottom(17) // Default position 2px higher
-        setMinimapLeft(15)
-        return
-      }
-
-      // Check if prompt box is visible - if hidden (opacity-0 or h-0), don't recalculate minimap position
-      // This prevents minimap from jumping when prompt box is shown/hidden
-      const computedStyle = window.getComputedStyle(promptBoxContainer)
-      const isPromptBoxHidden = computedStyle.opacity === '0' || computedStyle.height === '0px' || promptBoxContainer.classList.contains('h-0')
-
-      // If prompt box is hidden, keep minimap in current position (don't recalculate)
-      if (isPromptBoxHidden) {
-        return // Don't update minimap position when prompt box is hidden
-      }
-
-      // Get actual positions
-      const promptBoxRect = promptBoxContainer.getBoundingClientRect()
-      const reactFlowRect = reactFlowElement.getBoundingClientRect()
-
-      // Prompt left edge relative to React Flow (mirrored from former right-edge logic)
-      const promptBoxLeftEdge = promptBoxRect.left - reactFlowRect.left
-
-      // Default left-anchored minimap right edge
-      const defaultMinimapLeft = 15
-      const minimapWidth = 179
-      const defaultMinimapRightEdge = defaultMinimapLeft + minimapWidth
-
-      // Gap between default minimap (on left) and prompt box approaching from the right
-      const gap = promptBoxLeftEdge - defaultMinimapRightEdge
-
-      const gapThreshold = 16
-
-      // If gap is less than threshold, move minimap/toggle up and left-align with prompt box
-      if (gap < gapThreshold) {
-        const gapAbovePrompt = 0 // Gap between minimap bottom and prompt box top
-        const cssBottom = reactFlowRect.bottom - promptBoxRect.top + gapAbovePrompt
-        const calculatedBottom = cssBottom + 12 // style uses minimapBottom - 12
-        const minimapHeight = 134
-        const maxReasonableBottom = reactFlowRect.height - minimapHeight + 12
-        setMinimapBottom(Math.max(17, Math.min(calculatedBottom, maxReasonableBottom)))
-        // Align minimap's left edge with prompt box's left edge
-        const leftPosition = Math.max(0, promptBoxLeftEdge)
-        setMinimapLeft(leftPosition)
-      } else {
-        setMinimapBottom(17) // Default at bottom
-        setMinimapLeft(15) // Default 15px from left edge of React Flow
-      }
-    }
-
-    checkMinimapPosition()
-    window.addEventListener('resize', () => {
-      // Skip minimap position updates during scroll to bottom to prevent flashing
-      if (isScrollingToBottomRef.current) {
-        return
-      }
-      checkMinimapPosition()
-    })
-
-    // Watch for React Flow container resize - this catches sidebar collapse/expand
-    // This ensures minimap and toggle align correctly when sidebar collapses/expands
-    const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
-    const reactFlowResizeObserver = reactFlowElement ? new ResizeObserver(() => {
-      // Skip minimap position updates during scroll to bottom to prevent flashing
-      if (isScrollingToBottomRef.current) {
-        return
-      }
-      checkMinimapPosition()
-    }) : null
-    
-    if (reactFlowResizeObserver && reactFlowElement) {
-      reactFlowResizeObserver.observe(reactFlowElement)
-    }
-
-    // Also watch for prompt box position/size changes (it can move/change size)
-    // This ensures minimap and toggle jump even when minimap is hidden
-    const setupObservers = () => {
-      const chatInputElement = document.querySelector('textarea[placeholder*="Type"], textarea[placeholder*="message"]') as HTMLElement
-      if (chatInputElement) {
-        const promptBoxContainer = chatInputElement.closest('[class*="pointer-events-auto"]') as HTMLElement
-        if (promptBoxContainer) {
-          const resizeObserver = new ResizeObserver(() => {
-            // Skip minimap position updates during scroll to bottom to prevent flashing
-            if (isScrollingToBottomRef.current) {
-              return
-            }
-            checkMinimapPosition()
-          })
-          resizeObserver.observe(promptBoxContainer)
-
-          return () => {
-            resizeObserver.disconnect()
-          }
-        }
-      }
-      return () => { }
-    }
-
-    const cleanupObservers = setupObservers()
-
-    return () => {
-      window.removeEventListener('resize', checkMinimapPosition)
-      if (reactFlowResizeObserver) reactFlowResizeObserver.disconnect()
-      cleanupObservers()
-    }
-  }, [isMinimapHidden]) // Re-run when minimap visibility changes to ensure toggle position updates
+    setMinimapBottom(MINIMAP_BOTTOM)
+    setMinimapLeft(8) // Match sticky-prompt-panel paddingLeft 0.5rem
+  }, [])
 
   // Calculate hover zone left position to align with minimap left edge
   useEffect(() => {
@@ -2130,13 +2009,11 @@ function BoardFlowInner({
       // Get React Flow rect first (needed for all calculations)
       const reactFlowRect = reactFlowElement.getBoundingClientRect()
 
-      // Calculate center position relative to board flow (left-anchored nav toggle)
-      // Toggle is positioned at: left: minimapLeft + 14
+      // Pill centers on minimap/nav cluster (shared left = minimapLeft)
       const reactFlowPaddingLeft = parseFloat(getComputedStyle(reactFlowElement).paddingLeft) || 0
       const minimapWidth = 179
-      const toggleLeftOffset = 14 // Align with minimap cluster on the left
-      const toggleLeft = minimapLeft + toggleLeftOffset + reactFlowPaddingLeft
-      const centerPosition = toggleLeft + minimapWidth / 2
+      const clusterLeft = minimapLeft + reactFlowPaddingLeft
+      const centerPosition = clusterLeft + minimapWidth / 2
       setMinimapPillCenter(centerPosition)
 
       // Get actual minimap position if available, otherwise calculate
@@ -2228,7 +2105,7 @@ function BoardFlowInner({
         // Fallback calculation - calculate from container width
         // (Note: centerPosition already calculated above, stays the same)
         const minimapWidth = 179
-        // Left-anchored minimap: hover zone starts at minimapLeft
+        // Hover zone aligns with shared minimap/nav left
         const leftPosition = minimapLeft
         setMinimapHoverLeft(leftPosition)
         // When minimap is hidden, calculate bottom position
@@ -2246,8 +2123,8 @@ function BoardFlowInner({
             const pillBottom = reactFlowBottom - promptBoxTop - 3
             setMinimapPillBottom(pillBottom)
             // Calculate hover area position - between minimap bottom and prompt box top
-            // When minimap is hidden, use toggle position (minimapBottom - 12 + 15 from reactFlow bottom)
-            const toggleBottomFromReactFlowBottom = minimapBottom - 12 + 15
+            // When minimap is hidden, nav sits at minimapBottom
+            const toggleBottomFromReactFlowBottom = minimapBottom
             const toggleBottom = reactFlowBottom - toggleBottomFromReactFlowBottom
             const hoverAreaTop = promptBoxTop // Hover area top is at prompt box top
             const hoverAreaBottom = toggleBottom // Hover area bottom is at toggle bottom
@@ -2257,7 +2134,7 @@ function BoardFlowInner({
             setMinimapHoverHeight(hoverAreaHeight)
           } else {
             // Fallback: calculate where toggle bottom edge would be
-            const toggleBottomFromReactFlowBottom = minimapBottom - 12 + 15
+            const toggleBottomFromReactFlowBottom = minimapBottom
             const toggleBottom = reactFlowBottom - toggleBottomFromReactFlowBottom
             const pillBottom = reactFlowBottom - toggleBottom - 3
             setMinimapPillBottom(pillBottom)
@@ -7058,10 +6935,10 @@ function BoardFlowInner({
            }}
            style={{
              position: 'absolute',
-             bottom: `${minimapBottom - 12}px`,
-             left: `${minimapLeft}px`,
+             bottom: `${minimapBottom}px`, // Align with brand icon bottom (12px)
+             left: `${minimapLeft}px`, // Same left as nav + top-bar menu button
              width: 179,
-             height: 150,
+             height: MINIMAP_HEIGHT, // Match .minimap-custom-size (globals.css)
              opacity: isScrollingToBottom ? 0 : (isMinimapHidden ? 0 : 1),
              transition: `opacity ${isMinimapHidden ? '0.15s' : '0.5s'} ease-in-out`, // Faster fade out (0.15s), slower fade in (0.5s)
              pointerEvents: isMinimapHidden ? 'none' : 'auto',
@@ -7075,8 +6952,8 @@ function BoardFlowInner({
                return node.selected ? '#9ca3af' : '#e5e7eb' // Dark grey if selected, light grey otherwise
              }}
              maskColor={resolvedTheme === 'dark'
-               ? 'rgba(42, 42, 58, 0.3)' // Dark mode: dark gray overlay matching selected tab container (#2a2a3a with transparency)
-               : 'rgba(206, 227, 253, 0.3)'} // Light mode: blue-200 overlay that appears as blue-50 (#eff6ff) when applied at 0.3 opacity over white
+               ? 'rgba(42, 42, 58, 0.45)' // Dark mode: match nav #2a2a3a
+               : 'rgba(243, 244, 246, 0.75)'} // Light mode: gray-100 cover (same as nav menu)
              pannable={true} // Allow panning (horizontal movement restricted via onMove in linear mode)
              zoomable={true}
              className="minimap-custom-size shadow-sm"
@@ -7088,10 +6965,11 @@ function BoardFlowInner({
                overflow: 'hidden',
                cursor: 'pointer', // Indicate clickability
                width: 179,
-               height: 150, // Minimap height
+               height: MINIMAP_HEIGHT, // Match .minimap-custom-size so nav sits flush on top
                position: 'absolute',
                bottom: 0, // Anchor to bottom of container
                left: 0,
+               margin: 0, // Override .react-flow__panel { margin: 15px } — that gap floated the minimap up
              }}
            />
          </div>
@@ -7218,7 +7096,7 @@ function BoardFlowInner({
         </div>
       )}
 
-      {/* Minimap pill + Linear/Free nav — host map only (hidden in page previews) */}
+      {/* Minimap pill + Free nav — host map only (hidden in page previews) */}
       {!embedded && (
       <div
         data-minimap-pill-context
@@ -7461,7 +7339,7 @@ function BoardFlowInner({
         </div>
       )}
 
-      {/* Linear/Canvas toggle with Nav dropdown above minimap — host map only */}
+      {/* Free nav: Scroll/Zoom select (left) + zoom % (right) — host map only */}
       {!embedded && (
       <div
         data-minimap-toggle-context
@@ -7491,233 +7369,53 @@ function BoardFlowInner({
           // Position toggle above minimap - slides down smoothly when minimap collapses
           // Both positions use minimapBottom which already accounts for the jump when prompt box gets close
           bottom: isMinimapHidden
-            ? `${minimapBottom - 12 + 15}px` // At minimap position when hidden + small offset (3px higher when collapsed)
-            : `${minimapBottom - 12 + 150 + 4}px`, // Above minimap (150px height + 4px gap)
-          // Align with left-side minimap (no chat logo here — that stays on the right)
-          left: `${minimapLeft + 14}px`,
+            ? `${minimapBottom}px` // Same bottom as brand when minimap collapsed
+            : `${minimapBottom + MINIMAP_HEIGHT}px`, // Flush on minimap top
+          // Same left as minimap / top-bar menu button
+          left: `${minimapLeft}px`,
           transition: 'bottom 0.25s ease-in-out', // Smooth slide animation, slightly faster
         }}
       >
         <div
           className={cn(
-            "bg-gray-100 dark:bg-[#2a2a3a] rounded-lg p-1 flex items-center gap-1 relative w-[181px]",
-            isMinimapHidden && "shadow-sm"
+            // Flat bottom sits on minimap (minimap top corners are square); round only when minimap is hidden
+            "bg-gray-100 dark:bg-[#2a2a3a] p-1 flex items-center gap-1 relative w-[179px]",
+            isMinimapHidden ? "rounded-lg shadow-sm" : "rounded-t-lg rounded-b-none"
           )}
         >
-          {/* Linear button with nested caret dropdown — flex-1 so both modes share container width evenly */}
-          <div className={cn(
-            'relative flex-1 min-w-0 py-1 text-xs rounded-lg flex items-center justify-evenly h-auto group',
-            viewMode === 'linear'
-              ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
-              : 'bg-transparent text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
-          )}>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                if (viewMode === 'linear') {
-                  // Already in linear mode - do nothing (dropdown handles navigation mode)
-                  return
-                } else {
-                  // Toggle to linear mode
-                  setViewMode('linear')
-                  
-                  // Get selected panel (if any)
-                  const selectedNode = nodes?.find(n => n.selected)
-                  
-                  // Determine which panel to center
-                  let panelToCenter: Node<ChatPanelNodeData> | null = null
-                  
-                  if (selectedNode) {
-                    const selectedIsChat = isChatPanel(selectedNode as Node<ChatPanelNodeData>)
-                    if (selectedIsChat || linearNavMode === 'all') {
-                      // Selected panel is a chat panel OR we're showing all panels - center it
-                      panelToCenter = selectedNode as Node<ChatPanelNodeData>
-                    } else {
-                      // Selected panel is not a chat panel AND we're in chat-only mode - center most recent chat
-                      panelToCenter = getMostRecentPanel('chat')
-                    }
-                  } else {
-                    // No panel selected - center most recent panel based on filter
-                    panelToCenter = getMostRecentPanel(linearNavMode)
-                  }
-                  
-                  // Center the panel above prompt box
-                  if (panelToCenter) {
-                    // Update focused panel index and reset scroll accumulator
-                    const panels = getChronologicalPanels(linearNavMode)
-                    const index = panels.findIndex(p => p.id === panelToCenter.id)
-                    setFocusedPanelIndex(index >= 0 ? index : panels.length - 1)
-                    scrollAccumulatorRef.current = 0
-                    lastScrollDirectionRef.current = null
-                    
-                    // Center the panel and reset zoom to 100% when focusing most recent panel
-                    setTimeout(() => {
-                      const isMostRecent = panelToCenter.id === getMostRecentPanel(linearNavMode)?.id
-                      centerPanelAbovePrompt(panelToCenter.id, isMostRecent)
-                    }, 100)
-                  } else {
-                    // No panels available - reset focused index and scroll accumulator
-                    setFocusedPanelIndex(null)
-                    scrollAccumulatorRef.current = 0
-                    lastScrollDirectionRef.current = null
-                  }
-                }
-              }}
-              className={cn(
-                'px-0 py-0 h-auto text-xs',
-                viewMode === 'linear'
-                  ? 'text-gray-900 hover:bg-transparent'
-                  : 'text-gray-700 group-hover:text-gray-900'
-              )}
-            >
-              Linear
-            </Button>
-            {/* Nav dropdown - smaller button nested inside Linear button */}
+          {/* Nav select — slightly over half; label is the active wheel mode (Scroll or Zoom) */}
+          <div className="flex-[1.25] basis-0 min-w-0">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className={cn(
-                    'px-1 py-0.5 h-auto text-xs rounded focus-visible:ring-0 focus-visible:ring-offset-0',
-                    viewMode === 'linear'
-                      ? 'bg-white dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100 hover:bg-gray-200 dark:hover:bg-[#2a2a2a]'
-                      : 'bg-transparent text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 group-hover:bg-gray-100 dark:group-hover:bg-[#1f1f1f]'
-                  )}
+                  className="w-full h-auto py-1 px-0 text-xs rounded-lg bg-transparent text-gray-900 dark:text-gray-100 hover:bg-gray-200/60 dark:hover:bg-gray-700/60 focus-visible:ring-0 focus-visible:ring-offset-0 justify-evenly"
                 >
-                  <ChevronDown className={cn(
-                    'h-3 w-3',
-                    viewMode === 'linear' ? 'text-gray-900' : 'text-gray-700 group-hover:text-gray-900'
-                  )} />
+                  <span>{isScrollMode ? 'Scroll' : 'Zoom'}</span>
+                  <ChevronDown className="h-3 w-3 shrink-0 text-gray-700 dark:text-gray-300" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" side="top" className="w-32">
+              <DropdownMenuContent align="start" side="top" className="w-32">
                 <DropdownMenuLabel>Navigation</DropdownMenuLabel>
-                <DropdownMenuRadioGroup value={linearNavMode} onValueChange={(value) => {
-                  const newMode = value as 'chat' | 'all'
-                  setLinearNavMode(newMode)
-                  
-                  // If in linear mode, update focused panel based on new filter
-                  if (viewMode === 'linear') {
-                    const newPanels = getChronologicalPanels(newMode)
-                    if (newPanels.length > 0) {
-                      // Find current focused panel in new list, or use most recent
-                      const currentFocused = focusedPanelIndex !== null && focusedPanelIndex < chronologicalPanels.length
-                        ? chronologicalPanels[focusedPanelIndex]
-                        : null
-                      
-                      let panelToCenter: Node<ChatPanelNodeData> | null = null
-                      if (currentFocused) {
-                        // Try to find same panel in new list
-                        const found = newPanels.find(p => p.id === currentFocused.id)
-                        panelToCenter = found || getMostRecentPanel(newMode)
-                      } else {
-                        panelToCenter = getMostRecentPanel(newMode)
-                      }
-                      
-                      if (panelToCenter) {
-                        const index = newPanels.findIndex(p => p.id === panelToCenter!.id)
-                        setFocusedPanelIndex(index >= 0 ? index : newPanels.length - 1)
-                        scrollAccumulatorRef.current = 0
-                        lastScrollDirectionRef.current = null
-                        // Reset zoom to 100% when focusing most recent panel
-                        const isMostRecent = panelToCenter.id === getMostRecentPanel(newMode)?.id
-                        setTimeout(() => {
-                          centerPanelAbovePrompt(panelToCenter!.id, isMostRecent)
-                        }, 100)
-                      }
-                    }
-                  }
-                }}>
-                  <DropdownMenuRadioItem value="chat">Chat</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="all">All</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          {/* Free button with nested caret dropdown — flex-1 so both modes share container width evenly */}
-          <div className={cn(
-            'relative flex-1 min-w-0 py-1 text-xs rounded-lg flex items-center justify-evenly h-auto group',
-            viewMode === 'canvas'
-              ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
-              : 'bg-transparent text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
-          )}>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                if (viewMode === 'canvas' && reactFlowInstance) {
-                  // Already in canvas mode - reset to default zoom and center selected panel(s) over prompt box
-                  const selectedNodes = nodes?.filter(n => n.selected) || []
-                  const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
-                  const chatTextarea = document.querySelector('textarea[placeholder*="Type"], textarea[placeholder*="message"]') as HTMLElement
-                  const promptBox = chatTextarea?.closest('[class*="pointer-events-auto"]') as HTMLElement
-
-                  if (selectedNodes.length > 0 && promptBox && reactFlowElement) {
-                    // Center selected panel(s) over prompt box at 100% zoom
-                    const promptBoxRect = promptBox.getBoundingClientRect()
-                    const reactFlowRect = reactFlowElement!.getBoundingClientRect()
-                    const promptBoxCenterX = (promptBoxRect.left + promptBoxRect.right) / 2 - reactFlowRect.left
-
-                    // Calculate center of selected nodes
-                    const minX = Math.min(...selectedNodes.map(n => n.position.x))
-                    const maxX = Math.max(...selectedNodes.map(n => n.position.x + 768)) // 768 = panel width
-                    const minY = Math.min(...selectedNodes.map(n => n.position.y))
-                    const maxY = Math.max(...selectedNodes.map(n => n.position.y + 400)) // estimate height
-                    const nodesCenterX = (minX + maxX) / 2
-                    const nodesCenterY = (minY + maxY) / 2
-
-                    // Calculate viewport to center nodes over prompt box horizontally
-                    const targetViewportX = promptBoxCenterX - nodesCenterX * 1 // zoom = 1
-                    const targetViewportY = (reactFlowRect.height / 2) - nodesCenterY * 1 // center vertically in map
-
-                    reactFlowInstance.setViewport({ x: targetViewportX, y: targetViewportY, zoom: 1 }, { duration: 200 })
-                  } else {
-                    // No selection - just reset to 100% zoom
-                    const viewport = reactFlowInstance.getViewport()
-                    reactFlowInstance.setViewport({ x: viewport.x, y: viewport.y, zoom: 1 }, { duration: 200 })
-                  }
-                } else {
-                  setViewMode('canvas')
-                }
-              }}
-              className={cn(
-                'px-0 py-0 h-auto text-xs',
-                viewMode === 'canvas'
-                  ? 'text-gray-900 hover:bg-transparent'
-                  : 'text-gray-700 group-hover:text-gray-900'
-              )}
-            >
-              Free
-            </Button>
-            {/* Nav dropdown - smaller button nested inside Canvas button */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className={cn(
-                    'px-1 py-0.5 h-auto text-xs rounded focus-visible:ring-0 focus-visible:ring-offset-0',
-                    viewMode === 'canvas'
-                      ? 'bg-white dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100 hover:bg-gray-200 dark:hover:bg-[#2a2a2a]'
-                      : 'bg-transparent text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 group-hover:bg-gray-100 dark:group-hover:bg-[#1f1f1f]'
-                  )}
+                <DropdownMenuRadioGroup
+                  value={isScrollMode ? 'scroll' : 'zoom'}
+                  onValueChange={(value) => {
+                    setIsScrollMode(value === 'scroll') // Wheel pans (scroll) vs zooms
+                    if (viewMode !== 'canvas') setViewMode('canvas') // Free-only nav; leave Linear behind
+                  }}
                 >
-                  <ChevronDown className={cn(
-                    'h-3 w-3',
-                    viewMode === 'canvas' ? 'text-gray-900' : 'text-gray-700 group-hover:text-gray-900'
-                  )} />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" side="top" className="w-32">
-                <DropdownMenuLabel>Navigation</DropdownMenuLabel>
-                <DropdownMenuRadioGroup value={isScrollMode ? 'scroll' : 'zoom'} onValueChange={(value) => setIsScrollMode(value === 'scroll')}>
                   <DropdownMenuRadioItem value="scroll">Scroll</DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="zoom">Zoom</DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
+          </div>
+          {/* Same hairline divider as top-bar toolbar */}
+          <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-1 flex-shrink-0" />
+          {/* Zoom % — remaining space, no chip background */}
+          <div className="flex-1 basis-0 flex items-center justify-center min-w-0">
+            <NavZoomControl />
           </div>
         </div>
       </div>
@@ -7732,7 +7430,7 @@ function BoardFlowInner({
           onClick={() => toggleChatSidebar()}
           className="absolute z-10 flex items-center justify-center bg-transparent hover:opacity-80 transition-opacity p-0 border-0 overflow-visible"
           style={{
-            bottom: '12px',
+            bottom: `${MINIMAP_BOTTOM}px`, // Same bottom as minimap
             right: '12px',
           }}
           title="Show chat"

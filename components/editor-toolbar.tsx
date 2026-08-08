@@ -7,7 +7,6 @@ import { Button } from './ui/button'
 import { useReactFlowContext } from './react-flow-context'
 import { usePreviewFocus } from '@/lib/preview-focus-context' // Nested preview View-style targeting
 import { useState, useEffect, useRef } from 'react'
-import { Input } from './ui/input'
 import { useRouter } from 'next/navigation'
 import {
   DropdownMenu,
@@ -79,7 +78,7 @@ interface EditorToolbarProps {
 }
 
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
-  const { reactFlowInstance, isLocked, setIsLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, viewMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, drawShape: contextDrawShape, setDrawShape: setContextDrawShape, mapUndo, mapRedo, canMapUndo, canMapRedo, snapEnabled, setSnapEnabled } = useReactFlowContext()
+  const { reactFlowInstance, isLocked, setIsLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, drawShape: contextDrawShape, setDrawShape: setContextDrawShape, mapUndo, mapRedo, canMapUndo, canMapRedo, snapEnabled, setSnapEnabled } = useReactFlowContext()
   const previewFocus = usePreviewFocus() // When a nested preview chrome is selected, View styles target that page
   // Route Board Style controls to the focused preview page (else the host map)
   const boardRule = previewFocus?.focusedPageId ? previewFocus.boardRule : hostBoardRule
@@ -319,10 +318,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   // Hide formatting options (clear formatting to line options) when insert/draw/view mode is selected
   const shouldHideFormattingOptions = editMenuPillMode !== 'home' // Hide when not in 'home' mode
 
-  const [zoom, setZoom] = useState(1)
-  const [isEditingZoom, setIsEditingZoom] = useState(false)
-  const [zoomEditValue, setZoomEditValue] = useState('100')
-  const zoomInputRef = useRef<HTMLInputElement>(null)
   // Initialize with consistent defaults to avoid hydration mismatch, then load from Supabase
   const [lineStyle, setLineStyle] = useState<'curved' | 'boxed'>('curved')
   const [editMode, setEditMode] = useState<'editing' | 'suggesting' | 'viewing'>('editing')
@@ -671,278 +666,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     saveToSupabase()
   }, [editMode, supabase])
 
-  // Update zoom display periodically and on mount
-  // Also snap to 100% when zoom is close to 100%
-  useEffect(() => {
-    if (!reactFlowInstance) return
-
-    const updateZoom = () => {
-      if (!isEditingZoom) { // Don't update if user is editing
-        const viewport = reactFlowInstance.getViewport()
-        const currentZoom = viewport.zoom
-
-        // Snap to 100% if zoom is within 2% of 100% (between 0.98 and 1.02)
-        if (currentZoom >= 0.98 && currentZoom <= 1.02 && currentZoom !== 1) {
-          reactFlowInstance.setViewport({
-            x: viewport.x,
-            y: viewport.y,
-            zoom: 1,
-          }, { duration: 150 }) // Smooth snap animation
-          setZoom(1)
-          setZoomEditValue('100')
-        } else {
-          setZoom(currentZoom)
-          setZoomEditValue(Math.round(currentZoom * 100).toString())
-        }
-      }
-    }
-
-    // Initial zoom
-    updateZoom()
-
-    // Update zoom periodically to catch external changes
-    const interval = setInterval(updateZoom, 100) // Check every 100ms
-
-    return () => {
-      clearInterval(interval)
-    }
-  }, [reactFlowInstance, isEditingZoom])
-
-  const handleZoomInputFocus = () => {
-    setIsEditingZoom(true)
-    setZoomEditValue(Math.round(zoom * 100).toString())
-    setTimeout(() => {
-      zoomInputRef.current?.select()
-    }, 0)
-  }
-
-  const handleZoomInputBlur = () => {
-    setIsEditingZoom(false)
-    const numericValue = parseFloat(zoomEditValue)
-    if (!isNaN(numericValue) && reactFlowInstance) {
-      const newZoom = Math.max(0.1, Math.min(2, numericValue / 100))
-      const viewport = reactFlowInstance.getViewport()
-      reactFlowInstance.setViewport({
-        x: viewport.x,
-        y: viewport.y,
-        zoom: newZoom,
-      })
-      setZoom(newZoom)
-      setZoomEditValue(Math.round(newZoom * 100).toString())
-    } else {
-      setZoomEditValue(Math.round(zoom * 100).toString())
-    }
-  }
-
-  const handleZoomInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      zoomInputRef.current?.blur()
-    } else if (e.key === 'Escape') {
-      setZoomEditValue(Math.round(zoom * 100).toString())
-      zoomInputRef.current?.blur()
-    }
-  }
-
-  const handleZoomInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setZoomEditValue(e.target.value)
-  }
-
-  const handleZoomChange = (zoomValue: number | 'fit') => {
-    if (!reactFlowInstance) return
-
-    if (zoomValue === 'fit') {
-      // Fit view - check if top bar and input box are visible to adjust fitView padding
-      const topBar = document.querySelector('[class*="bg-white"][class*="shadow-sm"][class*="border-b"]') as HTMLElement
-      const inputBox = document.querySelector('textarea[placeholder*="Type"], textarea[placeholder*="message"]')?.closest('[class*="pointer-events-auto"]') as HTMLElement
-      const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
-
-      let topPadding = 0
-      let bottomPadding = 0
-
-      if (topBar && reactFlowElement) {
-        const topBarHeight = topBar.offsetHeight
-        const reactFlowHeight = reactFlowElement.offsetHeight
-        if (topBarHeight > 0) {
-          topPadding = topBarHeight / reactFlowHeight
-        }
-      }
-
-      if (inputBox && reactFlowElement) {
-        const inputBoxRect = inputBox.getBoundingClientRect()
-        const reactFlowRect = reactFlowElement.getBoundingClientRect()
-        const inputBoxHeight = reactFlowRect.bottom - inputBoxRect.top + 16
-        const reactFlowHeight = reactFlowElement.offsetHeight
-        if (inputBoxHeight > 0 && inputBoxHeight < reactFlowHeight) {
-          bottomPadding = inputBoxHeight / reactFlowHeight
-        }
-      }
-
-      const uiPadding = Math.max(topPadding, bottomPadding, 0.05)
-
-      // Calculate prompt box center position first (before any viewport changes)
-      let promptBoxCenterX: number | null = null
-      if (inputBox && reactFlowElement) {
-        const inputBoxRect = inputBox.getBoundingClientRect()
-        const reactFlowRect = reactFlowElement.getBoundingClientRect()
-        // Calculate prompt box center relative to React Flow container
-        promptBoxCenterX = (inputBoxRect.left + inputBoxRect.right) / 2 - reactFlowRect.left
-      }
-
-      // Get all nodes to calculate content bounds
-      const nodes = reactFlowInstance.getNodes()
-      if (nodes.length === 0) {
-        // No nodes, just do regular fitView
-        reactFlowInstance.fitView({ padding: uiPadding, minZoom: 0.1, maxZoom: 1, duration: 300 })
-        return
-      }
-
-      // Calculate bounds manually from nodes
-      const panelWidth = 768 // Standard panel width
-      const panelHeight = 400 // Estimated panel height
-
-      // Find min/max positions
-      const minX = Math.min(...nodes.map(n => n.position.x))
-      const maxX = Math.max(...nodes.map(n => n.position.x + panelWidth))
-      const minY = Math.min(...nodes.map(n => n.position.y))
-      const maxY = Math.max(...nodes.map(n => n.position.y + panelHeight))
-
-      // Calculate content dimensions from bounds
-      const contentWidth = maxX - minX
-      const contentHeight = maxY - minY
-      const contentCenterX = minX + contentWidth / 2
-      const contentCenterY = minY + contentHeight / 2
-
-      // Get React Flow container dimensions (ensure we have valid dimensions)
-      const reactFlowWidth = reactFlowElement?.clientWidth || 0
-      const reactFlowHeight = reactFlowElement?.clientHeight || 0
-
-      if (reactFlowWidth === 0 || reactFlowHeight === 0) {
-        // Fallback if dimensions are invalid
-        reactFlowInstance.fitView({ padding: uiPadding, minZoom: 0.1, maxZoom: 1, duration: 300 })
-        return
-      }
-
-      // Calculate available space (accounting for padding)
-      const availableWidth = reactFlowWidth * (1 - uiPadding * 2)
-      const availableHeight = reactFlowHeight * (1 - uiPadding * 2)
-
-      // Calculate zoom to fit content (same logic as fitView)
-      const zoomX = availableWidth / contentWidth
-      const zoomY = availableHeight / contentHeight
-      let calculatedZoom = Math.min(zoomX, zoomY)
-
-      // Apply min/max zoom constraints based on view mode
-      const minZoom = viewMode === 'linear' ? 0.1 : 0.3
-      calculatedZoom = Math.max(minZoom, Math.min(1, calculatedZoom)) // Cap at 100% (1.0)
-
-      // Calculate viewport Y to center content vertically (same as fitView)
-      // Formula: screenY = worldY * zoom + viewportY
-      // We want content center Y to be at screen center Y
-      // screenCenterY = reactFlowHeight / 2
-      // contentCenterY * zoom + viewportY = screenCenterY
-      // viewportY = screenCenterY - contentCenterY * zoom
-      const screenCenterY = reactFlowHeight / 2
-      const targetViewportY = screenCenterY - contentCenterY * calculatedZoom
-
-      // Calculate viewport X to center content on prompt box (not screen center)
-      // Formula: screenX = worldX * zoom + viewportX
-      // We want: contentCenterX * zoom + viewportX = promptBoxCenterX
-      // So: viewportX = promptBoxCenterX - contentCenterX * zoom
-      // Recalculate prompt box center right before using it to ensure we have the latest position
-      let finalPromptBoxCenterX: number | null = null
-      if (inputBox && reactFlowElement) {
-        const inputBoxRect = inputBox.getBoundingClientRect()
-        const reactFlowRect = reactFlowElement.getBoundingClientRect()
-        // Calculate prompt box center relative to React Flow container (screen coordinates)
-        finalPromptBoxCenterX = (inputBoxRect.left + inputBoxRect.right) / 2 - reactFlowRect.left
-      }
-
-      // If we couldn't find the prompt box, fall back to screen center
-      const targetViewportX = finalPromptBoxCenterX !== null
-        ? finalPromptBoxCenterX - contentCenterX * calculatedZoom
-        : (reactFlowWidth / 2) - contentCenterX * calculatedZoom
-
-      // Dispatch custom event to signal fit view is starting (so board-flow.tsx can set fitViewInProgressRef)
-      window.dispatchEvent(new CustomEvent('fit-view-start'))
-
-      // Use requestAnimationFrame to ensure DOM is fully laid out, then set viewport
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          if (!reactFlowInstance) {
-            window.dispatchEvent(new CustomEvent('fit-view-end'))
-            return
-          }
-
-          // Re-verify elements exist right before setting viewport
-          const currentInputBox = document.querySelector('textarea[placeholder*="Type"], textarea[placeholder*="message"]')?.closest('[class*="pointer-events-auto"]') as HTMLElement
-          const currentReactFlowElement = document.querySelector('.react-flow') as HTMLElement
-
-          if (currentInputBox && currentReactFlowElement) {
-            // Recalculate prompt box center one more time to ensure accuracy
-            const inputBoxRect = currentInputBox.getBoundingClientRect()
-            const reactFlowRect = currentReactFlowElement.getBoundingClientRect()
-            const currentPromptBoxCenterX = (inputBoxRect.left + inputBoxRect.right) / 2 - reactFlowRect.left
-
-            // Recalculate viewport X with the latest prompt box position
-            // Formula: screenX = worldX * zoom + viewportX
-            // We want: contentCenterX * zoom + viewportX = promptBoxCenterX
-            // So: viewportX = promptBoxCenterX - contentCenterX * zoom
-            const finalViewportX = currentPromptBoxCenterX - contentCenterX * calculatedZoom
-
-            // Debug logging (remove in production)
-            console.log('Fit View Debug:', {
-              promptBoxCenterX: currentPromptBoxCenterX,
-              contentCenterX,
-              calculatedZoom,
-              finalViewportX,
-              reactFlowWidth: reactFlowRect.width,
-              reactFlowHeight: reactFlowRect.height
-            })
-
-            // Set viewport with calculated zoom and position (centered on prompt box)
-            reactFlowInstance.setViewport({
-              x: finalViewportX,
-              y: targetViewportY,
-              zoom: calculatedZoom
-            }, { duration: 300 }) // Smooth animation
-          } else {
-            // Fallback if elements not found - use calculated values
-            console.warn('Fit View: Could not find input box or React Flow element')
-            reactFlowInstance.setViewport({
-              x: targetViewportX,
-              y: targetViewportY,
-              zoom: calculatedZoom
-            }, { duration: 300 })
-          }
-
-          // Clear the fit view flag after animation completes
-          setTimeout(() => {
-            window.dispatchEvent(new CustomEvent('fit-view-end'))
-          }, 350)
-        })
-      })
-    } else {
-      // Set specific zoom level - snap to 100% if close
-      let finalZoom = zoomValue
-      if (zoomValue >= 0.98 && zoomValue <= 1.02) {
-        finalZoom = 1
-      }
-
-      const viewport = reactFlowInstance.getViewport()
-      reactFlowInstance.setViewport({
-        x: viewport.x,
-        y: viewport.y,
-        zoom: finalZoom,
-      }, finalZoom !== zoomValue ? { duration: 150 } : undefined) // Smooth snap if snapping
-    }
-
-    // Update zoom display
-    setTimeout(() => {
-      const viewport = reactFlowInstance.getViewport()
-      setZoom(viewport.zoom)
-    }, 10)
-  }
-
   const handleToggleLock = () => {
     if (!reactFlowInstance) return
 
@@ -1134,7 +857,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           { id: 'insertGroup2', width: 252 }, // Link, Symbols, Date (72 + 92 + 72 + container padding)
           { id: 'insertGroup1', width: 237 + 17 }, // Table, File, Camera (72 + 67 + 82 + container padding) + divider after
           { id: 'undoRedo', width: 70 },
-          { id: 'zoom', width: 60 },
           { id: 'lock', width: 40 },
         ]
         : editMenuPillMode === 'view'
@@ -1144,8 +866,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             { id: 'boardStyle', width: 118 },
             { id: 'snap', width: 40 },
             { id: 'undoRedo', width: 70 },
-            { id: 'zoom', width: 60 },
-            { id: 'lock', width: 40 },
+              { id: 'lock', width: 40 },
           ]
           : editMenuPillMode === 'draw'
             ? [
@@ -1167,8 +888,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               { id: 'drawGroup2', width: 44 + 5 }, // Eraser (44px) + divider after (5px)
               { id: 'drawGroup1', width: 108 + 5 }, // Lasso, Vertical, Horizontal (108px) + divider after (5px)
               { id: 'undoRedo', width: 70 },
-              { id: 'zoom', width: 60 },
-              { id: 'lock', width: 40 },
+                  { id: 'lock', width: 40 },
             ]
             : [
               // Home mode buttons (formatting options)
@@ -1180,8 +900,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               { id: 'heading', width: 50 },
               { id: 'paint', width: 40 },
               { id: 'undoRedo', width: 70 },
-              { id: 'zoom', width: 60 },
-              { id: 'lock', width: 40 },
+                  { id: 'lock', width: 40 },
             ]
 
       // Calculate total width needed
@@ -1257,117 +976,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-1 flex-shrink-0" />
           </>
         )}
-
-        {/* Zoom/Scale Dropdown */}
-        {!isItemHidden('zoom') && (
-          <>
-            {isEditingZoom ? (
-              <Input
-                ref={zoomInputRef}
-                type="text"
-                value={`${zoomEditValue}%`}
-                onChange={handleZoomInputChange}
-                onBlur={handleZoomInputBlur}
-                onKeyDown={handleZoomInputKeyDown}
-                className="h-7 w-14 px-1 text-sm text-center text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 focus:border-blue-500 dark:focus:border-blue-400 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0 flex-shrink-0"
-                onFocus={(e) => {
-                  e.target.select()
-                }}
-                style={{ fontSize: '0.875rem' }}
-                autoFocus
-              />
-            ) : (
-              <DropdownMenu modal={false} open={openDropdown === 'zoom'} onOpenChange={(open) => handleDropdownOpenChange('zoom', open)}>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={!reactFlowInstance}
-                    className={cn(
-                      'h-7 px-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0',
-                      !reactFlowInstance && 'opacity-50 cursor-not-allowed'
-                    )}
-                    style={{ minWidth: '48px' }} // Fixed width to prevent jitter when zoom numbers change
-                    onClick={(e) => {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      handleZoomInputFocus()
-                    }}
-                  >
-                    <span
-                      className="text-sm cursor-text inline-block text-center"
-                      style={{ width: '32px' }} // Fixed width for zoom number text
-                    >
-                      {Math.round(zoom * 100)}%
-                    </span>
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="start"
-                  className="w-32"
-                  onInteractOutside={(e) => {
-                    // Prevent closing when clicking on input
-                    if (e.target instanceof HTMLElement && e.target.closest('input')) {
-                      e.preventDefault()
-                    }
-                  }}
-                >
-                  <DropdownMenuItem
-                    onClick={() => handleZoomChange('fit')}
-                    className="flex items-center"
-                  >
-                    Fit
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={() => handleZoomChange(0.5)}
-                    className={cn('flex items-center', zoom === 0.5 && 'bg-gray-100 dark:bg-[#1f1f1f]')}
-                  >
-                    50%
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => handleZoomChange(0.75)}
-                    className={cn('flex items-center', zoom === 0.75 && 'bg-gray-100 dark:bg-gray-800')}
-                  >
-                    75%
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => handleZoomChange(0.9)}
-                    className={cn('flex items-center', zoom === 0.9 && 'bg-gray-100 dark:bg-gray-800')}
-                  >
-                    90%
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => handleZoomChange(1)}
-                    className={cn('flex items-center', zoom === 1 && 'bg-gray-100 dark:bg-gray-800')}
-                  >
-                    100%
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => handleZoomChange(1.25)}
-                    className={cn('flex items-center', zoom === 1.25 && 'bg-gray-100 dark:bg-gray-800')}
-                  >
-                    125%
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => handleZoomChange(1.5)}
-                    className={cn('flex items-center', zoom === 1.5 && 'bg-gray-100 dark:bg-gray-800')}
-                  >
-                    150%
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => handleZoomChange(2)}
-                    className={cn('flex items-center', zoom === 2 && 'bg-gray-100 dark:bg-gray-800')}
-                  >
-                    200%
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-            <div className="w-px h-6 bg-gray-300 mx-1 flex-shrink-0" />
-          </>
-        )}
-
 
         {/* Undo/Redo Controls */}
         {!isItemHidden('undoRedo') && (
@@ -2714,7 +2322,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <DropdownMenuSeparator />
                   </>
                 )}
-                {/* Common items (undo/redo, zoom, lock) */}
+                {/* Common items (undo/redo, lock) */}
                 {isItemHidden('undoRedo') && editor && (
                   <>
                     <DropdownMenuItem
@@ -2737,19 +2345,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       <Redo2 className="h-4 w-4 mr-2" />
                       Redo
                     </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                {isItemHidden('zoom') && reactFlowInstance && (
-                  <>
-                    <DropdownMenuItem onClick={() => handleZoomChange('fit')}>
-                      Fit to view
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(0.5)}>50%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(0.75)}>75%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(1)}>100%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(1.5)}>150%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(2)}>200%</DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>
                 )}
@@ -2778,7 +2373,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <DropdownMenuSeparator />
                   </>
                 )}
-                {/* Common items (undo/redo, zoom, lock) */}
+                {/* Common items (undo/redo, lock) */}
                 {isItemHidden('undoRedo') && editor && (
                   <>
                     <DropdownMenuItem
@@ -2801,19 +2396,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       <Redo2 className="h-4 w-4 mr-2" />
                       Redo
                     </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                {isItemHidden('zoom') && reactFlowInstance && (
-                  <>
-                    <DropdownMenuItem onClick={() => handleZoomChange('fit')}>
-                      Fit to view
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(0.5)}>50%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(0.75)}>75%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(1)}>100%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(1.5)}>150%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(2)}>200%</DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>
                 )}
@@ -2951,7 +2533,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <DropdownMenuSeparator />
                   </>
                 )}
-                {/* Common items (undo/redo, zoom, lock) */}
+                {/* Common items (undo/redo, lock) */}
                 {isItemHidden('undoRedo') && editor && (
                   <>
                     <DropdownMenuItem
@@ -2977,19 +2559,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <DropdownMenuSeparator />
                   </>
                 )}
-                {isItemHidden('zoom') && reactFlowInstance && (
-                  <>
-                    <DropdownMenuItem onClick={() => handleZoomChange('fit')}>
-                      Fit to view
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(0.5)}>50%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(0.75)}>75%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(1)}>100%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(1.5)}>150%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(2)}>200%</DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
                 {isItemHidden('lock') && reactFlowInstance && (
                   <>
                     <DropdownMenuItem onClick={handleToggleLock}>
@@ -3008,19 +2577,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       {isLocked ? <Lock className="h-4 w-4 mr-2" /> : <Unlock className="h-4 w-4 mr-2" />}
                       {isLocked ? 'Unlock nodes' : 'Lock nodes'}
                     </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                {isItemHidden('zoom') && reactFlowInstance && (
-                  <>
-                    <DropdownMenuItem onClick={() => handleZoomChange('fit')}>
-                      Fit to view
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(0.5)}>50%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(0.75)}>75%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(1)}>100%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(1.5)}>150%</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleZoomChange(2)}>200%</DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>
                 )}

@@ -474,7 +474,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
             )}
           </div>
 
-          {/* Editor Toolbar - shows lock/zoom controls always, editor controls when editor is active */}
+          {/* Editor Toolbar - shows lock/undo controls always, editor controls when editor is active */}
           <EditorToolbar editor={activeEditor} conversationId={conversationId} />
         </div>
 
