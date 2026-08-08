@@ -1,6 +1,6 @@
 'use client'
 
-// Notion-style ⋮⋮ handles per TipTap content block (not the map-card frame).
+// ⋮⋮ on each TipTap **block** (not the host **frame**). Click = actions; drag = that block only. See DEFINITIONS.md.
 
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
@@ -45,8 +45,8 @@ type HandleLayout = {
 type TipTapBlockHandlesProps = {
   editor: Editor | null
   enabled?: boolean // Off for flashcards / project boards
-  hostNodeId?: string // RF node id — for Page promote via board-flow
-  conversationId?: string // Board id — extract a line onto the map as its own card
+  hostNodeId?: string // Host **frame** RF id — Page promote / extract target
+  conversationId?: string // Page id — extract a block onto the page as its own frame
   pageInTargets?: PageInTarget[]
   onPageTurnInto?: (blockType: 'page' | 'pageIn', pageInParentId?: string | null) => void
 }
@@ -97,7 +97,7 @@ function layoutForBlock(
   }
 }
 
-/** Map-card frame that owns this editor (full width hover target). */
+/** Host **frame** that owns this editor (full width hover target — RF node DOM). */
 function frameForEditor(dom: HTMLElement): HTMLElement {
   return (dom.closest('.react-flow__node') as HTMLElement | null) ?? dom.parentElement ?? dom
 }
@@ -110,7 +110,7 @@ export function TipTapBlockHandles({
   pageInTargets = [],
   onPageTurnInto,
 }: TipTapBlockHandlesProps) {
-  const { screenToFlowPosition } = useReactFlow() // Drop-on-canvas → flow coords for a new card
+  const { screenToFlowPosition } = useReactFlow() // Drop-on-page → flow coords for a new frame
   const queryClient = useQueryClient() // Refetch messages after extract
   const [hover, setHover] = useState<HandleLayout | null>(null) // Handle beside hovered block
   const [focusLayout, setFocusLayout] = useState<HandleLayout | null>(null) // Handle beside focused/caret block
@@ -127,11 +127,11 @@ export function TipTapBlockHandles({
   const focusRef = useRef<HandleLayout | null>(null)
   hoverRef.current = hover
   focusRef.current = focusLayout
-  // Click vs drag on the ⋮⋮ grip — click opens menu; drag moves this content block only
+  // Click vs drag on the ⋮⋮ grip — click opens menu; drag moves this **block** only (never the frame)
   const gripPointerRef = useRef<{ x: number; y: number; dragged: boolean } | null>(null)
   const draggingRef = useRef(false) // Freeze hover/handle while a content-block drag is live
 
-  // Register this card’s editor so ⋮⋮ drag can drop into it (and unregister on unmount)
+  // Register this frame’s editor so ⋮⋮ block-drag can drop into it (and unregister on unmount)
   useEffect(() => {
     if (!editor || !hostNodeId || editor.isDestroyed) return
     registerHostEditor(hostNodeId, editor)
@@ -302,11 +302,11 @@ export function TipTapBlockHandles({
   // Click vs drag: nodrag so RF never starts; pointermove/up on window for this content block only
   const onGripPointerDown = useCallback((e: ReactPointerEvent) => {
     if (e.button !== 0 || !editor) return // Left button + live editor
-    e.stopPropagation() // Never start RF card / group drag from ⋮⋮
+    e.stopPropagation() // Never start RF frame drag from ⋮⋮
     const block = (hover ?? focusLayout)?.block
     if (!block) return
     gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false } // Baseline for click vs drag
-    const sourceHostId = hostNodeId // Card this line currently lives in
+    const sourceHostId = hostNodeId // Frame this block currently lives in
     const sourceFrom = block.from // Snapshot — docs shift after delete
     const sourceTo = block.to
     const ghostText = editor.state.doc.textBetween(sourceFrom, sourceTo, ' ').trim() || ' ' // Preview label
@@ -387,7 +387,7 @@ export function TipTapBlockHandles({
         return
       }
 
-      // Drop on empty canvas → new map card with this line’s HTML
+      // Drop on empty **page** → new **frame** with this block’s HTML
       if (!conversationId) {
         setEditorBlockHighlight(editor, null)
         return
@@ -405,7 +405,7 @@ export function TipTapBlockHandles({
           conversation_id: conversationId,
           user_id: user.id,
           role: 'user',
-          content: html, // This content block becomes the new card body
+          content: html, // This block becomes the new frame body
           metadata: newBlockMetadata({
             position: { x: flow.x, y: flow.y }, // Drop point
             fadeIn: true,
@@ -483,7 +483,7 @@ export function TipTapBlockHandles({
           tabIndex={0}
           data-tt-block-handle
           className={cn(
-            'nodrag nopan absolute z-[60] w-5 h-6 flex items-center justify-center rounded', // nodrag: ⋮⋮ never starts RF card drag
+            'nodrag nopan absolute z-[60] w-5 h-6 flex items-center justify-center rounded', // nodrag: ⋮⋮ never starts RF frame drag
             'text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/10',
             'pointer-events-auto cursor-grab active:cursor-grabbing select-none'
           )}
@@ -498,7 +498,7 @@ export function TipTapBlockHandles({
             e.preventDefault()
             const start = gripPointerRef.current
             gripPointerRef.current = null
-            if (start?.dragged) return // Drag moved this content block — don’t open the menu
+            if (start?.dragged) return // Drag moved this block — don’t open the menu
             openForBlock(layout.block, e.clientX, e.clientY) // Click → content-block actions
           }}
           onKeyDown={(e) => {

@@ -1,4 +1,4 @@
-// TipTap helpers — resolve a Notion-like content block under a position (list item or top-level node).
+// TipTap **block** helpers (paragraph / heading / list item — not the **frame**). See DEFINITIONS.md.
 
 import type { Editor, JSONContent } from '@tiptap/react'
 import { DOMSerializer, type Node as PMNode } from '@tiptap/pm/model' // Slice → HTML; PM node type
@@ -6,11 +6,11 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import type { BlockTypeId } from '@/components/block-actions-menu'
 
-const editorsByHostId = new Map<string, Editor>() // host RF node id → TipTap editor (⋮⋮ drop targets)
+const editorsByHostId = new Map<string, Editor>() // host **frame** RF id → TipTap editor (⋮⋮ drop targets)
 
-/** Register this map card’s editor so ⋮⋮ drag can drop into it. */
+/** Register this frame’s editor so ⋮⋮ block-drag can drop into it. */
 export function registerHostEditor(hostNodeId: string, editor: Editor) {
-  editorsByHostId.set(hostNodeId, editor) // Latest editor for this card
+  editorsByHostId.set(hostNodeId, editor) // Latest editor for this frame
 }
 
 /** Drop registration when the handles unmount or the editor is replaced. */
@@ -24,7 +24,7 @@ export function editorForHostNode(hostNodeId: string): Editor | null {
   return editor && !editor.isDestroyed ? editor : null
 }
 
-/** Map card + editor under the pointer (skips ⋮⋮ drag chrome). */
+/** Frame + editor under the pointer (skips ⋮⋮ drag chrome). */
 export function findHostEditorAtPoint(
   clientX: number,
   clientY: number

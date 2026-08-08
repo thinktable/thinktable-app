@@ -104,7 +104,7 @@ export type BlockActionsMenuProps = {
   zoom?: number // Optional scale with viewport
   isCollapsed?: boolean // Condense toggle label state
   selectedCount?: number // Enables Group when ≥2
-  canUngroup?: boolean // True when focus block is inside a group
+  canUngroup?: boolean // True when focus frame is inside the legacy dashed wrapper
   showAddChild?: boolean // Study-set may omit Add child
   currentBlockType?: BlockTypeId // Checkmark in Turn into
   pageInTargets?: PageInTarget[] // Pages available for "Page in"
@@ -298,7 +298,7 @@ export function BlockActionsMenu({
       {
         kind: 'action',
         id: 'ungroup',
-        label: 'Ungroup',
+        label: 'Ungroup', // Legacy wrapper around frames — not a product “block group”
         icon: <Ungroup className="h-4 w-4" />,
         hidden: !canUngroup,
       },

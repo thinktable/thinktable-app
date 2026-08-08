@@ -1,4 +1,5 @@
-// Block / page helpers — map cards are blocks; a titled block links to a child page (own map).
+// Frame / page helpers — a **frame** (`metadata.isBlock`, RF `chatPanel`) on a **page** holds TipTap **blocks**.
+// A titled frame links to a child page. `isBlock` ≠ TipTap block. See DEFINITIONS.md.
 
 import type { SupabaseClient } from '@supabase/supabase-js' // Typed client for sync helpers
 
@@ -69,17 +70,17 @@ export function migrateLegacyBlockFlags(meta: Record<string, unknown>): {
   return { meta: next, changed }
 }
 
-/** True when message metadata marks a map block (post-migration: isBlock only). */
+/** True when message metadata marks a **frame** on a page (legacy key `isBlock` — not a TipTap block). */
 export function isBlockMeta(meta?: Record<string, unknown> | null): boolean {
   if (!meta) return false
-  return meta.isBlock === true
+  return meta.isBlock === true // Frame on the map (not flashcard/chat)
 }
 
-/** Metadata written when creating a new map block (no page until titled). */
+/** Metadata written when creating a new **frame** (no linked page until titled). */
 export function newBlockMetadata(extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    isBlock: true, // Canonical block flag
-    isInlineBlock: true, // Placed block (honor metadata.position)
+    isBlock: true, // Legacy flag: this message is a map frame (not a TipTap block)
+    isInlineBlock: true, // Placed frame (honor metadata.position)
     blockType: 'text', // Baseline Turn into kind (menu + future render)
     frameUnlocked: false, // Default: content scales with frame (proportional resize)
     ...extra, // Caller position / fadeIn / Notion fields / override blockType

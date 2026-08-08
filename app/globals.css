@@ -1291,7 +1291,7 @@ span[data-added="true"] {
   pointer-events: auto !important;
 }
 
-/* Drop-target highlight while dragging a block onto a group */
+/* Drop-target highlight while dragging a frame onto the legacy wrapper */
 .react-flow__node-blockGroup.drop-target [data-block-group="true"] {
   border-color: #3b82f6; /* blue-500 */
   background-color: rgba(59, 130, 246, 0.12);

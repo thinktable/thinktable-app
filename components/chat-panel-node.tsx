@@ -214,7 +214,7 @@ function TipTapContent({
   onBlur,
   onEditorActiveChange,
   fontScale,
-  enableBlockHandles = false, // Notion ⋮⋮ on each content block (not the card frame)
+  enableBlockHandles = false, // ⋮⋮ on each TipTap **block** (not this **frame**)
   singleLineUntilEnter = false, // Unresized blocks: one visual line per TipTap block
   hostNodeId,
   conversationId,
@@ -243,7 +243,7 @@ function TipTapContent({
   enableBlockHandles?: boolean
   singleLineUntilEnter?: boolean // Unresized map blocks: grow width; Enter starts a new line
   hostNodeId?: string
-  conversationId?: string // Board id — ⋮⋮ extract a line onto the map
+              conversationId?: string // Page id — ⋮⋮ extract a block onto the page
   pageInTargets?: PageInTarget[]
   onPageTurnInto?: (blockType: 'page' | 'pageIn', pageInParentId?: string | null) => void
 }) {
@@ -726,7 +726,7 @@ function TipTapContent({
       <div
         className={cn(
           'relative',
-          enableBlockHandles && 'pl-6', // Gutter for per-block ⋮⋮ (outside content, like Notion)
+          enableBlockHandles && 'pl-6', // Gutter for per-block ⋮⋮ (outside content; not frame chrome)
           isLoading && !isFlashcard && 'shimmer'
         )}
       >
@@ -1268,7 +1268,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const router = useRouter()
   const { reactFlowInstance, panelWidth, getSetNodes, flashcardMode, setFlashcardMode, selectedTag } = useReactFlowContext() // Get zoom, panel width, setNodes function, flashcard study mode, and selected tag
   const { setNodes, getNodes } = useReactFlow() // Get setNodes and getNodes for NodeToolbar actions
-  const rfStoreApi = useStoreApi() // Unselect groups before RF snapshots dragItems (card-body drag)
+  const rfStoreApi = useStoreApi() // Unselect legacy wrapper before RF snapshots dragItems (frame-body drag)
   const [promptHasChanges, setPromptHasChanges] = useState(false)
   const [responseHasChanges, setResponseHasChanges] = useState(false)
   // Single text body: plain-merge legacy prompt + response (no section split)
@@ -1813,7 +1813,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
      !responseMessage && 
      (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
 
-  // Offset nodules outside the resize rectangle via inline style so RF handleBounds match the visual dots
+  // Offset **connection points** outside the resize rectangle so RF handleBounds match the visual dots
   const noduleOut = isBlock && selected ? 14 : 0 // Match CSS offset outside the blue frame
   const noduleHandleStyle = (side: 'left' | 'right' | 'top' | 'bottom'): React.CSSProperties => ({
     width: '10px',
@@ -3468,7 +3468,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         transformOrigin: 'center center', // Rotate around panel center (matches drag math)
       }}
       onPointerDownCapture={() => {
-        // RF snapshots dragItems before onNodeDragStart — a selected group rides along with this card.
+        // RF snapshots dragItems before onNodeDragStart — a selected wrapper rides along with this frame.
         const store = rfStoreApi.getState() as {
           unselectNodesAndEdges?: (p: { nodes: unknown[]; edges: unknown[] }) => void
           nodeInternals?: Map<string, { type?: string; selected?: boolean; draggable?: boolean }>
@@ -3963,7 +3963,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               isLoading={false}
               onBlur={handleEditorBlur}
               onEditorActiveChange={handleEditorActiveChange}
-              enableBlockHandles={isBlock && !isFlashcard} // ⋮⋮ on each TipTap block, not the card frame
+              enableBlockHandles={isBlock && !isFlashcard} // ⋮⋮ on each TipTap block, not this frame
               singleLineUntilEnter={isBlock && !isFlashcard} // nowrap; unlocked clip hides overflow instead of wrapping
               hostNodeId={id}
               conversationId={conversationId}

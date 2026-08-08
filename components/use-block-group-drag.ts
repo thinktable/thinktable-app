@@ -1,7 +1,7 @@
 'use client'
 
-// Drag map blocks into / out of visual groups. Groups are RF siblings (no parentId);
-// membership is metadata.blockGroupId. Dragging a block never moves the group frame.
+// Drag **frames** into / out of the legacy dashed wrapper (RF `blockGroup`, not a product type).
+// Wrapper is an RF sibling (no parentId); membership is metadata.blockGroupId. ⋮⋮ is block-only.
 
 import { useCallback } from 'react' // Stable drag handlers
 import type { Node } from 'reactflow' // RF node shape (v11)
@@ -182,7 +182,7 @@ export function useBlockGroupDrag({ conversationId, getNodes, setNodes, isLocked
           }
         }
       } catch (err) {
-        console.error('Failed to persist block group attach/detach:', err)
+        console.error('Failed to persist frame wrapper attach/detach:', err)
       }
     },
     [conversationId, getNodes, isLocked, setNodes]

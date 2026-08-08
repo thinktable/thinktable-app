@@ -1,0 +1,4 @@
+-- Frontend-only snapshot marker (no schema DDL).
+-- Official terms: page, frame, block, thread, connection point (DEFINITIONS.md).
+-- No “block group” product type — multiple blocks live in a frame.
+-- Persistence unchanged (messages.content + messages.metadata JSON).

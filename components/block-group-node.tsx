@@ -1,8 +1,8 @@
 'use client'
 
-// Visual group frame — RF sibling of cards (not a parent). RF drag is OFF (`draggable: false`).
-// Only the dashed padding ring is hittable; interior is hollow so ⋮⋮ / cards receive events.
-// Ring pointer drag moves the frame + member cards together.
+// Legacy dashed wrapper (RF type `blockGroup`) around **frames**. Not a product type — see DEFINITIONS.md.
+// RF drag OFF (`draggable: false`). Hollow interior so ⋮⋮ (**blocks**) / frames receive events.
+// Ring drag moves the wrapper + member frames.
 
 import { memo, useRef, type PointerEvent as ReactPointerEvent } from 'react' // Stable node type + drag baseline
 import { NodeProps, useReactFlow } from 'reactflow' // RF node props + flow coords / setNodes
@@ -121,10 +121,10 @@ function BlockGroupNodeComponent({ id, selected, data }: NodeProps<BlockGroupNod
 
   return (
     <div
-      data-block-group="true" // Marks group frame for menus / hit-testing
-      className="relative w-full h-full pointer-events-none" // Interior hollow — cards / ⋮⋮ on top receive events
+      data-block-group="true" // Legacy wrapper chrome (not a product type)
+      className="relative w-full h-full pointer-events-none" // Interior hollow — frames / ⋮⋮ receive events
       style={{ minWidth: 120, minHeight: 80 }}
-      title={data?.label || 'Block group'}
+      title={data?.label || 'Frame'}
     >
       {/* Visual dashed frame (no hit) */}
       <div

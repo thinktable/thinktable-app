@@ -22,7 +22,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import { ChatPanelNode } from './chat-panel-node'
-import { BlockGroupNode } from './block-group-node' // Visual block group container
+import { BlockGroupNode } from './block-group-node' // Legacy dashed wrapper around frames
 import {
   BlockActionsMenu,
   type BlockActionId,
@@ -4055,7 +4055,7 @@ function BoardFlowInner({
       const message = messagesToUse[i]
 
       if (message.role === 'user') {
-        // Block groups are visual containers — built in a second pass (not chat panels)
+        // Legacy frame wrappers (`blockGroup`) — built in a second pass (not frames)
         if (isBlockGroupMeta(message.metadata as Record<string, unknown>)) {
           i--
           continue
@@ -5653,7 +5653,7 @@ function BoardFlowInner({
     setRightClickedNode(null)
   }, [rightClickedNode, conversationId])
 
-  // Group ≥2 selected blocks into a visual block group
+  // Wrap ≥2 selected frames in the legacy dashed wrapper
   const handleGroupBlocks = useCallback(async () => {
     if (!conversationId) return
     const selected = nodes.filter((n) => n.selected && n.type === 'chatPanel' && n.data?.promptMessage?.id)
