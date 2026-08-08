@@ -3,13 +3,12 @@
 // Drag map blocks into / out of visual groups. Groups are RF siblings (no parentId);
 // membership is metadata.blockGroupId. Dragging a block never moves the group frame.
 
-import { useCallback, useRef } from 'react' // Stable handlers + last group pos for child delta
+import { useCallback } from 'react' // Stable drag handlers
 import type { Node } from 'reactflow' // RF node shape (v11)
 import { createClient } from '@/lib/supabase/client' // Persist placement to messages.metadata
 import {
   blockGroupMessageIdFromNodeId, // block-group-{id} → message id
   deleteEmptyBlockGroups, // Drop group rows with no children left
-  persistBlockGroupFrame, // Save group origin + size
   persistBlockPlacement, // Save absolute child position + optional blockGroupId
 } from '@/lib/blocks'
 
@@ -80,37 +79,11 @@ type UseBlockGroupDragOpts = {
   isLocked: boolean
 }
 
-/** Attach / detach chatPanel blocks; move group + children together when the frame is dragged. */
+/** Attach / detach chatPanel blocks. Group frame move is custom (ring) — not RF node drag. */
 export function useBlockGroupDrag({ conversationId, getNodes, setNodes, isLocked }: UseBlockGroupDragOpts) {
-  const lastGroupPosRef = useRef<{ id: string; x: number; y: number } | null>(null) // Delta baseline while dragging a group
-
   const onNodeDrag = useCallback(
     (_event: unknown, node: Node) => {
-      if (isLocked) return
-
-      // Dragging the dashed frame → translate member blocks by the same delta
-      if (node.type === 'blockGroup') {
-        const prev = lastGroupPosRef.current?.id === node.id ? lastGroupPosRef.current : null
-        lastGroupPosRef.current = { id: node.id, x: node.position.x, y: node.position.y }
-        if (!prev) return
-        const dx = node.position.x - prev.x
-        const dy = node.position.y - prev.y
-        if (dx === 0 && dy === 0) return
-        const groupMessageId = blockGroupMessageIdFromNodeId(node.id)
-        if (!groupMessageId) return
-        setNodes((nds) =>
-          nds.map((n) => {
-            if (n.id === node.id) return { ...n, position: node.position }
-            if (n.type === 'chatPanel' && childGroupId(n) === groupMessageId) {
-              return { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } } // Keep members inside the moving frame
-            }
-            return n
-          })
-        )
-        return
-      }
-
-      if (node.type !== 'chatPanel') return
+      if (isLocked || node.type !== 'chatPanel') return // Groups aren’t RF-draggable
       const live = getNodes().map((n) => (n.id === node.id ? { ...n, position: node.position } : n))
       const targetId = findDropTargetGroup({ ...node, parentId: undefined }, live)?.id ?? null
       const current = getNodes()
@@ -134,7 +107,6 @@ export function useBlockGroupDrag({ conversationId, getNodes, setNodes, isLocked
 
   const onNodeDragStop = useCallback(
     async (_event: unknown, node: Node) => {
-      lastGroupPosRef.current = null
       if (isLocked || !conversationId) {
         setNodes((nds) =>
           nds.map((n) => (n.type === 'blockGroup' && n.className ? { ...n, className: '' } : n))
@@ -149,34 +121,6 @@ export function useBlockGroupDrag({ conversationId, getNodes, setNodes, isLocked
             ? { ...n, className: '' }
             : n
       )
-
-      if (node.type === 'blockGroup') {
-        setNodes(live)
-        const groupMessageId = blockGroupMessageIdFromNodeId(node.id)
-        if (!groupMessageId) return
-        const { width, height } = nodeFlowSize(node)
-        const supabase = createClient()
-        try {
-          await persistBlockGroupFrame(supabase, {
-            groupMessageId,
-            position: node.position,
-            size: { width, height },
-          })
-          const children = live.filter((n) => n.type === 'chatPanel' && childGroupId(n) === groupMessageId)
-          for (const child of children) {
-            const msgId = child.data?.promptMessage?.id as string | undefined
-            if (!msgId) continue
-            await persistBlockPlacement(supabase, {
-              messageId: msgId,
-              position: child.position, // Already page-absolute
-              blockGroupId: groupMessageId,
-            })
-          }
-        } catch (err) {
-          console.error('Failed to persist block group move:', err)
-        }
-        return
-      }
 
       if (node.type !== 'chatPanel') {
         setNodes(live)

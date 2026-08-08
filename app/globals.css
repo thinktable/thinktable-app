@@ -1278,12 +1278,17 @@ span[data-added="true"] {
   }
 }
 
-/* Group frame sits behind cards; cards stay independently draggable (no RF parentId) */
+/* Group frame behind cards; interior is hollow (ring only hits). Cards stay independently draggable. */
 .react-flow__node-blockGroup {
   z-index: 0 !important;
+  pointer-events: none !important; /* Wrapper doesn’t steal ⋮⋮ / card drags */
+}
+.react-flow__node-blockGroup .block-group-drag-handle {
+  pointer-events: auto !important; /* Dashed padding ring still moves the group */
 }
 .react-flow__node-chatPanel {
   z-index: 1 !important;
+  pointer-events: auto !important;
 }
 
 /* Drop-target highlight while dragging a block onto a group */

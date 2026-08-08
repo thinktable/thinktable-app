@@ -1,7 +1,7 @@
 'use client'
 
 // Custom React Flow node for chat panels (prompt + response)
-import { NodeProps, Handle, Position, useReactFlow, NodeResizeControl } from 'reactflow' // RF node primitives + corner/line resize
+import { NodeProps, Handle, Position, useReactFlow, useStoreApi, NodeResizeControl } from 'reactflow' // RF node primitives + store (unselect groups before dragItems)
 import { cn, generateUUID } from '@/lib/utils'
 import { useEditor, EditorContent } from '@tiptap/react'
 import { createPanelExtensions } from '@/lib/tiptap/extensions' // StarterKit + Turn into nodes
@@ -217,6 +217,7 @@ function TipTapContent({
   enableBlockHandles = false, // Notion ⋮⋮ on each content block (not the card frame)
   singleLineUntilEnter = false, // Unresized blocks: one visual line per TipTap block
   hostNodeId,
+  conversationId,
   pageInTargets,
   onPageTurnInto,
 }: {
@@ -242,6 +243,7 @@ function TipTapContent({
   enableBlockHandles?: boolean
   singleLineUntilEnter?: boolean // Unresized map blocks: grow width; Enter starts a new line
   hostNodeId?: string
+  conversationId?: string // Board id — ⋮⋮ extract a line onto the map
   pageInTargets?: PageInTarget[]
   onPageTurnInto?: (blockType: 'page' | 'pageIn', pageInParentId?: string | null) => void
 }) {
@@ -732,6 +734,7 @@ function TipTapContent({
           editor={editor}
           enabled={enableBlockHandles && !isFlashcard}
           hostNodeId={hostNodeId}
+          conversationId={conversationId}
           pageInTargets={pageInTargets}
           onPageTurnInto={onPageTurnInto}
         />
@@ -1265,6 +1268,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const router = useRouter()
   const { reactFlowInstance, panelWidth, getSetNodes, flashcardMode, setFlashcardMode, selectedTag } = useReactFlowContext() // Get zoom, panel width, setNodes function, flashcard study mode, and selected tag
   const { setNodes, getNodes } = useReactFlow() // Get setNodes and getNodes for NodeToolbar actions
+  const rfStoreApi = useStoreApi() // Unselect groups before RF snapshots dragItems (card-body drag)
   const [promptHasChanges, setPromptHasChanges] = useState(false)
   const [responseHasChanges, setResponseHasChanges] = useState(false)
   // Single text body: plain-merge legacy prompt + response (no section split)
@@ -3463,6 +3467,27 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         transform: rotation ? `rotate(${rotation}deg)` : undefined, // Apply persisted/live item rotation
         transformOrigin: 'center center', // Rotate around panel center (matches drag math)
       }}
+      onPointerDownCapture={() => {
+        // RF snapshots dragItems before onNodeDragStart — a selected group rides along with this card.
+        const store = rfStoreApi.getState() as {
+          unselectNodesAndEdges?: (p: { nodes: unknown[]; edges: unknown[] }) => void
+          nodeInternals?: Map<string, { type?: string; selected?: boolean; draggable?: boolean }>
+        }
+        const groups = getNodes().filter((n) => n.type === 'blockGroup')
+        if (groups.length > 0) store.unselectNodesAndEdges?.({ nodes: groups, edges: [] })
+        store.nodeInternals?.forEach((internal) => {
+          if (internal.type !== 'blockGroup') return
+          internal.selected = false
+          internal.draggable = false
+        })
+        if (groups.some((g) => g.selected || g.draggable !== false)) {
+          setNodes((nds) =>
+            nds.map((n) =>
+              n.type === 'blockGroup' ? { ...n, selected: false, draggable: false } : n
+            )
+          )
+        }
+      }}
       onMouseEnter={() => setIsFrameHovering(true)} // Overflow chevron on hover even when unselected
       onMouseLeave={(e) => {
         const related = e.relatedTarget as HTMLElement | null
@@ -3941,6 +3966,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               enableBlockHandles={isBlock && !isFlashcard} // ⋮⋮ on each TipTap block, not the card frame
               singleLineUntilEnter={isBlock && !isFlashcard} // nowrap; unlocked clip hides overflow instead of wrapping
               hostNodeId={id}
+              conversationId={conversationId}
               pageInTargets={(() => {
                 const convs =
                   (queryClient.getQueryData(['conversations']) as

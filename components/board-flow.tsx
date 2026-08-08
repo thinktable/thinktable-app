@@ -766,7 +766,7 @@ function BoardFlowInner({
   // One-shot: existing boards still have RF-parented cards + zIndex:-1 groups (messagesKey doesn’t rebuild).
   // Unparent immediately and restore a visible dashed sibling frame.
   useEffect(() => {
-    const key = conversationId || 'none'
+    const key = `${conversationId || 'none'}:v2` // v2: also stamp draggable:false (v1 one-shot skipped that)
     if (unparentedGroupsRef.current === key) return // Already converted this board
     if (!nodes.length) return // Wait until panels exist
     const hasParented = nodes.some((n) => Boolean(n.parentId || (n as { parentNode?: string }).parentNode))
@@ -792,6 +792,8 @@ function BoardFlowInner({
           }
           return {
             ...rest,
+            draggable: false, // Ring-only move; RF dragItems must never include the group
+            selectable: true,
             zIndex: 0, // Visible above the canvas, behind cards
             style: { width: n.style?.width, height: n.style?.height }, // Drop pointerEvents:none
           }
@@ -810,6 +812,15 @@ function BoardFlowInner({
       })
     })
   }, [conversationId, nodes, setNodes])
+
+  // Always keep group frames out of RF dragItems (one-shot above may have already run on an older build)
+  useEffect(() => {
+    const needs = nodes.some((n) => n.type === 'blockGroup' && n.draggable !== false)
+    if (!needs) return
+    setNodes((nds) =>
+      nds.map((n) => (n.type === 'blockGroup' && n.draggable !== false ? { ...n, draggable: false } : n))
+    )
+  }, [nodes, setNodes])
   const previewFocus = usePreviewFocus() // Host map: View bar may target a focused preview page
   // Iframe embed: styles arrive via postMessage (no shared React context across frames)
   const [embedStyleOverride, setEmbedStyleOverride] = useState<{
@@ -4350,7 +4361,8 @@ function BoardFlowInner({
         position,
         style: { width: dims.width, height: dims.height }, // Visible dashed frame (sibling of cards)
         data: { conversationId: conversationId || '' },
-        draggable: !isLocked,
+        draggable: false, // RF never drags the group — only the dashed ring (custom pointer) does
+        selectable: true,
         zIndex: 0, // Behind child cards, still above the canvas
       })
       originalPositionsRef.current.set(nodeId, position)
@@ -4444,7 +4456,7 @@ function BoardFlowInner({
           extent: node.extent,
           style: node.style ?? existingNode?.style,
           zIndex: node.zIndex ?? existingNode?.zIndex, // Cards above group frame
-          draggable: existingNode?.draggable ?? node.draggable, // Keep existing draggable state
+          draggable: node.type === 'blockGroup' ? false : (existingNode?.draggable ?? node.draggable), // Groups: ring-only; never RF dragItems
         }
       })
 
@@ -6513,24 +6525,6 @@ function BoardFlowInner({
             return
           }
 
-          // ⋮⋮ / card drag must not also move a selected group; group drag must not double-move selected kids
-          if (node.type === 'chatPanel') {
-            setNodes((nds) =>
-              nds.map((n) =>
-                n.type === 'blockGroup' && n.selected ? { ...n, selected: false } : n
-              )
-            )
-          } else if (node.type === 'blockGroup') {
-            const groupMessageId = node.id.replace(/^block-group-/, '')
-            setNodes((nds) =>
-              nds.map((n) => {
-                const inGroup =
-                  n.data?.promptMessage?.metadata?.blockGroupId === groupMessageId
-                return inGroup && n.selected ? { ...n, selected: false } : n // Hook translates members; RF must not also
-              })
-            )
-          }
-          
           // Check if this node is the target of any placeholder (the node the placeholder is connected to)
           const placeholderNodes = nodes.filter((n) => n.type === 'placeholder')
           const isTargetNode = placeholderNodes.some(

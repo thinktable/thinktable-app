@@ -1,7 +1,7 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-08T02:41:53Z`
+- Snapped at: `2026-08-08T02:57:12Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` failed without `SUPABASE_DB_PASSWORD` (cli_login_postgres permission). Access token works for `projects list`; migration files remain source of truth.
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
@@ -41,6 +41,6 @@ Columns:
 
 ## This save
 
-- Marker: `20260808024153_locked_frame_hug_block_groups.sql`
-- App: locked frames hug scaled text; block groups are RF siblings (`metadata.blockGroupId` only).
-- Schema: no DDL; lock/scale/size + group membership live in `messages.metadata` JSON (`frameUnlocked`, `frameScale`, `resizeDimensions`, `collapsedFrameSize`, `blockGroupId`, `position`).
+- Marker: `20260808025712_content_block_drag.sql`
+- App: ⋮⋮ drag moves the TipTap content block only (dashed drop line; extract onto map as its own card).
+- Schema: no DDL; content stays in `messages.content`; placement/group/lock stay in `messages.metadata` JSON.

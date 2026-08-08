@@ -1,10 +1,46 @@
 // TipTap helpers — resolve a Notion-like content block under a position (list item or top-level node).
 
 import type { Editor, JSONContent } from '@tiptap/react'
-import type { Node as PMNode } from '@tiptap/pm/model'
+import { DOMSerializer, type Node as PMNode } from '@tiptap/pm/model' // Slice → HTML; PM node type
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import type { BlockTypeId } from '@/components/block-actions-menu'
+
+const editorsByHostId = new Map<string, Editor>() // host RF node id → TipTap editor (⋮⋮ drop targets)
+
+/** Register this map card’s editor so ⋮⋮ drag can drop into it. */
+export function registerHostEditor(hostNodeId: string, editor: Editor) {
+  editorsByHostId.set(hostNodeId, editor) // Latest editor for this card
+}
+
+/** Drop registration when the handles unmount or the editor is replaced. */
+export function unregisterHostEditor(hostNodeId: string, editor: Editor) {
+  if (editorsByHostId.get(hostNodeId) === editor) editorsByHostId.delete(hostNodeId)
+}
+
+/** Editor for a map-card RF node, if still mounted. */
+export function editorForHostNode(hostNodeId: string): Editor | null {
+  const editor = editorsByHostId.get(hostNodeId)
+  return editor && !editor.isDestroyed ? editor : null
+}
+
+/** Map card + editor under the pointer (skips ⋮⋮ drag chrome). */
+export function findHostEditorAtPoint(
+  clientX: number,
+  clientY: number
+): { hostNodeId: string; editor: Editor } | null {
+  const els = document.elementsFromPoint(clientX, clientY) // Topmost → bottom
+  for (const el of els) {
+    if (!(el instanceof HTMLElement)) continue
+    if (el.closest('[data-tt-block-drag-ghost], [data-tt-drop-line]')) continue // Ignore drag overlays
+    const node = el.closest('.react-flow__node') as HTMLElement | null
+    const id = node?.getAttribute('data-id')
+    if (!id) continue
+    const editor = editorForHostNode(id)
+    if (editor) return { hostNodeId: id, editor }
+  }
+  return null
+}
 
 export type EditorBlockRef = {
   from: number // Inclusive start in doc
@@ -354,4 +390,124 @@ export function turnEditorBlockInto(
     default:
       return false
   }
+}
+
+/** HTML for a content-block range (extract onto the map as its own card). */
+export function htmlForEditorRange(editor: Editor, from: number, to: number): string {
+  const slice = editor.state.doc.slice(from, to) // Block slice (from inclusive, to exclusive)
+  const serializer = DOMSerializer.fromSchema(editor.schema) // Schema-aware HTML
+  const div = document.createElement('div') // Off-DOM target
+  div.appendChild(serializer.serializeFragment(slice.content))
+  return div.innerHTML || '<p></p>'
+}
+
+/** Wrap a list-item slice so it can insert at doc / list boundaries. */
+export function wrapJsonForInsert(editor: Editor, block: EditorBlockRef, json: JSONContent[]): JSONContent[] {
+  if (json.length === 0) return json
+  const first = json[0]
+  if (first && typeof first === 'object' && (first.type === 'listItem' || first.type === 'taskItem')) {
+    try {
+      const $from = editor.state.doc.resolve(block.from) // Parent list type at source
+      const parentName = $from.node(-1)?.type.name
+      const listType =
+        parentName === 'orderedList' || parentName === 'taskList' || parentName === 'bulletList'
+          ? parentName
+          : first.type === 'taskItem'
+            ? 'taskList'
+            : 'bulletList'
+      return [{ type: listType, content: json }] // Valid top-level list
+    } catch {
+      return [{ type: first.type === 'taskItem' ? 'taskList' : 'bulletList', content: json }]
+    }
+  }
+  return json
+}
+
+/** JSON nodes for inserting a content-block range into another editor. */
+export function jsonForEditorRange(editor: Editor, from: number, to: number): JSONContent[] {
+  const json = editor.state.doc.slice(from, to).content.toJSON() // Fragment → child JSON
+  return Array.isArray(json) ? json : json ? [json] : []
+}
+
+/** Screen Y + insert pos for a dashed drop line (before/after the block under clientY). */
+export function findContentBlockDropTarget(
+  editor: Editor,
+  clientY: number
+): { insertPos: number; lineTop: number; lineLeft: number; lineWidth: number } | null {
+  const { doc } = editor.state
+  const blocks: { from: number; to: number; top: number; bottom: number; left: number; width: number }[] = []
+  doc.descendants((node, pos) => {
+    const name = node.type.name
+    if (name === 'bulletList' || name === 'orderedList' || name === 'taskList') return true
+    if (!isHandleBlockType(name)) return true
+    try {
+      const start = editor.view.coordsAtPos(pos + 1)
+      const endPos = Math.max(pos + 1, pos + node.nodeSize - 1)
+      const end = editor.view.coordsAtPos(endPos)
+      const el = editor.view.nodeDOM(pos)
+      const rect = el instanceof HTMLElement ? el.getBoundingClientRect() : null
+      blocks.push({
+        from: pos,
+        to: pos + node.nodeSize,
+        top: start.top,
+        bottom: Math.max(start.bottom, end.bottom),
+        left: rect?.left ?? start.left,
+        width: rect?.width ?? Math.max(40, (start.right || start.left + 120) - start.left),
+      })
+    } catch {
+      // skip
+    }
+    if (name === 'listItem' || name === 'taskItem') return false
+    return true
+  })
+  if (blocks.length === 0) return null
+  const first = blocks[0]
+  const last = blocks[blocks.length - 1]
+  if (clientY < first.top) {
+    return { insertPos: first.from, lineTop: first.top, lineLeft: first.left, lineWidth: first.width }
+  }
+  if (clientY > last.bottom) {
+    return { insertPos: last.to, lineTop: last.bottom, lineLeft: last.left, lineWidth: last.width }
+  }
+  for (const b of blocks) {
+    if (clientY < b.top || clientY > b.bottom) continue
+    const mid = (b.top + b.bottom) / 2
+    if (clientY <= mid) {
+      return { insertPos: b.from, lineTop: b.top, lineLeft: b.left, lineWidth: b.width } // Drop above this block
+    }
+    return { insertPos: b.to, lineTop: b.bottom, lineLeft: b.left, lineWidth: b.width } // Drop below
+  }
+  return { insertPos: last.to, lineTop: last.bottom, lineLeft: last.left, lineWidth: last.width }
+}
+
+/** Move a content block to insertPos in the same editor (no-op if it wouldn’t change order). */
+export function moveEditorBlockToPos(editor: Editor, from: number, to: number, insertPos: number): boolean {
+  if (insertPos === from || insertPos === to) return false // Already there
+  if (insertPos > from && insertPos < to) return false // Inside itself
+  const json = jsonForEditorRange(editor, from, to)
+  if (json.length === 0) return false
+  let mapped = insertPos
+  if (insertPos > to) mapped = insertPos - (to - from) // Delete first, then insert
+  // List items stay unwrapped inside a list; wrap if the drop is at doc level
+  let payload: JSONContent[] = json
+  try {
+    const $ins = editor.state.doc.resolve(Math.min(insertPos, editor.state.doc.content.size))
+    const inList = $ins.parent.type.name === 'bulletList' || $ins.parent.type.name === 'orderedList' || $ins.parent.type.name === 'taskList'
+    if (!inList && json[0] && (json[0].type === 'listItem' || json[0].type === 'taskItem')) {
+      payload = wrapJsonForInsert(editor, { from, to, node: editor.state.doc.nodeAt(from)!, typeName: json[0].type || 'listItem' }, json)
+    }
+  } catch {
+    // keep unwrapped
+  }
+  return editor.chain().focus().deleteRange({ from, to }).insertContentAt(mapped, payload).run()
+}
+
+/** Delete a content-block range; leave an empty paragraph if the doc would be empty. */
+export function deleteEditorBlockRange(editor: Editor, from: number, to: number): boolean {
+  const ok = editor.chain().focus().deleteRange({ from, to }).run()
+  if (!ok) return false
+  if (editor.state.doc.content.size <= 2) {
+    editor.commands.setContent('<p></p>') // PM docs need at least one block
+  }
+  return true
 }

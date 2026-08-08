@@ -1,0 +1,4 @@
+-- Frontend-only snapshot marker (no schema DDL).
+-- TipTap ⋮⋮ drag moves that content block only (nodrag — never RF card/group).
+-- Reorder in-editor, drop into another card, or extract onto the map as a new card.
+-- Persistence remains messages.metadata JSON + messages.content HTML.
