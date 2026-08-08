@@ -4,6 +4,7 @@
 import { NodeProps, Handle, Position, useReactFlow, useStoreApi, NodeResizeControl } from 'reactflow' // RF node primitives + store (unselect groups before dragItems)
 import { cn, generateUUID } from '@/lib/utils'
 import { useEditor, EditorContent } from '@tiptap/react'
+import { DOMParser as PMDOMParser } from '@tiptap/pm/model' // Parse stored HTML → PM doc for exact (non-string) sync compare
 import { createPanelExtensions } from '@/lib/tiptap/extensions' // StarterKit + Turn into nodes
 import { TipTapBlockHandles } from '@/components/tiptap-block-handles' // Per-content-block ⋮⋮ (Notion)
 import type { PageInTarget } from '@/components/block-actions-menu'
@@ -75,7 +76,7 @@ import { useEditorContext } from './editor-context'
 import { useReactFlowContext } from './react-flow-context'
 import { useTheme } from './theme-provider'
 import { SelectionFormatPopupAnchor } from './selection-format-popup' // Notion-style selection menu (stable edge anchor)
-import { BlockTitleEdge } from './block-title-edge' // Edge title chip; titled blocks promote to pages
+import { PageLinkProvider, type PageLinkActions } from '@/lib/page-link-context' // Bridge pageLink NodeViews → frame preview/open/rename
 import { NestedBoardPreview, prefetchPageEmbed } from './nested-board-preview' // Page-within-page board preview
 import { deleteLinkedPageForBlock, isBlockContentEmpty, isBlockMeta, isPageBodyMeta } from '@/lib/blocks' // Block detection + empty check + delete sync
 import { applyTurnInto } from '@/lib/blocks/turn-into' // Page / Page in from content-block menu
@@ -555,10 +556,22 @@ function TipTapContent({
 
   useEffect(() => {
     if (editor) {
-      const currentContent = editor.getHTML()
-      // Sync prop → editor, but never clobber an active typing session with a stale prop
-      if (currentContent !== content) {
-        if (editor.isFocused) return // Caret owns the doc while typing; parent catches up on blur/save
+      if (editor.isFocused) return // Caret owns the doc while typing; parent catches up on blur/save
+      // Compare DOCUMENTS, not HTML strings. The pageLink NodeView adds a class and TipTap emits
+      // attributes in its own order, so editor.getHTML() never byte-equals the stored HTML once a
+      // pageLink exists — a raw string compare re-ran setContent every sync (infinite loop / page
+      // unresponsive). doc.eq() ignores cosmetic class/attr-order/whitespace, so it's exact + stable.
+      let differs = true
+      try {
+        const tmp = document.createElement('div') // Off-DOM parse target
+        tmp.innerHTML = content || '<p></p>'
+        const parsed = PMDOMParser.fromSchema(editor.schema).parse(tmp) // Stored HTML → PM doc
+        differs = !editor.state.doc.eq(parsed) // Semantic equality (not string)
+      } catch {
+        differs = editor.getHTML() !== content // Fallback to string compare on parse error
+      }
+      // Sync prop → editor only when the document actually changed
+      if (differs) {
         editor.commands.setContent(content || '<p></p>')
         // Ensure cursor is visible by focusing if editor is empty
         if (!content || content.trim() === '' || content === '<p></p>') {
@@ -726,7 +739,7 @@ function TipTapContent({
       <div
         className={cn(
           'relative',
-          enableBlockHandles && 'pl-6', // Gutter for per-block ⋮⋮ (outside content; not frame chrome)
+          enableBlockHandles && 'pl-10', // Gutter for per-block "+" and ⋮⋮ (outside content; not frame chrome)
           isLoading && !isFlashcard && 'shimmer'
         )}
       >
@@ -1838,9 +1851,11 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // In-place nested board for a titled item’s linked page
   const [pagePreviewOpen, setPagePreviewOpen] = useState(false)
   const [pagePreviewMounted, setPagePreviewMounted] = useState(false) // Keep iframe warm after first open/hover
+  const [previewTargetPageId, setPreviewTargetPageId] = useState<string | null>(null) // Which page the preview shows (pageLink or frame)
   const linkedPageId = !isProjectBoard
     ? (promptMessage?.metadata?.linkedPageId as string | undefined)
     : undefined
+  const activePreviewPageId = previewTargetPageId || linkedPageId || null // Page the shell renders
   const blockTitleLabel =
     (promptMessage?.metadata?.blockTitle as string | undefined) || ''
 
@@ -1851,6 +1866,50 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     router.prefetch(`/embed/${linkedPageId}`)
     setPagePreviewMounted(true)
   }
+
+  // Actions handed to pageLink NodeViews (open/close preview, open page, prefetch, rename)
+  const pageLinkActions = useMemo<PageLinkActions>(
+    () => ({
+      previewPageId: pagePreviewOpen ? activePreviewPageId : null,
+      openPreview: (pid: string) => {
+        setPreviewTargetPageId(pid) // Point the shared shell at this child page
+        setPagePreviewMounted(true)
+        setPagePreviewOpen(true)
+      },
+      closePreview: () => setPagePreviewOpen(false),
+      openPage: (pid: string) => router.push(`/board/${pid}`),
+      prefetch: (pid: string) => {
+        prefetchPageEmbed(pid)
+        router.prefetch(`/embed/${pid}`)
+        setPagePreviewMounted(true)
+      },
+      renameTitle: async (pid: string, title: string) => {
+        try {
+          const supabase = createClient()
+          await supabase.from('conversations').update({ title: title || 'Untitled' }).eq('id', pid)
+          await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+        } catch (err) {
+          console.error('Failed to rename linked page:', err)
+        }
+      },
+      setIcon: async (pid: string, iconEmoji: string | null) => {
+        try {
+          const supabase = createClient()
+          const { data: row } = await supabase.from('conversations').select('metadata').eq('id', pid).single()
+          const existing = (row?.metadata as Record<string, unknown>) || {}
+          const nextMeta = { ...existing }
+          if (iconEmoji) nextMeta.icon = { type: 'emoji', emoji: iconEmoji } // Notion-compatible icon shape
+          else delete nextMeta.icon
+          await supabase.from('conversations').update({ metadata: nextMeta }).eq('id', pid)
+          await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+          await queryClient.invalidateQueries({ queryKey: ['path-board-menu'] })
+        } catch (err) {
+          console.error('Failed to set linked page icon:', err)
+        }
+      },
+    }),
+    [pagePreviewOpen, activePreviewPageId, router, queryClient]
+  )
 
   // Update title-chip perimeter when the note/item box changes size
   useEffect(() => {
@@ -3612,26 +3671,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         </div>
       )}
 
-      {/* Edge title chip — hidden while preview fills the card (chrome has title; chip would overlap) */}
-      {isBlock && !isProjectBoard && promptMessage?.id && !pagePreviewOpen && (
-        <BlockTitleEdge
-          selected={!!selected}
-          width={itemBoxSize.width}
-          height={itemBoxSize.height}
-          messageId={promptMessage.id}
-          conversationId={conversationId}
-          blockTitle={promptMessage.metadata?.blockTitle as string | undefined}
-          linkedPageId={linkedPageId}
-          titleEdgeT={typeof promptMessage.metadata?.titleEdgeT === 'number' ? promptMessage.metadata.titleEdgeT : null}
-          previewOpen={pagePreviewOpen}
-          onTogglePreview={() => {
-            setPagePreviewMounted(true) // Keep iframe after close for instant reopen
-            setPagePreviewOpen((open) => !open)
-          }}
-          onPrefetchPreview={prefetchPagePreview}
-          isPageBody={isPageBodyMeta(promptMessage.metadata as Record<string, unknown>)}
-        />
-      )}
+      {/* Page titles/links now render inline as pageLink blocks inside the editor (no edge chip). */}
       
       {/* Left handle with flashcard navigation */}
       {isFlashcard && (hasMultipleFlashcards || hasFlashcardsInOtherBoards) && previousBoardWithFlashcards && isAtFirstFlashcardInBoard && selected ? (
@@ -3925,6 +3965,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 : {}),
             }}
           >
+            <PageLinkProvider value={pageLinkActions}>
             <TipTapContent
               content={promptContent || ''}
               className="text-gray-900 dark:text-gray-100"
@@ -4003,19 +4044,22 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 }
               }}
             />
+            </PageLinkProvider>
           </div>
           </div>
         )}
 
-        {/* Keep iframe mounted after warm/open; fills card while visible */}
-        {pagePreviewMounted && linkedPageId && (
+        {/* Keep iframe mounted after warm/open; fills card while visible. Targets the active page
+            (a pageLink's child page) — falls back to the frame's own linked page. */}
+        {pagePreviewMounted && activePreviewPageId && (
           <div
             className={cn(
               pagePreviewOpen ? 'flex-1 min-h-0 min-w-0 flex flex-col p-2 pt-2' : 'hidden'
             )}
           >
             <NestedBoardPreview
-              conversationId={linkedPageId}
+              key={activePreviewPageId} // Remount when switching between different child pages
+              conversationId={activePreviewPageId}
               title={blockTitleLabel}
               visible={pagePreviewOpen}
               fill={pagePreviewOpen}

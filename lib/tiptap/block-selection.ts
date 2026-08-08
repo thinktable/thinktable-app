@@ -65,7 +65,8 @@ export function isHandleBlockType(name: string): boolean {
     name === 'toggleHeading' ||
     name === 'blockEquation' ||
     name === 'syncedBlock' ||
-    name === 'columns'
+    name === 'columns' ||
+    name === 'pageLink' // Linked-page block (inline/title) gets the ⋮⋮ + "+" gutter too
   )
 }
 
@@ -84,11 +85,22 @@ export function findEditorBlockAtClientY(editor: Editor, clientY: number): Edito
     if (!isHandleBlockType(name)) return true
 
     try {
-      const start = editor.view.coordsAtPos(pos + 1) // Top of block
-      const endPos = Math.max(pos + 1, pos + node.nodeSize - 1)
-      const end = editor.view.coordsAtPos(endPos) // Bottom of block
-      const top = start.top
-      const bottom = Math.max(start.bottom, end.bottom)
+      // Atom blocks (pageLink) have no inner text positions — use their DOM rect for the band
+      let top: number
+      let bottom: number
+      if (node.isAtom || node.isLeaf) {
+        const dom = editor.view.nodeDOM(pos)
+        const rect = dom instanceof HTMLElement ? dom.getBoundingClientRect() : null
+        if (!rect) return true
+        top = rect.top
+        bottom = rect.bottom
+      } else {
+        const start = editor.view.coordsAtPos(pos + 1) // Top of block
+        const endPos = Math.max(pos + 1, pos + node.nodeSize - 1)
+        const end = editor.view.coordsAtPos(endPos) // Bottom of block
+        top = start.top
+        bottom = Math.max(start.bottom, end.bottom)
+      }
       if (clientY < top || clientY > bottom) {
         // Skip children of list items — the item itself is the handle unit
         return name !== 'listItem' && name !== 'taskItem'
@@ -200,9 +212,21 @@ export function createBlockHighlightPlugin() {
     state: {
       init: () => DecorationSet.empty,
       apply(tr, old) {
-        const meta = tr.getMeta(highlightKey) as { from: number; to: number } | 'clear' | undefined
+        const meta = tr.getMeta(highlightKey) as
+          | { from: number; to: number }
+          | { ranges: { from: number; to: number }[] }
+          | 'clear'
+          | undefined
         if (meta === 'clear') return DecorationSet.empty
-        if (meta && typeof meta.from === 'number') {
+        // Multi-range wash (in-frame multi-block selection)
+        if (meta && 'ranges' in meta) {
+          if (meta.ranges.length === 0) return DecorationSet.empty
+          return DecorationSet.create(
+            tr.doc,
+            meta.ranges.map((r) => Decoration.node(r.from, r.to, { class: 'tt-block-highlight' }))
+          )
+        }
+        if (meta && 'from' in meta && typeof meta.from === 'number') {
           // Node decoration paints the whole list item / paragraph (Notion wash)
           return DecorationSet.create(tr.doc, [
             Decoration.node(meta.from, meta.to, { class: 'tt-block-highlight' }),
@@ -231,6 +255,17 @@ export function setEditorBlockHighlight(
   } else {
     tr.setMeta(highlightKey, range)
   }
+  editor.view.dispatch(tr)
+}
+
+/** Paint a Notion wash across several block ranges at once (in-frame multi-block selection). */
+export function setEditorBlockHighlightRanges(
+  editor: Editor,
+  ranges: { from: number; to: number }[]
+) {
+  if (!editor || editor.isDestroyed) return
+  const tr = editor.state.tr
+  tr.setMeta(highlightKey, ranges.length ? { ranges } : 'clear')
   editor.view.dispatch(tr)
 }
 

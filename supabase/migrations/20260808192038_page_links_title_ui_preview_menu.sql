@@ -1,0 +1,14 @@
+-- Frontend-only snapshot marker (no schema DDL).
+-- pageLink block feature: any text block/frame can become a linked page (Notion-style).
+--   New TipTap `pageLink` node (inline + title variants), React NodeView, PageLink context
+--   bridge to the host frame (open/preview/prefetch/rename/setIcon), and child-page creation.
+-- Title UI: page/emoji icon LEFT of an underlined title; single-click places the caret to edit
+--   (no accidental navigation) and hides the open-page menu while editing.
+-- Preview menu: semi-transparent, icon-only [preview toggle] + [↗ open full page]; slides just
+--   right of the title when the frame has room (measured), else overlaps the text end.
+-- Multi-block selection via ⋮⋮ grips (Shift range / Cmd-Ctrl toggle) + "+" add-below control.
+-- Snapshot-to-page (Phase C): copy selected frames/blocks/threads/drawings into a new/existing page.
+-- Stability: chat-panel content sync compares ProseMirror docs via doc.eq() (stops a pageLink
+--   re-render loop); React Flow multi-select/selection keycodes are stable module consts.
+-- Also present: a dev-only [LOOP-DIAG] render-storm detector in board-flow.tsx (logs only).
+-- Persistence unchanged (messages.content + messages.metadata JSON; conversations for child pages).

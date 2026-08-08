@@ -1212,6 +1212,106 @@ span[data-added="true"] {
     background-color: rgba(59, 130, 246, 0.22) !important;
   }
 
+  /* pageLink — Notion child-page block: icon + link text + hover-overlap preview button */
+  .ProseMirror .tt-page-link {
+    position: relative;
+    margin: 2px 0;
+  }
+  .ProseMirror .tt-page-link-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 100%;
+  }
+  .ProseMirror .tt-page-link-title {
+    display: inline-flex;        /* Icon LEFT of the title (row), same axis as inline */
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0.4rem;
+    max-width: 100%;
+  }
+  .ProseMirror .tt-page-link-icon {
+    display: inline-flex;
+    align-items: center;
+  }
+  .ProseMirror .tt-page-link-emoji { font-size: 1.05em; line-height: 1; }
+  .ProseMirror .tt-page-link-title .tt-page-link-emoji { font-size: 1.6em; }
+  .ProseMirror .tt-page-link-title .tt-page-link-fallback { width: 1.4rem; height: 1.4rem; }
+  .ProseMirror .tt-page-link-label {
+    outline: none;
+    text-decoration: underline;
+    text-decoration-color: rgba(55, 53, 47, 0.28);
+    text-underline-offset: 2px;
+    cursor: text;
+    border-radius: 3px;
+    min-width: 1ch;
+    white-space: pre-wrap;
+  }
+  .ProseMirror .tt-page-link-title .tt-page-link-label {
+    font-size: 1.4em;
+    font-weight: 600;            /* Keep the underline (inherited) — matches other page-link text */
+  }
+  .ProseMirror .tt-page-link-label:empty::before {
+    content: attr(data-placeholder);
+    color: #9ca3af;
+  }
+  /* Preview chrome: semi-transparent, icon-only pill overlapping the text end */
+  .ProseMirror .tt-page-link-preview {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.125rem;
+    padding: 2px 4px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.6);   /* Semi-transparent glass */
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
+  }
+  /* When the frame has room, sit the menu just right of the title instead of overlapping the text */
+  .ProseMirror .tt-page-link-preview-right {
+    right: auto;
+    left: 100%;
+    margin-left: 6px;
+  }
+  .ProseMirror .tt-page-link-preview-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    border-radius: 4px;
+    color: #4b5563;
+    cursor: pointer;
+  }
+  .ProseMirror .tt-page-link-preview-btn:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: #111827;
+  }
+  /* Reveal on hover, or keep shown while the preview is active; hide entirely while editing the title */
+  .ProseMirror .tt-page-link:hover .tt-page-link-preview,
+  .ProseMirror .tt-page-link-preview:has(.tt-page-link-preview-active) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .ProseMirror .tt-page-link-editing .tt-page-link-preview {
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+  .dark .ProseMirror .tt-page-link-preview {
+    background: rgba(31, 31, 31, 0.6);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+  .dark .ProseMirror .tt-page-link-preview-btn { color: #d1d5db; }
+  .dark .ProseMirror .tt-page-link-preview-btn:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
+  .ProseMirror .tt-page-link-preview-active { color: #2563eb; }
+
   /* Turn into — Notion-like block type chrome */
   .ProseMirror .tt-callout {
     border-radius: 0.5rem;

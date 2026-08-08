@@ -260,10 +260,18 @@ export async function applyTurnInto(
       .eq('id', messageId)
       .single()
     const meta = (refreshed?.metadata as Record<string, unknown>) || migrated
+
+    // Prepend a title-variant pageLink at the TOP of the frame (icon on top). Done server-side so
+    // the blockType-change force-sync reloads content that already contains the title block.
+    const titleDiv = `<div data-type="pageLink" data-page-id="${linkedPageId}" data-title="${escapeHtml(
+      title
+    )}" data-variant="title"></div>`
+    const titledContent = /data-type="pageLink"/.test(nextContent) ? nextContent : titleDiv + nextContent
+
     await supabase
       .from('messages')
       .update({
-        content: nextContent,
+        content: titledContent,
         metadata: {
           ...meta,
           isBlock: true,

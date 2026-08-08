@@ -113,6 +113,9 @@ const MINIMAP_HEIGHT = 120 // Keep in sync with .minimap-custom-size height in g
 const MINIMAP_BOTTOM = 8 // Inset from map column bottom edge
 const MINIMAP_LEFT = 8 // Match top-bar menu button (sticky-prompt-panel paddingLeft 0.5rem)
 const BRAND_RIGHT = 12 // Inset from map column right edge
+// Stable key-code arrays — new array literals each render make RF's useKeyPress loop (Max update depth).
+const MULTI_SELECT_KEYS = ['Shift', 'Meta', 'Control'] // Shift/Cmd/Ctrl+click adds to selection
+const SELECTION_BOX_KEYS = ['Shift'] // Shift+drag draws a selection box
 
 // Fetch messages for a conversation and create panels
 // For homepage boards, uses API route (public access via service role)
@@ -452,7 +455,33 @@ function BoardFlowInner({
   const [linearNavMode, setLinearNavMode] = useState<'chat' | 'all'>('chat') // Filter mode for linear navigation
   const [focusedPanelIndex, setFocusedPanelIndex] = useState<number | null>(null) // Currently focused panel index in linear mode
   const [viewportKey, setViewportKey] = useState(0) // Force re-render when viewport changes to update button visibility
-  
+
+  // [TEMP DIAG] Render-storm detector: names which RF value flips each render when a loop occurs. REMOVE AFTER.
+  const __renderTimesRef = useRef<number[]>([]) // Sliding window of recent render timestamps (ms)
+  const __lastTrackedRef = useRef<{ n: unknown; nl: number; e: unknown; el: number; vk: number; vm: string } | null>(null) // Previous render's tracked values
+  const __lastWarnRef = useRef(0) // Throttle warnings so we log once per storm, not 1000x
+  useEffect(() => {
+    const now = Date.now() // Timestamp this render
+    const w = __renderTimesRef.current // Window of render times
+    w.push(now) // Record this render
+    while (w.length && now - w[0] > 1000) w.shift() // Keep only the last 1s of renders
+    // Snapshot the RF-related values React points at (<ReactFlow>): array identities, lengths, viewport/view keys
+    const cur = { n: nodes, nl: nodes.length, e: edges, el: edges.length, vk: viewportKey, vm: viewMode }
+    const prev = __lastTrackedRef.current // What they were last render
+    __lastTrackedRef.current = cur // Advance for next comparison
+    // A storm = >40 renders within 1s (well past normal); warn at most every 2s with the changed keys
+    if (w.length > 40 && now - __lastWarnRef.current > 2000 && prev) {
+      __lastWarnRef.current = now // Throttle
+      const changed: string[] = [] // Which tracked values differ from last render
+      if (prev.n !== cur.n) changed.push(`nodes(ref) len ${prev.nl}->${cur.nl}`) // New nodes array each render = setNodes loop
+      if (prev.e !== cur.e) changed.push(`edges(ref) len ${prev.el}->${cur.el}`) // New edges array each render = setEdges loop
+      if (prev.vk !== cur.vk) changed.push(`viewportKey ${prev.vk}->${cur.vk}`) // Viewport bump loop (onMove)
+      if (prev.vm !== cur.vm) changed.push(`viewMode ${prev.vm}->${cur.vm}`) // View mode thrash
+      // Emit a single high-signal line naming the culprit (or telling us it's an untracked state)
+      console.error('[LOOP-DIAG] render storm', w.length, '/1s; changed since last render:', changed.length ? changed.join(', ') : 'NONE of {nodes,edges,viewportKey,viewMode} — culprit is another state')
+    }
+  }) // No dep array on purpose: runs after every render to measure render frequency
+
   // Free-only nav UI — Linear toggle removed; coerce any 'linear' preference to canvas
   const setViewMode = (mode: 'linear' | 'canvas') => {
     const next = mode === 'linear' ? 'canvas' : mode
@@ -5628,6 +5657,8 @@ function BoardFlowInner({
   const handleTurnInto = useCallback(
     async (blockType: BlockTypeId, pageInParentId?: string | null) => {
       const messageId = rightClickedNode?.data?.promptMessage?.id
+      const nodeId = rightClickedNode?.id // Live editor registry key
+      const frameContent = (rightClickedNode?.data?.promptMessage?.content as string) || '' // Title seed
       if (!messageId || !conversationId) return
       setRightClickedNode(null)
       try {
@@ -5636,14 +5667,26 @@ function BoardFlowInner({
           data: { user },
         } = await supabase.auth.getUser()
         if (!user) return
-        const { applyTurnInto } = await import('@/lib/blocks/turn-into')
-        await applyTurnInto(supabase, {
+        const { applyTurnInto, htmlToPlainText } = await import('@/lib/blocks/turn-into')
+        // Frame → page prepends a title-variant pageLink to the content server-side (race-free)
+        const { linkedPageId } = await applyTurnInto(supabase, {
           messageId,
           conversationId,
           userId: user.id,
           blockType,
           pageInParentId: pageInParentId || null,
         })
+        // Also insert client-side (idempotent) so the title block appears even if the editor was
+        // focused (which skips the content re-sync). No duplicate — insertPageTitleBlock updates in place.
+        if ((blockType === 'page' || blockType === 'pageIn') && linkedPageId && nodeId) {
+          const { editorForHostNode } = await import('@/lib/tiptap/block-selection')
+          const { insertPageTitleBlock } = await import('@/lib/tiptap/page-blocks')
+          const ed = editorForHostNode(nodeId)
+          if (ed) {
+            const title = htmlToPlainText(frameContent).split('\n')[0]?.trim() || 'Untitled'
+            insertPageTitleBlock(ed, { pageId: linkedPageId, title, icon: null, variant: 'title' })
+          }
+        }
         await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
         await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
         if (blockType === 'page' || blockType === 'pageIn') {
@@ -5655,6 +5698,93 @@ function BoardFlowInner({
       }
     },
     [rightClickedNode, conversationId, queryClient]
+  )
+
+  // Multi-selection → new page: snapshot selected frames + threads + drawings/shapes exactly as
+  // they are onto a fresh child page, and drop a title link frame on this page (Phase C).
+  const handleSelectionToPage = useCallback(
+    async (blockType: BlockTypeId, pageInParentId?: string | null) => {
+      if (!conversationId) return
+      const frameNodes = nodes.filter(
+        (n) => n.selected && n.type === 'chatPanel' && n.data?.promptMessage?.id
+      )
+      const canvasNodes = nodes.filter(
+        (n) => n.selected && (n.type === 'freehand' || n.type === 'shape')
+      )
+      if (frameNodes.length + canvasNodes.length === 0) return
+      const linkPos = nodeClickPositionRef.current || undefined // Popup flow position
+      setRightClickedNode(null)
+      try {
+        const supabase = createClient()
+        const {
+          data: { user },
+        } = await supabase.auth.getUser()
+        if (!user) return
+
+        // node.id → message id (edges use RF node ids; panel_edges use message ids)
+        const nodeIdToMsg = new Map<string, string>()
+        const frames = frameNodes.map((n) => {
+          const abs = absFlowPosition(n, nodes)
+          const msgId = n.data.promptMessage!.id as string
+          nodeIdToMsg.set(n.id, msgId)
+          return {
+            oldId: msgId,
+            content: (n.data.promptMessage!.content as string) || '',
+            metadata: (n.data.promptMessage!.metadata as Record<string, unknown>) || {},
+            position: { x: abs.x, y: abs.y },
+          }
+        })
+        const selNodeIds = new Set(frameNodes.map((n) => n.id))
+        const edgesSel = edges
+          .filter((e) => selNodeIds.has(e.source) && selNodeIds.has(e.target))
+          .map((e) => ({ source: nodeIdToMsg.get(e.source)!, target: nodeIdToMsg.get(e.target)! }))
+          .filter((e) => e.source && e.target)
+        const canvas = canvasNodes.map((n) => ({
+          node_type: n.type as string,
+          position_x: n.positionAbsolute?.x ?? n.position.x,
+          position_y: n.positionAbsolute?.y ?? n.position.y,
+          width: (n.width as number) || (n.data?.width as number) || 100,
+          height: (n.height as number) || (n.data?.height as number) || 100,
+          data: n.data,
+        }))
+
+        // Title seed: first selected frame's first line, else default
+        const firstText = frames[0]?.content?.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || ''
+        const title = firstText.split('\n')[0]?.slice(0, 60).trim() || 'Snapshot'
+
+        // Bounding-box top-left fallback if the popup position is unknown
+        const fallbackPos =
+          frames.length > 0
+            ? {
+                x: Math.min(...frames.map((f) => f.position.x)),
+                y: Math.min(...frames.map((f) => f.position.y)) - 60,
+              }
+            : { x: canvas[0]?.position_x ?? 0, y: (canvas[0]?.position_y ?? 0) - 60 }
+
+        const parentId =
+          blockType === 'pageIn' && pageInParentId ? pageInParentId : conversationId
+
+        const { snapshotSelectionToPage } = await import('@/lib/blocks/snapshot')
+        await snapshotSelectionToPage(supabase, {
+          userId: user.id,
+          sourceConversationId: conversationId,
+          parentId,
+          title,
+          frames,
+          edges: edgesSel,
+          canvas,
+          linkPosition: linkPos || fallbackPos,
+        })
+
+        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+        await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
+        await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+        await queryClient.refetchQueries({ queryKey: ['conversations'] })
+      } catch (err) {
+        console.error('Failed to snapshot selection to page:', err)
+      }
+    },
+    [conversationId, nodes, edges, queryClient]
   )
 
   // Dispatch block action from the shared menu
@@ -5686,8 +5816,20 @@ function BoardFlowInner({
           void handleUngroupBlocks()
           break
         case 'turnInto':
-          if (payload?.blockType)
-            void handleTurnInto(payload.blockType, payload.pageInParentId)
+          if (payload?.blockType) {
+            // Page/Page in on a multi-selection → snapshot to a new page; else single-frame promote
+            const relevantSelected = nodes.filter(
+              (n) => n.selected && (n.type === 'chatPanel' || n.type === 'freehand' || n.type === 'shape')
+            )
+            if (
+              (payload.blockType === 'page' || payload.blockType === 'pageIn') &&
+              relevantSelected.length >= 2
+            ) {
+              void handleSelectionToPage(payload.blockType, payload.pageInParentId)
+            } else {
+              void handleTurnInto(payload.blockType, payload.pageInParentId)
+            }
+          }
           break
         // Baseline stubs — menu entries present; behavior later
         case 'color':
@@ -5710,6 +5852,8 @@ function BoardFlowInner({
       handleGroupBlocks,
       handleUngroupBlocks,
       handleTurnInto,
+      handleSelectionToPage,
+      nodes,
       rightClickedNode,
       addChildNode,
     ]
@@ -6743,7 +6887,8 @@ function BoardFlowInner({
         preventScrolling // RF consumes wheel so the host page/map doesn’t scroll
         autoPanOnNodeDrag={false}
         selectNodesOnDrag={embedded ? false : !isDrawing} // Preview: drag starts pan, not selection box
-        multiSelectionKeyCode={['Shift']}
+        multiSelectionKeyCode={MULTI_SELECT_KEYS}
+        selectionKeyCode={SELECTION_BOX_KEYS} // Shift+drag a box to select multiple frames for snapshot
         onMove={(event, viewport) => {
           // Update viewport key to trigger re-render for button visibility check (throttled)
           // Only update every 100ms to prevent excessive re-renders
