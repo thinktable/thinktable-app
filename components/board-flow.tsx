@@ -134,6 +134,7 @@ const BRAND_RIGHT = 12 // Inset from map column right edge
 // Stable key-code arrays — new array literals each render make RF's useKeyPress loop (Max update depth).
 const MULTI_SELECT_KEYS = ['Shift', 'Meta', 'Control'] // Shift/Cmd/Ctrl+click adds to selection
 const SELECTION_BOX_KEYS = ['Shift'] // Shift+drag draws a selection box
+const DELETE_KEYS = ['Backspace', 'Delete'] // Stable — inline arrays loop RF useKeyPress
 
 // Fetch messages for a conversation and create panels
 // For homepage boards, uses API route (public access via service role)
@@ -7399,10 +7400,9 @@ function BoardFlowInner({
             ? null // Select tool uses selectionOnDrag; no Shift required
             : SELECTION_BOX_KEYS // Pan tool: Shift+drag still draws a selection box
         }
-        // Backspace edits TipTap blocks (empty block → previous line). Only Delete removes selected frames.
-        // RF's isInputDOMNode misses <p>/<br> inside ProseMirror (no contenteditable attr), so Backspace
-        // was deleting the whole frame while typing — editor also has class `nokey` as a second guard.
-        deleteKeyCode="Delete"
+        // Backspace/Delete remove selected frames/threads. TipTap editors use class `nokey` so RF
+        // skips delete while typing (isInputDOMNode misses <p>/<br> without contenteditable).
+        deleteKeyCode={DELETE_KEYS}
         onMove={(event, viewport) => {
           // Update viewport key to trigger re-render for button visibility check (throttled)
           // Only update every 100ms to prevent excessive re-renders

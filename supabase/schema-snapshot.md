@@ -1,13 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T19:06:14Z`
+- Snapped at: `2026-08-09T19:44:48Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 - CLI: `supabase` `2.90.0` (remote `projects list` needs login token — marker migration used)
 
 ## This save
+
+- No DDL. Marker `20260809194448_notion_mindmap_structured_database.sql`.
+- **Generate mindmap**: walk Notion `child_page` + `child_database` (incl. under headings); resolve `block_id` parents; parent→child `panel_edges` threads; pages → title `pageLink` + Pages menu nesting; databases → one map `databaseBlock` with live Notion-like table (`/api/notion/database/[id]`, property columns + typed cells) — not one frame per row.
+- **Open menu**: Preview/Open/Notion on pageLink + DB title; DB frames skip sole-`databaseBlock`→pageLink migration when `notionObject=database`.
+- Persisted via existing tables — schema unchanged.
+
+## Prior: thread actions menu + sidebar pin
 
 - No DDL. Marker `20260809190614_thread_actions_menu_sidebar_pin.sql`.
 - **Thread click menu** (`thread-actions-menu.tsx` + `board-flow` `onEdgeClick`): Notion-style chrome matching ⋮⋮ / text-select menus; wired Delete, Insert frame, Collapse/Expand, Dotted/Solid, Arrange→Smooth/Sharp/Linear, Copy/Paste style; other rows stubs.

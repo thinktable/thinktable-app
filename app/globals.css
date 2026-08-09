@@ -1406,16 +1406,21 @@ span[data-added="true"] {
     color: #9ca3af;
   }
 
-  /* databaseBlock — compact Notion database (one TipTap block, not a map frame) */
+  /* databaseBlock — Notion-like structured table (header + live property grid) */
   .ProseMirror .tt-database-block {
     position: relative;
     margin: 2px 0;
+    width: max-content; /* Hug the table so locked frames size to columns */
+    max-width: 100%;
   }
   .ProseMirror .tt-database-block-row {
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
     max-width: 100%;
+  }
+  .ProseMirror .tt-notion-db {
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
   }
   .ProseMirror .tt-database-block-icon {
     display: inline-flex;

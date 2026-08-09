@@ -1,15 +1,15 @@
 'use client'
 
-// React NodeView for the databaseBlock: compact Notion database row (table/emoji icon + title).
-// Nested inside a page body: Notion-icon open chrome. Sole content of a Notion-linked map frame:
-// same PageOpenMenu as page blocks (preview + open + Notion icon). New imports use pageLink on the
-// map instead; this path covers older DB-only frames and nested child_database atoms.
+// React NodeView for databaseBlock: Notion-like structured table (columns + typed cells).
+// Header keeps icon + title + PageOpenMenu (preview / open / Notion). Nested page-body DBs
+// and map DB frames both render the live table from /api/notion/database/[id].
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react'
 import { Table2 } from 'lucide-react'
 import { PageOpenMenu } from '@/components/page-open-menu' // Same chrome as pageLink blocks
 import { NotionMarkIcon } from '@/components/notion-mark-icon' // Monochrome Notion mark
+import { NotionDatabaseTableView } from '@/components/notion-database-table' // Structured table
 import { usePageLinkActions } from '@/lib/page-link-context'
 import { cn } from '@/lib/utils'
 
@@ -63,12 +63,12 @@ export function DatabaseBlockView({ node, updateAttributes }: NodeViewProps) {
       )}
       data-notion-database-id={notionDatabaseId || undefined}
     >
-      {/* Shrink-wrap to icon+title only — hover chrome is absolute so it can’t widen the frame. */}
-      <div className="tt-database-block-row inline-flex items-center gap-1.5 max-w-full">
+      {/* Title row — icon + label + open menu (preview / open / Notion) */}
+      <div className="tt-database-block-row relative inline-flex items-center gap-1.5 max-w-full mb-2">
         <button
           type="button"
           className="tt-database-block-icon flex-shrink-0 rounded hover:bg-black/5 dark:hover:bg-white/10"
-          onClick={hostPageId ? undefined : openInNotion} // Map-frame DB: menu owns open; nested: icon → Notion
+          onClick={hostPageId ? undefined : openInNotion}
           title={!hostPageId && notionUrl ? 'Open in Notion' : undefined}
           aria-label={!hostPageId && notionUrl ? `Open ${title} in Notion` : title}
         >
@@ -85,19 +85,23 @@ export function DatabaseBlockView({ node, updateAttributes }: NodeViewProps) {
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()
-              titleRef.current?.blur() // Commit on Enter
+              titleRef.current?.blur()
             }
-            e.stopPropagation() // Don't let TipTap/RF steal keys while editing the label
+            e.stopPropagation()
           }}
           onClick={(e) => e.stopPropagation()}
         >
           {title}
         </span>
-        {/* Map-frame Notion DB: same preview / open / Notion-icon menu as page blocks */}
+        {/* Map-frame: full preview / open / Notion menu; nested: Notion-only when no Thinktable page */}
         {hostPageId ? (
-          <PageOpenMenu pageId={hostPageId} notionUrl={notionUrl} className="!left-full !right-auto !ml-1" />
+          <PageOpenMenu
+            pageId={hostPageId}
+            notionUrl={notionUrl}
+            forceVisible
+            className="!relative !left-auto !right-auto !top-auto !translate-y-0 !ml-1"
+          />
         ) : notionUrl ? (
-          // Nested child_database: Notion icon only (no Thinktable page to preview)
           <span className="tt-page-link-preview !relative !left-auto !right-auto !top-auto !translate-y-0 !ml-1 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto">
             <button
               type="button"
@@ -116,6 +120,14 @@ export function DatabaseBlockView({ node, updateAttributes }: NodeViewProps) {
           </span>
         ) : null}
       </div>
+
+      {/* Structured Notion table — properties as columns, pages as rows */}
+      {notionDatabaseId ? (
+        <NotionDatabaseTableView
+          notionDatabaseId={notionDatabaseId}
+          fallbackTitle={title}
+        />
+      ) : null}
     </NodeViewWrapper>
   )
 }

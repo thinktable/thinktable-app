@@ -1324,7 +1324,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const [promptHasChanges, setPromptHasChanges] = useState(false)
   const [responseHasChanges, setResponseHasChanges] = useState(false)
   // Single text body: plain-merge legacy prompt + response (no section split).
-  // Sync-migrate sole databaseBlock → pageLink when linkedPageId already exists (fixes grip + open menu).
+  // Sync-migrate sole databaseBlock → pageLink when linkedPageId exists (legacy pages only — not DBs).
   const [promptContent, setPromptContent] = useState(() => {
     if (isProjectBoard) return data.boardTitle || ''
     const responseRaw = data.responseMessage?.content
@@ -1333,6 +1333,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     const meta = (data.promptMessage?.metadata || {}) as Record<string, unknown>
     const linkedId = typeof meta.linkedPageId === 'string' ? meta.linkedPageId : null
     if (!linkedId) return merged
+    if (meta.notionObject === 'database') return merged // Keep structured DB table in-frame
     const iconMeta = meta.notionIcon as { type?: string; emoji?: string } | null
     const emoji = iconMeta?.type === 'emoji' && iconMeta.emoji ? iconMeta.emoji : null
     return (
@@ -1923,22 +1924,29 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     (promptContent.includes(`data-page-id="${linkedPageId}"`) ||
       promptContent.includes(`data-page-id='${linkedPageId}'`))
   )
+  // databaseBlock NodeView owns Preview/Open when this is a Notion DB frame
+  const hasDatabaseBlockForFrame = /data-type=["']databaseBlock["']/i.test(promptContent)
   // Page frames whose content is still regular TipTap blocks (legacy title) need the menu too
   const showFramePageOpenMenu =
     !!linkedPageId &&
     !isPageBody &&
     !pagePreviewOpen &&
     !hasPageLinkForFrame &&
+    !hasDatabaseBlockForFrame &&
     (isFrameHovering || selected)
 
-  // One-shot: Notion map frames still on sole databaseBlock → real pageLink (same menu + grip as local pages).
-  // Handles missing linkedPageId by resolving/creating the nested Thinktable page.
+  // One-shot: legacy sole-databaseBlock map frames → pageLink (pages only).
+  // Notion **databases** keep databaseBlock so the structured table NodeView can render.
   // Check server content too — useState may already have rewritten promptContent locally.
   const migratedDbFrameRef = useRef(false)
   useEffect(() => {
     if (migratedDbFrameRef.current || isProjectBoard || isPageBody) return
     if (!promptMessage?.id || !conversationId) return
     if (hasPageLinkForFrame) return
+    // Intentional DB map frames (mindmap / Add frame on a DB) must stay as databaseBlock
+    if ((promptMessage.metadata as { notionObject?: string } | null)?.notionObject === 'database') {
+      return
+    }
     const serverContent = promptMessage.content || ''
     const needsMigrate =
       isSoleDatabaseBlockContent(serverContent) || isSoleDatabaseBlockContent(promptContent)
@@ -2068,7 +2076,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         }
       },
       notionUrl, // Open in Notion button when this frame is Notion-linked
-      // Sole databaseBlock map frames (legacy) reuse this page id for the shared open menu
+      // DB / legacy titled frames (no pageLink NodeView) reuse this for PageOpenMenu
       hostLinkedPageId: hasPageLinkForFrame ? null : linkedPageId || null,
     }),
     [pagePreviewOpen, activePreviewPageId, router, queryClient, notionUrl, hasPageLinkForFrame, linkedPageId]
@@ -3573,10 +3581,10 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         ? formatResponseContent(responseMessage.content)
         : ''
       let merged = mergePanelHtml(promptMessage?.content, responseHtml)
-      // Keep Notion DB map frames as pageLink when the server row is still a sole databaseBlock
+      // Legacy: sole databaseBlock → pageLink for pages only (DB frames keep the table NodeView)
       const meta = (promptMessage?.metadata || {}) as Record<string, unknown>
       const linkedId = typeof meta.linkedPageId === 'string' ? meta.linkedPageId : null
-      if (linkedId && isSoleDatabaseBlockContent(merged)) {
+      if (linkedId && meta.notionObject !== 'database' && isSoleDatabaseBlockContent(merged)) {
         const iconMeta = meta.notionIcon as { type?: string; emoji?: string } | null
         const emoji = iconMeta?.type === 'emoji' && iconMeta.emoji ? iconMeta.emoji : null
         merged =

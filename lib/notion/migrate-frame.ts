@@ -75,6 +75,8 @@ export async function ensureNotionMapFrameIsPageLink(
   }
 ): Promise<{ content: string; linkedPageId: string; metadata: Record<string, unknown> } | null> {
   const { messageId, userId, parentConversationId, content, metadata } = opts
+  // Intentional database map frames render a structured table — do not convert to pageLink
+  if (metadata.notionObject === 'database') return null
   if (!isSoleDatabaseBlockContent(content)) return null // Already a page block / mixed body
   if (/data-type="pageLink"/.test(content)) return null
 

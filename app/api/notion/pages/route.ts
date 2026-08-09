@@ -3,7 +3,11 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { buildNotionPageTree, searchAllAccessibleNotionPages } from '@/lib/notion/pages'
+import {
+  buildNotionPageTree,
+  resolveBlockIdParents,
+  searchAllAccessibleNotionPages,
+} from '@/lib/notion/pages'
 
 export async function GET() {
   try {
@@ -28,7 +32,8 @@ export async function GET() {
       return NextResponse.json({ error: 'Notion is not connected' }, { status: 400 })
     }
 
-    const pages = await searchAllAccessibleNotionPages(connection.access_token) // Flat accessible set
+    const raw = await searchAllAccessibleNotionPages(connection.access_token) // Flat accessible set
+    const pages = await resolveBlockIdParents(connection.access_token, raw) // Nest DBs under pages
     const tree = buildNotionPageTree(pages) // Notion-native nesting
 
     return NextResponse.json({

@@ -52,6 +52,7 @@
 20260809174346_unlocked_frame_clip_hover_preview.sql
 20260809174711_thread_stroke_comfort_zoom.sql
 20260809190614_thread_actions_menu_sidebar_pin.sql
+20260809194448_notion_mindmap_structured_database.sql
 #
-# No new schema this save (frontend: Notion-style thread click menu + click-pinned
-# Pages nav; marker only — schema unchanged).
+# No new schema this save (frontend: Notion mindmap tree/threads + structured
+# database table UI; marker only — schema unchanged).

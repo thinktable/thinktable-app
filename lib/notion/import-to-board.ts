@@ -5,9 +5,10 @@ import { newBlockMetadata } from '@/lib/blocks'
 import { fetchNotionPageBlockTree } from './blocks'
 import { notionPageBodyToHtml } from './blocks-to-html'
 import {
-  collectPageAndDescendants,
+  collectMindmapSubtreeViaBlocks,
   filterTopLevelSharedPages,
   normalizeNotionId,
+  resolveBlockIdParents,
   searchAllAccessibleNotionPages,
   type NotionSearchPage,
 } from './pages'
@@ -25,7 +26,7 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-/** Build TipTap HTML for a Notion database as one compact databaseBlock (not sprawled frames). */
+/** Build TipTap HTML for a Notion database as one compact databaseBlock (header chrome). */
 function databaseBlockHtml(page: NotionSearchPage): string {
   const title = escapeHtml(page.title || 'Untitled database') // Visible label
   const id = escapeHtml(page.id) // Notion database UUID
@@ -36,6 +37,7 @@ function databaseBlockHtml(page: NotionSearchPage): string {
   const iconAttr = icon ? ` data-icon="${icon}"` : ''
   return `<div data-type="databaseBlock" data-notion-database-id="${id}" data-title="${title}"${urlAttr}${iconAttr}></div>`
 }
+
 
 /** Title-variant pageLink HTML — same chrome as local page blocks (icon + title + open menu). */
 function pageLinkHtml(opts: {
@@ -51,6 +53,15 @@ function pageLinkHtml(opts: {
 /** Emoji string from a Notion icon payload, else null (default page icon in the NodeView). */
 function emojiFromNotionIcon(icon: NotionSearchPage['icon']): string | null {
   return icon?.type === 'emoji' && icon.emoji ? icon.emoji : null
+}
+
+/** Notion page/database parent id when the page is nested under another imported object. */
+function notionParentKey(page: NotionSearchPage): string | null {
+  const parent = page.parent // Workspace / page / database / block
+  if (!parent) return null // Top-level share — no parent thread
+  if (parent.type === 'page_id') return normalizeNotionId(String(parent.page_id || '')) // Nest under page
+  if (parent.type === 'database_id') return normalizeNotionId(String(parent.database_id || '')) // Nest under DB
+  return null // block_id / unknown — no map-level parent link
 }
 
 /**
@@ -82,8 +93,8 @@ function enrichDatabaseBlocksInHtml(html: string, byId: Map<string, NotionSearch
 
 /**
  * Decide which Notion objects become map **frames**.
- * Databases nest as TipTap databaseBlocks inside the parent page frame; DB rows stay out of the
- * map so import doesn't sprawl one frame per row. Explicit root picks of a DB still get one frame.
+ * Card: nested DBs → databaseBlock in parent body; DB rows stay off the map.
+ * Mindmap: pages + databases as frames; DB rows become TipTap blocks inside the DB frame body.
  */
 function pagesForMapFrames(
   pages: NotionSearchPage[],
@@ -93,12 +104,21 @@ function pagesForMapFrames(
 ): NotionSearchPage[] {
   const importIds = new Set(pages.map((p) => normalizeNotionId(p.id))) // Everything in this import set
   const explicit = new Set((explicitIds || []).map(normalizeNotionId)) // User-picked ids from the modal
-  const byId = new Map(allPages.map((p) => [normalizeNotionId(p.id), p])) // Flat lookup
+  const dbIds = new Set(
+    pages.filter((p) => p.object === 'database').map((p) => normalizeNotionId(p.id))
+  )
+  void allPages // Lookup reserved for future card enrichments
 
-  // Mindmap with a single database root → one frame for that DB only (rows are not frames)
-  if (mode === 'mindmap' && explicitIds?.length === 1) {
-    const root = byId.get(normalizeNotionId(explicitIds[0]))
-    if (root?.object === 'database') return [root]
+  // Mindmap: keep pages + DBs; never one map frame per DB row
+  if (mode === 'mindmap') {
+    return pages.filter((page) => {
+      if (page.object === 'database') return true
+      if (page.parent?.type === 'database_id') {
+        const dbId = normalizeNotionId(String(page.parent.database_id || ''))
+        if (dbIds.has(dbId)) return false // Rows live as blocks in the DB frame
+      }
+      return true
+    })
   }
 
   return pages.filter((page) => {
@@ -109,7 +129,7 @@ function pagesForMapFrames(
     if (page.object === 'database') {
       if (explicit.has(id)) return true // User asked for this DB as its own frame
       // In card mode with no explicit list (legacy), top-level DBs still get a frame
-      if (mode === 'card' && (!explicitIds || explicitIds.length === 0)) return true
+      if (!explicitIds || explicitIds.length === 0) return true
       // Nested under a page that is also importing → embed as block, skip frame
       const parent = page.parent
       if (parent?.type === 'page_id') {
@@ -119,15 +139,11 @@ function pagesForMapFrames(
       return true // Orphan / workspace DB with no parent frame in set → one frame
     }
 
-    // Page that is a database row: skip map frame when its parent DB is in this import
-    // (those rows would otherwise sprawl across the page). Explicit picks still import.
+    // Page that is a database row: skip map frame when its parent DB is in this card import
     const parent = page.parent
     if (parent?.type === 'database_id') {
       const dbId = normalizeNotionId(String(parent.database_id || ''))
       if (importIds.has(dbId) && !explicit.has(id)) return false
-      // Parent DB not imported as its own object but we're mindmapping a page tree that includes
-      // the DB via collectPageAndDescendants — still skip rows (DB is represented as a block).
-      if (mode === 'mindmap' && importIds.has(dbId)) return false
     }
 
     return true // Regular Notion pages → one frame each
@@ -192,8 +208,7 @@ async function resolveConversationId(opts: {
 
 function layoutPositions(
   pages: NotionSearchPage[],
-  mode: 'card' | 'mindmap',
-  allPages: NotionSearchPage[]
+  mode: 'card' | 'mindmap'
 ): Map<string, { x: number; y: number }> {
   const positions = new Map<string, { x: number; y: number }>() // id → canvas pos
 
@@ -212,7 +227,7 @@ function layoutPositions(
   // Mindmap: place root at origin and walk descendants in DFS with depth indent
   const root = pages[0] // First page is the selected root
   const byParent = new Map<string, NotionSearchPage[]>() // children grouped by parent
-  for (const page of allPages) {
+  for (const page of pages) {
     const parent = page.parent
     let parentKey: string | null = null
     if (parent?.type === 'page_id') parentKey = normalizeNotionId(String(parent.page_id || ''))
@@ -256,14 +271,17 @@ export async function importNotionPagesToBoard(opts: {
   mode?: 'card' | 'mindmap' // card = one frame per pick; mindmap = pick + descendants
 }): Promise<ImportNotionResult> {
   const admin = createAdminClient() // Service role for tokens + inserts
-  const allPages = await searchAllAccessibleNotionPages(opts.accessToken) // Full accessible set
+  const rawPages = await searchAllAccessibleNotionPages(opts.accessToken) // Full accessible set
+  // Nested DBs often report parent.block_id — rewrite to owning page for tree/threads
+  const allPages = await resolveBlockIdParents(opts.accessToken, rawPages)
   const mode = opts.mode || 'card' // Default: add as frame(s)
 
   let pages: NotionSearchPage[] // Pages that become frames
   if (opts.pageIds && opts.pageIds.length > 0) {
     const wanted = new Set(opts.pageIds.map(normalizeNotionId)) // Selected ids
     if (mode === 'mindmap' && opts.pageIds.length === 1) {
-      pages = collectPageAndDescendants(opts.pageIds[0], allPages) // Root + nested pages
+      // Walk child_page blocks — search alone often returns only the shared root
+      pages = await collectMindmapSubtreeViaBlocks(opts.accessToken, opts.pageIds[0], allPages)
     } else {
       pages = allPages.filter((p) => wanted.has(normalizeNotionId(p.id))) // Exact picks only
     }
@@ -293,7 +311,7 @@ export async function importNotionPagesToBoard(opts: {
   const framePages = pagesForMapFrames(pages, allPages, mode, opts.pageIds).filter(
     (p) => !alreadyLinked.has(normalizeNotionId(p.id))
   )
-  const positions = layoutPositions(framePages, mode, allPages) // Canvas coordinates
+  const positions = layoutPositions(framePages, mode) // Canvas coordinates
   const pagesById = new Map(allPages.map((p) => [normalizeNotionId(p.id), p])) // Enrich DB blocks
 
   // Fetch each Notion page body once — all TipTap blocks land in that page’s single frame
@@ -301,7 +319,7 @@ export async function importNotionPagesToBoard(opts: {
   await Promise.all(
     framePages.map(async (page) => {
       if (page.object !== 'page') {
-        // Database → one compact databaseBlock (not a frame-per-row sprawl)
+        // Database → sole databaseBlock; NodeView fetches schema+rows as a structured table
         bodyByNotionId.set(normalizeNotionId(page.id), databaseBlockHtml(page))
         return
       }
@@ -317,27 +335,30 @@ export async function importNotionPagesToBoard(opts: {
     })
   )
 
-  // Map frames: Notion pages *and* explicitly picked databases become pageLink-only (same chrome as
-  // local page blocks). Nested DBs inside a page body stay as databaseBlock atoms. Page link HTML is
-  // patched in once the child conversation id exists.
+  // Map frames:
+  // - Notion **pages** → temp title, then title-variant pageLink (menu page + open chrome)
+  // - Notion **databases** → databaseBlock + row blocks visible in the frame (not pageLink-only)
   const rows = framePages.map((page) => {
     const position = positions.get(page.id) || { x: START_X, y: START_Y } // Fallback origin
-    // Temp title until linkedPageId → pageLink (DBs no longer use databaseBlock on the map)
-    const content = `<p>${escapeHtml(page.title || 'Untitled')}</p>`
+    const isDatabase = page.object === 'database'
+    const content = isDatabase
+      ? bodyByNotionId.get(normalizeNotionId(page.id)) || databaseBlockHtml(page) // Show DB in-frame
+      : `<p>${escapeHtml(page.title || 'Untitled')}</p>` // Temp until pageLink patch
     return {
       conversation_id: conversationId, // Target page
       user_id: opts.userId, // Owner
       role: 'user', // Frames are user-role messages in this app
-      content, // Replaced with pageLink after nested page is created
+      content,
       metadata: newBlockMetadata({
         position, // Canvas coordinates
-        blockTitle: page.title || 'Untitled', // Mirrors pageLink title
+        blockTitle: page.title || (isDatabase ? 'Untitled database' : 'Untitled'),
         notionPageId: page.id, // Link back for sync later
         notionObject: page.object, // page vs database
         notionUrl: page.url ?? null, // Deep link for Open in Notion
         notionIcon: page.icon ?? null, // Optional icon payload
-        isPage: true, // Same page-block flags as snapshot / local pages
-        blockType: 'page',
+        // Pages are page-blocks; DB frames show content in-place but still link a menu page
+        isPage: true,
+        blockType: isDatabase ? 'text' : 'page',
       }),
     }
   })
@@ -356,6 +377,71 @@ export async function importNotionPagesToBoard(opts: {
     for (const msg of inserted || []) {
       const notionPageId = (msg.metadata as { notionPageId?: string } | null)?.notionPageId
       if (notionPageId) notionIdToMessageId.set(normalizeNotionId(notionPageId), msg.id)
+    }
+  }
+
+  // Mindmap: thread parent → child frames so the tree is wired (not just laid out).
+  // Board load picks closest connection points from positions (root left → children right).
+  if (mode === 'mindmap') {
+    for (const msg of existingMessages || []) {
+      const notionPageId = (msg.metadata as { notionPageId?: string } | null)?.notionPageId
+      if (!notionPageId) continue
+      const nid = normalizeNotionId(notionPageId)
+      if (!notionIdToMessageId.has(nid)) notionIdToMessageId.set(nid, msg.id) // Reuse existing frames
+    }
+
+    const allMapFrames = pagesForMapFrames(pages, allPages, mode, opts.pageIds) // Full tree set
+    const frameIdSet = new Set(allMapFrames.map((p) => normalizeNotionId(p.id))) // Fast parent check
+    const seenPairs = new Set<string>() // Dedupe batch rows
+    const edgeRows: Array<{
+      conversation_id: string
+      user_id: string
+      source_message_id: string
+      target_message_id: string
+      metadata: { algorithm: string; points: []; dotted: boolean }
+    }> = []
+
+    for (const page of allMapFrames) {
+      const childMsgId = notionIdToMessageId.get(normalizeNotionId(page.id)) // Child frame
+      if (!childMsgId) continue
+      const parentNotionId = notionParentKey(page) // Notion hierarchy parent
+      if (!parentNotionId || !frameIdSet.has(parentNotionId)) continue // Parent not a map frame
+      const parentMsgId = notionIdToMessageId.get(parentNotionId) // Parent frame
+      if (!parentMsgId || parentMsgId === childMsgId) continue
+      const pairKey = `${parentMsgId}->${childMsgId}`
+      if (seenPairs.has(pairKey)) continue
+      seenPairs.add(pairKey)
+      edgeRows.push({
+        conversation_id: conversationId, // Same page as the map frames
+        user_id: opts.userId,
+        source_message_id: parentMsgId, // Thread starts at parent
+        target_message_id: childMsgId, // Ends at child sub-page frame
+        metadata: {
+          algorithm: 'Bezier Catmull-Rom', // Default Smooth thread (matches DEFAULT_THREAD_ALGORITHM)
+          points: [], // Unbent — board uses Miro bezier between sides
+          dotted: false,
+        },
+      })
+    }
+
+    if (edgeRows.length > 0) {
+      const { error: edgeError } = await admin.from('panel_edges').upsert(edgeRows, {
+        onConflict: 'source_message_id,target_message_id', // UNIQUE pair — skip duplicates
+        ignoreDuplicates: true,
+      })
+      if (edgeError) {
+        // Retry without metadata if column not migrated yet (same path as board-flow)
+        if (String(edgeError.message || '').includes('metadata')) {
+          const bare = edgeRows.map(({ metadata: _m, ...rest }) => rest)
+          const { error: retryError } = await admin.from('panel_edges').upsert(bare, {
+            onConflict: 'source_message_id,target_message_id',
+            ignoreDuplicates: true,
+          })
+          if (retryError) console.error('Failed to create mindmap threads:', retryError)
+        } else {
+          console.error('Failed to create mindmap threads:', edgeError)
+        }
+      }
     }
   }
 
@@ -436,43 +522,68 @@ export async function importNotionPagesToBoard(opts: {
     }
     notionIdToConvId.set(normalizeNotionId(page.id), createdChild.id)
 
-    // Point the parent-page frame at this child page; Notion pages/DBs become a pageLink block
-    // (same look as local page blocks) with Open in Notion via metadata.notionUrl.
+    // Wire the map frame ↔ nested Thinktable page (Pages menu tree).
+    // Pages: title-variant pageLink (Notion page title block). Databases: keep DB+rows in the frame.
     if (sourceBlockMessageId) {
       const { data: frameRow } = await admin
         .from('messages')
-        .select('metadata')
+        .select('content, metadata')
         .eq('id', sourceBlockMessageId)
         .maybeSingle()
       const existingMeta = (frameRow?.metadata as Record<string, unknown>) || {}
-      const linkContent = pageLinkHtml({
-        pageId: createdChild.id, // Thinktable nested page
-        title: page.title || 'Untitled',
-        icon: emojiFromNotionIcon(page.icon), // Notion emoji when present
-      })
-      await admin
-        .from('messages')
-        .update({
-          content: linkContent, // Replace temp title with pageLink
-          metadata: {
-            ...existingMeta,
-            linkedPageId: createdChild.id, // Frame ↔ nested page
-            blockTitle: page.title || 'Untitled',
-            notionUrl: page.url ?? null, // Open-menu deep link
-            isPage: true,
-            blockType: 'page',
-          },
+      const notionTitle = page.title || (page.object === 'database' ? 'Untitled database' : 'Untitled')
+      const isDatabase = page.object === 'database'
+
+      if (isDatabase) {
+        // Keep databaseBlock + row blocks visible on the map; only attach linkedPageId for open/menu
+        await admin
+          .from('messages')
+          .update({
+            content:
+              (frameRow?.content as string) ||
+              body ||
+              databaseBlockHtml(page), // Ensure DB HTML stayed on the frame
+            metadata: {
+              ...existingMeta,
+              linkedPageId: createdChild.id, // Open / Pages menu still work
+              blockTitle: notionTitle,
+              notionUrl: page.url ?? null,
+              isPage: true,
+              blockType: 'text', // Content frame (not a sole pageLink title)
+            },
+          })
+          .eq('id', sourceBlockMessageId)
+      } else {
+        // Notion page → title-variant pageLink (same chrome as local page blocks)
+        const linkContent = pageLinkHtml({
+          pageId: createdChild.id,
+          title: notionTitle, // Notion page title
+          icon: emojiFromNotionIcon(page.icon),
         })
-        .eq('id', sourceBlockMessageId)
+        await admin
+          .from('messages')
+          .update({
+            content: linkContent,
+            metadata: {
+              ...existingMeta,
+              linkedPageId: createdChild.id,
+              blockTitle: notionTitle,
+              notionUrl: page.url ?? null,
+              isPage: true,
+              blockType: 'page',
+            },
+          })
+          .eq('id', sourceBlockMessageId)
+      }
     }
 
-    // Materialize the same Notion body as the page-body frame on the child page
+    // Nested page body: full Notion content (page blocks, or DB header + row blocks)
     if (hasBody) {
       const { error: bodyError } = await admin.from('messages').insert({
         conversation_id: createdChild.id, // Child page’s map
         user_id: opts.userId,
         role: 'user',
-        content: body, // Notion TipTap HTML lives on the nested page, not the map pageLink
+        content: body,
         metadata: newBlockMetadata({
           isPageBody: true, // This frame IS the page’s body
           blockTitle: page.title || 'Untitled',

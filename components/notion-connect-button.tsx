@@ -94,6 +94,7 @@ export function NotionConnectButton() {
     }
     if (data.conversationId) {
       await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', data.conversationId] })
+      await queryClient.invalidateQueries({ queryKey: ['panel-edges', data.conversationId] }) // Mindmap threads
       await queryClient.invalidateQueries({ queryKey: ['conversations'] }) // Refresh Pages menu nesting
       await queryClient.invalidateQueries({ queryKey: ['path-board-menu'] })
       await queryClient.invalidateQueries({ queryKey: ['edit-panel-title'] })
@@ -101,6 +102,7 @@ export function NotionConnectButton() {
         router.push(`/board/${data.conversationId}?notion=connected&imported=${data.importedCount || 0}`)
       } else {
         await queryClient.refetchQueries({ queryKey: ['messages-for-panels', data.conversationId] })
+        await queryClient.refetchQueries({ queryKey: ['panel-edges', data.conversationId] }) // Load new threads
         await queryClient.refetchQueries({ queryKey: ['conversations'] })
         window.setTimeout(() => {
           window.dispatchEvent(new CustomEvent('fit-view-start'))

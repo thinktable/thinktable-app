@@ -307,11 +307,12 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
         {title}
       </span>
 
-      {/* Preview chrome — clamped left so it stays inside the visible frame when unlocked+narrow */}
+      {/* Preview / open / Notion — clamped left so it stays inside the visible frame */}
       {pageId && (
         <PageOpenMenu
           ref={chromeRef}
           pageId={pageId}
+          notionUrl={actions.notionUrl} // Notion-linked frames: show Notion icon with preview+open
           style={{
             ...(menuLeft != null ? { left: menuLeft, right: 'auto' } : {}), // Measured local px; overrides CSS right:0
             ...(menuTop != null ? { top: menuTop } : {}), // Align to the TITLE's first-line center (overrides top:50%)
