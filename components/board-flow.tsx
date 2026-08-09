@@ -7049,6 +7049,10 @@ function BoardFlowInner({
         selectNodesOnDrag={embedded ? false : !isDrawing} // Preview: drag starts pan, not selection box
         multiSelectionKeyCode={MULTI_SELECT_KEYS}
         selectionKeyCode={SELECTION_BOX_KEYS} // Shift+drag a box to select multiple frames for snapshot
+        // Backspace edits TipTap blocks (empty block → previous line). Only Delete removes selected frames.
+        // RF's isInputDOMNode misses <p>/<br> inside ProseMirror (no contenteditable attr), so Backspace
+        // was deleting the whole frame while typing — editor also has class `nokey` as a second guard.
+        deleteKeyCode="Delete"
         onMove={(event, viewport) => {
           // Update viewport key to trigger re-render for button visibility check (throttled)
           // Only update every 100ms to prevent excessive re-renders

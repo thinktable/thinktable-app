@@ -255,7 +255,7 @@ function TipTapContent({
     editorProps: {
       attributes: {
         class: cn(
-          'prose max-w-none focus:outline-none min-h-[20px] cursor-text',
+          'prose max-w-none focus:outline-none min-h-[20px] cursor-text nokey', // nokey: RF must not treat Backspace as frame delete while typing
           isFlashcard && 'text-xl' // Increase font size for flashcards
         ),
         ...(singleLineUntilEnter ? { 'data-single-line': 'true' } : {}), // CSS nowrap until Enter

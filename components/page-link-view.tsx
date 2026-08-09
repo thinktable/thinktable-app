@@ -118,7 +118,7 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
     <NodeViewWrapper
       as="div"
       className={cn(
-        'tt-page-link group relative',
+        'tt-page-link group relative nokey', // nokey: RF must not steal Backspace while editing the title
         variant === 'title' ? 'tt-page-link-title' : 'tt-page-link-inline',
         editing && 'tt-page-link-editing' // While editing the title, CSS hides the preview chrome
       )}

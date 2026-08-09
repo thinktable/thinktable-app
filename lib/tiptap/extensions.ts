@@ -17,7 +17,8 @@ import {
   ToggleHeading,
   ToggleList,
 } from '@/lib/tiptap/block-nodes'
-import { PageLink } from '@/lib/tiptap/page-link' // Linked-page block (icon + title + preview)
+import { PageLink } from '@/lib/tiptap/page-link' // Linked-page block (inline + title + preview)
+import { EmptyBlockBackspace } from '@/lib/tiptap/empty-block-backspace' // Backspace empty block → previous line
 import { Extension } from '@tiptap/core'
 import { createBlockHighlightPlugin } from '@/lib/tiptap/block-selection'
 
@@ -50,6 +51,7 @@ export function createPanelExtensions(placeholder?: string): any[] {
     SyncedBlock,
     Columns,
     PageLink, // Block that links to a child page (Notion child-page block)
+    EmptyBlockBackspace, // Empty block Backspace → delete + caret on previous (skip fresh frame)
     BlockHighlight, // Per-content-block menu highlight (not the map card)
   ]
 

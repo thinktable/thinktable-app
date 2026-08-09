@@ -1,16 +1,16 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T05:33:10Z`
+- Snapped at: `2026-08-09T05:41:10Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` failed without `SUPABASE_DB_PASSWORD` (cli_login_postgres permission). Access token works for `projects list` + Management SQL API; migration files remain source of truth.
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 
 ## This save
 
-- No DDL. Marker `20260809053310_page_open_menu_frame_clamp.sql`.
-- App: shared `PageOpenMenu` chrome for pageLink + page frames with regular TipTap blocks (`linkedPageId`); menu `left` clamped to the visible frame clip so unlocked narrow frames still show preview/open inside the frame; transparent border option in View toolbar.
-- Schema unchanged (page links in `messages.content` / `messages.metadata`).
+- No DDL. Marker `20260809054110_empty_block_backspace.sql`.
+- App: empty TipTap block Backspace deletes that block only (not the frame) and moves the I-bar to the previous line; fresh frame sole empty block is a no-op; RF `deleteKeyCode` is Delete-only; ProseMirror/`pageLink` use `nokey` so RF does not steal Backspace while typing.
+- Schema unchanged.
 
 ## Prior: `panel_edges.metadata`
 
@@ -51,7 +51,8 @@ Columns:
 - `subscriptions`
 - `usage`
 
-## Prior save
+## Prior saves
 
-- Marker: `20260809011319_thread_style_smooth_sharp_linear.sql` (frontend thread styles).
+- Marker: `20260809053310_page_open_menu_frame_clamp.sql` (page open menu clamp).
+- Marker: `20260809011319_thread_style_smooth_sharp_linear.sql` (thread styles).
 - Marker: `20260808192038_page_links_title_ui_preview_menu.sql` (pageLink block feature).
