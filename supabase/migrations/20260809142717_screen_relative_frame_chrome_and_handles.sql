@@ -1,0 +1,12 @@
+-- No DDL. Frontend-only save (frame chrome + ⋮⋮ block handles now sized relative to the screen).
+-- Frame chrome (rotate · lock · wrap, chat-panel-node): counter-scaled `scale(1/zoom)` via
+--   useStore((s)=>s.transform[2]) with transform-origin top-left, top-anchored under the bottom-left
+--   corner; nudge/gap offsets are `±px / zoom` so they stay a constant SCREEN distance (10px gap).
+-- ⋮⋮ block grips + add-block line (tiptap-block-handles): counter-scaled by the measured container
+--   local→screen scale (getBoundingClientRect().height/offsetHeight = zoom × frameScale); a useStore
+--   zoom subscription re-renders them to re-measure. Comfort scale `1 / max(1, sqrt(scale))`:
+--   scale=1 when zoomed out (rides with content, stays in the shrinking gutter), grows ∝ sqrt(zoom)
+--   when zoomed in. Horizontally CENTERED in the gutter (left = GUTTER/2 - GRIP_W/2); vertically
+--   dropped onto the FIRST line's center (top = block.top + firstLineH/2 - GRIP_H/2, firstLineH from
+--   computed line-height); transform-origin center.
+-- Persisted via existing tables — schema unchanged.

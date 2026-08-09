@@ -1,12 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T13:21:39Z`
+- Snapped at: `2026-08-09T14:27:17Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 
 ## This save
+
+- No DDL. Marker `20260809142717_screen_relative_frame_chrome_and_handles.sql`.
+- **Frame chrome** (rotate · lock · wrap, `chat-panel-node`): counter-scaled `scale(1/zoom)` via `useStore((s)=>s.transform[2])`, `transform-origin: top left`, top-anchored under the bottom-left corner. Nudge/gap offsets are `±px / zoom` so they stay a constant **SCREEN** distance (10px gap) — fixed local-px margins would detach it at zoom extremes.
+- **⋮⋮ block grips + add-block line** (`tiptap-block-handles`): counter-scaled by the measured container local→screen scale (`getBoundingClientRect().height/offsetHeight` = zoom × frameScale); a `useStore` zoom subscription re-renders them to re-measure. Comfort scale `1 / max(1, √scale)`: **scale=1 when zoomed out** (rides with content, stays in the shrinking gutter), grows ∝ **√zoom** when zoomed in. Horizontally **centered in the gutter** (`left = GUTTER(24)/2 − GRIP_W(20)/2`); vertically dropped onto the **first line's center** (`top = block.top + firstLineH/2 − GRIP_H(24)/2`, `firstLineH` = computed `line-height`); `transform-origin: center`.
+- Persisted via existing tables — schema unchanged.
+
+## Prior: menu sizing + placement + nav
 
 - No DDL. Marker `20260809132139_menu_placement_zoom_and_nav.sql`.
 - **Frame right-click menu** (`BlockActionsMenu` absolute mode): removed `scale(zoom)` → **constant size at any zoom** (matches the text-highlight menu).

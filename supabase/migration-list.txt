@@ -45,6 +45,7 @@
 20260809123351_locked_wrap_column_width.sql
 20260809130553_frame_unlock_return_remove_caret.sql
 20260809132139_menu_placement_zoom_and_nav.sql
+20260809142717_screen_relative_frame_chrome_and_handles.sql
 #
-# No new schema this save (frontend: menu sizing/placement + nav behavior — frame menu constant size at any
-# zoom; selection popup hides on pan/zoom and prefers right of frame; ⋮⋮ handle menu opens left of frame).
+# No new schema this save (frontend: frame chrome + ⋮⋮ block handles sized relative to the screen —
+# counter-scaled against board zoom/frameScale; grips centered in the gutter and dropped onto the first line).

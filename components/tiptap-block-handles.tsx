@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { createPortal } from 'react-dom'
 import type { Editor } from '@tiptap/react'
 import { GripVertical } from 'lucide-react' // ⋮⋮ grip; between-block add is a short centered hairline
-import { useReactFlow } from 'reactflow' // screenToFlowPosition when extracting a line onto the map
+import { useReactFlow, useStore } from 'reactflow' // screenToFlowPosition when extracting a line onto the map; useStore = live zoom to keep grips screen-constant
 import { useQueryClient } from '@tanstack/react-query' // Refresh panels after extract-to-card
 import { createClient } from '@/lib/supabase/client' // Persist a new map card from a dragged line
 import { newBlockMetadata } from '@/lib/blocks' // Canonical isBlock metadata for extracted cards
@@ -47,6 +47,7 @@ import {
 type HandleLayout = {
   top: number // CSS px relative to editor gutter container (local, not screen)
   height: number
+  firstLineH: number // First-line box height (local px) — grip centers vertically on the first line
   block: EditorBlockRef
 }
 
@@ -64,6 +65,8 @@ type InsertLine = { top: number; insertPos: number } // Gap mid in editor-contai
 const INSERT_EDGE_PX = 4 // Thin join band only — larger values stole most of each line from ⋮⋮
 const GRIP_W = 20 // Matches ⋮⋮ `w-5` — insert line uses the same width
 const INSERT_HIT_H = 12 // Tight add-line hit target so it doesn’t blanket neighboring grips
+const HANDLE_GUTTER = 24 // Text starts here (row `pl-6`), in local px — where the ⋮⋮ column lives
+const GRIP_H = 24 // ⋮⋮ button height (`h-6`) — used to vertically center it on the first line
 
 /** Gap between blocks (or above/below) under clientY — lineTop is the visual midpoint. */
 function findBlockInsertGap(
@@ -165,7 +168,10 @@ function layoutForBlock(
       const blockRect = el.getBoundingClientRect()
       const top = (blockRect.top - containerRect.top) / safeScale
       const height = Math.max(22, blockRect.height / safeScale)
-      return { top, height, block }
+      // First-line height (local px): computed line-height is transform-independent already
+      const lh = parseFloat(getComputedStyle(el).lineHeight)
+      const firstLineH = Number.isFinite(lh) && lh > 0 ? lh : Math.min(height, 28)
+      return { top, height, firstLineH, block }
     }
 
     // Fallback: coordsAtPos is also screen-space — same scale correction
@@ -173,7 +179,7 @@ function layoutForBlock(
     const end = editor.view.coordsAtPos(Math.max(block.from + 1, block.to - 1))
     const top = (start.top - containerRect.top) / safeScale
     const height = Math.max(22, (end.bottom - start.top) / safeScale)
-    return { top, height, block }
+    return { top, height, firstLineH: Math.min(height, 28), block }
   } catch {
     return null
   }
@@ -193,6 +199,7 @@ export function TipTapBlockHandles({
   onPageTurnInto,
 }: TipTapBlockHandlesProps) {
   const { screenToFlowPosition } = useReactFlow() // Drop-on-page → flow coords for a new frame
+  const rfZoom = useStore((s) => s.transform[2] || 1) // Live zoom — re-render on board zoom so grips can counter-scale to a constant screen size
   const queryClient = useQueryClient() // Refetch messages after extract
   const [hover, setHover] = useState<HandleLayout | null>(null) // Handle beside hovered block
   const [focusLayout, setFocusLayout] = useState<HandleLayout | null>(null) // Handle beside focused/caret block
@@ -760,6 +767,27 @@ export function TipTapBlockHandles({
 
   // Grips render for every selected block (persistent wash) + the hovered/caret/menu block.
   const container = editor.view.dom.parentElement
+  // Local→screen scale (RF zoom × frameScale) measured off the container; grips live in local px
+  // inside these transforms, so counter-scaling by 1/scale keeps them a constant SCREEN size
+  // (like the portaled actions menu). `rfZoom` in deps forces this to re-measure on zoom.
+  void rfZoom // Referenced so zoom changes re-render this component (measurement below reads live DOM)
+  const localToScreen = (() => {
+    if (!container) return 1
+    const rect = container.getBoundingClientRect()
+    const s = container.offsetHeight > 0 ? rect.height / container.offsetHeight : 1
+    return s > 0.01 ? s : 1
+  })()
+  // Grip sizing (comfort, not strict screen-constancy):
+  //  • Zoomed OUT (localToScreen ≤ 1): scale = 1 → grip rides WITH the content, staying in the
+  //    (also-shrinking) gutter, aligned exactly where designed. A constant screen size here would
+  //    overflow the tiny gutter and spill left of the frame.
+  //  • Zoomed IN (localToScreen > 1): scale = 1/√localToScreen → grip grows sub-linearly vs the
+  //    text (screen size ∝ √scale: ~1.4× at 200%, 2× at 400%) so it's neither tiny nor huge.
+  const chromeScale = 1 / Math.max(1, Math.sqrt(localToScreen))
+  // Horizontal: keep the grip CENTERED in the gutter — midway between the frame's left edge (local 0)
+  // and the block's text left (local HANDLE_GUTTER). This rides with the content, so it stays visually
+  // centered between frame-edge and block-text at every zoom (transform-origin center holds it there).
+  const gutterCenterLeft = HANDLE_GUTTER / 2 - GRIP_W / 2 // Left so the grip's center sits at gutter mid
   const gripLayouts = new Map<number, HandleLayout>() // keyed by block.from (dedupe)
   if (container) {
     for (const b of selection) {
@@ -796,8 +824,10 @@ export function TipTapBlockHandles({
               'pointer-events-auto cursor-grab active:cursor-grabbing select-none'
             )}
             style={{
-              left: 0, // Sole control in the narrowed gutter
-              top: gl.top, // Align grip to top of the content block (not vertically centered)
+              left: gutterCenterLeft, // Centered in the gutter (between frame-left and block-text)
+              top: gl.top + gl.firstLineH / 2 - GRIP_H / 2, // Drop down onto the FIRST line's center (not block-box top)
+              transform: `scale(${chromeScale})`, // Screen-constant out, gently larger in (comfort)
+              transformOrigin: 'center', // Scale about the center so it stays gutter-centered + line-centered
             }}
             title="Drag to move · click for actions · Shift/⌘-click to multi-select"
             onPointerDown={(e) => onGripPointerDown(e, gl.block)}
@@ -821,10 +851,12 @@ export function TipTapBlockHandles({
           data-tt-insert-line
           className="nodrag nopan absolute z-[61] cursor-pointer select-none"
           style={{
-            left: 0, // Same gutter column as ⋮⋮
-            top: insertLine.top - INSERT_HIT_H / 2, // Tight hit band so it doesn’t cover neighboring grips
+            left: gutterCenterLeft, // Centered in the gutter, same column as ⋮⋮
+            top: insertLine.top - INSERT_HIT_H / 2, // Center the hit band on the gap (origin center holds it)
             width: GRIP_W, // Same width as the ⋮⋮ handle button
             height: INSERT_HIT_H,
+            transform: `scale(${chromeScale})`, // Match the grip: screen-constant out, gently larger in
+            transformOrigin: 'center', // Match the grip anchoring
           }}
           title="Add block"
           onPointerDown={(e) => e.stopPropagation()} // Never start RF frame drag

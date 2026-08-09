@@ -1,7 +1,7 @@
 'use client'
 
 // Custom React Flow node for chat panels (prompt + response)
-import { NodeProps, Handle, Position, useReactFlow, useStoreApi, NodeResizeControl, useUpdateNodeInternals } from 'reactflow' // RF node primitives + store (unselect groups before dragItems) + remeasure
+import { NodeProps, Handle, Position, useReactFlow, useStore, useStoreApi, NodeResizeControl, useUpdateNodeInternals } from 'reactflow' // RF node primitives + store (unselect groups before dragItems) + remeasure; useStore = live zoom for screen-constant chrome
 import {
   useIsThreadConnecting,
   INDICATOR_OUTSET,
@@ -1305,6 +1305,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const { setNodes, getNodes } = useReactFlow() // Get setNodes and getNodes for NodeToolbar actions
   const updateNodeInternals = useUpdateNodeInternals() // Remeasure auto-sized frames without setNodes (avoids RO→setNodes storms)
   const rfStoreApi = useStoreApi() // Unselect legacy wrapper before RF snapshots dragItems (frame-body drag)
+  const rfZoom = useStore((s) => s.transform[2] || 1) // Live board zoom — counter-scale chrome so it stays screen-constant
   const [promptHasChanges, setPromptHasChanges] = useState(false)
   const [responseHasChanges, setResponseHasChanges] = useState(false)
   // Single text body: plain-merge legacy prompt + response (no section split).
@@ -4098,7 +4099,14 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         <div
           data-frame-chrome
           className="nodrag nopan absolute z-50 flex items-center gap-0.5"
-          style={{ left: 0, bottom: 0, marginLeft: '-8px', marginBottom: '-28px' }} // Outside bottom-left corner
+          style={{
+            left: 0, // Pin to frame's left edge
+            top: '100%', // Sit just below the frame's bottom edge (top-anchored so scale grows downward)
+            marginLeft: `${-8 / rfZoom}px`, // Constant 8px SCREEN nudge left (÷zoom cancels the viewport transform)
+            marginTop: `${10 / rfZoom}px`, // Constant 10px SCREEN gap under the frame (was 4px — too tight zoomed in)
+            transform: `scale(${1 / rfZoom})`, // Counter board zoom → constant screen size (like the portaled handle menu)
+            transformOrigin: 'top left', // Anchor to the bottom-left corner while counter-scaling
+          }}
           onMouseEnter={() => setIsFrameHovering(true)} // Keep hover while on chrome
           onMouseLeave={(e) => {
             const related = e.relatedTarget as HTMLElement | null
