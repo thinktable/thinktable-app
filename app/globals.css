@@ -1252,7 +1252,68 @@ span[data-added="true"] {
     background-color: rgba(59, 130, 246, 0.22) !important;
   }
 
-  /* pageLink — Notion child-page block: icon + link text + hover-overlap preview button */
+  /* Preview chrome: semi-transparent, icon-only pill; left is set in JS so it stays inside the frame
+     when an unlocked frame is narrower than the page block (title would otherwise clip the menu).
+     Also used as a frame-level menu (outside ProseMirror) for linkedPageId frames without a pageLink. */
+  .tt-page-link-preview {
+    position: absolute;
+    right: 0; /* Fallback before first measure / frame-level pin */
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.125rem;
+    padding: 2px 4px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.6);   /* Semi-transparent glass */
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
+    z-index: 2; /* Above clipped body text so the menu stays hit-testable */
+  }
+  .tt-page-link-preview-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    border-radius: 4px;
+    color: #4b5563;
+    cursor: pointer;
+  }
+  .tt-page-link-preview-btn:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: #111827;
+  }
+  /* Reveal on hover, or keep shown while the preview is active; hide entirely while editing the title */
+  .tt-page-link:hover .tt-page-link-preview,
+  .tt-page-link-preview:has(.tt-page-link-preview-active),
+  .tt-page-link-preview-force {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  /* Title pageLink menu also shows when hovering anywhere on the host frame — so regular body
+     blocks inside a page frame still expose preview/open (not only when hovering the title line). */
+  .react-flow__node:hover .tt-page-link-title .tt-page-link-preview {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .tt-page-link-editing .tt-page-link-preview {
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+  .dark .tt-page-link-preview {
+    background: rgba(31, 31, 31, 0.6);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+  .dark .tt-page-link-preview-btn { color: #d1d5db; }
+  .dark .tt-page-link-preview-btn:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
+  .tt-page-link-preview-active { color: #2563eb; }
+
+  /* pageLink layout (still scoped to the editor) */
   .ProseMirror .tt-page-link {
     position: relative;
     margin: 2px 0;
@@ -1295,62 +1356,6 @@ span[data-added="true"] {
     content: attr(data-placeholder);
     color: #9ca3af;
   }
-  /* Preview chrome: semi-transparent, icon-only pill overlapping the text end */
-  .ProseMirror .tt-page-link-preview {
-    position: absolute;
-    right: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    display: inline-flex;
-    align-items: center;
-    gap: 0.125rem;
-    padding: 2px 4px;
-    border-radius: 6px;
-    background: rgba(255, 255, 255, 0.6);   /* Semi-transparent glass */
-    border: 1px solid rgba(0, 0, 0, 0.08);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 120ms ease;
-  }
-  /* When the frame has room, sit the menu just right of the title instead of overlapping the text */
-  .ProseMirror .tt-page-link-preview-right {
-    right: auto;
-    left: 100%;
-    margin-left: 6px;
-  }
-  .ProseMirror .tt-page-link-preview-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2px;
-    border-radius: 4px;
-    color: #4b5563;
-    cursor: pointer;
-  }
-  .ProseMirror .tt-page-link-preview-btn:hover {
-    background: rgba(0, 0, 0, 0.06);
-    color: #111827;
-  }
-  /* Reveal on hover, or keep shown while the preview is active; hide entirely while editing the title */
-  .ProseMirror .tt-page-link:hover .tt-page-link-preview,
-  .ProseMirror .tt-page-link-preview:has(.tt-page-link-preview-active) {
-    opacity: 1;
-    pointer-events: auto;
-  }
-  .ProseMirror .tt-page-link-editing .tt-page-link-preview {
-    opacity: 0 !important;
-    pointer-events: none !important;
-  }
-  .dark .ProseMirror .tt-page-link-preview {
-    background: rgba(31, 31, 31, 0.6);
-    border-color: rgba(255, 255, 255, 0.12);
-  }
-  .dark .ProseMirror .tt-page-link-preview-btn { color: #d1d5db; }
-  .dark .ProseMirror .tt-page-link-preview-btn:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
-  .ProseMirror .tt-page-link-preview-active { color: #2563eb; }
 
   /* Turn into — Notion-like block type chrome */
   .ProseMirror .tt-callout {

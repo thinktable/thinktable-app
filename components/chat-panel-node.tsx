@@ -61,6 +61,7 @@ import { useReactFlowContext } from './react-flow-context'
 import { useTheme } from './theme-provider'
 import { SelectionFormatPopupAnchor } from './selection-format-popup' // Notion-style selection menu (stable edge anchor)
 import { PageLinkProvider, type PageLinkActions } from '@/lib/page-link-context' // Bridge pageLink NodeViews → frame preview/open/rename
+import { PageOpenMenu } from '@/components/page-open-menu' // Preview/open chrome for page frames without a pageLink
 import { NestedBoardPreview, prefetchPageEmbed } from './nested-board-preview' // Page-within-page board preview
 import { deleteLinkedPageForBlock, isBlockContentEmpty, isBlockMeta, isPageBodyMeta } from '@/lib/blocks' // Block detection + empty check + delete sync
 import { applyTurnInto } from '@/lib/blocks/turn-into' // Page / Page in from content-block menu
@@ -1386,11 +1387,17 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const handleHoverColor = '#2563eb' // Slightly darker on hover/active
   const handleBorderColor = '#ffffff'
 
-  // Check if panel is minimal (transparent fill + no border)
+  // Check if panel is minimal (transparent fill + no visible border)
   // When minimal and not selected, handles should be hidden
-  // Handle null/undefined/empty string for fillColor and null/undefined/'none' for borderStyle
+  // Empty borderColor = Transparent (same as fill); borderStyle 'none' also counts
   const isFillTransparent = !data.fillColor || data.fillColor === '' || data.fillColor === null
-  const isBorderNone = !data.borderStyle || data.borderStyle === 'none' || data.borderStyle === null
+  const isBorderColorTransparent =
+    !data.borderColor || data.borderColor === '' || data.borderColor === null
+  const isBorderNone =
+    isBorderColorTransparent ||
+    !data.borderStyle ||
+    data.borderStyle === 'none' ||
+    data.borderStyle === null
   const isMinimalPanel = isFillTransparent && isBorderNone
   const shouldHideHandles = isMinimalPanel && !selected
 
@@ -1815,6 +1822,20 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const activePreviewPageId = previewTargetPageId || linkedPageId || null // Page the shell renders
   const blockTitleLabel =
     (promptMessage?.metadata?.blockTitle as string | undefined) || ''
+  const isPageBody = isPageBodyMeta(promptMessage?.metadata) // Body on its own page — no nested open menu
+  // Frame already has a pageLink for this page → that NodeView owns the open menu
+  const hasPageLinkForFrame = !!(
+    linkedPageId &&
+    (promptContent.includes(`data-page-id="${linkedPageId}"`) ||
+      promptContent.includes(`data-page-id='${linkedPageId}'`))
+  )
+  // Page frames whose content is still regular TipTap blocks (Notion / legacy title) need the menu too
+  const showFramePageOpenMenu =
+    !!linkedPageId &&
+    !isPageBody &&
+    !pagePreviewOpen &&
+    !hasPageLinkForFrame &&
+    (isFrameHovering || selected)
 
   // Warm lean embed document (and mount hidden iframe) so first nav isn’t a cold boot
   const prefetchPagePreview = () => {
@@ -3515,7 +3536,9 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               : (data.borderColor ? '' : 'border-transparent'), // Default frame: no visible border until styled
           isBookmarked
             ? 'shadow-[0_0_8px_rgba(250,204,21,0.6)] dark:shadow-[0_0_8px_rgba(250,204,21,0.4)]'
-            : (data.borderStyle === 'none' || !data.borderStyle ? 'shadow-none' : 'shadow-sm'), // No card shadow on default/unstyled frames
+            : isBorderNone
+              ? 'shadow-none' // Transparent / none border — no card shadow (looked like a border)
+              : 'shadow-sm',
           // Blur non-flashcard panels when flashcard study mode is active
           shouldBlur && 'blur-sm opacity-40 pointer-events-none'
         )}
@@ -3550,9 +3573,22 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         maxWidth: undefined,
         opacity: isInitialShrinkComplete ? 1 : 0,
         backgroundColor: panelBackgroundColor,
-        borderColor: selected ? undefined : (data.borderColor || undefined),
-        borderStyle: selected ? 'solid' : (data.borderStyle as any || undefined),
-        borderWidth: selected ? (data.borderWeight || '1px') : (data.borderWeight || undefined),
+        // Transparent border color: drop stroke entirely (don't leave width/style with no color)
+        borderColor: selected
+          ? undefined
+          : isBorderColorTransparent
+            ? 'transparent'
+            : data.borderColor,
+        borderStyle: selected
+          ? 'solid'
+          : isBorderNone
+            ? 'none'
+            : ((data.borderStyle as React.CSSProperties['borderStyle']) || undefined),
+        borderWidth: selected
+          ? (data.borderWeight || '1px')
+          : isBorderNone
+            ? 0
+            : (data.borderWeight || undefined),
         transform: rotation ? `rotate(${rotation}deg)` : undefined, // Apply persisted/live item rotation
         transformOrigin: 'center center', // Rotate around panel center (matches drag math)
       }}
@@ -3942,6 +3978,17 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           backgroundColor: responseAreaBackgroundColor,
         }}
       >
+        {/* Page frame with regular blocks (no pageLink) — pin open menu to the visible frame edge
+            (inside the overflow clip), not to the wider content box. */}
+        {showFramePageOpenMenu && linkedPageId && (
+          <PageLinkProvider value={pageLinkActions}>
+            <PageOpenMenu
+              pageId={linkedPageId}
+              forceVisible
+              className="!right-1 !top-2 !translate-y-0"
+            />
+          </PageLinkProvider>
+        )}
         {/* Hide body while previewing — keeps page title (edge chip / preview chrome) from sitting under the map */}
         {!pagePreviewOpen && (
           <div
@@ -3962,6 +4009,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           <div
             ref={contentFitRef} // Unscaled content box (offsetWidth ignores CSS scale)
             className={cn(
+              'relative', // Anchor for in-content absolute chrome
               wrapContentWidth != null ? undefined : 'w-max', // Wrap: fixed width; else hug longest line
               // Blocks: keep top/right/bottom pad; left matches ⋮⋮→text gap (~2px) so + isn’t inset farther than the grip
               isBlock ? 'pt-4 pr-4 pb-4 pl-0.5' : 'px-3 py-3'

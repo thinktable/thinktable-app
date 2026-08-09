@@ -1,7 +1,7 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-09T05:13:19Z
+# snapped_at=2026-08-09T05:33:10Z
 # postgres=17.6.1.052 gotrue=v2.195.0 rest=v13.0.5 storage=v1.68.1
 # Note: supabase db dump --linked needs SUPABASE_DB_PASSWORD (cli_login_postgres alter denied);
 # snapshot via local migrations + .temp service versions. Access token OK for projects list / SQL API.
@@ -35,6 +35,7 @@
 20260808160000_panel_edges_thread_metadata.sql
 20260808192038_page_links_title_ui_preview_menu.sql
 20260809011319_thread_style_smooth_sharp_linear.sql
+20260809053310_page_open_menu_frame_clamp.sql
 #
-# No new schema this save (frontend: Smooth / Sharp rounded-orthogonal / Linear thread styles
-# in edit toolbar; ConnectionIndicator pointer tracking; invisible edge connection points).
+# No new schema this save (frontend: page open menu on page frames / regular blocks;
+# clamp menu inside unlocked frames narrower than the page block; transparent border option).

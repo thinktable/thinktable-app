@@ -2089,12 +2089,21 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   <div className="px-2 py-1.5">
                     <input
                       type="color"
-                      value={borderColor}
+                      value={borderColor || '#ffffff'}
                       onChange={(e) => setBorderColor(e.target.value)}
                       className="w-full h-8 rounded border border-gray-300 dark:border-gray-600 cursor-pointer"
                       title="Border Color"
                       aria-label="Border Color"
                     />
+                    {/* Transparent option — same as fill: empty string clears the frame border */}
+                    <Button
+                      variant={!borderColor ? "default" : "outline"}
+                      size="sm"
+                      className="w-full mt-2 h-7 text-xs"
+                      onClick={() => setBorderColor('')}
+                    >
+                      Transparent
+                    </Button>
                   </div>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -2808,7 +2817,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       >
                         <input
                           type="color"
-                          value={borderColor}
+                          value={borderColor || '#ffffff'}
                           onChange={(e) => setBorderColor(e.target.value)}
                           className="w-full h-full cursor-pointer border-0"
                           style={{
@@ -2819,6 +2828,15 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                           aria-label="Border Color"
                         />
                       </div>
+                      {/* Transparent option — same as fill */}
+                      <Button
+                        variant={!borderColor ? "default" : "outline"}
+                        size="sm"
+                        className="w-full mt-2 h-7 text-xs"
+                        onClick={() => setBorderColor('')}
+                      >
+                        Transparent
+                      </Button>
                     </div>
                     {/* Border Weight */}
                     {/* Border Settings */}

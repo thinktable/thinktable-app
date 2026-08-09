@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react'
-import { AppWindow, ArrowUpRight, FileText } from 'lucide-react'
+import { FileText } from 'lucide-react'
 import { useTheme } from '@/components/theme-provider'
 import Picker from '@emoji-mart/react'
 import data from '@emoji-mart/data'
@@ -17,6 +17,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { PageOpenMenu } from '@/components/page-open-menu' // Shared preview/open chrome
 import { usePageLinkActions } from '@/lib/page-link-context'
 import { cn } from '@/lib/utils'
 
@@ -30,9 +31,10 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
   const [title, setTitle] = useState<string>((node.attrs.title as string) || '') // Local editable label
   const [editing, setEditing] = useState(false) // True while the title span holds focus (caret editing)
   const [iconOpen, setIconOpen] = useState(false) // Emoji picker open
-  const [placeRight, setPlaceRight] = useState(false) // Sit menu right-of-title when the frame has room, else overlap
+  // Menu left (local CSS px relative to .tt-page-link) — clamped so it stays inside the visible frame
+  const [menuLeft, setMenuLeft] = useState<number | null>(null)
   const titleRef = useRef<HTMLSpanElement>(null) // contentEditable span
-  const chromeRef = useRef<HTMLSpanElement>(null) // Preview/open menu (measured against the frame's text area)
+  const chromeRef = useRef<HTMLSpanElement>(null) // Preview/open menu (measured against the frame)
 
   // Keep local title in sync when the node attr changes externally (e.g. page rename)
   useEffect(() => {
@@ -43,30 +45,59 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
     }
   }, [node.attrs.title, editing])
 
-  // Decide where the menu sits: if the frame's text area is wider than this page-link (room to the
-  // right without growing the frame), slide the menu just right of the title; otherwise overlap the end.
+  // Place the open menu just right of the title when the frame has room; otherwise overlap the title
+  // end. If the unlocked frame is narrower than the page block (title clipped), pin the menu to the
+  // visible frame’s right edge so it stays clickable inside the frame.
   useEffect(() => {
     const chrome = chromeRef.current
     if (!chrome) return
     const wrapper = chrome.closest('.tt-page-link') as HTMLElement | null // Shrink-wrapped to icon+title
-    const area = wrapper?.closest('.ProseMirror') as HTMLElement | null // The frame's text area (w-max)
-    if (!wrapper || !area) return
+    if (!wrapper) return
+    const panel = wrapper.closest('[data-panel-container="true"]') as HTMLElement | null // Visible frame box
+    const area = wrapper.closest('.ProseMirror') as HTMLElement | null // Text area (may be wider than frame)
+    if (!panel || !area) return
+
     const measure = () => {
-      const wrapRect = wrapper.getBoundingClientRect() // Right edge of the title
-      const areaRect = area.getBoundingClientRect()
-      const padRight = parseFloat(getComputedStyle(area).paddingRight) || 0 // Ignore the text-area padding
-      const roomRight = areaRect.right - padRight - wrapRect.right // Free space right of the title
-      const need = chrome.offsetWidth + 6 // Menu width + a small gap
-      setPlaceRight(roomRight >= need) // Only move right if it fits without extending the frame
+      const wrapRect = wrapper.getBoundingClientRect() // Title block in screen space
+      const panelRect = panel.getBoundingClientRect() // Visible frame (clips when unlocked + small)
+      const scale = wrapper.offsetWidth > 0 ? wrapRect.width / wrapper.offsetWidth : 1 // RF zoom × frameScale
+      const pad = 4 // Keep a hair inside the frame edge
+      const gap = 6 // Gap when sitting just right of the title
+      const chromeLocal = Math.max(chrome.offsetWidth, 1) // Menu width in local CSS px
+      const chromeScreen = chromeLocal * scale
+
+      // Prefer the overflow-hidden body as the clip edge when present (unlocked frame < content)
+      const clipEl =
+        (wrapper.closest('.overflow-hidden') as HTMLElement | null) || panel
+      const clipRect = clipEl.getBoundingClientRect()
+      const frameRight = clipRect.right - pad // Rightmost screen x the menu may occupy
+
+      const titleRight = wrapRect.right
+      let targetLeftScreen: number
+      if (titleRight + gap + chromeScreen <= frameRight) {
+        // Room to the right of the title within the visible frame
+        targetLeftScreen = titleRight + gap
+      } else if (titleRight <= frameRight) {
+        // Title ends inside the frame but no spare room — overlap the title end
+        targetLeftScreen = titleRight - chromeScreen
+      } else {
+        // Title extends past the frame (unlocked frame narrower than page block) — pin inside frame
+        targetLeftScreen = frameRight - chromeScreen
+      }
+      // Never sit left of the frame’s left edge
+      targetLeftScreen = Math.max(clipRect.left + pad, targetLeftScreen)
+
+      const leftLocal = (targetLeftScreen - wrapRect.left) / scale
+      setMenuLeft(leftLocal)
     }
+
     measure()
-    const ro = new ResizeObserver(measure) // Re-decide when the frame or title width changes
-    ro.observe(area)
+    const ro = new ResizeObserver(measure) // Re-clamp when frame / title / chrome size changes
+    ro.observe(panel)
     ro.observe(wrapper)
+    ro.observe(area)
     return () => ro.disconnect()
   }, [title, variant])
-
-  const previewActive = pageId != null && actions.previewPageId === pageId // Highlight when open
 
   // Commit an edited title to the node attr + linked page
   const commitTitle = useCallback(() => {
@@ -76,28 +107,6 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
     updateAttributes({ title: next }) // Persist into the frame message HTML
     if (pageId) void actions.renameTitle(pageId, next) // Rename the linked page too
   }, [actions, node.attrs.title, pageId, updateAttributes])
-
-  // Full-page navigation now lives ONLY on the ↗ button (title click just edits) to avoid accidents
-  const onOpenPage = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation()
-      e.preventDefault()
-      if (pageId) actions.openPage(pageId)
-    },
-    [actions, pageId]
-  )
-
-  // Toggle the in-place preview for this child page
-  const onPreview = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation()
-      e.preventDefault()
-      if (!pageId) return
-      if (previewActive) actions.closePreview()
-      else actions.openPreview(pageId)
-    },
-    [actions, pageId, previewActive]
-  )
 
   const IconEl = icon ? (
     <span className="tt-page-link-emoji leading-none">{icon}</span>
@@ -209,35 +218,17 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
         {title}
       </span>
 
-      {/* Preview chrome — semi-transparent, icon-only; overlaps the text end on hover (see globals.css) */}
+      {/* Preview chrome — clamped left so it stays inside the visible frame when unlocked+narrow */}
       {pageId && (
-        <span
+        <PageOpenMenu
           ref={chromeRef}
-          data-page-link-preview
-          className={cn('tt-page-link-preview', placeRight && 'tt-page-link-preview-right')}
-        >
-          {/* Toggle the in-place iframe preview */}
-          <button
-            type="button"
-            className={cn('tt-page-link-preview-btn', previewActive && 'tt-page-link-preview-active')}
-            title={previewActive ? 'Close page preview' : 'Open page preview'}
-            onPointerEnter={() => actions.prefetch(pageId)} // Warm iframe before click
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={onPreview}
-          >
-            <AppWindow className="h-3.5 w-3.5" />
-          </button>
-          {/* Open the full page (the only navigation affordance now) */}
-          <button
-            type="button"
-            className="tt-page-link-preview-btn"
-            title="Open full page"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={onOpenPage}
-          >
-            <ArrowUpRight className="h-3.5 w-3.5" />
-          </button>
-        </span>
+          pageId={pageId}
+          style={
+            menuLeft != null
+              ? { left: menuLeft, right: 'auto' } // Measured local px; overrides CSS right:0
+              : undefined
+          }
+        />
       )}
     </NodeViewWrapper>
   )
