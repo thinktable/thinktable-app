@@ -201,6 +201,7 @@ export function TipTapBlockHandles({
     y: number
     block: EditorBlockRef
     blockType: BlockTypeId
+    openLeft: boolean // Anchor menu to the left of the frame when there's room
   } | null>(null)
   const [dropLine, setDropLine] = useState<DropLine | null>(null) // Dashed insert line while dragging a content block
   const [insertLine, setInsertLine] = useState<InsertLine | null>(null) // Hover gap → centered add hairline
@@ -423,12 +424,27 @@ export function TipTapBlockHandles({
     return () => document.removeEventListener('mousedown', onDoc, true)
   }, [menu, closeMenu])
 
+  // Prefer opening the actions menu to the LEFT of the frame (the ⋮⋮ handle lives in the left gutter);
+  // fall back to the default right-of-handle spot when there isn't room on the left.
+  const menuPlacement = useCallback(
+    (clientX: number, clientY: number): { x: number; y: number; openLeft: boolean } => {
+      if (!editor) return { x: clientX, y: clientY, openLeft: false }
+      const frameRect = frameForEditor(editor.view.dom).getBoundingClientRect() // Host frame bounds
+      const MENU_W = 248 // Approx BlockActionsMenu width (min-w 240 + border/padding)
+      const GAP = 8 // Breathing room between menu and frame edge
+      // Room for the whole card between the viewport edge and the frame's left edge?
+      if (frameRect.left - GAP - MENU_W >= 0) return { x: frameRect.left, y: clientY, openLeft: true }
+      return { x: clientX, y: clientY, openLeft: false }
+    },
+    [editor]
+  )
+
   const openForBlock = useCallback(
     (block: EditorBlockRef, clientX: number, clientY: number) => {
       if (!editor) return
       setEditorBlockHighlight(editor, { from: block.from, to: block.to })
       const blockType = refineListBlockType(editor, block)
-      setMenu({ x: clientX, y: clientY, block, blockType })
+      setMenu({ ...menuPlacement(clientX, clientY), block, blockType })
       const container = editor.view.dom.parentElement
       const layout = container ? layoutForBlock(editor, container, block) : null
       if (layout) {
@@ -436,7 +452,7 @@ export function TipTapBlockHandles({
         setFocusLayout(layout)
       }
     },
-    [editor]
+    [editor, menuPlacement]
   )
 
   // Between-block add line: click inserts an empty paragraph at the hovered gap
@@ -729,7 +745,7 @@ export function TipTapBlockHandles({
       const cur = selectionRef.current
       if (cur.length > 1 && cur.some((b) => b.from === block.from)) {
         const blockType = refineListBlockType(editor, block)
-        setMenu({ x: e.clientX, y: e.clientY, block, blockType })
+        setMenu({ ...menuPlacement(e.clientX, e.clientY), block, blockType })
         return
       }
       // Otherwise reset to a single-block selection + open its menu
@@ -737,7 +753,7 @@ export function TipTapBlockHandles({
       setSelection([])
       openForBlock(block, e.clientX, e.clientY)
     },
-    [editor, applySelection, collectBlocksBetween, openForBlock]
+    [editor, applySelection, collectBlocksBetween, openForBlock, menuPlacement]
   )
 
   if (!editor || !enabled) return null
@@ -870,6 +886,7 @@ export function TipTapBlockHandles({
             y={menu.y}
             zoom={1}
             positionMode="fixed"
+            openLeft={menu.openLeft}
             currentBlockType={menu.blockType}
             pageInTargets={pageInTargets}
             showAddChild={false}

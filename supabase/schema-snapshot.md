@@ -1,12 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T13:05:53Z`
+- Snapped at: `2026-08-09T13:21:39Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 
 ## This save
+
+- No DDL. Marker `20260809132139_menu_placement_zoom_and_nav.sql`.
+- **Frame right-click menu** (`BlockActionsMenu` absolute mode): removed `scale(zoom)` → **constant size at any zoom** (matches the text-highlight menu).
+- **Text selection popup** (`selection-format-popup`): **hides during board nav** (pan/zoom) via `MutationObserver` on `.react-flow__viewport` transform, **returns ~150ms after nav settles** (stays mounted, `visibility:hidden`, re-places). Placement now prefers **right of frame → left of frame → end of text** (1- and multi-line alike).
+- **⋮⋮ handle actions menu** (`BlockActionsMenu` fixed mode): new `openLeft` prop → opens **left of the frame** when there's room (else right of the handle), sitting opposite the right-anchored selection popup.
+- Persisted via existing `messages.metadata` jsonb — schema unchanged.
+
+## Prior: frame unlock returns to saved shape
 
 - No DDL. Marker `20260809130553_frame_unlock_return_remove_caret.sql`.
 - Removed the overflow expand/collapse **caret** (`handleToggleOverflow` / `contentOverflows` / `frameExpanded` gone). New model: **lock = fit-to-content, unlock = your saved shape**.

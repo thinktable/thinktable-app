@@ -44,6 +44,7 @@
 20260809103353_locked_frame_fit_notion_db_blocks.sql
 20260809123351_locked_wrap_column_width.sql
 20260809130553_frame_unlock_return_remove_caret.sql
+20260809132139_menu_placement_zoom_and_nav.sql
 #
-# No new schema this save (frontend: removed overflow caret; unlock restores saved unlockedFrameSize/
-# unlockedFrameScale so it's reversible after locked resize; dropped collapsedFrameSize; menu stub).
+# No new schema this save (frontend: menu sizing/placement + nav behavior — frame menu constant size at any
+# zoom; selection popup hides on pan/zoom and prefers right of frame; ⋮⋮ handle menu opens left of frame).

@@ -116,6 +116,8 @@ export type BlockActionsMenuProps = {
   className?: string
   /** absolute = board-flow pane coords; fixed = viewport (TipTap in-editor menu) */
   positionMode?: 'absolute' | 'fixed'
+  /** fixed mode only: anchor to the LEFT of x (menu's right edge) instead of right of the handle */
+  openLeft?: boolean
 }
 
 type TurnIntoDef = {
@@ -211,6 +213,7 @@ export function BlockActionsMenu({
   onClose,
   className,
   positionMode = 'absolute',
+  openLeft = false,
 }: BlockActionsMenuProps) {
   const [query, setQuery] = useState('') // Filter actions + turn-into
   const [openSubmenu, setOpenSubmenu] = useState<'turnInto' | 'pageIn' | null>(null) // Flyout
@@ -390,9 +393,12 @@ export function BlockActionsMenu({
         top: `${y}px`,
         transform:
           positionMode === 'fixed'
-            ? 'translate(8px, 4px)' // TipTap: open just beside the handle
-            : `translate(-50%, -100%) scale(${zoom})`,
-        transformOrigin: positionMode === 'fixed' ? 'top left' : 'center bottom',
+            ? openLeft
+              ? 'translate(calc(-100% - 8px), 4px)' // Left of frame: menu's right edge sits 8px left of x
+              : 'translate(8px, 4px)' // TipTap default: open just beside the handle
+            : 'translate(-50%, -100%)', // Constant size regardless of zoom (like the text highlight menu) — no scale(zoom)
+        transformOrigin:
+          positionMode === 'fixed' ? (openLeft ? 'top right' : 'top left') : 'center bottom',
         marginTop: positionMode === 'fixed' ? 0 : '-8px',
       }}
       onClick={(e) => {

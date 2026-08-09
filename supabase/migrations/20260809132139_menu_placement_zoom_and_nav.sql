@@ -1,0 +1,6 @@
+-- No DDL. Frontend-only save (menu sizing + placement + nav behavior).
+-- Frame right-click menu (BlockActionsMenu absolute mode): dropped scale(zoom) → constant size at any zoom.
+-- Text selection popup (selection-format-popup): hides on board nav (pan/zoom) via MutationObserver on
+--   .react-flow__viewport transform, returns ~150ms after it settles; placement now prefers RIGHT of frame.
+-- ⋮⋮ handle actions menu (BlockActionsMenu fixed mode): new openLeft → opens LEFT of the frame when there's room.
+-- Persisted via existing tables — schema unchanged.

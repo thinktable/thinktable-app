@@ -32,7 +32,6 @@ import { cn } from '@/lib/utils' // Conditional classes for active Hide text row
 
 const EDGE_GAP = 8 // Gap between highlight edge and popup
 const VIEWPORT_PAD = 8 // Minimum inset from the visible viewport edges
-const ROW_TOP_TOLERANCE = 3 // Client rects within this Y delta count as the same visual row
 
 // Static Skills list shown in the Notion-style AI section (labels only for now)
 const SKILL_LABELS = [
@@ -222,16 +221,6 @@ function getSelectionClientRects(): DOMRect[] | null {
   return [fallback]
 }
 
-/** Count distinct visual rows from selection client rects. */
-function countSelectionRows(rects: DOMRect[]): number {
-  const rowTops: number[] = []
-  for (const rect of rects) {
-    const matchesExisting = rowTops.some((top) => Math.abs(top - rect.top) <= ROW_TOP_TOLERANCE)
-    if (!matchesExisting) rowTops.push(rect.top)
-  }
-  return rowTops.length
-}
-
 /** Viewport boundary used for edge fits (React Flow pane when present). */
 function getBoundaryRect(): DOMRect {
   const pane = document.querySelector('.react-flow') as HTMLElement | null
@@ -342,13 +331,9 @@ function resolveSelectionPopupPosition(
 
   const boundary = getBoundaryRect()
   const endRect = rects[rects.length - 1] // Trailing edge of the highlight
-  const isMultiLine = countSelectionRows(rects) > 1
 
-  if (!isMultiLine) {
-    return placeAtSelectionEnd(endRect, popupW, popupH, boundary)
-  }
-
-  // Multi-line: anchor to the panel/item edges (not the text-block bounding box)
+  // Always prefer the RIGHT edge of the frame/item when there's room, then left, then end of text.
+  // (Single- and multi-line alike anchor to the frame so the popup sits opposite the ⋮⋮ handle menu.)
   const itemRect = getSelectionItemRect(containerEl)
   const selectionTop = Math.min(...rects.map((r) => r.top)) // Keep vertical alignment with the highlight
   if (itemRect) {
@@ -393,6 +378,7 @@ export function SelectionFormatPopupAnchor({
   containerRef: React.RefObject<HTMLDivElement | null> // TipTapContent root (ownership / click tests)
 }) {
   const [showPopup, setShowPopup] = useState(false) // Whether a valid selection is active
+  const [isNavigating, setIsNavigating] = useState(false) // Hide while the board pans/zooms; return when nav stops
   const [popupPosition, setPopupPosition] = useState({ top: 0, left: 0 }) // Viewport (fixed) coords
   const [savedSelection, setSavedSelection] = useState<{ from: number; to: number } | null>(null) // Preserve range across blur
   const popupRef = useRef<HTMLDivElement>(null) // Floating element for autoUpdate + hit tests
@@ -518,6 +504,31 @@ export function SelectionFormatPopupAnchor({
     }
   }, [showPopup, placePopup])
 
+  // Hide the popup while the board is navigating (pan/zoom), re-show once the viewport settles
+  useEffect(() => {
+    if (!showPopup) return
+    // The React Flow viewport transform mutates on every pan/zoom frame — watch it as the nav signal
+    const viewportEl = document.querySelector('.react-flow__viewport') as HTMLElement | null
+    if (!viewportEl) return
+
+    let settleTimer: number | undefined // Debounce: nav is "stopped" after a quiet gap
+    const observer = new MutationObserver(() => {
+      setIsNavigating(true) // Any transform change → treat as active navigation → hide
+      if (settleTimer !== undefined) window.clearTimeout(settleTimer)
+      settleTimer = window.setTimeout(() => {
+        setIsNavigating(false) // No transform change for the gap → nav stopped → reveal again
+        placePopup() // Re-anchor to the settled selection position
+      }, 150) // Short enough to feel instant, long enough to span momentum/settle frames
+    })
+    observer.observe(viewportEl, { attributes: true, attributeFilter: ['style'] }) // Only the transform style
+
+    return () => {
+      observer.disconnect()
+      if (settleTimer !== undefined) window.clearTimeout(settleTimer)
+      setIsNavigating(false) // Reset so a re-open isn't stuck hidden
+    }
+  }, [showPopup, placePopup])
+
   // Detect intentional collapse clicks inside the editor so we don't fight the user
   useEffect(() => {
     if (!showPopup || !savedSelection || !editor) return
@@ -597,6 +608,9 @@ export function SelectionFormatPopupAnchor({
       style={{
         top: `${popupPosition.top}px`,
         left: `${popupPosition.left}px`,
+        // Stay mounted (so we can measure/re-place) but disappear while the board is being navigated
+        visibility: isNavigating ? 'hidden' : 'visible',
+        pointerEvents: isNavigating ? 'none' : 'auto',
       }}
     >
       <SelectionFormatPopup editor={editor} />
