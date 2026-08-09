@@ -1,16 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T06:17:13Z`
+- Snapped at: `2026-08-09T06:31:03Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 
 ## This save
 
-- No DDL. Marker `20260809061713_between_block_insert_line.sql`.
-- App: remove per-block gutter `+`; tighten frame gutter (`pl-10` → `pl-6`); hover between TipTap blocks shows a light hairline the same width as the ⋮⋮ grip, in the grip column, mid-gap; click inserts a block.
+- No DDL. Marker `20260809063103_add_block_hairline_centered.sql`.
+- App: between-block add mark is a short `w-3` hairline, horizontally centered with the ⋮⋮ grips (no vertical stem); slightly darker stroke.
 - Schema unchanged.
+
+## Prior: between-block insert line
+
+- Marker: `20260809061713_between_block_insert_line.sql` — remove gutter +; grip-width mid-gap hairline.
 
 ## Prior: `panel_edges.metadata`
 
@@ -53,6 +57,7 @@ Columns:
 
 ## Prior saves
 
+- Marker: `20260809061713_between_block_insert_line.sql` (between-block hairline).
 - Marker: `20260809054110_empty_block_backspace.sql` (empty-block Backspace).
 - Marker: `20260809053310_page_open_menu_frame_clamp.sql` (page open menu clamp).
 - Marker: `20260809011319_thread_style_smooth_sharp_linear.sql` (thread styles).

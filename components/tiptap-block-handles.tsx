@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { Editor } from '@tiptap/react'
-import { GripVertical } from 'lucide-react' // ⋮⋮ grip; between-block add is a light horizontal line
+import { GripVertical } from 'lucide-react' // ⋮⋮ grip; between-block add is a short centered hairline
 import { useReactFlow } from 'reactflow' // screenToFlowPosition when extracting a line onto the map
 import { useQueryClient } from '@tanstack/react-query' // Refresh panels after extract-to-card
 import { createClient } from '@/lib/supabase/client' // Persist a new map card from a dragged line
@@ -204,7 +204,7 @@ export function TipTapBlockHandles({
     blockType: BlockTypeId
   } | null>(null)
   const [dropLine, setDropLine] = useState<DropLine | null>(null) // Dashed insert line while dragging a content block
-  const [insertLine, setInsertLine] = useState<InsertLine | null>(null) // Hover gap → + shaped add line
+  const [insertLine, setInsertLine] = useState<InsertLine | null>(null) // Hover gap → centered add hairline
   const [ghost, setGhost] = useState<{ x: number; y: number; text: string; width: number } | null>(null) // Floating preview of the dragged line
   // In-frame multi-block selection (Shift = range, Cmd/Ctrl = toggle). Empty = no multi-selection.
   const [selection, setSelection] = useState<EditorBlockRef[]>([])
@@ -820,7 +820,11 @@ export function TipTapBlockHandles({
             onInsertLineClick(e as unknown as React.MouseEvent)
           }}
         >
-          <div className="pointer-events-none absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-black/10 dark:bg-white/15" />
+          {/* Hairline centered in the same column as ⋮⋮ */}
+          <div
+            className="pointer-events-none absolute left-1/2 top-1/2 h-px w-3 -translate-x-1/2 -translate-y-1/2 bg-black/20 dark:bg-white/25"
+            aria-hidden
+          />
         </div>
       )}
 
