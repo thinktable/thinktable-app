@@ -1,12 +1,17 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T05:02:30Z`
+- Snapped at: `2026-08-09T05:13:19Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` failed without `SUPABASE_DB_PASSWORD` (cli_login_postgres permission). Access token works for `projects list` + Management SQL API; migration files remain source of truth.
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 
-## This save: `panel_edges.metadata`
+## This save
+
+- No DDL. Marker `20260809011319_thread_style_smooth_sharp_linear.sql` (frontend thread styles).
+- `panel_edges.metadata` unchanged (algorithm / points / dotted still live there).
+
+## Prior: `panel_edges.metadata`
 
 - Migration: `20260808160000_panel_edges_thread_metadata.sql` (applied + registered remotely)
 - Column: `metadata jsonb NOT NULL DEFAULT '{}'::jsonb` — thread path points / dotted / algorithm

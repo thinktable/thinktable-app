@@ -15,6 +15,7 @@ export {
 export { insetToConnectionPoint } from './inset-to-connection-point'
 export {
   connectionPointOnNode,
+  exitPointAlongSide,
   sideFromHandleId,
 } from './connection-point-on-node'
 export {
@@ -22,4 +23,8 @@ export {
   DEFAULT_THREAD_ALGORITHM,
   THREAD_DEFAULT_COLOR,
   THREAD_SELECTED_COLOR,
+  threadAlgorithmFromStyle,
+  threadStyleFromAlgorithm,
+  isSharpThreadAlgorithm,
+  type ThreadStylePref,
 } from './constants'

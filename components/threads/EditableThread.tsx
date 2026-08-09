@@ -10,7 +10,7 @@ import {
 } from 'reactflow' // Custom edge primitives + selection store
 
 import { ControlPoint, type ControlPointData } from './ControlPoint' // Miro-style path knobs
-import { getPath, getControlPoints } from './path' // Catmull-Rom → SVG path
+import { getPath, getControlPoints } from './path' // Path math by algorithm
 import {
   DEFAULT_THREAD_ALGORITHM,
   THREAD_DEFAULT_COLOR,
@@ -21,7 +21,7 @@ import { normalizeHandleId } from './handle-ids' // Strip -indicator from stored
 import {
   connectionPointOnNode,
   sideFromHandleId,
-} from './connection-point-on-node' // Frame-edge attach from node box (never indicator)
+} from './connection-point-on-node' // Frame-edge attach from node box
 
 /** Persistable thread payload stored in panel_edges.metadata + edge.data. */
 export type ThreadEdgeData = {
@@ -144,13 +144,19 @@ export function EditableThread({
     [setEdges, id, algorithm]
   )
 
-  const pathPoints = [sourceOrigin, ...points, targetOrigin]
   const sides = {
     fromSide: sourceSide ?? Position.Right,
     toSide: targetSide ?? Position.Left,
   }
-  const controlPoints = getControlPoints({ points: pathPoints, algorithm, sides })
-  const path = getPath({ points: pathPoints, algorithm, sides })
+
+  // All styles attach on the frame edge; Orthogonal leaves perpendicular then 90° elbows
+  const routePoints = [sourceOrigin, ...points, targetOrigin]
+  const controlPoints = getControlPoints({
+    points: routePoints,
+    algorithm,
+    sides,
+  })
+  const path = getPath({ points: routePoints, algorithm, sides })
   const controlPointsWithIds = useIdsForInactiveControlPoints(controlPoints)
 
   const stroke = selected ? THREAD_SELECTED_COLOR : (style?.stroke as string) || THREAD_DEFAULT_COLOR

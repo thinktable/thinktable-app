@@ -27,6 +27,7 @@ import {
   EditableThread,
   ThreadConnectionLine,
   DEFAULT_THREAD_ALGORITHM,
+  threadAlgorithmFromStyle,
   normalizeHandleId,
   type ThreadEdgeData,
 } from '@/components/threads' // Miro-style editable threads + connection preview
@@ -2933,7 +2934,11 @@ function BoardFlowInner({
               targetHandle: handles.targetHandle,
               type: 'editable', // Miro-style adjustable thread
               data: {
-                algorithm: DEFAULT_THREAD_ALGORITHM,
+                algorithm: threadAlgorithmFromStyle(
+                  typeof window !== 'undefined'
+                    ? localStorage.getItem('thinktable-horizontal-line-style')
+                    : null
+                ),
                 points: [],
                 dotted: lineStyle === 'dotted',
               } satisfies ThreadEdgeData,
@@ -6792,7 +6797,11 @@ function BoardFlowInner({
                 null,
               type: 'editable', // Miro-style adjustable thread
               data: {
-                algorithm: DEFAULT_THREAD_ALGORITHM,
+                algorithm: threadAlgorithmFromStyle(
+                  typeof window !== 'undefined'
+                    ? localStorage.getItem('thinktable-horizontal-line-style')
+                    : null
+                ),
                 points: [],
                 dotted: lineStyle === 'dotted',
               } satisfies ThreadEdgeData,

@@ -1,5 +1,5 @@
 import { Position, type Node, type XYPosition } from 'reactflow' // Node box → mid-side attach point
-import { normalizeHandleId } from './handle-ids' // left-indicator → left
+import { normalizeHandleId, INDICATOR_OUTSET } from './handle-ids' // left-indicator → left; exit stub length
 
 /**
  * Mid-side point on a node's frame edge (the connection **point**).
@@ -26,6 +26,29 @@ export function connectionPointOnNode(
       return { x: x + w / 2, y: y + h }
     default:
       return null
+  }
+}
+
+/**
+ * Point just outside the frame on a side — same offset as the connection indicator.
+ * Threads run straight here before curving so they don't hug the frame edge.
+ */
+export function exitPointAlongSide(
+  origin: XYPosition,
+  side: Position | undefined,
+  dist: number = INDICATOR_OUTSET
+): XYPosition {
+  switch (side) {
+    case Position.Left:
+      return { x: origin.x - dist, y: origin.y }
+    case Position.Right:
+      return { x: origin.x + dist, y: origin.y }
+    case Position.Top:
+      return { x: origin.x, y: origin.y - dist }
+    case Position.Bottom:
+      return { x: origin.x, y: origin.y + dist }
+    default:
+      return origin
   }
 }
 

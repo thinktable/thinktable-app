@@ -3,6 +3,10 @@ import { type XYPosition, Position } from 'reactflow' // RF positions for end-si
 import type { ControlPointData } from '../ControlPoint' // Active + inactive control points
 import { getLinearPath, getLinearControlPoints } from './linear' // Straight-segment fallback
 import { getCatmullRomPath, getCatmullRomControlPoints } from './catmull-rom' // Smooth Miro-like curves
+import {
+  getOrthogonalPath,
+  getOrthogonalControlPoints,
+} from './orthogonal' // Sharp 90° ridged
 import { ThreadAlgorithm } from '../constants' // Which path math to use
 
 /** Compute inactive (addable) + active control points along the thread. */
@@ -18,6 +22,8 @@ export function getControlPoints({
   switch (algorithm) {
     case ThreadAlgorithm.Linear:
       return getLinearControlPoints(points)
+    case ThreadAlgorithm.Orthogonal:
+      return getOrthogonalControlPoints(points)
     case ThreadAlgorithm.CatmullRom:
       return getCatmullRomControlPoints(points)
     case ThreadAlgorithm.BezierCatmullRom:
@@ -39,6 +45,8 @@ export function getPath({
   switch (algorithm) {
     case ThreadAlgorithm.Linear:
       return getLinearPath(points)
+    case ThreadAlgorithm.Orthogonal:
+      return getOrthogonalPath(points, sides)
     case ThreadAlgorithm.CatmullRom:
       return getCatmullRomPath(points)
     case ThreadAlgorithm.BezierCatmullRom:

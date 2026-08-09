@@ -5,6 +5,7 @@
 import { Editor } from '@tiptap/react'
 import { Button } from './ui/button'
 import { useReactFlowContext } from './react-flow-context'
+import { threadAlgorithmFromStyle, type ThreadStylePref } from '@/components/threads' // Smooth/Sharp/Linear
 import { usePreviewFocus } from '@/lib/preview-focus-context' // Nested preview View-style targeting
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
@@ -319,7 +320,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const shouldHideFormattingOptions = editMenuPillMode !== 'home' // Hide when not in 'home' mode
 
   // Initialize with consistent defaults to avoid hydration mismatch, then load from Supabase
-  const [lineStyle, setLineStyle] = useState<'curved' | 'boxed'>('curved')
+  const [lineStyle, setLineStyle] = useState<ThreadStylePref>('curved')
   const [editMode, setEditMode] = useState<'editing' | 'suggesting' | 'viewing'>('editing')
   // Use context values for drawTool and drawShape, with local state as fallback
   const drawTool = contextDrawTool ?? null
@@ -484,8 +485,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     if (typeof window === 'undefined') return
 
     // STEP 1: Load from localStorage FIRST (synchronous, instant) - ensures UI shows saved prefs immediately
-    const savedLineStyle = localStorage.getItem('thinktable-horizontal-line-style') as 'curved' | 'boxed' | null
-    if (savedLineStyle && ['curved', 'boxed'].includes(savedLineStyle)) {
+    const savedLineStyle = localStorage.getItem('thinktable-horizontal-line-style') as ThreadStylePref | null
+    if (savedLineStyle && ['curved', 'boxed', 'linear'].includes(savedLineStyle)) {
       setLineStyle(savedLineStyle)
     }
 
@@ -509,12 +510,12 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
 
           if (profile?.metadata) {
             const prefs = profile.metadata as {
-              horizontalLineStyle?: 'curved' | 'boxed'
+              horizontalLineStyle?: ThreadStylePref
               editMode?: 'editing' | 'suggesting' | 'viewing'
             }
 
             // Update from Supabase if values exist (Supabase is source of truth for cross-device sync)
-            if (prefs.horizontalLineStyle && ['curved', 'boxed'].includes(prefs.horizontalLineStyle)) {
+            if (prefs.horizontalLineStyle && ['curved', 'boxed', 'linear'].includes(prefs.horizontalLineStyle)) {
               setLineStyle(prefs.horizontalLineStyle)
               localStorage.setItem('thinktable-horizontal-line-style', prefs.horizontalLineStyle)
             }
@@ -536,8 +537,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     // Also reload when conversation is created (to maintain selections on new boards)
     const handleConversationCreated = async () => {
       // Load from localStorage first (instant)
-      const savedLineStyle = localStorage.getItem('thinktable-horizontal-line-style') as 'curved' | 'boxed' | null
-      if (savedLineStyle && ['curved', 'boxed'].includes(savedLineStyle)) {
+      const savedLineStyle = localStorage.getItem('thinktable-horizontal-line-style') as ThreadStylePref | null
+      if (savedLineStyle && ['curved', 'boxed', 'linear'].includes(savedLineStyle)) {
         setLineStyle(savedLineStyle)
       }
 
@@ -559,12 +560,12 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
 
             if (profile?.metadata) {
               const prefs = profile.metadata as {
-                horizontalLineStyle?: 'curved' | 'boxed'
+                horizontalLineStyle?: ThreadStylePref
                 editMode?: 'editing' | 'suggesting' | 'viewing'
               }
 
               // Update from Supabase if values exist
-              if (prefs.horizontalLineStyle && ['curved', 'boxed'].includes(prefs.horizontalLineStyle)) {
+              if (prefs.horizontalLineStyle && ['curved', 'boxed', 'linear'].includes(prefs.horizontalLineStyle)) {
                 setLineStyle(prefs.horizontalLineStyle)
                 localStorage.setItem('thinktable-horizontal-line-style', prefs.horizontalLineStyle)
               }
@@ -2181,15 +2182,44 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   {/* Separator */}
                   <DropdownMenuSeparator className="mx-2" />
                   
-                  {/* Curve Style Options */}
+                  {/* Curve Style Options — Smooth · Sharp (90°) · Linear (straight) */}
                   <DropdownMenuRadioGroup 
-                    value={lineStyle === 'curved' ? 'smooth' : 'sharp'}
+                    value={
+                      lineStyle === 'boxed'
+                        ? 'sharp'
+                        : lineStyle === 'linear'
+                          ? 'linear'
+                          : 'smooth'
+                    }
                     onValueChange={(value) => {
-                      setLineStyle(value === 'smooth' ? 'curved' : 'boxed')
+                      const next: ThreadStylePref =
+                        value === 'sharp'
+                          ? 'boxed'
+                          : value === 'linear'
+                            ? 'linear'
+                            : 'curved'
+                      setLineStyle(next)
+                      // Apply to selected threads immediately
+                      const algorithm = threadAlgorithmFromStyle(next)
+                      reactFlowInstance?.setEdges((eds) =>
+                        eds.map((e) => {
+                          if (!e.selected && e.id !== clickedEdge?.id) return e
+                          if (e.type !== 'editable' && e.type !== 'animatedDotted')
+                            return e
+                          return {
+                            ...e,
+                            data: {
+                              ...(e.data as object),
+                              algorithm,
+                            },
+                          }
+                        })
+                      )
                     }}
                   >
                     <DropdownMenuRadioItem value="smooth" className="pl-8 text-xs">Smooth</DropdownMenuRadioItem>
                     <DropdownMenuRadioItem value="sharp" className="pl-8 text-xs">Sharp</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="linear" className="pl-8 text-xs">Linear</DropdownMenuRadioItem>
                   </DropdownMenuRadioGroup>
                 </DropdownMenuContent>
               </DropdownMenu>
