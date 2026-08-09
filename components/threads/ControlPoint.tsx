@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react' // Drag + keyboard edit for a control point
 import { useReactFlow, useStore, type XYPosition } from 'reactflow' // Screen→flow coords + pane DOM
+import { threadComfortScale } from './constants' // Same zoom comfort as thread stroke
 
 /** One editable point on a thread path (active = shapes the curve). */
 export type ControlPointData = XYPosition & {
@@ -31,8 +32,8 @@ export function ControlPoint({
   onPointsCommitted,
 }: ControlPointProps) {
   const container = useStore((store) => store.domNode) // Pane element for pointer listeners
-  const zoom = useStore((s) => s.transform[2] || 1) // Counter-scale knobs with board zoom
-  const invZoom = 1 / Math.max(0.01, zoom)
+  const zoom = useStore((s) => s.transform[2] || 1) // Live board zoom for knob sizing
+  const comfort = threadComfortScale(zoom) // Match thread stroke comfort (thin on zoom-out)
   const { screenToFlowPosition } = useReactFlow() // Convert pointer to flow coords
   const [dragging, setDragging] = useState(false) // True while pointer is down on this knob
   const ref = useRef<SVGCircleElement>(null) // Focus target after delete
@@ -139,8 +140,8 @@ export function ControlPoint({
       className={'nopan nodrag' + (active ? ' active' : '')} // Don't pan/drag the map while editing
       cx={x}
       cy={y}
-      r={(active ? 5 : 4) * invZoom} // Screen-constant knob size (÷zoom)
-      strokeWidth={1.5 * invZoom} // Ring thickness stays constant on screen
+      r={(active ? 5 : 4) * comfort} // Comfort curve — thins with stroke when zoomed out
+      strokeWidth={1.5 * comfort} // Ring tracks knob comfort scale
       strokeOpacity={active ? 1 : 0.85}
       stroke={color}
       fill={active ? color : '#ffffff'} // Miro: solid = active, hollow = addable

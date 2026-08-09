@@ -17,7 +17,8 @@ import {
   THREAD_DEFAULT_COLOR,
   THREAD_SELECTED_COLOR,
   ThreadAlgorithm,
-} from './constants' // Stroke + algorithm defaults
+  threadComfortScale,
+} from './constants' // Stroke + algorithm defaults + zoom comfort
 import { normalizeHandleId } from './handle-ids' // Strip -indicator from stored handle ids
 import {
   connectionPointOnNode,
@@ -124,8 +125,9 @@ export function EditableThread({
   })
 
   const isConnecting = useStore((s) => !!s.connectionNodeId)
-  const zoom = useStore((s) => s.transform[2] || 1) // Live board zoom — counter-scale stroke to stay screen-constant
-  const invZoom = 1 / Math.max(0.01, zoom) // Local px → constant screen px under the viewport transform
+  const zoom = useStore((s) => s.transform[2] || 1) // Live board zoom for stroke / hit-band scaling
+  const comfort = threadComfortScale(zoom) // Thins on zoom-out; soft counter-scale on zoom-in
+  const invZoom = 1 / Math.max(0.01, zoom) // Hit band stays ~screen-constant so thin threads remain clickable
 
   const setControlPoints = useCallback(
     (update: (pts: ControlPointData[]) => ControlPointData[]) => {
@@ -182,8 +184,8 @@ export function EditableThread({
   }
 
   const stroke = selected ? THREAD_SELECTED_COLOR : (style?.stroke as string) || THREAD_DEFAULT_COLOR
-  const baseWidth = selected ? 2.5 : 2 // Desired SCREEN thickness (px)
-  const dash = 5 * invZoom // Dash/gap lengths stay constant on screen when dotted
+  const baseWidth = selected ? 2.5 : 2 // Base flow thickness at ≤100% zoom
+  const dash = 5 * comfort // Dash/gap tracks stroke comfort (thins when zoomed out)
 
   return (
     <>
@@ -195,7 +197,7 @@ export function EditableThread({
         interactionWidth={20 * invZoom} // Hit band stays ~20px on screen at any zoom
         style={{
           ...style,
-          strokeWidth: baseWidth * invZoom, // ÷zoom cancels viewport scale → constant screen thickness
+          strokeWidth: baseWidth * comfort, // Comfort curve — not full 1/zoom (that looked fat zoomed out)
           stroke,
           strokeDasharray: dotted ? `${dash},${dash}` : undefined,
         }}

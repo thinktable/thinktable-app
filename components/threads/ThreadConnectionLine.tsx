@@ -3,7 +3,8 @@ import {
   isSharpThreadAlgorithm,
   threadAlgorithmFromStyle,
   ThreadAlgorithm,
-} from './constants' // Toolbar Smooth / Sharp / Linear
+  threadComfortScale,
+} from './constants' // Toolbar Smooth / Sharp / Linear + zoom comfort
 
 /** Read board thread style preference for the live connection preview. */
 function preferredAlgorithm() {
@@ -34,8 +35,8 @@ export function ThreadConnectionLine({
   toPosition?: Position // Target handle side when snapped
 }) {
   const algorithm = preferredAlgorithm()
-  const zoom = useStore((s) => s.transform[2] || 1) // Counter-scale preview stroke with board zoom
-  const strokeWidth = 2 / Math.max(0.01, zoom) // Same screen thickness as settled threads
+  const zoom = useStore((s) => s.transform[2] || 1) // Live board zoom for preview stroke
+  const strokeWidth = 2 * threadComfortScale(zoom) // Match settled thread comfort (thins on zoom-out)
 
   let path: string
   if (isSharpThreadAlgorithm(algorithm)) {
@@ -68,7 +69,7 @@ export function ThreadConnectionLine({
         fill="none"
         className="react-flow__connectionline-path"
         stroke="#6b7280"
-        strokeWidth={strokeWidth} // Screen-constant (÷zoom)
+        strokeWidth={strokeWidth} // Comfort curve — same as EditableThread
       />
     </g>
   )

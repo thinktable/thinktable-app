@@ -42,3 +42,13 @@ export function isSharpThreadAlgorithm(
 ): boolean {
   return algorithm === ThreadAlgorithm.Orthogonal
 }
+
+/**
+ * Flow-space multiplier for stroke / knobs (same comfort as ⋮⋮ grips).
+ * Zoomed out → 1 (rides with content, thins on screen). Zoomed in → 1/√zoom
+ * (screen size grows only ∝ √zoom). Avoids fat threads when the page is zoomed out.
+ */
+export function threadComfortScale(zoom: number): number {
+  const z = Math.max(0.01, zoom) // Guard against 0 / negative store values
+  return 1 / Math.max(1, Math.sqrt(z)) // max(1,√z) → no counter-scale below 100%
+}

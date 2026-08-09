@@ -1,7 +1,7 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T17:43:46Z`
+- Snapped at: `2026-08-09T17:47:11Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
@@ -9,10 +9,15 @@
 
 ## This save
 
+- No DDL. Marker `20260809174711_thread_stroke_comfort_zoom.sql`.
+- **Thread stroke comfort** (`EditableThread` / `ThreadConnectionLine` / `ControlPoint`): `threadComfortScale(zoom) = 1/max(1,√zoom)` — thins on zoom-out (rides with content); soft counter-scale on zoom-in. Replaces full `1/zoom` screen-constant stroke that looked fat when zoomed out. Hit band stays `×1/zoom`.
+- Persisted via existing tables — schema unchanged.
+
+## Prior: unlocked frame clip hover preview
+
 - No DDL. Marker `20260809174346_unlocked_frame_clip_hover_preview.sql`.
 - **Unlocked clip UX** (`chat-panel-node`): overflowing right/bottom edges use a short `mask-image` fade so half-cut glyphs dissolve instead of chopping.
 - **Hover preview**: after ~500ms dwell on an unlocked clipped frame, temporarily unclip + backdrop + raise RF node z-index to show full blocks; leave cancels immediately; saved `resizeDimensions` unchanged.
-- Persisted via existing tables — schema unchanged.
 
 ## Prior: frame select click / drag border
 
