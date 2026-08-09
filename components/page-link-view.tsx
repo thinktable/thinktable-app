@@ -275,6 +275,9 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
         onFocus={() => setEditing(true)} // Entering edit mode hides the open-page chrome
         onBlur={commitTitle}
         onMouseDown={(e) => {
+          // Unselected frame: do not place caret — let RF select/drag the frame
+          const frame = (e.currentTarget as HTMLElement).closest('.react-flow__node')
+          if (!frame?.classList.contains('selected')) return
           // ProseMirror would otherwise select this atom node on click; we take over so a click just
           // focuses the label and drops the caret (I-bar) at the click point — like editing plain text.
           e.stopPropagation()
@@ -291,8 +294,15 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
             sel.addRange(range)
           }
         }}
-        onPointerDown={(e) => e.stopPropagation()} // Don't start frame/block drag
-        onClick={(e) => e.stopPropagation()} // Caret placement only — no navigation
+        onPointerDown={(e) => {
+          // Only trap the pointer when the host frame is selected (else RF drags the frame)
+          const frame = (e.currentTarget as HTMLElement).closest('.react-flow__node')
+          if (frame?.classList.contains('selected')) e.stopPropagation()
+        }}
+        onClick={(e) => {
+          const frame = (e.currentTarget as HTMLElement).closest('.react-flow__node')
+          if (frame?.classList.contains('selected')) e.stopPropagation() // Caret placement only — no navigation
+        }}
       >
         {title}
       </span>

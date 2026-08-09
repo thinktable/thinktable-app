@@ -48,7 +48,7 @@
 20260809142717_screen_relative_frame_chrome_and_handles.sql
 20260809153815_pagelink_chrome_deselect_fix.sql
 20260809163216_frame_ui_scale_selection_chrome.sql
+20260809173223_frame_select_click_drag_border.sql
 #
-# No new schema this save (frontend: selection chrome — resize handles, blue lines, connection
-# indicators, rotate/lock/wrap — scales with frame size via shared frameUiScale; pageLink frames
-# show lock/wrap).
+# No new schema this save (frontend: frame select on click release; drag shows blue box only and
+# never leaves the frame selected; ⋮⋮ drag moves block only when armed via grip click).

@@ -4,9 +4,10 @@
 import { NodeProps, Handle, Position, useReactFlow, useStore, useStoreApi, NodeResizeControl, useUpdateNodeInternals } from 'reactflow' // RF node primitives + store (unselect groups before dragItems) + remeasure; useStore = live zoom for screen-constant chrome
 import {
   useIsThreadConnecting,
+  useIsNearThreadConnection,
   INDICATOR_OUTSET,
   ConnectionIndicator,
-} from '@/components/threads' // Miro: DOM indicators arm edge connection points
+} from '@/components/threads' // Miro: DOM indicators arm edge connection points; proximity while dragging
 
 
 import { cn, generateUUID } from '@/lib/utils'
@@ -16,6 +17,7 @@ import { TextSelection } from '@tiptap/pm/state' // Only text ranges keep a fram
 import { createPanelExtensions } from '@/lib/tiptap/extensions' // StarterKit + Turn into nodes
 import { TipTapBlockHandles } from '@/components/tiptap-block-handles' // Per-content-block ⋮⋮ (Notion)
 import { findEditorBlockAtClientY } from '@/lib/tiptap/block-selection' // Click in frame padding → block at Y
+import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Strip blank lines on frame deselect
 import type { PageInTarget } from '@/components/block-actions-menu'
 import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
 import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, Lock, Unlock, WrapText } from 'lucide-react' // Rotate + frame lock / wrap
@@ -313,6 +315,9 @@ function TipTapContent({
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { setActiveEditor } = useEditorContext()
+  // Live frame-selected flag for TipTap DOM handlers (useEditor config is not recreated each render)
+  const isPanelSelectedRef = useRef(!!isPanelSelected)
+  isPanelSelectedRef.current = !!isPanelSelected
 
   // Shared stack: headings 1–4, lists, tasks, callout/toggle/equation/synced/columns
   const extensions = createPanelExtensions(
@@ -340,7 +345,11 @@ function TipTapContent({
       },
       handleDOMEvents: {
         mousedown: (view, event) => {
-          // Prevent React Flow from handling drag when clicking on editor
+          // Unselected frame: do not place caret / select text — let RF select + drag the frame
+          if (!isPanelSelectedRef.current) {
+            return true // Prevent ProseMirror default; do not stopPropagation
+          }
+          // Selected frame: keep pointer inside the editor so RF does not start a frame drag
           event.stopPropagation()
 
           // Temporary reveal: click a hazed span to clear blur until click-away / blur
@@ -688,11 +697,11 @@ function TipTapContent({
     return () => observer.disconnect()
   }, [containerRef])
 
-  // Focus editor + place I-bar at the click (selected panel single-click, or double-click)
+  // Focus editor + place I-bar — only when the frame is already selected
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
     if (!editor) return
-    // Unselected + single click: let RF select the frame first
-    if (!isPanelSelected && e.detail < 2) return
+    // Unselected: never place caret — RF selects/drags the frame first
+    if (!isPanelSelected) return
     e.stopPropagation()
 
     const clientX = e.clientX
@@ -724,39 +733,15 @@ function TipTapContent({
       ref={containerRef}
       className={cn(
         'relative overflow-visible w-full', // Full frame content width so short/empty blocks stretch
-        isFlashcard ? 'cursor-pointer' : 'cursor-text',
+        // Unselected → grab (drag frame); selected → text caret; flashcards keep pointer
+        isFlashcard ? 'cursor-pointer' : isPanelSelected ? 'cursor-text' : 'cursor-grab',
         isInline && 'inline-block',
         otherClasses
       )}
       onClick={(e) => {
-        // If panel is not selected and it's a single click, don't handle - let React Flow select the panel
-        if (!isPanelSelected && e.detail < 2) {
-          // Don't call handleContainerClick, don't stop propagation - let click bubble to React Flow
-          return
-        }
-        // Otherwise, handle the click (selected panel single click, or double click)
+        // Unselected: let the click bubble so RF selects the frame (no caret)
+        if (!isPanelSelected) return
         handleContainerClick(e)
-      }}
-      onDoubleClick={(e) => {
-        // Double click focuses the editor (for unselected panels) at the click point
-        if (!isPanelSelected && editor) {
-          e.stopPropagation()
-          const clientX = e.clientX
-          const clientY = e.clientY
-          setTimeout(() => {
-            if (editor.isDestroyed) return
-            try {
-              const posResult = editor.view.posAtCoords({ left: clientX, top: clientY })
-              if (posResult != null && posResult.pos >= 0) {
-                editor.chain().focus().setTextSelection(posResult.pos).run()
-                return
-              }
-            } catch {
-              /* fall through */
-            }
-            editor.commands.focus()
-          }, 0)
-        }
       }}
     >
       {/* Notion-style format popup — outside highlight edge, stays open with selection */}
@@ -773,6 +758,7 @@ function TipTapContent({
         <TipTapBlockHandles
           editor={editor}
           enabled={enableBlockHandles && !isFlashcard}
+          isPanelSelected={!!isPanelSelected} // Frame must be selected (and not mid-drag) before ⋮⋮ can arm a block
           hostNodeId={hostNodeId}
           conversationId={conversationId}
           pageInTargets={pageInTargets}
@@ -1289,7 +1275,7 @@ function TagButton({ responseMessageId }: { responseMessageId: string }) {
   )
 }
 
-export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) {
+export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelNodeData>) {
   // Handle both ChatPanelNodeData and ProjectBoardPanelNodeData
   const isProjectBoard = isProjectBoardData(data)
 
@@ -1369,8 +1355,9 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const [frameTextWrap, setFrameTextWrap] = useState(false) // Unlocked only: wrap lines in the frame box instead of clipping
   const [wrapColWidth, setWrapColWidth] = useState<number | null>(null) // Unscaled wrap column width — fixed on locked resize, restored on rewrap
   const [frameScale, setFrameScale] = useState(1) // Uniform content scale while frame is locked
-  const [unlockedFrameSize, setUnlockedFrameSize] = useState<{ width: number; height: number } | null>(null) // Saved unlocked shape — unlock returns here after lock + proportional resize
-  const [unlockedFrameScale, setUnlockedFrameScale] = useState<number | null>(null) // Saved scale to pair with unlockedFrameSize
+  const [unlockedFrameSize, setUnlockedFrameSize] = useState<{ width: number; height: number } | null>(null) // Last free-resize shape (metadata continuity; unlock does NOT snap to this)
+  const [unlockedFrameScale, setUnlockedFrameScale] = useState<number | null>(null) // Scale paired with unlockedFrameSize (bookkeeping only)
+
   const [intrinsicSize, setIntrinsicSize] = useState({ width: BLOCK_MIN_FRAME_W, height: 48 }) // Unscaled content box (max-content)
   const [intrinsicMeasured, setIntrinsicMeasured] = useState(false) // True after first contentFit measure (avoid hug flash)
   const [isFrameHovering, setIsFrameHovering] = useState(false) // Frame hover — page-open menu (not lock/rotate)
@@ -1849,9 +1836,20 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // Miro split (locked):
   // • Connection **point** = invisible RF Handle on the frame edge (geometry + snap)
   // • Connection **indicator** = plain DOM dot outside — starts drag on the edge point (not an RF Handle)
-  const isThreadConnecting = useIsThreadConnecting() // Hide adjust chrome; reveal snap targets while dragging
-  const showAdjustFrame = Boolean(selected && isBlock && !isThreadConnecting) // Deselect visual during thread drag
-  const showIndicators = showAdjustFrame && !shouldHideHandles // Outer blue dots while adjust frame is up
+  const isThreadConnecting = useIsThreadConnecting() // Hide adjust chrome while dragging a thread
+  const isNearThreadSnap = useIsNearThreadConnection(id) // Pointer near this frame → show connection simulators
+  // Pressed but not yet a drag — hide selection chrome until click release confirms select
+  const [pressing, setPressing] = useState(false)
+  // Full adjust chrome only when selected + idle (not mid-press / mid-drag)
+  const showAdjustFrame = Boolean(selected && isBlock && !isThreadConnecting && !dragging && !pressing)
+  // Transient blue outline while the frame is being moved (not a real selection)
+  const showDragBorderOnly = Boolean(dragging && isBlock)
+  // Indicators: selected frame (idle), OR nearby snap target while connecting — never during frame drag
+  const showIndicators =
+    isBlock &&
+    !isFlashcard &&
+    !dragging &&
+    ((selected && !isThreadConnecting) || (isThreadConnecting && isNearThreadSnap))
 
   // Invisible edge connection point — idle: no hit/cursor; while selected, source can be armed by indicator
   const connectionPointStyle = (): React.CSSProperties => ({
@@ -2275,7 +2273,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     if (width > 0 && height > 0) {
       setResizeDimensions({ width, height }) // Lock final box size into local state
     }
-    // Unlocked drag defines the returnable shape — keep it fresh so a later unlock snaps back here.
+    // Unlocked drag refreshes the last free-resize shape (bookkeeping only — unlock keeps current size).
     if (frameUnlocked) {
       setUnlockedFrameSize({ width, height })
       setUnlockedFrameScale(finalScale)
@@ -2287,7 +2285,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       frameTextWrap, // Wrap persists in either lock state now
       frameScale: finalScale,
       fontScale,
-      ...(frameUnlocked ? { unlockedFrameSize: { width, height }, unlockedFrameScale: finalScale } : {}), // Returnable shape
+      ...(frameUnlocked ? { unlockedFrameSize: { width, height }, unlockedFrameScale: finalScale } : {}),
       ...(colToPersist != null ? { wrapColWidth: colToPersist } : {}), // Save the new unlocked wrap point
     })
   }, [resizeDimensions, frameUnlocked, frameTextWrap, wrapColWidth, fontScale, persistFrameMeta, intrinsicSize, promptContent])
@@ -2376,33 +2374,37 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     })
   }, [saveRotation])
 
-  // Toggle frame lock: lock hugs scaled text; unlock keeps current visual size
+  // Toggle frame lock: lock hugs scaled text; unlock keeps the CURRENT visual box + scale
+  // (blocks stay the size they were adjusted to while locked — no snap-back to a pre-lock shape).
   const handleToggleFrameLock = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
     e.preventDefault()
     const nextUnlocked = !frameUnlocked
     setFrameUnlocked(nextUnlocked)
     if (nextUnlocked) {
-      // Return to the SAVED unlocked shape (set before the last lock) so unlock is reversible even
-      // after a locked proportional resize; fall back to the current box on first-ever unlock.
+      // Keep locked visual size: same box + same frameScale (proportional resize stays).
       const el = panelRef.current
-      const nextDims = unlockedFrameSize ?? resizeDimensions ?? {
+      const nextDims = resizeDimensions ?? {
         width: Math.max(blockMinFrameWidth(promptContent), el?.offsetWidth ?? intrinsicSize.width),
         height: Math.max(BLOCK_MIN_FRAME_H, el?.offsetHeight ?? intrinsicSize.height),
       }
-      const nextScale = unlockedFrameScale ?? frameScale // Restore the scale the unlocked shape had
       setResizeDimensions(nextDims)
-      setFrameScale(nextScale)
       setIsUserResized(true)
+      // Also seed the unlocked returnable shape to the CURRENT size so later unlocked
+      // resize-end bookkeeping stays coherent (not used to snap size on unlock).
+      setUnlockedFrameSize(nextDims)
+      setUnlockedFrameScale(frameScale)
       void persistFrameMeta({
         frameUnlocked: true,
-        frameScale: nextScale,
+        frameScale, // Preserve locked scale so block size does not jump
         resizeDimensions: nextDims,
         frameTextWrap,
+        unlockedFrameSize: nextDims,
+        unlockedFrameScale: frameScale,
       })
       return
     }
-    // Locking: remember the CURRENT unlocked shape (+scale) so a later unlock returns to it.
+    // Locking: remember the CURRENT unlocked shape (+scale) for metadata continuity.
     const unlockedShape =
       resizeDimensions ?? {
         width: Math.max(blockMinFrameWidth(promptContent), panelRef.current?.offsetWidth ?? intrinsicSize.width),
@@ -2425,7 +2427,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         frameScale,
         resizeDimensions: nextDims,
         frameTextWrap: true, // Keep wrap on through lock
-        unlockedFrameSize: unlockedShape, // Shape to return to on unlock
+        unlockedFrameSize: unlockedShape,
         unlockedFrameScale: frameScale,
       })
       return
@@ -2451,10 +2453,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       frameScale,
       resizeDimensions: nextDims,
       frameTextWrap: false,
-      unlockedFrameSize: unlockedShape, // Shape to return to on unlock
+      unlockedFrameSize: unlockedShape,
       unlockedFrameScale: frameScale,
     })
-  }, [frameUnlocked, frameScale, resizeDimensions, intrinsicSize, frameTextWrap, unlockedFrameSize, unlockedFrameScale, persistFrameMeta, promptContent])
+  }, [frameUnlocked, frameScale, resizeDimensions, intrinsicSize, frameTextWrap, persistFrameMeta, promptContent])
 
   // Unlocked: wrap lines inside the frame width (vs clip overflow)
   const handleToggleFrameTextWrap = useCallback((e: React.MouseEvent) => {
@@ -2504,7 +2506,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     }
   }, [frameUnlocked, frameTextWrap, frameScale, wrapColWidth, resizeDimensions, persistFrameMeta, promptContent, intrinsicSize])
 
-  // (Overflow caret removed — lock = fit-to-content, unlock = your saved set shape cover this now.)
+  // (Overflow caret removed — lock = fit-to-content; unlock keeps current visual size + free resize/clip.)
 
   // Locked + resized: hug WIDTH and HEIGHT to natural text (locked = hug to content) —
   // shrink/grow both dimensions on lock/type instead of keeping the taller resize box.
@@ -3127,22 +3129,26 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     prevSelectedRef.current = selected
   }, [selected, isFlashcard, flashcardMode, setFlashcardMode])
 
-  // Sole empty block in a frame + click outside (deselect) → remove the frame
+  // Frame deselect: prune empty TipTap blocks; sole-empty untitled frames → remove the frame
   const prevSelectedEmptyFrameRef = useRef(selected)
   useEffect(() => {
     const wasSelected = prevSelectedEmptyFrameRef.current
     prevSelectedEmptyFrameRef.current = selected
     if (!wasSelected || selected) return // Only fire on selected → unselected
-    if (!isBlock || isFlashcard || isProjectBoard || isPageBody) return
+    if (!isBlock || isFlashcard || isProjectBoard) return
     if (isRestoringSelectionRef.current) return
 
+    const ed = promptEditorRef.current
+    // Drop blank Enter lines (and other empty textblocks) while keeping real content / atoms
+    if (ed && !ed.isDestroyed) pruneEmptyTextblocks(ed)
+
+    // Sole-empty frame deletion — skip page-body / titled / linked pages
+    if (isPageBody) return
     const meta = (promptMessage?.metadata || {}) as Record<string, unknown>
-    // Keep titled / linked pages even if the body text was cleared
     if (meta.linkedPageId) return
     if (typeof meta.blockTitle === 'string' && meta.blockTitle.trim()) return
 
-    // Must be exactly one empty textblock (not a pageLink-only frame, not multi-block)
-    const ed = promptEditorRef.current
+    // Must be exactly one empty textblock after prune (not a pageLink-only frame)
     let soleEmpty = false
     if (ed && !ed.isDestroyed) {
       const doc = ed.state.doc
@@ -4053,6 +4059,11 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         ['--tt-frame-handle-border' as string]: `${Math.max(1, 1.5 * frameUiScale)}px`,
       }}
       onPointerDownCapture={() => {
+        // Hide selection chrome until mouseup — gesture may become a drag (blue box only)
+        setPressing(true)
+        const clearPress = () => setPressing(false)
+        window.addEventListener('pointerup', clearPress, { once: true })
+        window.addEventListener('pointercancel', clearPress, { once: true })
         // RF snapshots dragItems before onNodeDragStart — a selected wrapper rides along with this frame.
         const store = rfStoreApi.getState() as {
           unselectNodesAndEdges?: (p: { nodes: unknown[]; edges: unknown[] }) => void
@@ -4101,7 +4112,18 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         }
       }}
     >
-      {/* Selected blocks: connected blue rectangle + circular corner handles (hidden while dragging a thread) */}
+      {/* Drag move: blue box only (no resize corners / indicators / chrome) — not a real selection */}
+      {showDragBorderOnly && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 z-[20] rounded-2xl"
+          style={{
+            boxShadow: `inset 0 0 0 ${frameLineW}px #3b82f6`, // Same blue as selection chrome, no hit target
+          }}
+        />
+      )}
+
+      {/* Selected frames: connected blue rectangle + circular corner handles (hidden while moving / thread drag) */}
       {showAdjustFrame && (
         <>
           {(['top', 'right', 'bottom', 'left'] as const).map((position) => (
@@ -4142,7 +4164,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             <ConnectionIndicator
               key={`indicator-${side}`}
               side={side}
-              className="nodrag nopan absolute z-[30] cursor-crosshair rounded-full border border-white bg-blue-500 shadow-sm hover:bg-blue-600"
+              className={cn(
+                'nodrag nopan absolute z-[30] rounded-full border border-white bg-blue-500 shadow-sm',
+                isThreadConnecting
+                  ? 'pointer-events-none' // Visual snap target only — don't steal hit from edge Handles
+                  : 'cursor-crosshair hover:bg-blue-600'
+              )}
               style={{
                 ...connectionIndicatorStyle(side, frameUiScale), // Outset scales with frame
                 width: frameIndicatorSize, // Dot grows/shrinks with frame size
@@ -4153,8 +4180,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         </>
       )}
 
-      {/* Frame chrome — rotate · lock · wrap (only while selected; screen-constant via frameChromeScale) */}
-      {isBlock && !pagePreviewOpen && !isThreadConnecting && selected && (
+      {/* Frame chrome — rotate · lock · wrap (selected + idle only; hidden while dragging) */}
+      {isBlock && !pagePreviewOpen && !isThreadConnecting && selected && !dragging && (
           <div
             data-frame-chrome
             className="nodrag nopan absolute z-[25] flex items-center gap-0.5" // Below connection indicators (z-30)
@@ -4297,9 +4324,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             <ChevronLeft className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
           </div>
         </div>
-      ) : !shouldHideHandles ? (
+      ) : !isFlashcard ? (
         <>
-          {/* Connection points — invisible edge anchors only (never start a drag) */}
+          {/* Connection points — always mounted on frames (even unselected/minimal) so settled
+              threads have Handle geometry to attach to; visibility is CSS-only. */}
           {(['left', 'right', 'top', 'bottom'] as const).map((side) => {
             const position =
               side === 'left'
@@ -4541,7 +4569,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               section="prompt"
               placeholder=""
               isFlashcard={isFlashcard}
-              isPanelSelected={selected}
+              isPanelSelected={!!selected && !dragging} // Mid-drag: treat as unselected so ⋮⋮ / caret stay off
               isLoading={false}
               onBlur={handleEditorBlur}
               onEditorActiveChange={handleEditorActiveChange}

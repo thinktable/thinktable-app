@@ -11,12 +11,23 @@ type ConnectionIndicatorProps = {
   className?: string
 }
 
+/** Only snap when the free end is this close (screen px) to a connection point — not merely near the frame. */
+const SNAP_RADIUS_PX = 28
+
 /** Client XY → pane-local XY (RF `connectionPosition` space). */
 function eventPos(
   event: { clientX: number; clientY: number },
   bounds: DOMRect
 ) {
   return { x: event.clientX - bounds.left, y: event.clientY - bounds.top }
+}
+
+type SnapResult = {
+  el: HTMLElement | null // DOM handle for highlight (optional)
+  conn: Connection
+  valid: boolean
+  end: { nodeId: string; handleId: string | null; type: 'source' | 'target' }
+  snapClient: { x: number; y: number } // Where to park the free end (client px)
 }
 
 /**
@@ -40,7 +51,6 @@ export function ConnectionIndicator({
     const {
       domNode,
       onConnectStart,
-      connectionRadius,
       connectionMode,
       isValidConnection,
       panBy,
@@ -109,80 +119,87 @@ export function ConnectionIndicator({
       autoPanId = requestAnimationFrame(autoPan)
     }
 
-    /** Snap to a connectable-end Handle near the pointer (DOM + radius). */
-    const findSnap = (clientX: number, clientY: number) => {
-      const under = doc.elementsFromPoint(clientX, clientY)
-      const hit = under.find(
-        (el) =>
-          el.classList.contains('react-flow__handle') &&
-          el.classList.contains('connectableend')
-      ) as HTMLElement | undefined
+    /**
+     * Snap only when close to a connection point (handle), not merely near the frame.
+     * Indicators still reveal on approach; release without a nearby point cancels.
+     */
+    const findSnap = (clientX: number, clientY: number): SnapResult | null => {
+      const validFn = isValidConnection || (() => true)
+      const radiusPx = SNAP_RADIUS_PX
 
-      const { transform } = store.getState()
-      const scale = transform[2] || 1
-      const radiusPx = Math.max(connectionRadius * scale, 24)
-
-      let best: HTMLElement | null = hit ?? null
-      let bestDist = hit ? 0 : Infinity
-
-      if (!best) {
-        const handles = doc.querySelectorAll(
-          '.react-flow__handle.connectable.connectableend'
+      let bestEl: HTMLElement | null = null
+      let bestDist = Infinity
+      let bestIsTarget = false
+      doc.querySelectorAll('.react-flow__handle.connectable.connectableend').forEach((node) => {
+        const el = node as HTMLElement
+        const nId = el.getAttribute('data-nodeid')
+        if (!nId || nId === nodeId) return
+        const rect = el.getBoundingClientRect()
+        const dist = Math.hypot(
+          rect.left + rect.width / 2 - clientX,
+          rect.top + rect.height / 2 - clientY
         )
-        handles.forEach((node) => {
-          const el = node as HTMLElement
-          const nId = el.getAttribute('data-nodeid')
-          if (!nId || nId === nodeId) return
-          const rect = el.getBoundingClientRect()
-          const dist = Math.hypot(
-            rect.left + rect.width / 2 - clientX,
-            rect.top + rect.height / 2 - clientY
-          )
-          if (dist <= radiusPx && dist < bestDist) {
-            best = el
-            bestDist = dist
-          }
-        })
-      }
+        if (dist > radiusPx) return
+        const isTarget = el.classList.contains('target')
+        // Prefer closer; at equal distance prefer target handles
+        if (dist < bestDist - 0.5 || (Math.abs(dist - bestDist) <= 0.5 && isTarget && !bestIsTarget)) {
+          bestEl = el
+          bestDist = dist
+          bestIsTarget = isTarget
+        }
+      })
 
-      if (!best) return null
+      if (!bestEl) return null
 
-      const targetNodeId = best.getAttribute('data-nodeid')
-      if (!targetNodeId || targetNodeId === nodeId) return null
-
-      const targetHandleId = best.getAttribute('data-handleid')
-      const type = best.classList.contains('target') ? 'target' : 'source'
+      const targetNodeId = bestEl.getAttribute('data-nodeid')!
+      const targetHandleId = bestEl.getAttribute('data-handleid')
+      const type = bestEl.classList.contains('target') ? 'target' : 'source'
+      if (connectionMode === 'strict' && type !== 'target') return null
       const conn: Connection = {
         source: nodeId,
         sourceHandle: handleId,
         target: targetNodeId,
         targetHandle: targetHandleId,
       }
-      const connectable =
-        best.classList.contains('connectable') &&
-        best.classList.contains('connectableend')
-      const typeOk =
-        connectionMode === 'strict' ? type === 'target' : true
-      const validFn = isValidConnection || (() => true)
-      const valid = Boolean(connectable && typeOk && validFn(conn))
-
+      if (!validFn(conn)) return null
+      const r = bestEl.getBoundingClientRect()
       return {
-        el: best,
+        el: bestEl,
         conn,
-        valid,
-        end: {
-          nodeId: targetNodeId,
-          handleId: targetHandleId,
-          type: type as 'source' | 'target',
-        },
+        valid: true,
+        end: { nodeId: targetNodeId, handleId: targetHandleId, type },
+        snapClient: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
       }
+    }
+
+    const applySnap = (snap: SnapResult | null, bounds: DOMRect) => {
+      isValid = snap?.valid ?? false
+      connection = snap?.conn ?? null
+      resetActive()
+      if (snap?.el && snap.conn.source !== snap.conn.target) {
+        prevActive = snap.el
+        snap.el.classList.add('connecting', 'react-flow__handle-connecting')
+        snap.el.classList.toggle('valid', isValid)
+        snap.el.classList.toggle('react-flow__handle-valid', isValid)
+      }
+      let nextPos = connectionPosition
+      if (snap?.valid && snap.snapClient) {
+        nextPos = eventPos(
+          { clientX: snap.snapClient.x, clientY: snap.snapClient.y },
+          bounds
+        )
+      }
+      store.setState({
+        connectionPosition: nextPos,
+        connectionStatus: snap ? (isValid ? 'valid' : 'invalid') : null,
+        connectionEndHandle: snap?.valid ? snap.end : null,
+      })
     }
 
     const onMove = (e: PointerEvent) => {
       if (e.pointerId !== pointerId) return
       const clientX = e.clientX
       const clientY = e.clientY
-      // Re-read pane bounds in case the viewport moved while dragging
       const bounds =
         store.getState().domNode?.getBoundingClientRect() ?? containerBounds
       connectionPosition = eventPos({ clientX, clientY }, bounds)
@@ -192,39 +209,21 @@ export function ConnectionIndicator({
         autoPanStarted = true
       }
 
-      const snap = findSnap(clientX, clientY)
-      isValid = snap?.valid ?? false
-      connection = snap?.conn ?? null
-
-      resetActive()
-      if (snap?.el && snap.conn.source !== snap.conn.target) {
-        prevActive = snap.el
-        snap.el.classList.add('connecting', 'react-flow__handle-connecting')
-        snap.el.classList.toggle('valid', isValid)
-        snap.el.classList.toggle('react-flow__handle-valid', isValid)
-      }
-
-      let nextPos = connectionPosition
-      if (snap?.valid && snap.el) {
-        const r = snap.el.getBoundingClientRect()
-        nextPos = eventPos(
-          { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 },
-          bounds
-        )
-      }
-
-      store.setState({
-        connectionPosition: nextPos,
-        connectionStatus: snap ? (isValid ? 'valid' : 'invalid') : null,
-        connectionEndHandle: snap?.valid ? snap.end : null,
-      })
+      applySnap(findSnap(clientX, clientY), bounds)
     }
 
     const onUp = (e: PointerEvent) => {
       if (e.pointerId !== pointerId) return
+      // Final snap check at release — only connects if still close to a point
+      const bounds =
+        store.getState().domNode?.getBoundingClientRect() ?? containerBounds
+      const snap = findSnap(e.clientX, e.clientY)
+      applySnap(snap, bounds)
+
       if (isValid && connection) {
         const edgeParams = { ...defaultEdgeOptions, ...connection }
-        if (hasDefaultEdges) {
+        // Controlled edges: only onConnect adds (avoid double-add via hasDefaultEdges)
+        if (hasDefaultEdges && !onConnectAction) {
           setEdges((eds) => addEdge(edgeParams, eds))
         }
         onConnectAction?.(edgeParams as Connection)

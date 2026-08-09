@@ -14,6 +14,7 @@ import ReactFlow, {
   BackgroundVariant,
   useReactFlow,
   useStoreApi,
+  useUpdateNodeInternals,
   ConnectionLineType,
   BaseEdge,
   getSmoothStepPath,
@@ -72,6 +73,11 @@ import {
   ungroupBlocks,
 } from '@/lib/blocks' // blocks, groups, page-body ensure
 import { absFlowPosition, useBlockGroupDrag } from './use-block-group-drag' // Drag attach/detach between groups / page
+import {
+  armMarqueeFrameSelect,
+  clearMarqueeFrameSelect,
+  isMarqueeFrameSelectArmed,
+} from '@/lib/frame-drag-transient' // Frame select = click release; marquee still allowed
 import {
   PREVIEW_READY_MESSAGE,
   PREVIEW_RESIZE_MESSAGE,
@@ -808,6 +814,7 @@ function BoardFlowInner({
 
   const reactFlowInstance = useReactFlow()
   const rfStore = useStoreApi() // Embed: force pane width/height when CSS % height collapses
+  const updateNodeInternals = useUpdateNodeInternals() // Remeasure Handles after connect so paths attach
   const { setReactFlowInstance, registerSetNodes, isLocked, layoutMode, setLayoutMode, setIsDeterministicMapping, panelWidth: contextPanelWidth, isPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection, boardRule: contextBoardRule, boardStyle: contextBoardStyle, clickedEdge: contextClickedEdge, setClickedEdge: setContextClickedEdge, fillColor, borderColor, borderWeight, borderStyle, flashcardMode, setFlashcardMode, selectedTag, setSelectedTag, isDrawing, drawTool, drawShape, registerMapUndoRedo, registerMapTakeSnapshot, snapEnabled } = useReactFlowContext()
   const { onNodeDrag: onBlockGroupNodeDrag, onNodeDragStop: onBlockGroupNodeDragStop } = useBlockGroupDrag({
     conversationId, // Persist attach/detach to this map
@@ -815,6 +822,13 @@ function BoardFlowInner({
     setNodes, // Reparent + clear drop-target class
     isLocked, // Locked board: move only, no group change
   })
+
+  // Arm marquee so frame select:true from the selection rect is not treated as mousedown-select
+  useEffect(() => {
+    return rfStore.subscribe((state) => {
+      if (state.userSelectionActive) armMarqueeFrameSelect()
+    })
+  }, [rfStore])
 
   // One-shot: existing boards still have RF-parented cards + zIndex:-1 groups (messagesKey doesn’t rebuild).
   // Unparent immediately and restore a visible dashed sibling frame.
@@ -1348,6 +1362,8 @@ function BoardFlowInner({
     reloadTopBarPrefs()
   }, [conversationId, setLayoutMode, setIsDeterministicMapping, setLineStyle, setArrowDirection])
   const selectedNodeIdRef = useRef<string | null>(null) // Track selected node ID
+  // Frame ids that just finished a drag — ignore onNodeClick so drag never selects
+  const justDraggedFrameRef = useRef<Set<string>>(new Set())
   // Track selected node IDs for restoring selection after pane click (when zoom !== 100%)
   const selectedNodeIdsRef = useRef<string[]>([])
   // Track when we're restoring selection from map click (to prevent nav mode exit)
@@ -3450,62 +3466,34 @@ function BoardFlowInner({
   }, [deleteNodesByIds])
 
   // Recalculate edge handles based on current node positions
-  // This is called when nodes are dragged to update edges in real-time
-  // Automatically switches to closest handles (any of the 4 handles) as nodes move
-  const recalculateEdgeHandles = useCallback((nodeId: string, currentNodes: Node[]) => {
-    const node = currentNodes.find(n => n.id === nodeId)
-    if (!node) return
-
-    // Find all edges connected to this node (including placeholder edges)
-    const connectedEdges = edges.filter(e => e.source === nodeId || e.target === nodeId)
-    if (connectedEdges.length === 0) return
-
-    // Recalculate handles for each connected edge
-    const updatedEdges: Edge[] = []
-    connectedEdges.forEach(edge => {
-      const sourceNode = currentNodes.find(n => n.id === edge.source)
-      const targetNode = currentNodes.find(n => n.id === edge.target)
-      if (!sourceNode || !targetNode) return
-
-      // Calculate closest handles (checks all 4 handles on each node)
-      const handles = findClosestHandles(sourceNode, targetNode)
-      if (!handles) return
-
-      // Check if handles need to change
-      const needsUpdate = edge.sourceHandle !== handles.sourceHandle || edge.targetHandle !== handles.targetHandle
-
-      if (needsUpdate) {
-        // Update edge with closest handles (no direction swapping needed - all handles work)
-        updatedEdges.push({
-          ...edge,
-          sourceHandle: handles.sourceHandle,
-          targetHandle: handles.targetHandle,
-        })
-      }
-    })
-
-    // Update edges if any changed
-    if (updatedEdges.length > 0) {
-      setEdges(eds => {
-        const edgeMap = new Map(eds.map(e => [e.id, e]))
-        updatedEdges.forEach(updatedEdge => {
-          edgeMap.set(updatedEdge.id, updatedEdge)
-        })
-        return Array.from(edgeMap.values())
-      })
-    }
-  }, [edges, setEdges, findClosestHandles])
+  // Previously remapped every connected edge to the nearest sides while dragging.
+  // Disabled — keep the sides the user snapped to; a future cleanup action will re-route.
+  const recalculateEdgeHandles = useCallback((_nodeId: string, _currentNodes: Node[]) => {
+    return
+  }, [])
 
   // Track node position changes in Canvas mode to update stored positions
   const handleNodesChange = useCallback((changes: any[]) => {
+    // Frames: block RF mousedown select — selection happens on click (mouseup) unless marquee
+    const marquee = isMarqueeFrameSelectArmed() || !!rfStore.getState().userSelectionActive
+    let changesToProcess = changes.filter((change) => {
+      if (change.type !== 'select' || change.selected !== true) return true
+      const node = nodes.find((n) => n.id === change.id)
+      if (node?.type !== 'chatPanel') return true // Other node types keep RF default select
+      if (marquee) return true // Selection-rect multi-select
+      return false // Drop mousedown / drag-start auto-select
+    })
+    if (marquee && !rfStore.getState().userSelectionActive) {
+      clearMarqueeFrameSelect() // Marquee batch consumed
+    }
+
     // Check if a placeholder is being interacted with (dragged or clicked)
-    const placeholderInteraction = changes.some((c) => {
+    const placeholderInteraction = changesToProcess.some((c) => {
       const node = nodes.find((n) => n.id === c.id);
       return node?.type === 'placeholder' && (c.type === 'position' || c.type === 'select');
     });
 
     // If a placeholder is being interacted with, preserve selection of non-placeholder nodes
-    let changesToProcess = changes;
     if (placeholderInteraction) {
       // Get currently selected non-placeholder nodes before changes are applied
       const selectedNonPlaceholderIds = nodes
@@ -3513,7 +3501,7 @@ function BoardFlowInner({
         .map((n) => n.id);
 
       // Filter out deselection changes for non-placeholder nodes when placeholder is being interacted with
-      changesToProcess = changes.filter((change) => {
+      changesToProcess = changesToProcess.filter((change) => {
         if (change.type === 'select' && change.selected === false) {
           const node = nodes.find((n) => n.id === change.id);
           // Filter out deselection of non-placeholder nodes when placeholder is being interacted with
@@ -3769,6 +3757,21 @@ function BoardFlowInner({
       }
     })
 
+    // Frame move never leaves a selection — deselect as soon as drag starts and again on drag end
+    // (blue box comes from `dragging`, not `selected`).
+    const frameDragSelectClearIds = new Set<string>([...draggedNodeIds, ...dragEndedNodeIds])
+    if (frameDragSelectClearIds.size > 0) {
+      const deselectChanges: Array<{ type: 'select'; id: string; selected: false }> = []
+      frameDragSelectClearIds.forEach((nodeId) => {
+        const node = nodes?.find((n) => n.id === nodeId)
+        if (node?.type !== 'chatPanel') return
+        deselectChanges.push({ type: 'select', id: nodeId, selected: false })
+      })
+      if (deselectChanges.length > 0) {
+        changesToProcess = [...changesToProcess, ...deselectChanges]
+      }
+    }
+
     // Apply helper lines snapping if enabled (before calling onNodesChange)
     const updatedChanges = snapEnabled ? updateHelperLines(changesToProcess, nodes) : changesToProcess
     
@@ -3786,7 +3789,7 @@ function BoardFlowInner({
       }, 500) // Clear flag after 500ms
       return
     }
-  }, [onNodesChange, nodes, viewMode, setNodes, deleteNodesByIds, recalculateEdgeHandles, takeSnapshot, getChronologicalPanels, linearNavMode, centerPanelAbovePrompt, snapEnabled, updateHelperLines])
+  }, [onNodesChange, nodes, viewMode, setNodes, deleteNodesByIds, recalculateEdgeHandles, takeSnapshot, getChronologicalPanels, linearNavMode, centerPanelAbovePrompt, snapEnabled, updateHelperLines, rfStore])
 
   // Track selected node from nodes array
   // Don't trigger viewport changes on selection in linear mode
@@ -6313,20 +6316,15 @@ function BoardFlowInner({
 
       takeSnapshot()
 
-      const handles = findClosestHandles(sourceNode, targetNode) // Magnetic mid-side snap
+      // Keep the sides the user snapped to (don't rewrite to nearest) — cleanup comes later
       const nextEdge: Edge = {
         ...oldEdge,
         source: newConnection.source,
         target: newConnection.target,
-        // Remap indicator ids → edge anchors so threads stay glued to the frame
         sourceHandle:
-          normalizeHandleId(newConnection.sourceHandle) ||
-          handles?.sourceHandle ||
-          newConnection.sourceHandle,
+          normalizeHandleId(newConnection.sourceHandle) || newConnection.sourceHandle,
         targetHandle:
-          normalizeHandleId(newConnection.targetHandle) ||
-          handles?.targetHandle ||
-          newConnection.targetHandle,
+          normalizeHandleId(newConnection.targetHandle) || newConnection.targetHandle,
         type: 'editable',
         data: {
           ...((oldEdge.data as ThreadEdgeData | undefined) || {}),
@@ -6373,7 +6371,7 @@ function BoardFlowInner({
         console.error('Error updating thread reconnect:', err)
       }
     },
-    [conversationId, findClosestHandles, isLocked, nodes, setEdges, takeSnapshot]
+    [conversationId, isLocked, nodes, setEdges, takeSnapshot]
   )
 
   // Update edge popup position when edge, nodes, or viewport changes
@@ -6937,15 +6935,20 @@ function BoardFlowInner({
             rebuildIndex(nodes)
           }
           void onBlockGroupNodeDragStop(event, node) // Attach to group / detach onto the page + persist
+          // Guard: some RF versions still fire onNodeClick after a drag — skip click-select briefly
+          if (node?.type === 'chatPanel') {
+            justDraggedFrameRef.current.add(node.id)
+            window.setTimeout(() => justDraggedFrameRef.current.delete(node.id), 100)
+          }
         }}
         nodeTypes={memoizedNodeTypes}
         edgeTypes={memoizedEdgeTypes}
         connectionMode={ConnectionMode.Loose}
         connectionLineType={ConnectionLineType.SmoothStep}
         connectionLineComponent={ThreadConnectionLine} // Thread free end tracks the cursor
-        connectionRadius={36} // Larger snap radius for Miro-like proximity targets
+        connectionRadius={36} // Snap only when close to a connection point (not the whole frame)
         edgesUpdatable={!isLocked} // Drag either end to detach / reconnect
-        edgeUpdaterRadius={16} // Hit area for grabbing a thread endpoint
+        edgeUpdaterRadius={20} // Hit area for grabbing a thread endpoint
         onEdgeUpdate={handleThreadReconnect}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
@@ -6984,28 +6987,31 @@ function BoardFlowInner({
             // Take snapshot before creating edge for undo support
             takeSnapshot()
             
-            // Prefer the side the user dragged from (indicator → edge id); else closest pair
-            const handles = findClosestHandles(sourceNode, targetNode)
-            if (!handles && !params.sourceHandle) {
-              console.warn('🔄 BoardFlow: Could not find closest handles for edge creation')
+            // Keep the sides the user snapped to; only fall back to closest if a side is missing
+            const sourceHandle =
+              normalizeHandleId(params.sourceHandle) || params.sourceHandle || null
+            const targetHandle =
+              normalizeHandleId(params.targetHandle) || params.targetHandle || null
+            const fallback =
+              !sourceHandle || !targetHandle
+                ? findClosestHandles(sourceNode, targetNode)
+                : null
+            if (!sourceHandle && !fallback?.sourceHandle) {
+              console.warn('🔄 BoardFlow: Could not resolve source handle for edge creation')
               return
             }
-            
+            if (!targetHandle && !fallback?.targetHandle) {
+              console.warn('🔄 BoardFlow: Could not resolve target handle for edge creation')
+              return
+            }
+
             const newEdge: Edge = {
               id: `${params.source}-${params.target}`,
               source: params.source,
               target: params.target,
               // Always store edge-anchor ids (never *-indicator) so geometry stays on the frame
-              sourceHandle:
-                normalizeHandleId(params.sourceHandle) ||
-                normalizeHandleId(handles?.sourceHandle) ||
-                handles?.sourceHandle ||
-                null,
-              targetHandle:
-                normalizeHandleId(params.targetHandle) ||
-                normalizeHandleId(handles?.targetHandle) ||
-                handles?.targetHandle ||
-                null,
+              sourceHandle: sourceHandle || fallback?.sourceHandle || null,
+              targetHandle: targetHandle || fallback?.targetHandle || null,
               type: 'editable', // Miro-style adjustable thread
               data: {
                 algorithm: threadAlgorithmFromStyle(
@@ -7019,7 +7025,13 @@ function BoardFlowInner({
             }
 
             // Add to React Flow state immediately (optimistic update)
-            setEdges((eds) => [...eds, newEdge])
+            setEdges((eds) => {
+              if (eds.some((e) => e.id === newEdge.id)) return eds // Already present
+              return [...eds, newEdge]
+            })
+            // Remeasure handle bounds so the path attaches on both ends
+            if (params.source) updateNodeInternals(params.source)
+            if (params.target) updateNodeInternals(params.target)
 
             // Save to database
             try {
@@ -7184,7 +7196,7 @@ function BoardFlowInner({
           }
         }}
         onEdgeClick={handleEdgeClick}
-        onNodeClick={(event) => {
+        onNodeClick={(event, node) => {
           // Clear I-bar cursor when clicking on a node/panel
           if (iBarPosition) {
             setIBarPosition(null)
@@ -7196,6 +7208,17 @@ function BoardFlowInner({
               previewFocus.clearPreviewFocus()
             }
           }
+          // Frames: select on click release only (mousedown select is blocked so drag ≠ select)
+          if (node?.type !== 'chatPanel') return
+          if (justDraggedFrameRef.current.has(node.id)) return // Drag release is not a select
+          const additive = event.metaKey || event.ctrlKey || event.shiftKey
+          setNodes((nds) =>
+            nds.map((n) => {
+              if (n.id === node.id) return { ...n, selected: true }
+              if (additive) return n // Keep other selected frames for multi-select
+              return n.selected ? { ...n, selected: false } : n
+            })
+          )
         }}
         onNodeContextMenu={handleNodeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}

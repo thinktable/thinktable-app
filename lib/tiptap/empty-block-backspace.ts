@@ -1,13 +1,48 @@
 // Empty TipTap block keys: Backspace removes the block; Enter does not spawn another empty block.
 // Fresh frames (sole empty block) keep Backspace as a no-op. pageLink / other atoms get title focus.
+// Frame deselect also prunes leftover empty top-level textblocks (blank Enter lines).
 
-import { Extension } from '@tiptap/core'
+import { Extension, type Editor } from '@tiptap/core' // Editor type for prune helper
 import { NodeSelection, TextSelection } from '@tiptap/pm/state'
 
 /** True when a textblock has no visible text (empty paragraph / heading). */
-function isEmptyTextblock(node: { isTextblock: boolean; textContent: string; content: { size: number } }) {
-  if (!node.isTextblock) return false
+export function isEmptyTextblock(node: { isTextblock: boolean; textContent: string; content: { size: number } }) {
+  if (!node.isTextblock) return false // Atoms / lists are not empty “lines”
   return node.content.size === 0 || node.textContent.length === 0
+}
+
+/**
+ * Remove empty top-level textblocks from a frame editor (blank lines left after Enter).
+ * Keeps pageLink/databaseBlock atoms. Never empties the doc — leaves one node so sole-empty
+ * frame deletion (or a typing shell) can still run. Returns true when something was deleted.
+ */
+export function pruneEmptyTextblocks(editor: Editor): boolean {
+  if (editor.isDestroyed) return false // Unmounted editor — nothing to prune
+  const { state, view } = editor
+  const { doc } = state
+
+  // Collect empty top-level textblock ranges (delete high→low so positions stay valid)
+  const ranges: { from: number; to: number }[] = []
+  let pos = 0
+  for (let i = 0; i < doc.childCount; i++) {
+    const child = doc.child(i)
+    const from = pos
+    const to = pos + child.nodeSize
+    if (isEmptyTextblock(child)) ranges.push({ from, to }) // Blank paragraph / heading only
+    pos = to
+  }
+  if (ranges.length === 0) return false // Nothing empty
+
+  // Would delete every child → keep one shell (PM needs a node; sole-empty path may remove the frame)
+  if (ranges.length >= doc.childCount) ranges.pop()
+  if (ranges.length === 0) return false // Sole empty textblock — leave for frame-delete logic
+
+  let tr = state.tr
+  for (let i = ranges.length - 1; i >= 0; i--) {
+    tr = tr.delete(ranges[i].from, ranges[i].to) // Strip blank line from the frame
+  }
+  view.dispatch(tr) // onUpdate persists HTML via existing content-change path
+  return true
 }
 
 export const EmptyBlockBackspace = Extension.create({

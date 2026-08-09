@@ -1,16 +1,9 @@
-import { getBezierPath, getSmoothStepPath, Position } from 'reactflow' // Preview by thread style
+import { getBezierPath, getSmoothStepPath, Position, useStore } from 'reactflow' // Preview by thread style + live zoom
 import {
   isSharpThreadAlgorithm,
   threadAlgorithmFromStyle,
   ThreadAlgorithm,
 } from './constants' // Toolbar Smooth / Sharp / Linear
-
-const opposite: Record<Position, Position> = {
-  [Position.Left]: Position.Right,
-  [Position.Right]: Position.Left,
-  [Position.Top]: Position.Bottom,
-  [Position.Bottom]: Position.Top,
-}
 
 /** Read board thread style preference for the live connection preview. */
 function preferredAlgorithm() {
@@ -22,7 +15,8 @@ function preferredAlgorithm() {
 
 /**
  * Connection-line preview while creating or reconnecting a thread.
- * Smooth = bezier · Sharp = ridged 90° · Linear = straight.
+ * Miro-like: side-aware cubic bezier (or sharp/linear) — no stub waypoints / S-curves.
+ * Uses RF `toPosition` so a top snap approaches from above.
  */
 export function ThreadConnectionLine({
   fromX,
@@ -30,15 +24,18 @@ export function ThreadConnectionLine({
   toX,
   toY,
   fromPosition = Position.Right,
+  toPosition = Position.Left,
 }: {
   fromX: number
   fromY: number
   toX: number
   toY: number
   fromPosition?: Position
+  toPosition?: Position // Target handle side when snapped
 }) {
   const algorithm = preferredAlgorithm()
-  const toPosition = opposite[fromPosition] ?? Position.Left
+  const zoom = useStore((s) => s.transform[2] || 1) // Counter-scale preview stroke with board zoom
+  const strokeWidth = 2 / Math.max(0.01, zoom) // Same screen thickness as settled threads
 
   let path: string
   if (isSharpThreadAlgorithm(algorithm)) {
@@ -49,7 +46,7 @@ export function ThreadConnectionLine({
       targetX: toX,
       targetY: toY,
       targetPosition: toPosition,
-      borderRadius: 8, // Match settled Sharp threads (rounded elbows)
+      borderRadius: 8,
     })
   } else if (algorithm === ThreadAlgorithm.Linear) {
     path = `M ${fromX} ${fromY} L ${toX} ${toY}`
@@ -71,7 +68,7 @@ export function ThreadConnectionLine({
         fill="none"
         className="react-flow__connectionline-path"
         stroke="#6b7280"
-        strokeWidth={2}
+        strokeWidth={strokeWidth} // Screen-constant (÷zoom)
       />
     </g>
   )

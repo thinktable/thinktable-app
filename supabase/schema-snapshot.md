@@ -1,7 +1,7 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T16:32:16Z`
+- Snapped at: `2026-08-09T17:32:23Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
@@ -9,10 +9,17 @@
 
 ## This save
 
-- No DDL. Marker `20260809163216_frame_ui_scale_selection_chrome.sql`.
-- **Selection chrome** (`chat-panel-node` + `globals.css`): shared `frameUiScale` — shrink when frame < ref/0.7 wide (floor 0.55); grow `widthRatio^0.85` up to 4×. Scales corner resize handles, blue resize lines (`--tt-frame-line-w` / `--tt-frame-line-hit` / `--tt-frame-handle`), connection indicators (dot + outset), and rotate/lock/wrap (fit × soft zoom comfort). Gap clears scaled bottom indicator.
-- **`isBlockContentEmpty`**: `pageLink` / `databaseBlock` atoms count as content so lock/wrap show on page frames.
+- No DDL. Marker `20260809173223_frame_select_click_drag_border.sql`.
+- **Frame select**: click-release only (`board-flow` blocks RF mousedown `select:true` for `chatPanel`; marquee still allowed). Mid-press hides selection chrome; `onNodeClick` selects.
+- **Frame move**: transient blue box only (no resize/connection/rotate chrome); deselect on drag start/end (`lib/frame-drag-transient.ts`).
+- **Blocks**: select frame before caret/text; ⋮⋮ drag moves the **block** only when armed via grip click, else moves the **frame**.
 - Persisted via existing tables — schema unchanged.
+
+## Prior: frame UI scale selection chrome
+
+- No DDL. Marker `20260809163216_frame_ui_scale_selection_chrome.sql`.
+- **Selection chrome** (`chat-panel-node` + `globals.css`): shared `frameUiScale` — shrink when frame < ref/0.7 wide (floor 0.55); grow `widthRatio^0.85` up to 4×. Scales corner resize handles, blue resize lines, connection indicators, and rotate/lock/wrap.
+- **`isBlockContentEmpty`**: `pageLink` / `databaseBlock` atoms count as content so lock/wrap show on page frames.
 
 ## Prior: pageLink chrome + deselect fix
 

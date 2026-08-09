@@ -1,0 +1,8 @@
+-- No DDL. Frontend-only save (frame select / drag interaction).
+-- Frame select is click-release only (RF mousedown select blocked for chatPanel;
+--   marquee still allowed). Mid-press hides selection chrome.
+-- Frame move shows a transient blue box only (no resize corners, connection
+--   indicators, or rotate/lock/wrap) and never leaves the frame selected.
+-- Select frame before caret/text; ⋮⋮ drag moves the block only when armed via
+--   ⋮⋮ click, otherwise moves the frame (`lib/frame-drag-transient.ts`).
+-- Persisted via existing tables — schema unchanged.

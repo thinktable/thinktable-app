@@ -1,6 +1,7 @@
 'use client'
 
-// ⋮⋮ on each TipTap **block** (not the host **frame**). Click = actions; drag = that block only. See DEFINITIONS.md.
+// ⋮⋮ on each TipTap **block** (not the host **frame**). Click selects the block (+ menu);
+// drag moves that block only when it is already selected — otherwise RF drags the frame. See DEFINITIONS.md.
 
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
@@ -55,6 +56,7 @@ type HandleLayout = {
 type TipTapBlockHandlesProps = {
   editor: Editor | null
   enabled?: boolean // Off for flashcards / project boards
+  isPanelSelected?: boolean // Host frame must be selected before ⋮⋮ can drag a block
   hostNodeId?: string // Host **frame** RF id — Page promote / extract target
   conversationId?: string // Page id — extract a block onto the page as its own frame
   pageInTargets?: PageInTarget[]
@@ -221,6 +223,7 @@ function frameForEditor(dom: HTMLElement): HTMLElement {
 export function TipTapBlockHandles({
   editor,
   enabled = true,
+  isPanelSelected = false,
   hostNodeId,
   conversationId,
   pageInTargets = [],
@@ -242,6 +245,7 @@ export function TipTapBlockHandles({
   const [insertLine, setInsertLine] = useState<InsertLine | null>(null) // Hover gap → centered add hairline
   const [ghost, setGhost] = useState<{ x: number; y: number; text: string; width: number } | null>(null) // Floating preview of the dragged line
   // In-frame multi-block selection (Shift = range, Cmd/Ctrl = toggle). Empty = no multi-selection.
+  // A plain ⋮⋮ click also arms a single-block selection so a later drag can move that block.
   const [selection, setSelection] = useState<EditorBlockRef[]>([])
   const selectionRef = useRef<EditorBlockRef[]>([]) // Latest selection for click handlers
   selectionRef.current = selection
@@ -251,7 +255,7 @@ export function TipTapBlockHandles({
   const focusRef = useRef<HandleLayout | null>(null)
   hoverRef.current = hover
   focusRef.current = focusLayout
-  // Click vs drag on the ⋮⋮ grip — click opens menu; drag moves this **block** only (never the frame)
+  // Click vs drag on the ⋮⋮ grip — drag moves the **block** only when it is already selected
   const gripPointerRef = useRef<{ x: number; y: number; dragged: boolean } | null>(null)
   const draggingRef = useRef(false) // Freeze hover/handle while a content-block drag is live
 
@@ -262,13 +266,24 @@ export function TipTapBlockHandles({
     return () => unregisterHostEditor(hostNodeId, editor)
   }, [editor, hostNodeId])
 
-  // Clear highlight + multi-selection when menu closes
-  const closeMenu = useCallback(() => {
-    if (editor) setEditorBlockHighlight(editor, null) // 'clear' wipes single + multi wash
-    setSelection([]) // Drop the multi-selection
+  // Drop block wash + selection + menu (frame deselect, click away, etc.)
+  const clearBlockSelection = useCallback(() => {
+    if (editor) setEditorBlockHighlight(editor, null) // Wipe single + multi wash
+    setSelection([])
     anchorRef.current = null
     setMenu(null)
   }, [editor])
+
+  // Close the actions menu only — keep the block selection so a follow-up ⋮⋮ drag can move it
+  const closeMenu = useCallback(() => {
+    setMenu(null)
+  }, [])
+
+  // Frame deselected → drop any armed block selection (no block drag without a selected frame)
+  useEffect(() => {
+    if (isPanelSelected) return
+    clearBlockSelection()
+  }, [isPanelSelected, clearBlockSelection])
 
   // Apply a multi-block selection: update state + paint the multi-range wash.
   const applySelection = useCallback(
@@ -314,6 +329,12 @@ export function TipTapBlockHandles({
       const el = target as HTMLElement | null
       // Pointer on the grip / add-line / menu — keep current hover
       if (el?.closest?.('[data-tt-block-handle], [data-tt-insert-line], .block-actions-menu')) return
+      // Rotate/lock/wrap lives under the node but outside content — never treat as insert-gap padding
+      if (el?.closest?.('[data-frame-chrome]')) {
+        setHover(null)
+        setInsertLine(null)
+        return
+      }
 
       // Only while over this map-card frame (full width)
       if (!frame.contains(el) && el !== frame) {
@@ -364,6 +385,12 @@ export function TipTapBlockHandles({
       const related = event.relatedTarget as HTMLElement | null
       // Leaving into grip / add-line / menu keeps hover so the control stays clickable
       if (related?.closest?.('[data-tt-block-handle], [data-tt-insert-line], .block-actions-menu')) return
+      // Leaving onto rotate/lock/wrap — clear insert line (chrome is outside content padding)
+      if (related?.closest?.('[data-frame-chrome]')) {
+        setHover(null)
+        setInsertLine(null)
+        return
+      }
       // Leaving to another node inside the same frame — mousemove will re-resolve
       if (related && frame.contains(related)) return
       setHover(null)
@@ -457,17 +484,17 @@ export function TipTapBlockHandles({
     }
   }, [editor, enabled, menu])
 
-  // Close menu on outside click
+  // Outside click: dismiss menu + clear armed block selection (unless clicking another grip / the menu)
   useEffect(() => {
-    if (!menu) return
+    if (!menu && selection.length === 0) return // Nothing armed
     const onDoc = (event: MouseEvent) => {
       const t = event.target as HTMLElement
       if (t.closest?.('.block-actions-menu, [data-tt-block-handle]')) return
-      closeMenu()
+      clearBlockSelection()
     }
     document.addEventListener('mousedown', onDoc, true)
     return () => document.removeEventListener('mousedown', onDoc, true)
-  }, [menu, closeMenu])
+  }, [menu, selection.length, clearBlockSelection])
 
   // Prefer opening the actions menu to the LEFT of the frame (the ⋮⋮ handle lives in the left gutter);
   // fall back to the default right-of-handle spot when there isn't room on the left.
@@ -487,7 +514,9 @@ export function TipTapBlockHandles({
   const openForBlock = useCallback(
     (block: EditorBlockRef, clientX: number, clientY: number) => {
       if (!editor) return
-      setEditorBlockHighlight(editor, { from: block.from, to: block.to })
+      // Arm this block for a follow-up ⋮⋮ drag (selection persists after the menu closes)
+      applySelection([block])
+      anchorRef.current = block
       const blockType = refineListBlockType(editor, block)
       setMenu({ ...menuPlacement(clientX, clientY), block, blockType })
       const container = editor.view.dom.parentElement
@@ -497,12 +526,14 @@ export function TipTapBlockHandles({
         setFocusLayout(layout)
       }
     },
-    [editor, menuPlacement]
+    [editor, menuPlacement, applySelection]
   )
 
   // Between-block add line: click inserts an empty paragraph at the hovered gap
   const onInsertLineClick = useCallback(
     (e: React.MouseEvent) => {
+      // Unselected frame: let RF select/drag — do not insert or place a caret
+      if (!isPanelSelected) return
       e.stopPropagation() // Don't bubble to frame / RF
       e.preventDefault()
       if (!editor || editor.isDestroyed || !insertLine) return
@@ -515,21 +546,33 @@ export function TipTapBlockHandles({
         .run()
       setInsertLine(null) // Hide until next hover
     },
-    [editor, insertLine]
+    [editor, insertLine, isPanelSelected]
   )
 
-  // Click vs drag: nodrag so RF never starts; pointermove/up on window for this content block only
+  // True when this block was armed by a prior ⋮⋮ click (single or multi) — only then may ⋮⋮ drag it
+  const isBlockArmed = useCallback(
+    (block: EditorBlockRef) => selectionRef.current.some((b) => b.from === block.from),
+    []
+  )
+
+  // Block drag only when frame + this block are selected; otherwise let RF drag the frame
   const onGripPointerDown = useCallback((e: ReactPointerEvent, target?: EditorBlockRef) => {
     if (e.button !== 0 || !editor) return // Left button + live editor
-    e.stopPropagation() // Never start RF frame drag from ⋮⋮
+    const block = target ?? (hover ?? focusLayout)?.block
+    if (!block) return
+    // Frame not selected, or block not armed via ⋮⋮ click → do not steal the pointer (RF drags the frame)
+    if (!isPanelSelected || !isBlockArmed(block)) {
+      gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
+      return // No stopPropagation / no nodrag path — frame moves
+    }
+    e.stopPropagation() // Armed block drag — never start RF frame drag from ⋮⋮
     // Modifier+click is a multi-select gesture (handled in onClick) — don't start a drag
     if (e.shiftKey || e.metaKey || e.ctrlKey) {
       gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
       return
     }
-    const block = target ?? (hover ?? focusLayout)?.block
-    if (!block) return
     gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false } // Baseline for click vs drag
+    setMenu(null) // Dismiss actions while dragging the armed block
     const sourceHostId = hostNodeId // Frame this block currently lives in
     const sourceFrom = block.from // Snapshot — docs shift after delete
     const sourceTo = block.to
@@ -553,17 +596,17 @@ export function TipTapBlockHandles({
         setDropLine(null) // Over empty canvas — extract on drop
         return
       }
-      const target = findContentBlockDropTarget(hit.editor, ev.clientY)
-      if (!target) {
+      const dropTarget = findContentBlockDropTarget(hit.editor, ev.clientY)
+      if (!dropTarget) {
         setDropLine(null)
         return
       }
       // Hide the line if it would insert the block back into itself
-      if (hit.hostNodeId === sourceHostId && target.insertPos >= sourceFrom && target.insertPos <= sourceTo) {
+      if (hit.hostNodeId === sourceHostId && dropTarget.insertPos >= sourceFrom && dropTarget.insertPos <= sourceTo) {
         setDropLine(null)
         return
       }
-      setDropLine({ top: target.lineTop, left: target.lineLeft, width: target.lineWidth }) // Dashed insert marker
+      setDropLine({ top: dropTarget.lineTop, left: dropTarget.lineLeft, width: dropTarget.lineWidth }) // Dashed insert marker
     }
 
     const onUp = async (ev: PointerEvent) => {
@@ -580,20 +623,20 @@ export function TipTapBlockHandles({
       const hit = findHostEditorAtPoint(ev.clientX, ev.clientY)
       const payload = jsonForEditorRange(editor, sourceFrom, sourceTo)
       if (payload.length === 0) {
-        setEditorBlockHighlight(editor, null)
+        clearBlockSelection()
         return
       }
 
       if (hit && hit.hostNodeId === sourceHostId) {
-        const target = findContentBlockDropTarget(hit.editor, ev.clientY)
-        if (target) moveEditorBlockToPos(editor, sourceFrom, sourceTo, target.insertPos) // Reorder in this card
-        setEditorBlockHighlight(editor, null)
+        const dropTarget = findContentBlockDropTarget(hit.editor, ev.clientY)
+        if (dropTarget) moveEditorBlockToPos(editor, sourceFrom, sourceTo, dropTarget.insertPos) // Reorder in this frame
+        clearBlockSelection()
         return
       }
 
       if (hit && hit.hostNodeId !== sourceHostId) {
-        const target = findContentBlockDropTarget(hit.editor, ev.clientY)
-        const insertPos = target?.insertPos ?? hit.editor.state.doc.content.size
+        const dropTarget = findContentBlockDropTarget(hit.editor, ev.clientY)
+        const insertPos = dropTarget?.insertPos ?? hit.editor.state.doc.content.size
         let toInsert = payload // List items stay bare inside a list
         try {
           const $ins = hit.editor.state.doc.resolve(Math.min(insertPos, hit.editor.state.doc.content.size))
@@ -606,14 +649,14 @@ export function TipTapBlockHandles({
           toInsert = wrapJsonForInsert(editor, block, payload)
         }
         const inserted = hit.editor.chain().focus().insertContentAt(insertPos, toInsert).run()
-        if (inserted) deleteEditorBlockRange(editor, sourceFrom, sourceTo) // Leave source card
-        setEditorBlockHighlight(editor, null)
+        if (inserted) deleteEditorBlockRange(editor, sourceFrom, sourceTo) // Leave source frame
+        clearBlockSelection()
         return
       }
 
       // Drop on empty **page** → new **frame** with this block’s HTML
       if (!conversationId) {
-        setEditorBlockHighlight(editor, null)
+        clearBlockSelection()
         return
       }
       const html = htmlForEditorRange(editor, sourceFrom, sourceTo)
@@ -622,7 +665,7 @@ export function TipTapBlockHandles({
         const supabase = createClient()
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) {
-          setEditorBlockHighlight(editor, null)
+          clearBlockSelection()
           return
         }
         const { error } = await supabase.from('messages').insert({
@@ -637,7 +680,7 @@ export function TipTapBlockHandles({
         })
         if (error) {
           console.error('Error extracting content block:', error)
-          setEditorBlockHighlight(editor, null)
+          clearBlockSelection()
           return
         }
         deleteEditorBlockRange(editor, sourceFrom, sourceTo) // Remove from source after persist
@@ -646,12 +689,23 @@ export function TipTapBlockHandles({
       } catch (err) {
         console.error('Error extracting content block:', err)
       }
-      setEditorBlockHighlight(editor, null)
+      clearBlockSelection()
     }
 
     window.addEventListener('pointermove', onMove, true)
     window.addEventListener('pointerup', onUp, true)
-  }, [conversationId, editor, focusLayout, hostNodeId, hover, queryClient, screenToFlowPosition])
+  }, [
+    clearBlockSelection,
+    conversationId,
+    editor,
+    focusLayout,
+    hostNodeId,
+    hover,
+    isBlockArmed,
+    isPanelSelected,
+    queryClient,
+    screenToFlowPosition,
+  ])
 
   // Single block → linked page: create a child page seeded with this block's content,
   // then replace the block with an inline pageLink node (icon LEFT of the link text).
@@ -732,11 +786,11 @@ export function TipTapBlockHandles({
         if (payload.blockType === 'page' || payload.blockType === 'pageIn') {
           if (isMulti) void turnSelectionIntoPage(sel, payload.blockType, payload.pageInParentId)
           else void turnBlockIntoPage(menu.block, payload.blockType, payload.pageInParentId)
-          closeMenu()
+          clearBlockSelection()
           return
         }
         for (const b of ordered) turnEditorBlockInto(editor, b, payload.blockType) // Per-block transform
-        closeMenu()
+        clearBlockSelection()
         return
       }
       if (action === 'duplicate') {
@@ -744,34 +798,36 @@ export function TipTapBlockHandles({
           const slice = editor.state.doc.slice(b.from, b.to)
           editor.chain().focus().insertContentAt(b.to, slice.content.toJSON()).run()
         }
-        closeMenu()
+        clearBlockSelection()
         return
       }
       if (action === 'delete') {
         for (const b of ordered) deleteEditorBlockRange(editor, b.from, b.to)
-        closeMenu()
+        clearBlockSelection()
         return
       }
       if (action === 'copyLink' && hostNodeId) {
         const url = `${window.location.href.split('?')[0]}?block=${hostNodeId}&pos=${menu.block.from}`
         void navigator.clipboard.writeText(url).catch(() => {})
-        closeMenu()
+        clearBlockSelection()
         return
       }
-      closeMenu()
+      clearBlockSelection()
     },
-    [editor, menu, closeMenu, turnBlockIntoPage, turnSelectionIntoPage, hostNodeId]
+    [editor, menu, clearBlockSelection, turnBlockIntoPage, turnSelectionIntoPage, hostNodeId]
   )
 
-  // Grip click: plain = actions menu (single, or group when block is already multi-selected);
-  // Shift = range-select to anchor; Cmd/Ctrl = toggle this block in the selection.
+  // Grip click: plain = arm block + actions menu; Shift/⌘ = multi-select.
+  // Unselected frame: do not steal the click — RF selects the frame first.
   const onGripClick = useCallback(
     (e: React.MouseEvent, block: EditorBlockRef) => {
-      e.stopPropagation()
-      e.preventDefault()
       const start = gripPointerRef.current
       gripPointerRef.current = null
       if (start?.dragged) return // Drag moved this block — don't open the menu
+      // Frame not selected yet → let the click bubble so RF selects the frame (no block menu)
+      if (!isPanelSelected) return
+      e.stopPropagation()
+      e.preventDefault()
       if (!editor) return
       if (e.shiftKey) {
         const anchor = anchorRef.current ?? block
@@ -793,12 +849,10 @@ export function TipTapBlockHandles({
         setMenu({ ...menuPlacement(e.clientX, e.clientY), block, blockType })
         return
       }
-      // Otherwise reset to a single-block selection + open its menu
-      anchorRef.current = block
-      setSelection([])
+      // Arm this single block + open its menu (follow-up ⋮⋮ drag can move it)
       openForBlock(block, e.clientX, e.clientY)
     },
-    [editor, applySelection, collectBlocksBetween, openForBlock, menuPlacement]
+    [editor, applySelection, collectBlocksBetween, openForBlock, menuPlacement, isPanelSelected]
   )
 
   if (!editor || !enabled) return null
@@ -849,7 +903,10 @@ export function TipTapBlockHandles({
 
   return (
     <>
-      {Array.from(gripLayouts.values()).map((gl) => (
+      {Array.from(gripLayouts.values()).map((gl) => {
+        // nodrag only when this block is armed — otherwise RF must receive the pointer to drag the frame
+        const armed = isPanelSelected && isBlockArmed(gl.block)
+        return (
         <div key={gl.block.from} data-tt-block-handle>
           {/* ⋮⋮ grip — sole gutter control (add-block is the between-line) */}
           <div
@@ -857,7 +914,8 @@ export function TipTapBlockHandles({
             tabIndex={0}
             data-tt-block-handle
             className={cn(
-              'nodrag nopan absolute z-[60] w-5 h-6 flex items-center justify-center rounded', // nodrag: ⋮⋮ never starts RF frame drag
+              'absolute z-[60] w-5 h-6 flex items-center justify-center rounded',
+              armed ? 'nodrag nopan' : 'nopan', // Armed → block drag; else frame drag via RF
               'text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/10',
               'pointer-events-auto cursor-grab active:cursor-grabbing select-none'
             )}
@@ -867,11 +925,18 @@ export function TipTapBlockHandles({
               transform: `translateY(-50%) scale(${chromeScale})`, // Center on that line via the true height (like the menu) + comfort
               transformOrigin: 'center', // Scale about the center so it stays gutter-centered + line-centered
             }}
-            title="Drag to move · click for actions · Shift/⌘-click to multi-select"
+            title={
+              armed
+                ? 'Drag to move block · click for actions · Shift/⌘-click to multi-select'
+                : isPanelSelected
+                  ? 'Click to select block · drag moves frame'
+                  : 'Drag to move frame · click to select frame'
+            }
             onPointerDown={(e) => onGripPointerDown(e, gl.block)}
             onClick={(e) => onGripClick(e, gl.block)}
             onKeyDown={(e) => {
               if (e.key !== 'Enter' && e.key !== ' ') return
+              if (!isPanelSelected) return // Frame must be selected before arming a block via keyboard
               e.preventDefault()
               openForBlock(gl.block, e.currentTarget.getBoundingClientRect().right, e.currentTarget.getBoundingClientRect().top)
             }}
@@ -879,10 +944,11 @@ export function TipTapBlockHandles({
             <GripVertical className="h-4 w-4 pointer-events-none" />
           </div>
         </div>
-      ))}
+        )
+      })}
 
-      {/* Same column/width as ⋮⋮ grip; vertically centered on the gap */}
-      {insertLine && (
+      {/* Same column/width as ⋮⋮ grip; vertically centered on the gap — only when frame is selected */}
+      {insertLine && isPanelSelected && (
         <div
           role="button"
           tabIndex={0}

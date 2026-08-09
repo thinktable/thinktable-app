@@ -13,7 +13,7 @@ import {
 import { useTheme } from '@/components/theme-provider';
 import Shape from './Shape';
 import { type ShapeNodeData } from './types';
-import { useIsThreadConnecting } from '@/components/threads'; // Reveal anchors while a thread end is dragged
+import { useIsThreadConnecting, useIsNearThreadConnection } from '@/components/threads'; // Reveal anchors while a thread end is dragged
 
 const handlePositions = [
   Position.Top,
@@ -131,7 +131,9 @@ export function ShapeNode({
 
   // Connection points: blue fill + white border (same as frame handles)
   const handleBorderColor = '#ffffff'
-  const isThreadConnecting = useIsThreadConnecting() // Miro: show snap targets; hide resize chrome
+  const isThreadConnecting = useIsThreadConnecting() // Hide resize chrome while dragging a thread
+  const isNearThreadSnap = useIsNearThreadConnection(id) // Show handles when the free end is near this shape
+  const showConnectionHandles = selected || (isThreadConnecting && isNearThreadSnap)
 
   return (
     <div ref={nodeRef} className="w-full h-full relative">
@@ -191,7 +193,7 @@ export function ShapeNode({
             height: '10px',
             backgroundColor: isThreadConnecting ? '#ffffff' : '#3b82f6', // Hollow while snapping
             border: '1.5px solid #3b82f6',
-            opacity: selected || isThreadConnecting ? 1 : 0, // Show on select or while a thread is dragged
+            opacity: showConnectionHandles ? 1 : 0, // Selected, or nearby while a thread end is dragged
             '--handle-border-color': handleBorderColor,
           } as React.CSSProperties}
           type="source"

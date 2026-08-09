@@ -21,11 +21,14 @@ When the user says **block**, they mean the TipTap line (blue wash + ⋮⋮), no
 - **Handle** (RF) — library name for a **connection point**. Do not use “handle” or “node” in product copy for thread ports. (⋮⋮ is a **block grip**, not a connection point.)
 - **`metadata.isBlock`** — legacy flag meaning “this message is a **frame** on a page” (not flashcard/chat). It does **not** mean a TipTap block.
 
-## Drag rules (do not repeat the ⋮⋮ bug)
+## Drag / selection rules (do not repeat the ⋮⋮ bug)
 
-- ⋮⋮ / blue wash → drag that **block** only (`nodrag` on the grip). Never start RF frame drag from ⋮⋮.
+- Select the **frame** first — caret / text selection only after the frame is selected. Unselected: drag anywhere (including ⋮⋮) moves the frame.
+- **Select** a frame on click release (not pointer-down). **Moving** shows a transient blue box only (no resize/connection/rotate chrome) and never leaves the frame selected.
+- Click ⋮⋮ → select that **block** (+ actions menu). Only then does ⋮⋮ drag move that **block** (`nodrag` while armed).
+- Unarmed ⋮⋮ drag (frame not selected, or block not selected via ⋮⋮ click) → drag the **frame**, not the block.
 - Drag the **frame** (body / chrome) to move the box on the **page**.
-- Click ⋮⋮ → block actions; drag ⋮⋮ → reorder blocks, drop into another frame, or extract onto the page as a new frame.
+- Armed ⋮⋮ drag → reorder blocks, drop into another frame, or extract onto the page as a new frame.
 
 ## Prefer in new writing
 

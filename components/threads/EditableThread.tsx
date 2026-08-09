@@ -6,11 +6,12 @@ import {
   useReactFlow,
   useStore,
   Position,
+  getBezierPath,
   type XYPosition,
-} from 'reactflow' // Custom edge primitives + selection store
+} from 'reactflow' // Custom edge primitives + selection store + Miro bezier
 
 import { ControlPoint, type ControlPointData } from './ControlPoint' // Miro-style path knobs
-import { getPath, getControlPoints } from './path' // Path math by algorithm
+import { getPath, getControlPoints } from './path' // Path math when user has bent the thread
 import {
   DEFAULT_THREAD_ALGORITHM,
   THREAD_DEFAULT_COLOR,
@@ -123,6 +124,8 @@ export function EditableThread({
   })
 
   const isConnecting = useStore((s) => !!s.connectionNodeId)
+  const zoom = useStore((s) => s.transform[2] || 1) // Live board zoom — counter-scale stroke to stay screen-constant
+  const invZoom = 1 / Math.max(0.01, zoom) // Local px → constant screen px under the viewport transform
 
   const setControlPoints = useCallback(
     (update: (pts: ControlPointData[]) => ControlPointData[]) => {
@@ -144,22 +147,43 @@ export function EditableThread({
     [setEdges, id, algorithm]
   )
 
-  const sides = {
-    fromSide: sourceSide ?? Position.Right,
-    toSide: targetSide ?? Position.Left,
-  }
+  const fromSide = sourceSide ?? Position.Right
+  const toSide = targetSide ?? Position.Left
+  const sides = { fromSide, toSide }
 
-  // All styles attach on the frame edge; Orthogonal leaves perpendicular then 90° elbows
+  // Route for editable knobs (user bends). Unbent smooth threads use RF bezier below — Catmull
+  // stubs were adding S-curves that looked worse than Miro.
   const routePoints = [sourceOrigin, ...points, targetOrigin]
   const controlPoints = getControlPoints({
     points: routePoints,
     algorithm,
     sides,
   })
-  const path = getPath({ points: routePoints, algorithm, sides })
   const controlPointsWithIds = useIdsForInactiveControlPoints(controlPoints)
 
+  // Unbent Smooth → single cubic bezier (side-aware approach, no extra waypoints).
+  // Bent / Sharp / Linear → existing path math through waypoints.
+  const unbentSmooth =
+    points.length === 0 &&
+    (algorithm === ThreadAlgorithm.BezierCatmullRom ||
+      algorithm === ThreadAlgorithm.CatmullRom)
+  let path: string
+  if (unbentSmooth) {
+    ;[path] = getBezierPath({
+      sourceX: sourceOrigin.x,
+      sourceY: sourceOrigin.y,
+      sourcePosition: fromSide,
+      targetX: targetOrigin.x,
+      targetY: targetOrigin.y,
+      targetPosition: toSide,
+    })
+  } else {
+    path = getPath({ points: routePoints, algorithm, sides })
+  }
+
   const stroke = selected ? THREAD_SELECTED_COLOR : (style?.stroke as string) || THREAD_DEFAULT_COLOR
+  const baseWidth = selected ? 2.5 : 2 // Desired SCREEN thickness (px)
+  const dash = 5 * invZoom // Dash/gap lengths stay constant on screen when dotted
 
   return (
     <>
@@ -168,12 +192,12 @@ export function EditableThread({
         path={path}
         markerStart={markerStart}
         markerEnd={markerEnd}
-        interactionWidth={20}
+        interactionWidth={20 * invZoom} // Hit band stays ~20px on screen at any zoom
         style={{
           ...style,
-          strokeWidth: selected ? 2.5 : 2,
+          strokeWidth: baseWidth * invZoom, // ÷zoom cancels viewport scale → constant screen thickness
           stroke,
-          strokeDasharray: dotted ? '5,5' : undefined,
+          strokeDasharray: dotted ? `${dash},${dash}` : undefined,
         }}
       />
 

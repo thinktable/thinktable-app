@@ -2,6 +2,7 @@ export { EditableThread, isThreadEdge, type ThreadEdge, type ThreadEdgeData } fr
 export { ControlPoint, type ControlPointData } from './ControlPoint'
 export { ThreadConnectionLine } from './ThreadConnectionLine'
 export { useIsThreadConnecting } from './use-is-thread-connecting'
+export { useIsNearThreadConnection } from './use-is-near-thread-connection'
 export { forwardConnectStartToHandle } from './forward-connect-start'
 export { startThreadFromIndicator } from './start-thread-from-indicator'
 export { ConnectionIndicator } from './ConnectionIndicator'
