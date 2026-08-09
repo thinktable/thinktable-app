@@ -17,7 +17,7 @@ import { TipTapBlockHandles } from '@/components/tiptap-block-handles' // Per-co
 import { findEditorBlockAtClientY } from '@/lib/tiptap/block-selection' // Click in frame padding → block at Y
 import type { PageInTarget } from '@/components/block-actions-menu'
 import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
-import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, Lock, Unlock, ChevronDown, ChevronUp, WrapText } from 'lucide-react' // Rotate + frame lock / wrap / overflow expand·collapse
+import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, Lock, Unlock, WrapText } from 'lucide-react' // Rotate + frame lock / wrap
 
 // Helper to check if content is effectively empty (handling HTML tags)
 const isContentEmpty = (content: string | undefined | null) => {
@@ -1363,10 +1363,11 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const [frameTextWrap, setFrameTextWrap] = useState(false) // Unlocked only: wrap lines in the frame box instead of clipping
   const [wrapColWidth, setWrapColWidth] = useState<number | null>(null) // Unscaled wrap column width — fixed on locked resize, restored on rewrap
   const [frameScale, setFrameScale] = useState(1) // Uniform content scale while frame is locked
+  const [unlockedFrameSize, setUnlockedFrameSize] = useState<{ width: number; height: number } | null>(null) // Saved unlocked shape — unlock returns here after lock + proportional resize
+  const [unlockedFrameScale, setUnlockedFrameScale] = useState<number | null>(null) // Saved scale to pair with unlockedFrameSize
   const [intrinsicSize, setIntrinsicSize] = useState({ width: BLOCK_MIN_FRAME_W, height: 48 }) // Unscaled content box (max-content)
   const [intrinsicMeasured, setIntrinsicMeasured] = useState(false) // True after first contentFit measure (avoid hug flash)
   const [isFrameHovering, setIsFrameHovering] = useState(false) // Frame hover — page-open menu (not lock/rotate)
-  const [collapsedFrameSize, setCollapsedFrameSize] = useState<{ width: number; height: number } | null>(null) // Pre-expand box for collapse toggle
   const [rotation, setRotation] = useState(0) // Degrees of item rotation (persisted in message metadata)
   const isResizingRef = useRef(false) // Track if currently resizing
   const contentFitRef = useRef<HTMLDivElement>(null) // Inner unscaled content wrapper for intrinsic measure
@@ -1586,20 +1587,22 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         if (isBlockPanel && typeof metadata.wrapColWidth === 'number' && metadata.wrapColWidth > 0) {
           setWrapColWidth(metadata.wrapColWidth) // Restore the fixed wrap column width (unwrap/rewrap point)
         }
+        if (
+          isBlockPanel &&
+          metadata.unlockedFrameSize &&
+          typeof metadata.unlockedFrameSize === 'object'
+        ) {
+          const u = metadata.unlockedFrameSize as { width?: number; height?: number }
+          if (u.width && u.height && u.width > 0 && u.height > 0) {
+            setUnlockedFrameSize({ width: u.width, height: u.height }) // Shape to return to on unlock
+          }
+        }
+        if (isBlockPanel && typeof metadata.unlockedFrameScale === 'number' && metadata.unlockedFrameScale > 0) {
+          setUnlockedFrameScale(metadata.unlockedFrameScale) // Scale paired with the unlocked shape
+        }
         if (isBlockPanel && typeof metadata.frameScale === 'number' && metadata.frameScale > 0) {
           setFrameScale(metadata.frameScale) // Locked proportional scale
         }
-        if (
-          isBlockPanel &&
-          metadata.collapsedFrameSize &&
-          typeof metadata.collapsedFrameSize === 'object'
-        ) {
-          const snap = metadata.collapsedFrameSize as { width?: number; height?: number }
-          if (snap.width && snap.height && snap.width > 0 && snap.height > 0) {
-            setCollapsedFrameSize({ width: snap.width, height: snap.height }) // Restore expand/collapse toggle
-          }
-        }
-
         // Load explicit box size for items + other panels (corner resize baseline)
         if (metadata.resizeDimensions && typeof metadata.resizeDimensions === 'object') {
           const dims = metadata.resizeDimensions as { width?: number; height?: number }
@@ -2263,6 +2266,11 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     if (width > 0 && height > 0) {
       setResizeDimensions({ width, height }) // Lock final box size into local state
     }
+    // Unlocked drag defines the returnable shape — keep it fresh so a later unlock snaps back here.
+    if (frameUnlocked) {
+      setUnlockedFrameSize({ width, height })
+      setUnlockedFrameScale(finalScale)
+    }
 
     await persistFrameMeta({
       resizeDimensions: { width, height },
@@ -2270,6 +2278,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       frameTextWrap, // Wrap persists in either lock state now
       frameScale: finalScale,
       fontScale,
+      ...(frameUnlocked ? { unlockedFrameSize: { width, height }, unlockedFrameScale: finalScale } : {}), // Returnable shape
       ...(colToPersist != null ? { wrapColWidth: colToPersist } : {}), // Save the new unlocked wrap point
     })
   }, [resizeDimensions, frameUnlocked, frameTextWrap, wrapColWidth, fontScale, persistFrameMeta, intrinsicSize, promptContent])
@@ -2365,23 +2374,33 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     const nextUnlocked = !frameUnlocked
     setFrameUnlocked(nextUnlocked)
     if (nextUnlocked) {
-      // Snapshot current box so unlock doesn’t snap back to fit-content
+      // Return to the SAVED unlocked shape (set before the last lock) so unlock is reversible even
+      // after a locked proportional resize; fall back to the current box on first-ever unlock.
       const el = panelRef.current
-      const nextDims = resizeDimensions ?? {
+      const nextDims = unlockedFrameSize ?? resizeDimensions ?? {
         width: Math.max(blockMinFrameWidth(promptContent), el?.offsetWidth ?? intrinsicSize.width),
         height: Math.max(BLOCK_MIN_FRAME_H, el?.offsetHeight ?? intrinsicSize.height),
       }
-      if (!resizeDimensions) setResizeDimensions(nextDims)
+      const nextScale = unlockedFrameScale ?? frameScale // Restore the scale the unlocked shape had
+      setResizeDimensions(nextDims)
+      setFrameScale(nextScale)
       setIsUserResized(true)
       void persistFrameMeta({
         frameUnlocked: true,
-        frameScale,
+        frameScale: nextScale,
         resizeDimensions: nextDims,
-        collapsedFrameSize,
         frameTextWrap,
       })
       return
     }
+    // Locking: remember the CURRENT unlocked shape (+scale) so a later unlock returns to it.
+    const unlockedShape =
+      resizeDimensions ?? {
+        width: Math.max(blockMinFrameWidth(promptContent), panelRef.current?.offsetWidth ?? intrinsicSize.width),
+        height: Math.max(BLOCK_MIN_FRAME_H, panelRef.current?.offsetHeight ?? intrinsicSize.height),
+      }
+    setUnlockedFrameSize(unlockedShape)
+    setUnlockedFrameScale(frameScale)
     const fitEl = contentFitRef.current
     const naturalH = fitEl ? measureNaturalContentHeight(fitEl) : intrinsicSize.height
     // Relock WHILE wrapped: keep the unlocked wrap WIDTH (text stays wrapped at that width);
@@ -2392,13 +2411,13 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       const nextDims = { width: keepW, height: wrapH }
       setResizeDimensions(nextDims)
       setIsUserResized(true)
-      setCollapsedFrameSize(null)
       void persistFrameMeta({
         frameUnlocked: false,
         frameScale,
         resizeDimensions: nextDims,
-        collapsedFrameSize: null,
         frameTextWrap: true, // Keep wrap on through lock
+        unlockedFrameSize: unlockedShape, // Shape to return to on unlock
+        unlockedFrameScale: frameScale,
       })
       return
     }
@@ -2418,15 +2437,15 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     )
     setResizeDimensions(nextDims)
     setIsUserResized(true)
-    setCollapsedFrameSize(null) // Lock mode doesn’t use expand/collapse
     void persistFrameMeta({
       frameUnlocked: false,
       frameScale,
       resizeDimensions: nextDims,
-      collapsedFrameSize: null,
       frameTextWrap: false,
+      unlockedFrameSize: unlockedShape, // Shape to return to on unlock
+      unlockedFrameScale: frameScale,
     })
-  }, [frameUnlocked, frameScale, resizeDimensions, intrinsicSize, collapsedFrameSize, frameTextWrap, persistFrameMeta, promptContent])
+  }, [frameUnlocked, frameScale, resizeDimensions, intrinsicSize, frameTextWrap, unlockedFrameSize, unlockedFrameScale, persistFrameMeta, promptContent])
 
   // Unlocked: wrap lines inside the frame width (vs clip overflow)
   const handleToggleFrameTextWrap = useCallback((e: React.MouseEvent) => {
@@ -2444,7 +2463,6 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     if (!resizeDimensions) setResizeDimensions(box) // Seed the box so width is stable under wrap
     setIsUserResized(true)
     setFrameTextWrap(next)
-    if (next) setCollapsedFrameSize(null) // Wrap replaces expand/collapse overflow UX
     // Reuse the stored wrap point (set when unlocked) so unwrap→rewrap returns to the SAME columns;
     // only capture a fresh one the first time wrap is turned on and none exists yet.
     let col = wrapColWidth
@@ -2457,7 +2475,6 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       frameUnlocked, // Preserve lock state (was always forcing unlocked)
       frameScale,
       resizeDimensions: box,
-      collapsedFrameSize: next ? null : collapsedFrameSize,
       ...(col != null ? { wrapColWidth: col } : {}),
     })
     // Locked = hug to content. After the wrap/nowrap layout reflows, deterministically re-hug so
@@ -2476,49 +2493,9 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         })
       }))
     }
-  }, [frameUnlocked, frameTextWrap, frameScale, wrapColWidth, resizeDimensions, collapsedFrameSize, persistFrameMeta, promptContent, intrinsicSize])
+  }, [frameUnlocked, frameTextWrap, frameScale, wrapColWidth, resizeDimensions, persistFrameMeta, promptContent, intrinsicSize])
 
-  // Expand clipped frame to content, or collapse back to the pre-expand box
-  const handleToggleOverflow = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation()
-    e.preventDefault()
-    // Wrap keeps its fixed width and expands height only; nowrap expands to the full scaled box.
-    const fullH = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(intrinsicSize.height * Math.max(0.15, frameScale)) + 2)
-    const expanded =
-      frameTextWrap && resizeDimensions
-        ? { width: resizeDimensions.width, height: fullH }
-        : scaledFrameSize(intrinsicSize, frameScale, BLOCK_MIN_FRAME_W) // Full scaled text + border
-    const current = resizeDimensions ?? {
-      width: panelRef.current?.offsetWidth ?? expanded.width,
-      height: panelRef.current?.offsetHeight ?? expanded.height,
-    }
-    const isExpanded =
-      !!collapsedFrameSize &&
-      current.width + 2 >= expanded.width &&
-      current.height + 2 >= expanded.height // Already showing full scaled content
-
-    if (isExpanded && collapsedFrameSize) {
-      setResizeDimensions(collapsedFrameSize) // Return to pre-expand size
-      setIsUserResized(true)
-      void persistFrameMeta({
-        resizeDimensions: collapsedFrameSize,
-        frameUnlocked: true,
-        frameScale,
-        collapsedFrameSize,
-      })
-      return
-    }
-
-    setCollapsedFrameSize(current) // Remember clipped size for collapse
-    setResizeDimensions(expanded)
-    setIsUserResized(true)
-    void persistFrameMeta({
-      resizeDimensions: expanded,
-      frameUnlocked: true,
-      frameScale,
-      collapsedFrameSize: current,
-    })
-  }, [intrinsicSize, frameScale, resizeDimensions, collapsedFrameSize, frameTextWrap, persistFrameMeta])
+  // (Overflow caret removed — lock = fit-to-content, unlock = your saved set shape cover this now.)
 
   // Locked + resized: hug WIDTH and HEIGHT to natural text (locked = hug to content) —
   // shrink/grow both dimensions on lock/type instead of keeping the taller resize box.
@@ -3197,19 +3174,6 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       : (unlockedResized || wrapActive) && unlockedInnerW != null // UNLOCKED wrap / clip: derive from current width (re-wrap on drag)
         ? Math.max(1, Math.floor(unlockedInnerW / Math.max(0.15, frameScale)))
         : null
-  // Frame smaller than its visual content → clip + chevron. Non-wrap checks width+height;
-  // wrap keeps its fixed width so it can only overflow vertically.
-  const contentOverflows =
-    (clipUnlocked &&
-      (resizeDimensions!.width + 2 < huggedSize.width ||
-        resizeDimensions!.height + 2 < huggedSize.height)) ||
-    (wrapUnlocked && resizeDimensions!.height + 2 < huggedSize.height)
-  const frameExpanded =
-    !!collapsedFrameSize &&
-    ((clipUnlocked &&
-      resizeDimensions!.width + 2 >= huggedSize.width &&
-      resizeDimensions!.height + 2 >= huggedSize.height) ||
-      (wrapUnlocked && resizeDimensions!.height + 2 >= huggedSize.height)) // Expand toggle flipped to collapse
   // Blocks start narrow; chat/flashcards use their fixed starting widths
   const initialWidth = isFlashcard ? 600 : (usesFitContent ? BLOCK_MIN_FRAME_W : 768)
   const [panelWidthToUse, setPanelWidthToUse] = useState(initialWidth)
@@ -4129,8 +4093,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         </>
       )}
 
-      {/* Frame chrome — rotate · overflow caret · lock · wrap; caret keeps x on deselect via offset */}
-      {isBlock && !pagePreviewOpen && !isThreadConnecting && (selected || contentOverflows || frameExpanded) && (
+      {/* Frame chrome — rotate · lock · wrap (only while selected) */}
+      {isBlock && !pagePreviewOpen && !isThreadConnecting && selected && (
         <div
           data-frame-chrome
           className="nodrag nopan absolute z-50 flex items-center gap-0.5"
@@ -4157,23 +4121,6 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               onClick={(e) => e.stopPropagation()}
             >
               <RotateCw className="h-4 w-4 pointer-events-none" />
-            </button>
-          )}
-          {(contentOverflows || frameExpanded) && (
-            <button
-              type="button"
-              className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
-              // Unselected: offset by rotate slot (24px + 2px gap) so caret doesn’t jump left
-              style={!selected ? { marginLeft: 26 } : undefined}
-              title={frameExpanded ? 'Collapse to previous size' : 'Show hidden content'}
-              aria-label={frameExpanded ? 'Collapse frame' : 'Expand frame to content'}
-              onClick={handleToggleOverflow}
-            >
-              {frameExpanded ? (
-                <ChevronUp className="h-4 w-4 pointer-events-none" />
-              ) : (
-                <ChevronDown className="h-4 w-4 pointer-events-none" />
-              )}
             </button>
           )}
           {selected && hasBlockContent && (

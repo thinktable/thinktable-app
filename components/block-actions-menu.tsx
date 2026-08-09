@@ -29,6 +29,7 @@ import {
   Plus,
   Quote,
   RefreshCw,
+  Shapes,
   Sigma,
   Sparkles,
   SquareCode,
@@ -87,6 +88,7 @@ export type BlockActionId =
   | 'presentFromHere'
   | 'askAI'
   | 'skills'
+  | 'frameShapeAutomations'
 
 export type BlockActionPayload = {
   blockType?: BlockTypeId // Present when action === 'turnInto'
@@ -287,6 +289,13 @@ export function BlockActionsMenu({
         id: 'condense',
         label: isCollapsed ? 'Expand' : 'Condense',
         icon: isCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />,
+      },
+      {
+        kind: 'action',
+        id: 'frameShapeAutomations',
+        label: 'Frame shape automations',
+        icon: <Shapes className="h-4 w-4" />,
+        beta: true, // Entry point for saved frame-shape rules — behavior wired later
       },
       {
         kind: 'action',

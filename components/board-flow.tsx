@@ -5892,6 +5892,7 @@ function BoardFlowInner({
         case 'presentFromHere':
         case 'askAI':
         case 'skills':
+        case 'frameShapeAutomations': // Placeholder entry — saved frame-shape automations land here later
           setRightClickedNode(null)
           break
       }

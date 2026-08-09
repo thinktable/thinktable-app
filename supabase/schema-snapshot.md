@@ -1,17 +1,23 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T12:33:51Z`
+- Snapped at: `2026-08-09T13:05:53Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 
 ## This save
 
-- No DDL. Marker `20260809123351_locked_wrap_column_width.sql`.
-- Locked wrapped frames now key off a persisted `metadata.wrapColWidth` (unscaled wrap columns) instead of deriving `wrapContentWidth` from the live frame width. Fixes: (1) proportional resize scales the text with **zero character reflow** (columns constant); (2) **unwrap → rewrap** returns to the same wrap point set while unlocked.
-- `wrapColWidth` captured on wrap-on (or updated on an unlocked-wrap resize-end); `handleResize`/`handleResizeEnd` derive the locked box as `wrapColWidth × frameScale + 2`; the wrap toggle's double-`rAF` re-hug restores it on rewrap.
+- No DDL. Marker `20260809130553_frame_unlock_return_remove_caret.sql`.
+- Removed the overflow expand/collapse **caret** (`handleToggleOverflow` / `contentOverflows` / `frameExpanded` gone). New model: **lock = fit-to-content, unlock = your saved shape**.
+- **Unlock returns to the saved unlocked shape** via `metadata.unlockedFrameSize {width,height}` + `metadata.unlockedFrameScale`, captured at lock time and refreshed on every unlocked resize-end → reversible even after a locked proportional resize (first-ever unlock falls back to the current box).
+- **`metadata.collapsedFrameSize` fully removed** (state, load, all persist keys) — it was a transient pre-expand box for the deleted caret; stale key on old rows is simply ignored (no migration needed).
+- Right-click frame menu (`BlockActionsMenu`) gains a **Frame shape automations** beta stub (`frameShapeAutomations`) — closes the menu for now; entry point for saved frame-shape rules later.
 - Persisted via existing `messages.metadata` jsonb — schema unchanged.
+
+## Prior: locked wrap column width
+
+- Marker: `20260809123351_locked_wrap_column_width.sql`.
 
 ## Prior: locked frame fit / Notion database blocks
 
