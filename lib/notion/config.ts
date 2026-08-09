@@ -1,6 +1,7 @@
 // Central Notion OAuth configuration helpers (why: one place for env + URLs)
 
-export const NOTION_VERSION = '2022-06-28' // Stable Notion-Version header for OAuth + Data API
+export const NOTION_VERSION = '2025-09-03' // Multi-source databases (data_sources) — required for modern Notion DBs
+
 
 export function getNotionClientId(): string | null {
   return process.env.NOTION_CLIENT_ID || null // Public OAuth client id from Notion Developer portal

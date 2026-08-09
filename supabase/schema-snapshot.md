@@ -1,13 +1,21 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T21:20:53Z`
+- Snapped at: `2026-08-09T22:00:49Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 - CLI: `supabase` `2.90.0` (remote `projects list` needs login token — marker migration used)
 
 ## This save
+
+- No DDL. Marker `20260809220049_notion_db_edit_and_view_settings.sql`.
+- **Notion API `2025-09-03`**: databases → data_sources for schema/query; search normalizes `data_source` → `database`.
+- **Editable DB cells** (`PATCH /api/notion/page/[id]`): title/text/number/checkbox/select/multi_select/status/…; select menus list full schema options.
+- **Thinktable view settings** (`databaseBlock.viewSettings` JSON): property drag-order + hide, search, filters, multi-sort, group-by, conditional row colors, sub-tasks, layouts (table/board/list/gallery/calendar; stubs for timeline/chart/feed/map).
+- Persisted via existing `messages` HTML attrs — schema unchanged.
+
+## Prior: rotation-safe pageLink chrome
 
 - No DDL. Marker `20260809212053_rotation_safe_pagelink_chrome.sql`.
 - **Rotation-safe chrome** (`lib/dom-transform.ts`): `elementUniformScale` via matrix `hypot(a,b)`; `screenToLocal` / `localToScreen` for pageLink icon/menu + ⋮⋮ grip placement (AABB width/height ratios break under frame `rotate`).

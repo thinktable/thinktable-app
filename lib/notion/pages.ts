@@ -7,12 +7,13 @@ export type NotionPageParent =
   | { type: 'workspace'; workspace: boolean }
   | { type: 'page_id'; page_id: string }
   | { type: 'database_id'; database_id: string }
+  | { type: 'data_source_id'; data_source_id: string } // 2025-09-03: rows parent under a data source
   | { type: 'block_id'; block_id: string }
   | { type: string; [key: string]: unknown }
 
 export type NotionSearchPage = {
-  id: string // Notion page/database id
-  object: 'page' | 'database' // Resource type from search
+  id: string // Notion page / database / data_source id
+  object: 'page' | 'database' // data_source results normalized to 'database'
   url?: string // Open-in-Notion URL when present
   icon?: { type?: string; emoji?: string; external?: { url?: string }; file?: { url?: string } } | null
   title: string // Extracted display title for the mind-map node
@@ -28,10 +29,13 @@ export function normalizeNotionId(id: string | undefined | null): string {
 }
 
 function extractTitle(result: Record<string, unknown>): string {
-  if (result.object === 'database') {
-    const titleArr = (result.title as Array<{ plain_text?: string }> | undefined) || [] // DB title is top-level
+  if (result.object === 'database' || result.object === 'data_source') {
+    const titleArr = (result.title as Array<{ plain_text?: string }> | undefined) || [] // DB / data source title
     const text = titleArr.map((t) => t.plain_text || '').join('').trim() // Flatten rich text
-    return text || 'Untitled database' // Fallback label
+    if (text) return text
+    // Search sometimes puts the label in `name` for data sources
+    if (typeof result.name === 'string' && result.name.trim()) return result.name.trim()
+    return 'Untitled database'
   }
 
   const properties = (result.properties as Record<string, { type?: string; title?: Array<{ plain_text?: string }> }> | undefined) || {}
@@ -48,6 +52,7 @@ function parentTargetId(parent: NotionPageParent | null | undefined): string | n
   if (!parent) return null // No parent info
   if (parent.type === 'page_id') return normalizeNotionId(String(parent.page_id || '')) // Nest under page
   if (parent.type === 'database_id') return normalizeNotionId(String(parent.database_id || '')) // Nest under database
+  if (parent.type === 'data_source_id') return normalizeNotionId(String(parent.data_source_id || '')) // Nest under data source
   return null // workspace / unresolved block_id → treat as root in the picker tree
 }
 
@@ -70,6 +75,7 @@ async function resolveBlockOwnerId(accessToken: string, blockId: string): Promis
     if (!parent) return null
     if (parent.type === 'page_id') return normalizeNotionId(String(parent.page_id || ''))
     if (parent.type === 'database_id') return normalizeNotionId(String(parent.database_id || ''))
+    if (parent.type === 'data_source_id') return normalizeNotionId(String(parent.data_source_id || ''))
     if (parent.type === 'block_id') {
       current = String(parent.block_id || '')
       if (!current) return null
@@ -167,6 +173,11 @@ export function filterTopLevelSharedPages(pages: NotionSearchPage[]): NotionSear
     if (parent.type === 'database_id') {
       const parentId = normalizeNotionId(String(parent.database_id || '')) // Parent database id
       return !accessible.has(parentId) // Skip database rows when the DB itself is in the set
+    }
+
+    if (parent.type === 'data_source_id') {
+      const parentId = normalizeNotionId(String(parent.data_source_id || '')) // Parent data source id
+      return !accessible.has(parentId) // Skip rows when the data source is in the set
     }
 
     if (parent.type === 'block_id') {
@@ -276,48 +287,75 @@ export async function collectDatabaseRows(
   const parent: NotionPageParent = { type: 'database_id', database_id: databaseId }
   const byId = new Map<string, NotionSearchPage>()
 
+  // Include pages parented by this database id OR this data_source id (search may use either)
   for (const page of allPages) {
     if (page.object !== 'page') continue
-    if (page.parent?.type !== 'database_id') continue
-    if (normalizeNotionId(String(page.parent.database_id || '')) !== dbKey) continue
-    byId.set(normalizeNotionId(page.id), { ...page, parent }) // Normalize parent for threads
+    if (page.parent?.type === 'database_id') {
+      if (normalizeNotionId(String(page.parent.database_id || '')) !== dbKey) continue
+      byId.set(normalizeNotionId(page.id), { ...page, parent })
+    } else if (page.parent?.type === 'data_source_id') {
+      if (normalizeNotionId(String(page.parent.data_source_id || '')) !== dbKey) continue
+      byId.set(normalizeNotionId(page.id), { ...page, parent })
+    }
   }
 
-  // Query API catches rows search pagination missed
-  let startCursor: string | undefined
+  // Resolve data source id(s) then query rows the search pagination missed
+  const dataSourceIds: string[] = []
   try {
-    do {
-      const res = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-          'Notion-Version': NOTION_VERSION,
-        },
-        body: JSON.stringify({ page_size: 100, start_cursor: startCursor }),
-      })
-      const payload = await res.json()
-      if (!res.ok) {
-        console.error('Database query failed:', databaseId, payload?.message)
-        break
+    const dbRes = await fetch(`https://api.notion.com/v1/databases/${databaseId}`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Notion-Version': NOTION_VERSION,
+      },
+    })
+    const dbPayload = await dbRes.json()
+    if (dbRes.ok && Array.isArray(dbPayload?.data_sources)) {
+      for (const s of dbPayload.data_sources) {
+        if (s?.id) dataSourceIds.push(String(s.id))
       }
-      for (const result of payload.results || []) {
-        if (result?.object !== 'page') continue
-        const key = normalizeNotionId(result.id)
-        if (byId.has(key)) continue
-        byId.set(key, {
-          id: result.id,
-          object: 'page',
-          url: result.url,
-          icon: result.icon ?? null,
-          title: extractTitle(result),
-          parent,
-        })
-      }
-      startCursor = payload.has_more ? payload.next_cursor : undefined
-    } while (startCursor)
+    }
   } catch (err) {
-    console.error('Database query threw:', databaseId, err)
+    console.error('Database retrieve for row query failed:', databaseId, err)
+  }
+  // Id may already be a data_source id
+  if (dataSourceIds.length === 0) dataSourceIds.push(databaseId)
+
+  for (const dataSourceId of dataSourceIds) {
+    let startCursor: string | undefined
+    try {
+      do {
+        const res = await fetch(`https://api.notion.com/v1/data_sources/${dataSourceId}/query`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Notion-Version': NOTION_VERSION,
+          },
+          body: JSON.stringify({ page_size: 100, start_cursor: startCursor }),
+        })
+        const payload = await res.json()
+        if (!res.ok) {
+          console.error('Data source query failed:', dataSourceId, payload?.message)
+          break
+        }
+        for (const result of payload.results || []) {
+          if (result?.object !== 'page') continue
+          const key = normalizeNotionId(result.id)
+          if (byId.has(key)) continue
+          byId.set(key, {
+            id: result.id,
+            object: 'page',
+            url: result.url,
+            icon: result.icon ?? null,
+            title: extractTitle(result),
+            parent,
+          })
+        }
+        startCursor = payload.has_more ? payload.next_cursor : undefined
+      } while (startCursor)
+    } catch (err) {
+      console.error('Data source query threw:', dataSourceId, err)
+    }
   }
 
   return Array.from(byId.values()).sort((a, b) =>
@@ -445,13 +483,20 @@ export async function collectMindmapSubtreeViaBlocks(
   )
   for (const page of fromSearchTree) {
     if (seen.has(normalizeNotionId(page.id))) continue
-    // Skip rows of a DB that is (or will be) its own map frame
-    if (
-      page.object === 'page' &&
-      page.parent?.type === 'database_id' &&
-      dbIds.has(normalizeNotionId(String(page.parent.database_id || '')))
-    ) {
-      continue
+    // Skip rows of a DB / data source that is (or will be) its own map frame
+    if (page.object === 'page') {
+      if (
+        page.parent?.type === 'database_id' &&
+        dbIds.has(normalizeNotionId(String(page.parent.database_id || '')))
+      ) {
+        continue
+      }
+      if (
+        page.parent?.type === 'data_source_id' &&
+        dbIds.has(normalizeNotionId(String(page.parent.data_source_id || '')))
+      ) {
+        continue
+      }
     }
     push(page)
   }
@@ -485,10 +530,17 @@ export async function searchAllAccessibleNotionPages(accessToken: string): Promi
     }
 
     for (const result of payload.results || []) {
-      if (result.object !== 'page' && result.object !== 'database') continue // Skip unexpected objects
+      // 2025-09-03 search returns data_source instead of database
+      if (
+        result.object !== 'page' &&
+        result.object !== 'database' &&
+        result.object !== 'data_source'
+      ) {
+        continue
+      }
       pages.push({
-        id: result.id, // Notion UUID
-        object: result.object, // page | database
+        id: result.id, // page id, or data_source id (usable for query)
+        object: result.object === 'data_source' ? 'database' : result.object, // Normalize for picker/import
         url: result.url, // Deep link back to Notion
         icon: result.icon ?? null, // Emoji / file icon for later UI
         title: extractTitle(result), // Human label for the note

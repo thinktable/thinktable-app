@@ -118,8 +118,14 @@ function cellFromProperty(prop: Record<string, unknown> | undefined): NotionDbCe
     case 'created_time':
     case 'last_edited_time':
       return { type, text: typeof prop[type] === 'string' ? String(prop[type]).slice(0, 10) : '' }
+    case 'relation': {
+      // Store related page ids so sub-task nesting can resolve parent→child
+      const rels = (prop.relation as Array<{ id?: string }> | undefined) || []
+      const ids = rels.map((r) => r.id).filter((id): id is string => !!id)
+      return { type, text: ids.join(',') }
+    }
     default:
-      // relation / rollup / people / files — show a short placeholder for now
+      // rollup / people / files — show a short placeholder for now
       return { type, text: '' }
   }
 }
@@ -131,10 +137,12 @@ function emojiFromIcon(icon: { type?: string; emoji?: string } | null | undefine
 
 /**
  * Load database title/properties + all queryable rows for the structured table UI.
+ * Accepts a Notion **database** id (container) or **data_source** id (table).
+ * Uses API 2025-09-03 data_sources endpoints (schema + query live on the data source).
  */
 export async function fetchNotionDatabaseTable(
   accessToken: string,
-  databaseId: string
+  databaseOrDataSourceId: string
 ): Promise<NotionDatabaseTable> {
   const headers = {
     Authorization: `Bearer ${accessToken}`,
@@ -142,16 +150,82 @@ export async function fetchNotionDatabaseTable(
     'Content-Type': 'application/json',
   }
 
-  const dbRes = await fetch(`https://api.notion.com/v1/databases/${databaseId}`, {
+  // Resolve container id → accessible data_source id + metadata
+  let dataSourceId: string | null = null
+  let databaseId = databaseOrDataSourceId
+  let title = 'Untitled database'
+  let url: string | undefined
+  let icon: string | null = null
+  let dbErrorMessage: string | null = null
+
+  const dbRes = await fetch(`https://api.notion.com/v1/databases/${databaseOrDataSourceId}`, {
     method: 'GET',
     headers,
   })
   const dbPayload = await dbRes.json()
-  if (!dbRes.ok) {
-    throw new Error(dbPayload?.message || `Failed to load Notion database ${databaseId}`)
+  if (dbRes.ok && dbPayload?.object === 'database') {
+    databaseId = dbPayload.id || databaseOrDataSourceId
+    const titleArr = (dbPayload.title as Array<{ plain_text?: string }> | undefined) || []
+    title = titleArr.map((t) => t.plain_text || '').join('').trim() || title
+    url = dbPayload.url
+    icon = emojiFromIcon(dbPayload.icon)
+    const sources = (dbPayload.data_sources as Array<{ id?: string; name?: string }> | undefined) || []
+    if (sources.length === 0) {
+      throw new Error(
+        'No data sources accessible for this database. In Notion, open the database → ••• → Connections and share it with Thinktable.'
+      )
+    }
+    // Prefer a source whose name matches the DB title; else first accessible source
+    const named =
+      sources.find((s) => (s.name || '').trim().toLowerCase() === title.toLowerCase()) || sources[0]
+    dataSourceId = named.id || null
+    if (named.name?.trim()) title = named.name.trim()
+  } else {
+    dbErrorMessage = dbPayload?.message || `Failed to load Notion database ${databaseOrDataSourceId}`
   }
 
-  const propsObj = (dbPayload.properties || {}) as Record<
+  // Id may already be a data_source id (search returns those on 2025-09-03)
+  if (!dataSourceId) {
+    const dsProbe = await fetch(
+      `https://api.notion.com/v1/data_sources/${databaseOrDataSourceId}`,
+      { method: 'GET', headers }
+    )
+    const dsProbePayload = await dsProbe.json()
+    if (dsProbe.ok && dsProbePayload?.object === 'data_source') {
+      dataSourceId = dsProbePayload.id
+      databaseId =
+        (dsProbePayload.parent as { database_id?: string } | undefined)?.database_id ||
+        databaseOrDataSourceId
+      const dsTitleArr = (dsProbePayload.title as Array<{ plain_text?: string }> | undefined) || []
+      const dsTitle = dsTitleArr.map((t) => t.plain_text || '').join('').trim()
+      if (dsTitle) title = dsTitle
+      url = dsProbePayload.url || url
+      icon = emojiFromIcon(dsProbePayload.icon) || icon
+    } else if (dbErrorMessage) {
+      throw new Error(dbErrorMessage)
+    } else {
+      throw new Error(dsProbePayload?.message || 'Notion data source unavailable')
+    }
+  }
+
+  // Schema lives on the data source (not the database container)
+  const dsRes = await fetch(`https://api.notion.com/v1/data_sources/${dataSourceId}`, {
+    method: 'GET',
+    headers,
+  })
+  const dsPayload = await dsRes.json()
+  if (!dsRes.ok || dsPayload?.object !== 'data_source') {
+    throw new Error(dsPayload?.message || `Failed to load Notion data source ${dataSourceId}`)
+  }
+
+  // Prefer data-source title/url/icon when present
+  const dsTitleArr = (dsPayload.title as Array<{ plain_text?: string }> | undefined) || []
+  const dsTitle = dsTitleArr.map((t) => t.plain_text || '').join('').trim()
+  if (dsTitle) title = dsTitle
+  if (dsPayload.url) url = dsPayload.url
+  if (dsPayload.icon) icon = emojiFromIcon(dsPayload.icon)
+
+  const propsObj = (dsPayload.properties || {}) as Record<
     string,
     {
       id?: string
@@ -187,20 +261,17 @@ export async function fetchNotionDatabaseTable(
     return a.name.localeCompare(b.name)
   })
 
-  const titleArr = (dbPayload.title as Array<{ plain_text?: string }> | undefined) || []
-  const title = titleArr.map((t) => t.plain_text || '').join('').trim() || 'Untitled database'
-
   const rows: NotionDbRow[] = []
   let startCursor: string | undefined
   do {
-    const qRes = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
+    const qRes = await fetch(`https://api.notion.com/v1/data_sources/${dataSourceId}/query`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ page_size: 100, start_cursor: startCursor }),
     })
     const qPayload = await qRes.json()
     if (!qRes.ok) {
-      throw new Error(qPayload?.message || `Failed to query Notion database ${databaseId}`)
+      throw new Error(qPayload?.message || `Failed to query Notion data source ${dataSourceId}`)
     }
     for (const result of qPayload.results || []) {
       if (result?.object !== 'page') continue
@@ -220,10 +291,10 @@ export async function fetchNotionDatabaseTable(
   } while (startCursor)
 
   return {
-    id: dbPayload.id || databaseId,
+    id: databaseId,
     title,
-    url: dbPayload.url,
-    icon: emojiFromIcon(dbPayload.icon),
+    url,
+    icon,
     properties,
     rows,
   }
@@ -232,4 +303,154 @@ export async function fetchNotionDatabaseTable(
 /** Normalize ids when comparing route params to stored Notion ids. */
 export function notionIdsEqual(a: string, b: string): boolean {
   return normalizeNotionId(a) === normalizeNotionId(b)
+}
+
+/** Property types we allow editing from the in-app table (writes back via PATCH page). */
+export const EDITABLE_NOTION_PROPERTY_TYPES = new Set([
+  'title',
+  'rich_text',
+  'number',
+  'checkbox',
+  'select',
+  'multi_select',
+  'status',
+  'url',
+  'email',
+  'phone_number',
+  'date',
+])
+
+export function isNotionPropertyEditable(type: string): boolean {
+  return EDITABLE_NOTION_PROPERTY_TYPES.has(type)
+}
+
+/** Client → server value for one property write. */
+export type NotionPropertyEditValue =
+  | { type: 'title' | 'rich_text' | 'url' | 'email' | 'phone_number' | 'date'; text: string }
+  | { type: 'number'; number: number | null }
+  | { type: 'checkbox'; checked: boolean }
+  | { type: 'select' | 'status'; name: string | null } // null clears
+  | { type: 'multi_select'; names: string[] }
+
+/** Build the Notion `properties` object fragment for a single property update. */
+export function buildNotionPropertyPayload(
+  propertyName: string,
+  value: NotionPropertyEditValue
+): Record<string, unknown> {
+  switch (value.type) {
+    case 'title':
+      return {
+        [propertyName]: {
+          title: value.text
+            ? [{ type: 'text', text: { content: value.text } }]
+            : [],
+        },
+      }
+    case 'rich_text':
+      return {
+        [propertyName]: {
+          rich_text: value.text
+            ? [{ type: 'text', text: { content: value.text } }]
+            : [],
+        },
+      }
+    case 'number':
+      return { [propertyName]: { number: value.number } }
+    case 'checkbox':
+      return { [propertyName]: { checkbox: value.checked } }
+    case 'select':
+      return {
+        [propertyName]: {
+          select: value.name ? { name: value.name } : null,
+        },
+      }
+    case 'status':
+      return {
+        [propertyName]: {
+          status: value.name ? { name: value.name } : null,
+        },
+      }
+    case 'multi_select':
+      return {
+        [propertyName]: {
+          multi_select: value.names.map((name) => ({ name })),
+        },
+      }
+    case 'url':
+      return { [propertyName]: { url: value.text || null } }
+    case 'email':
+      return { [propertyName]: { email: value.text || null } }
+    case 'phone_number':
+      return { [propertyName]: { phone_number: value.text || null } }
+    case 'date':
+      return {
+        [propertyName]: {
+          date: value.text ? { start: value.text } : null,
+        },
+      }
+    default:
+      throw new Error('Unsupported property type')
+  }
+}
+
+/** Apply an edit to a local render cell (optimistic UI). */
+export function applyEditToCell(
+  prev: NotionDbCell | undefined,
+  value: NotionPropertyEditValue,
+  options?: Array<{ id: string; name: string; color?: string }>
+): NotionDbCell {
+  const colorFor = (name: string) => options?.find((o) => o.name === name)?.color
+  switch (value.type) {
+    case 'title':
+    case 'rich_text':
+    case 'url':
+    case 'email':
+    case 'phone_number':
+    case 'date':
+      return { type: value.type, text: value.text }
+    case 'number':
+      return { type: 'number', text: value.number == null ? '' : String(value.number) }
+    case 'checkbox':
+      return { type: 'checkbox', checked: value.checked }
+    case 'select':
+    case 'status':
+      return {
+        type: value.type,
+        text: value.name || '',
+        tags: value.name ? [{ name: value.name, color: colorFor(value.name) }] : [],
+      }
+    case 'multi_select':
+      return {
+        type: 'multi_select',
+        tags: value.names.map((name) => ({ name, color: colorFor(name) })),
+        text: value.names.join(', '),
+      }
+    default:
+      return prev || { type: 'unknown', text: '' }
+  }
+}
+
+/**
+ * PATCH a Notion page property (database row cell). Source of truth stays in Notion.
+ */
+export async function updateNotionPageProperty(
+  accessToken: string,
+  pageId: string,
+  propertyName: string,
+  value: NotionPropertyEditValue
+): Promise<void> {
+  const properties = buildNotionPropertyPayload(propertyName, value)
+  const res = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Notion-Version': NOTION_VERSION,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ properties }),
+  })
+  const payload = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(payload?.message || `Failed to update Notion page ${pageId}`)
+  }
 }

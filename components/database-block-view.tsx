@@ -126,6 +126,8 @@ export function DatabaseBlockView({ node, updateAttributes }: NodeViewProps) {
         <NotionDatabaseTableView
           notionDatabaseId={notionDatabaseId}
           fallbackTitle={title}
+          viewSettingsJson={(node.attrs.viewSettings as string | null) || null}
+          onViewSettingsChange={(json) => updateAttributes({ viewSettings: json })}
         />
       ) : null}
     </NodeViewWrapper>
