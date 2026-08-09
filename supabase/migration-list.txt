@@ -1,7 +1,7 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-09T10:33:53Z
+# snapped_at=2026-08-09T12:33:51Z
 # postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
 # Note: supabase db dump --linked / projects list need login or SUPABASE_DB_PASSWORD;
 # snapshot via local migrations + apps/web/supabase/.temp service versions.
@@ -42,6 +42,7 @@
 20260809072420_ibar_typing_empty_frame_ux.sql
 20260809084152_logo_draw_personalize_ai_badge.sql
 20260809103353_locked_frame_fit_notion_db_blocks.sql
+20260809123351_locked_wrap_column_width.sql
 #
-# No new schema this save (frontend: locked frame symmetric width + height hug,
-# pageLink open-menu clamp scoped to panel, Notion database blocks + assets).
+# No new schema this save (frontend: locked wrap uses a fixed persisted wrapColWidth —
+# proportional resize scales text with no character reflow; unwrap/rewrap restores the point).

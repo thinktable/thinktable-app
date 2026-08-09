@@ -1,18 +1,21 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T10:33:53Z`
+- Snapped at: `2026-08-09T12:33:51Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 
 ## This save
 
-- No DDL. Marker `20260809103353_locked_frame_fit_notion_db_blocks.sql`.
-- Locked frame hug: symmetric width — gutter read from the ⋮⋮ handles row (`pm.closest('.relative')`, not the outer `containerRef` → was ~24px too narrow / right-clipped) and right margin mirrors the frame-left→⋮⋮-icon inset; hug HEIGHT to content on lock/relock/type (no longer keeps the taller resize box).
-- pageLink open-menu spill clamp scoped to the panel (`panel.contains` the `.overflow-hidden`, else panel) — locked frames were matching the canvas-wide React Flow pane, so the menu escaped the right edge.
-- Notion database blocks: `databaseBlock` TipTap atom + NodeView, `migrate-frame` (sole-DB map frame → pageLink), `blocks-to-html` / `import-to-board` updates, Notion mark/color assets, connect/import chrome.
-- Schema unchanged.
+- No DDL. Marker `20260809123351_locked_wrap_column_width.sql`.
+- Locked wrapped frames now key off a persisted `metadata.wrapColWidth` (unscaled wrap columns) instead of deriving `wrapContentWidth` from the live frame width. Fixes: (1) proportional resize scales the text with **zero character reflow** (columns constant); (2) **unwrap → rewrap** returns to the same wrap point set while unlocked.
+- `wrapColWidth` captured on wrap-on (or updated on an unlocked-wrap resize-end); `handleResize`/`handleResizeEnd` derive the locked box as `wrapColWidth × frameScale + 2`; the wrap toggle's double-`rAF` re-hug restores it on rewrap.
+- Persisted via existing `messages.metadata` jsonb — schema unchanged.
+
+## Prior: locked frame fit / Notion database blocks
+
+- Marker: `20260809103353_locked_frame_fit_notion_db_blocks.sql`.
 
 ## Prior: drawable logo personalize / AI badge
 
