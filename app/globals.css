@@ -1226,10 +1226,13 @@ span[data-added="true"] {
     background: rgba(255, 255, 255, 0.08);
   }
 
-  /* Unresized map blocks: one visual line per TipTap block; card width is measured in JS */
+  /* Frame blocks: fill the content box so empty/short lines stay full-row clickable.
+     min-width:max-content still lets unresized frames hug the longest nowrap line. */
   .ProseMirror[data-single-line="true"] {
-    width: max-content !important;
+    width: 100% !important;
     max-width: none !important;
+    min-width: max-content;
+    box-sizing: border-box;
   }
   .ProseMirror[data-single-line="true"] p,
   .ProseMirror[data-single-line="true"] h1,
@@ -1239,6 +1242,14 @@ span[data-added="true"] {
   .ProseMirror[data-single-line="true"] li,
   .ProseMirror[data-single-line="true"] blockquote {
     white-space: nowrap !important; /* Line runs until Enter creates the next block */
+    min-width: 1ch; /* Empty lines keep a clickable band so the I-bar can land */
+    width: 100%; /* Stretch to frame/editor width even when text is short or empty */
+    box-sizing: border-box;
+  }
+  /* pageLink atoms also span the row so the grip/I-bar band matches the frame */
+  .ProseMirror[data-single-line="true"] .tt-page-link {
+    width: 100%;
+    box-sizing: border-box;
   }
 
   /* Active content-block highlight (⋮⋮ menu open) — Notion blue wash on that block only */

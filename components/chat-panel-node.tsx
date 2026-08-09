@@ -14,6 +14,7 @@ import { useEditor, EditorContent } from '@tiptap/react'
 import { DOMParser as PMDOMParser } from '@tiptap/pm/model' // Parse stored HTML → PM doc for exact (non-string) sync compare
 import { createPanelExtensions } from '@/lib/tiptap/extensions' // StarterKit + Turn into nodes
 import { TipTapBlockHandles } from '@/components/tiptap-block-handles' // Per-content-block ⋮⋮ (Notion)
+import { findEditorBlockAtClientY } from '@/lib/tiptap/block-selection' // Click in frame padding → block at Y
 import type { PageInTarget } from '@/components/block-actions-menu'
 import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
 import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, Lock, Unlock, ChevronDown, ChevronUp, WrapText } from 'lucide-react' // Rotate + frame lock / wrap / overflow expand·collapse
@@ -274,18 +275,7 @@ function TipTapContent({
             hazeTarget.classList.add('tt-haze-revealed') // Reveal this hazed block temporarily
           }
 
-          // Focus editor on click to show cursor - access editor from view
-          const editorInstance = view.state.doc ? (view as any).editor : null
-          if (editorInstance && !editorInstance.isDestroyed) {
-            setTimeout(() => {
-              editorInstance.commands.focus()
-              // Ensure cursor is visible by setting selection if empty
-              const isEmpty = !editorInstance.getHTML() || editorInstance.getHTML() === '<p></p>' || editorInstance.getHTML() === '<p><br></p>'
-              if (isEmpty) {
-                editorInstance.commands.setTextSelection(0)
-              }
-            }, 0)
-          }
+          // Don’t override selection here — PM places the I-bar; container click confirms via posAtCoords
           return false
         },
         blur: (view) => {
@@ -393,11 +383,13 @@ function TipTapContent({
     if (!editor || editor.isDestroyed) return
     const editorDOM = editor.view.dom as HTMLElement
     if (singleLineUntilEnter) {
-      editorDOM.setAttribute('data-single-line', 'true') // nowrap + max-content via CSS
-      editorDOM.style.width = 'max-content'
+      editorDOM.setAttribute('data-single-line', 'true') // nowrap; CSS fills frame width
+      editorDOM.style.width = '100%' // Stretch to content box — empty/short lines stay full-row
+      editorDOM.style.minWidth = 'max-content' // Still hug longest line for unresized frames
     } else {
       editorDOM.removeAttribute('data-single-line')
       editorDOM.style.width = ''
+      editorDOM.style.minWidth = ''
     }
   }, [editor, singleLineUntilEnter])
 
@@ -617,69 +609,29 @@ function TipTapContent({
     return () => observer.disconnect()
   }, [containerRef])
 
-  // Focus editor when container is clicked to ensure cursor is visible
-  // If panel is selected, allow single click to place I-bar; otherwise require double click
-  // Also clears text selection when clicking on text by collapsing selection to cursor at click position
+  // Focus editor + place I-bar at the click (selected panel single-click, or double-click)
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
-    if (editor) {
-      // If panel is not selected and it's a single click, allow propagation so panel can be selected
-      if (!isPanelSelected && e.detail < 2) {
-        // Single click on unselected panel - don't focus, don't stop propagation (let panel be selected)
-        return
-      }
-      // Stop propagation when focusing editor (selected panel single click, or double click)
-      e.stopPropagation()
-      
-      // Check if there's a text selection that needs to be cleared
-      const { from, to } = editor.state.selection
-      const hasSelection = from !== to
-      
-      // Focus editor on click (single if selected, double if not selected) to show cursor
-      setTimeout(() => {
-        if (!editor.isDestroyed) {
-          // If there was a selection, clear it by placing cursor at click position
-          if (hasSelection) {
-            try {
-              const view = editor.view
-              // Get click position in editor coordinates - posAtCoords returns { pos, inside } object
-              const posResult = view.posAtCoords({ left: e.clientX, top: e.clientY })
-              if (posResult !== null && posResult.pos >= 0) {
-                // Place cursor at click position to clear selection
-                editor.commands.setTextSelection(posResult.pos)
-                editor.commands.focus()
-                return
-              }
-            } catch {
-              // Fallback: collapse selection to start position
-              editor.commands.setTextSelection(from)
-              editor.commands.focus()
-              return
-            }
-          }
-          
-          // No selection - normal focus behavior
-          editor.commands.focus()
-          // If editor is empty or clicking on empty area, place cursor at end or appropriate position
-          const isEmpty = !editor.getHTML() || editor.getHTML() === '<p></p>' || editor.getHTML() === '<p><br></p>'
-          if (isEmpty) {
-            // Place cursor at the start
-            editor.commands.setTextSelection(0)
-          } else {
-            // Try to place cursor at click position, or at end if that fails
-            try {
-              const { from } = editor.state.selection
-              // If selection is at start and editor has content, move to end
-              if (from === 0 && editor.state.doc.content.size > 1) {
-                editor.commands.setTextSelection(editor.state.doc.content.size - 1)
-              }
-            } catch {
-              // Fallback: place cursor at end
-              editor.commands.setTextSelection(editor.state.doc.content.size - 1)
-            }
-          }
+    if (!editor) return
+    // Unselected + single click: let RF select the frame first
+    if (!isPanelSelected && e.detail < 2) return
+    e.stopPropagation()
+
+    const clientX = e.clientX
+    const clientY = e.clientY
+    setTimeout(() => {
+      if (editor.isDestroyed) return
+      try {
+        // Always resolve against click coords so empty lines get the caret (not doc start/end)
+        const posResult = editor.view.posAtCoords({ left: clientX, top: clientY })
+        if (posResult != null && posResult.pos >= 0) {
+          editor.chain().focus().setTextSelection(posResult.pos).run()
+          return
         }
-      }, 0)
-    }
+      } catch {
+        /* fall through */
+      }
+      editor.commands.focus()
+    }, 0)
   }, [editor, isPanelSelected])
 
   if (!editor) return null
@@ -691,7 +643,12 @@ function TipTapContent({
   return (
     <div
       ref={containerRef}
-      className={cn('relative overflow-visible', isFlashcard ? 'cursor-pointer' : 'cursor-text', isInline && 'inline-block', otherClasses)}
+      className={cn(
+        'relative overflow-visible w-full', // Full frame content width so short/empty blocks stretch
+        isFlashcard ? 'cursor-pointer' : 'cursor-text',
+        isInline && 'inline-block',
+        otherClasses
+      )}
       onClick={(e) => {
         // If panel is not selected and it's a single click, don't handle - let React Flow select the panel
         if (!isPanelSelected && e.detail < 2) {
@@ -702,18 +659,23 @@ function TipTapContent({
         handleContainerClick(e)
       }}
       onDoubleClick={(e) => {
-        // Double click focuses the editor (for unselected panels) - handleContainerClick already handles this via e.detail check
-        // This handler ensures double click works even if onClick didn't fire
+        // Double click focuses the editor (for unselected panels) at the click point
         if (!isPanelSelected && editor) {
           e.stopPropagation()
+          const clientX = e.clientX
+          const clientY = e.clientY
           setTimeout(() => {
-            if (!editor.isDestroyed) {
-              editor.commands.focus()
-              const isEmpty = !editor.getHTML() || editor.getHTML() === '<p></p>' || editor.getHTML() === '<p><br></p>'
-              if (isEmpty) {
-                editor.commands.setTextSelection(0)
+            if (editor.isDestroyed) return
+            try {
+              const posResult = editor.view.posAtCoords({ left: clientX, top: clientY })
+              if (posResult != null && posResult.pos >= 0) {
+                editor.chain().focus().setTextSelection(posResult.pos).run()
+                return
               }
+            } catch {
+              /* fall through */
             }
+            editor.commands.focus()
           }, 0)
         }
       }}
@@ -724,7 +686,7 @@ function TipTapContent({
       {/* Apply shimmer animation to prompt text when response is loading (not for flashcards) */}
       <div
         className={cn(
-          'relative',
+          'relative w-full', // Match frame width — gutter + editor share one row
           enableBlockHandles && 'pl-6', // Gutter for ⋮⋮ only (add-block is the between-line)
           isLoading && !isFlashcard && 'shimmer'
         )}
@@ -737,7 +699,7 @@ function TipTapContent({
           pageInTargets={pageInTargets}
           onPageTurnInto={onPageTurnInto}
         />
-        <EditorContent editor={editor} />
+        <EditorContent editor={editor} className="block w-full" />
       </div>
     </div>
   )
@@ -2806,6 +2768,51 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     prevSelectedRef.current = selected
   }, [selected, isFlashcard, flashcardMode, setFlashcardMode])
 
+  // Sole empty block in a frame + click outside (deselect) → remove the frame
+  const prevSelectedEmptyFrameRef = useRef(selected)
+  useEffect(() => {
+    const wasSelected = prevSelectedEmptyFrameRef.current
+    prevSelectedEmptyFrameRef.current = selected
+    if (!wasSelected || selected) return // Only fire on selected → unselected
+    if (!isBlock || isFlashcard || isProjectBoard || isPageBody) return
+    if (isRestoringSelectionRef.current) return
+
+    const meta = (promptMessage?.metadata || {}) as Record<string, unknown>
+    // Keep titled / linked pages even if the body text was cleared
+    if (meta.linkedPageId) return
+    if (typeof meta.blockTitle === 'string' && meta.blockTitle.trim()) return
+
+    // Must be exactly one empty textblock (not a pageLink-only frame, not multi-block)
+    const ed = promptEditorRef.current
+    let soleEmpty = false
+    if (ed && !ed.isDestroyed) {
+      const doc = ed.state.doc
+      const only = doc.childCount === 1 ? doc.firstChild : null
+      soleEmpty = !!(
+        only &&
+        only.isTextblock &&
+        (only.content.size === 0 || only.textContent.length === 0)
+      )
+    } else {
+      soleEmpty = isBlockContentEmpty(promptContent)
+    }
+    if (!soleEmpty) return
+
+    // Board-flow owns DB + RF removal (same path as Delete / context menu)
+    window.dispatchEvent(
+      new CustomEvent('tt-delete-empty-frame', { detail: { nodeId: id } })
+    )
+  }, [
+    selected,
+    isBlock,
+    isFlashcard,
+    isProjectBoard,
+    isPageBody,
+    promptContent,
+    promptMessage?.metadata,
+    id,
+  ])
+
   // Get current zoom level and update panel width when zoom is 100% or less
   const [currentZoom, setCurrentZoom] = useState(reactFlowInstance?.getViewport().zoom ?? 1)
   // Block panels grow with the longest TipTap line until manually resized
@@ -3178,6 +3185,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       setIsInitialShrinkComplete(true)
       return
     }
+    // Map I-bar / grip-created frames must stay visible — the 300ms opacity:0 hid typed text
+    if (promptMessage?.metadata?.fadeIn === true) {
+      hasInitialShrunkRef.current = promptMessage?.id || id
+      setIsInitialShrinkComplete(true)
+      return
+    }
 
     const panelId = promptMessage?.id || id
     if (hasInitialShrunkRef.current === panelId) {
@@ -3213,6 +3226,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     isFlashcard,
     isRegularChatPanel,
     promptMessage?.id,
+    promptMessage?.metadata?.fadeIn,
     id,
     isUserResized,
     resizeDimensions,
@@ -3455,28 +3469,79 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   }, [isBlock, isInitialShrinkComplete, promptContent, resizeDimensions])
 
   // Auto-focus note editor when first created (empty component panel or inline note with fadeIn flag)
+  // Map I-bar typing seeds arrive via tt-ibar-typed-seed so keystrokes aren't dropped while the frame spawns
   useEffect(() => {
-    if (isComponentPanel && !isFlashcard && promptEditorRef.current && !hasAutoFocusedRef.current) {
-      const isEmpty = !promptContent || promptContent === '' || promptContent === '<p></p>' || promptContent === '<p><br></p>'
-      const isNewInlineNote = promptMessage?.metadata?.fadeIn === true // Inline note created via double-click
-      
-      if (isEmpty || isNewInlineNote) {
-        // Small delay to ensure editor is ready
-        setTimeout(() => {
-          if (promptEditorRef.current && !promptEditorRef.current.isDestroyed) {
-            promptEditorRef.current.commands.focus()
-            // For inline notes with content, place cursor at end; otherwise at start
-            if (isNewInlineNote && promptContent && promptContent.length > 0) {
-              promptEditorRef.current.commands.focus('end') // Place cursor at end to continue typing
-            } else {
-              promptEditorRef.current.commands.setTextSelection(0)
-            }
-            hasAutoFocusedRef.current = true
-          }
-        }, 100)
+    if (!isComponentPanel || isFlashcard) return
+
+    const applySeed = (html: string, text: string) => {
+      const ed = promptEditorRef.current
+      if (!ed || ed.isDestroyed) return false
+      const current = ed.getText()
+      // Only replace when seed is ahead — avoid setContent flicker when already in sync
+      if (text.length > current.length || (text.length === current.length && text !== current)) {
+        ed.commands.setContent(html || '<p></p>')
+        ed.commands.focus('end')
+        setPromptContent(html || '<p></p>')
+        setPromptHasChanges(true) // Persist the buffered typing; block remote wipe
+        hasAutoFocusedRef.current = true
+        return true
+      }
+      if (!ed.isFocused) ed.commands.focus('end')
+      hasAutoFocusedRef.current = true
+      setPromptHasChanges(true)
+      return true
+    }
+
+    const onSeed = (event: Event) => {
+      const detail = (event as CustomEvent<{ messageId?: string; text?: string; html?: string }>).detail
+      if (!detail?.messageId || detail.messageId !== promptMessage?.id) return
+      const ok = applySeed(detail.html || '<p></p>', detail.text || '')
+      const ed = promptEditorRef.current
+      // Only release map capture once TipTap actually has focus (otherwise more keys would drop)
+      if (ok && ed && !ed.isDestroyed && ed.isFocused) {
+        window.dispatchEvent(
+          new CustomEvent('tt-ibar-seed-applied', { detail: { messageId: detail.messageId } })
+        )
       }
     }
-  }, [isComponentPanel, isFlashcard, promptContent, promptEditorRef.current, promptMessage?.metadata?.fadeIn])
+
+    window.addEventListener('tt-ibar-typed-seed', onSeed)
+
+    // Normal fadeIn autofocus (grip-click empty frame, or seed already in message content)
+    if (promptEditorRef.current && !hasAutoFocusedRef.current) {
+      const isEmpty =
+        !promptContent ||
+        promptContent === '' ||
+        promptContent === '<p></p>' ||
+        promptContent === '<p><br></p>'
+      const isNewInlineNote = promptMessage?.metadata?.fadeIn === true
+      if (isEmpty || isNewInlineNote) {
+        const t = window.setTimeout(() => {
+          if (!promptEditorRef.current || promptEditorRef.current.isDestroyed) return
+          promptEditorRef.current.commands.focus('end')
+          hasAutoFocusedRef.current = true
+          // If a seed is still in flight, ask board-flow to re-push it
+          if (promptMessage?.id) {
+            window.dispatchEvent(
+              new CustomEvent('tt-ibar-request-seed', { detail: { messageId: promptMessage.id } })
+            )
+          }
+        }, 0) // Immediate — was 100ms and felt like a typing gap
+        return () => {
+          window.clearTimeout(t)
+          window.removeEventListener('tt-ibar-typed-seed', onSeed)
+        }
+      }
+    }
+
+    return () => window.removeEventListener('tt-ibar-typed-seed', onSeed)
+  }, [
+    isComponentPanel,
+    isFlashcard,
+    promptContent,
+    promptMessage?.id,
+    promptMessage?.metadata?.fadeIn,
+  ])
 
   // Debug logging for flashcard conversion
   if (isComponentPanel && promptMessage?.id) {
@@ -3972,7 +4037,9 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           // Preview open: fill the card; body editor is hidden (content lives on the nested page)
           pagePreviewOpen && 'flex flex-col h-full min-h-0',
           clipUnlocked ? 'h-full overflow-hidden' : 'overflow-visible', // Clip when unlocked frame < content
-          promptMessage?.metadata?.fadeIn === true && 'animate-note-fade-in'
+          promptMessage?.metadata?.fadeIn === true &&
+            isBlockContentEmpty(promptContent) &&
+            'animate-note-fade-in' // Empty grip-spawn only — typed I-bar frames stay solid (no opacity blink)
         )}
         style={{
           backgroundColor: responseAreaBackgroundColor,
@@ -4010,7 +4077,13 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             ref={contentFitRef} // Unscaled content box (offsetWidth ignores CSS scale)
             className={cn(
               'relative', // Anchor for in-content absolute chrome
-              wrapContentWidth != null ? undefined : 'w-max', // Wrap: fixed width; else hug longest line
+              // Resized / fixed box: fill frame so short+empty blocks span the full row.
+              // Unresized hug: w-max from longest line; children still width:100% of that box.
+              wrapContentWidth != null
+                ? undefined
+                : isUserResized || !growsWithLine
+                  ? 'w-full'
+                  : 'w-max',
               // Blocks: keep top/right/bottom pad; left matches ⋮⋮→text gap (~2px) so + isn’t inset farther than the grip
               isBlock ? 'pt-4 pr-4 pb-4 pl-0.5' : 'px-3 py-3'
             )}
@@ -4020,6 +4093,21 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               ...(applyFrameScale
                 ? { transform: `scale(${frameScale})`, transformOrigin: 'top left' }
                 : {}),
+            }}
+            onClick={(e) => {
+              // Clicks in frame padding (right of short/empty lines) still place the I-bar
+              if (!isBlock || !selected) return
+              const t = e.target as HTMLElement
+              if (t.closest?.('.ProseMirror, [data-tt-block-handle], [data-tt-insert-line], .block-actions-menu')) {
+                return // Editor / grip already handle these
+              }
+              const ed = promptEditorRef.current
+              if (!ed || ed.isDestroyed) return
+              e.stopPropagation()
+              const block = findEditorBlockAtClientY(ed, e.clientY)
+              if (!block) return
+              const caret = Math.max(block.from + 1, block.to - 1) // End of that block’s content
+              ed.chain().focus().setTextSelection(caret).run()
             }}
           >
             <PageLinkProvider value={pageLinkActions}>

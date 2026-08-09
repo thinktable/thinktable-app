@@ -1992,19 +1992,18 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     // Top bar is ~2% brighter in light mode, ~3.1% brighter in dark mode
                     // Light mode: 10% + 2% = 12%, Dark mode: 15% + 3.1% = 18.1%
                     const opacity = resolvedTheme === 'dark' ? 0.181 : 0.12
-                    const buttonBgColor = fillColor ? hexToRgba(fillColor, opacity) : 'transparent'
-                    const borderColorWithOpacity = fillColor && fillColor.trim() !== '' ? hexToRgba(fillColor, opacity) : undefined
+                    const hasFill = Boolean(fillColor && fillColor.trim() !== '') // Colored fill vs transparent default
+                    const buttonBgColor = hasFill ? hexToRgba(fillColor, opacity) : 'transparent' // Match frame fill preview
+                    const borderColorWithOpacity = hasFill ? hexToRgba(fillColor, opacity) : 'transparent' // No outline when transparent
                     
                     return (
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center justify-center border border-solid border-gray-300 dark:border-gray-600"
+                        className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center justify-center border border-solid border-transparent"
                         style={{
-                          backgroundColor: buttonBgColor,
-                          ...(borderColorWithOpacity ? {
-                            borderColor: borderColorWithOpacity,
-                          } : {})
+                          backgroundColor: buttonBgColor, // Preview fill on the button
+                          borderColor: borderColorWithOpacity, // Colored when set; transparent when clear
                         }}
                         onMouseEnter={(e) => {
                           if (buttonBgColor !== 'transparent' && fillColor) {
@@ -2054,19 +2053,18 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     // Top bar is ~2% brighter in light mode, ~3.1% brighter in dark mode
                     // Light mode: 10% + 2% = 12%, Dark mode: 15% + 3.1% = 18.1%
                     const opacity = resolvedTheme === 'dark' ? 0.181 : 0.12
-                    const buttonBgColor = borderColor ? hexToRgba(borderColor, opacity) : 'transparent'
-                    const borderColorWithOpacity = borderColor && borderColor.trim() !== '' ? hexToRgba(borderColor, opacity) : undefined
+                    const hasBorder = Boolean(borderColor && borderColor.trim() !== '') // Colored border vs transparent default
+                    const buttonBgColor = hasBorder ? hexToRgba(borderColor, opacity) : 'transparent' // Match frame border preview
+                    const borderColorWithOpacity = hasBorder ? hexToRgba(borderColor, opacity) : 'transparent' // No outline when transparent
                     
                     return (
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center justify-center border border-solid border-gray-300 dark:border-gray-600"
+                        className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center justify-center border border-solid border-transparent"
                         style={{
-                          backgroundColor: buttonBgColor,
-                          ...(borderColorWithOpacity ? {
-                            borderColor: borderColorWithOpacity,
-                          } : {})
+                          backgroundColor: buttonBgColor, // Preview border tint on the button
+                          borderColor: borderColorWithOpacity, // Colored when set; transparent when clear
                         }}
                         onMouseEnter={(e) => {
                           if (buttonBgColor !== 'transparent' && borderColor) {

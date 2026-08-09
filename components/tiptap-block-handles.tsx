@@ -61,9 +61,9 @@ type TipTapBlockHandlesProps = {
 
 type DropLine = { top: number; left: number; width: number } // Viewport dashed insert marker
 type InsertLine = { top: number; insertPos: number } // Gap mid in editor-container local CSS px
-const INSERT_EDGE_PX = 14 // Screen px around a block join → show the add line
+const INSERT_EDGE_PX = 4 // Thin join band only — larger values stole most of each line from ⋮⋮
 const GRIP_W = 20 // Matches ⋮⋮ `w-5` — insert line uses the same width
-const GRIP_H = 24 // Matches ⋮⋮ `h-6` — vertical align / hit band
+const INSERT_HIT_H = 12 // Tight add-line hit target so it doesn’t blanket neighboring grips
 
 /** Gap between blocks (or above/below) under clientY — lineTop is the visual midpoint. */
 function findBlockInsertGap(
@@ -109,15 +109,13 @@ function findBlockInsertGap(
   })
   if (blocks.length === 0) return null
 
-  // Paragraphs use margin 0 — joins touch. Hit a band around each join, place line at midpoint.
+  // Paragraphs use margin 0 — joins touch. Only a thin band at the join (⋮⋮ owns the rest).
   let best: { insertPos: number; lineTop: number; dist: number } | null = null
   for (let i = 0; i < blocks.length - 1; i++) {
     const a = blocks[i]
     const b = blocks[i + 1]
     const mid = (a.bottom + b.top) / 2 // Center between the two block boxes
-    const lo = Math.min(a.bottom, b.top) - INSERT_EDGE_PX
-    const hi = Math.max(a.bottom, b.top) + INSERT_EDGE_PX
-    if (clientY < lo || clientY > hi) continue
+    if (Math.abs(clientY - mid) > INSERT_EDGE_PX) continue
     const dist = Math.abs(clientY - mid)
     if (!best || dist < best.dist) {
       best = { insertPos: a.to, lineTop: mid, dist }
@@ -125,13 +123,14 @@ function findBlockInsertGap(
   }
   if (best) return { insertPos: best.insertPos, lineTop: best.lineTop }
 
+  // Above / below: only in frame padding outside the block box — never steal the line interior
   const first = blocks[0]
   const last = blocks[blocks.length - 1]
-  if (clientY <= first.top + INSERT_EDGE_PX) {
-    return { insertPos: first.from, lineTop: first.top } // Above first block
+  if (clientY < first.top) {
+    return { insertPos: first.from, lineTop: first.top }
   }
-  if (clientY >= last.bottom - INSERT_EDGE_PX) {
-    return { insertPos: last.to, lineTop: last.bottom } // Below last block
+  if (clientY > last.bottom) {
+    return { insertPos: last.to, lineTop: last.bottom }
   }
   return null
 }
@@ -296,9 +295,10 @@ export function TipTapBlockHandles({
         }
       }
 
-      // Near a gap → short line in the ⋮⋮ column, mid-gap (same width as the grip button)
+      // ⋮⋮ wins inside a block’s band; insert hairline only in the thin join / outer padding
+      const block = findEditorBlockAtClientY(editor, clientY)
       const gap = findBlockInsertGap(editor, clientY)
-      if (gap) {
+      if (gap && (!block || Math.abs(clientY - gap.lineTop) <= INSERT_EDGE_PX)) {
         const containerRect = container.getBoundingClientRect()
         const scaleY =
           container.offsetHeight > 0 ? containerRect.height / container.offsetHeight : 1
@@ -307,12 +307,11 @@ export function TipTapBlockHandles({
           top: (gap.lineTop - containerRect.top) / safeScaleY, // Gap midpoint in gutter-container local px
           insertPos: gap.insertPos,
         })
-        setHover(null) // Gap wins — hide ⋮⋮ while the add line is up
+        setHover(null) // Thin join only — hide ⋮⋮ while the add line is up
         return
       }
       setInsertLine(null)
 
-      const block = findEditorBlockAtClientY(editor, clientY)
       if (!block) {
         setHover(null)
         return
@@ -807,9 +806,9 @@ export function TipTapBlockHandles({
           className="nodrag nopan absolute z-[61] cursor-pointer select-none"
           style={{
             left: 0, // Same gutter column as ⋮⋮
-            top: insertLine.top - GRIP_H / 2, // Vertically center the grip-sized hit band on the gap
+            top: insertLine.top - INSERT_HIT_H / 2, // Tight hit band so it doesn’t cover neighboring grips
             width: GRIP_W, // Same width as the ⋮⋮ handle button
-            height: GRIP_H,
+            height: INSERT_HIT_H,
           }}
           title="Add block"
           onPointerDown={(e) => e.stopPropagation()} // Never start RF frame drag
@@ -820,9 +819,9 @@ export function TipTapBlockHandles({
             onInsertLineClick(e as unknown as React.MouseEvent)
           }}
         >
-          {/* Hairline centered in the same column as ⋮⋮ */}
+          {/* Pill hairline centered in the same column as ⋮⋮ */}
           <div
-            className="pointer-events-none absolute left-1/2 top-1/2 h-px w-3 -translate-x-1/2 -translate-y-1/2 bg-black/20 dark:bg-white/25"
+            className="pointer-events-none absolute left-1/2 top-1/2 h-px w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/20 dark:bg-white/25"
             aria-hidden
           />
         </div>

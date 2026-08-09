@@ -44,7 +44,7 @@ import { useEffect, useRef, useMemo, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useTheme } from '@/components/theme-provider'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
+import { cn, generateUUID } from '@/lib/utils'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
 import {
@@ -528,6 +528,14 @@ function BoardFlowInner({
   
   // Track if we're creating an inline note (to prevent double-creation)
   const [isCreatingInlineNote, setIsCreatingInlineNote] = useState(false)
+  // Keystrokes typed at the map I-bar while the frame is still spawning (continuous typing)
+  const iBarTypeBufferRef = useRef('')
+  // Flow position captured at create-start (iBarPosition is cleared immediately)
+  const iBarCreatePosRef = useRef<{ x: number; y: number } | null>(null)
+  // Message id of the in-flight I-bar frame — seed events target this panel
+  const iBarPendingMessageIdRef = useRef<string | null>(null)
+  // True while insert is in flight — ref so rapid keydowns don’t double-create
+  const iBarCreatingRef = useRef(false)
 
   // Load preferences from localStorage first (instant), then Supabase (sync)
   useEffect(() => {
@@ -3431,6 +3439,17 @@ function BoardFlowInner({
       return false
     }
   }, [conversationId, nodes, setNodes, queryClient])
+
+  // Frames with a sole empty TipTap block ask to be removed when clicked off (deselected)
+  useEffect(() => {
+    const onEmptyFrame = (event: Event) => {
+      const nodeId = (event as CustomEvent<{ nodeId?: string }>).detail?.nodeId
+      if (!nodeId) return
+      void deleteNodesByIds([nodeId])
+    }
+    window.addEventListener('tt-delete-empty-frame', onEmptyFrame)
+    return () => window.removeEventListener('tt-delete-empty-frame', onEmptyFrame)
+  }, [deleteNodesByIds])
 
   // Recalculate edge handles based on current node positions
   // This is called when nodes are dragged to update edges in real-time
@@ -6446,117 +6465,310 @@ function BoardFlowInner({
     }
   }, [clickedEdge])
 
-  // Handle keyboard input when I-bar is visible - create note panel on first keystroke
-  // Listens for printable characters and creates an editable note panel at the I-bar position
+  // Map I-bar typing: keep capturing keys until the new frame editor takes over (no dropped chars)
   useEffect(() => {
-    if (!iBarPosition || isCreatingInlineNote) return // Only listen when I-bar visible and not already creating
-    
+    if (!iBarPosition && !isCreatingInlineNote) return // Idle — nothing to capture
+
+    const escapeHtml = (s: string) =>
+      s
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+
+    const bufferToHtml = (text: string) => {
+      if (!text) return '<p></p>'
+      // Enter during capture becomes a soft break inside the first block (frame opens single-line)
+      const safe = escapeHtml(text).replace(/\n/g, '<br>')
+      return `<p>${safe}</p>`
+    }
+
+    const pushSeed = () => {
+      const messageId = iBarPendingMessageIdRef.current
+      if (!messageId) return
+      window.dispatchEvent(
+        new CustomEvent('tt-ibar-typed-seed', {
+          detail: { messageId, text: iBarTypeBufferRef.current, html: bufferToHtml(iBarTypeBufferRef.current) },
+        })
+      )
+    }
+
+    // Frame asked for the latest buffer (editor just mounted / focused)
+    const onRequestSeed = (event: Event) => {
+      const messageId = (event as CustomEvent<{ messageId?: string }>).detail?.messageId
+      if (!messageId || messageId !== iBarPendingMessageIdRef.current) return
+      pushSeed()
+    }
+
     const handleKeyDown = async (event: KeyboardEvent) => {
-      // Ignore modifier keys, function keys, and navigation keys
-      const ignoredKeys = ['Shift', 'Control', 'Alt', 'Meta', 'Tab', 'CapsLock',
-        'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown',
-        'Insert', 'Delete', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']
-      
-      // Escape dismisses the I-bar
+      // Escape dismisses the I-bar (only before create starts)
       if (event.key === 'Escape') {
-        setIBarPosition(null)
+        if (!iBarCreatingRef.current) {
+          setIBarPosition(null)
+          iBarTypeBufferRef.current = ''
+        }
         return
       }
-      
+
+      const ignoredKeys = [
+        'Shift',
+        'Control',
+        'Alt',
+        'Meta',
+        'Tab',
+        'CapsLock',
+        'ArrowUp',
+        'ArrowDown',
+        'ArrowLeft',
+        'ArrowRight',
+        'Home',
+        'End',
+        'PageUp',
+        'PageDown',
+        'Insert',
+        'Delete',
+        'F1',
+        'F2',
+        'F3',
+        'F4',
+        'F5',
+        'F6',
+        'F7',
+        'F8',
+        'F9',
+        'F10',
+        'F11',
+        'F12',
+      ]
       if (ignoredKeys.includes(event.key)) return
-      
-      // Check if any modifier is held (except Shift for capitals)
       if (event.ctrlKey || event.altKey || event.metaKey) return
-      
-      // User started typing - create a note panel at the I-bar position
-      event.preventDefault()
-      
-      // Calculate panel position so text cursor aligns with I-bar
-      // Note panel: p-1+px-3 (16) + TipTap handle gutter pl-6 (24) = 40px to caret
-      //             p-1 + top padding ≈ 20px to first line
-      const cursorOffsetX = 40 // Left padding + gutter to where cursor sits
-      const cursorOffsetY = 20 // Top padding to where cursor sits
-      const notePosition = { 
-        x: iBarPosition.x - cursorOffsetX, // Panel left edge
-        y: iBarPosition.y - cursorOffsetY, // Panel top edge
-      }
-      
-      setIBarPosition(null) // Clear I-bar immediately
-      setIsCreatingInlineNote(true)
-      
-      try {
-        const supabase = createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-        
-        if (!user) {
-          console.warn('Cannot create inline note: user not authenticated')
-          setIsCreatingInlineNote(false)
-          return
-        }
-        
-        let currentConversationId = conversationId
-        
-        // If no conversation ID, create a new conversation first
-        if (!currentConversationId) {
-          const { data: newConversation, error: convError } = await supabase
-            .from('conversations')
-            .insert({
-              user_id: user.id,
-              title: 'New Conversation',
-              metadata: { position: -1 },
+
+      const isPrintable = event.key.length === 1
+      const isEnter = event.key === 'Enter'
+      const isBackspace = event.key === 'Backspace'
+      if (!isPrintable && !isEnter && !isBackspace) return
+
+      // TipTap already focused on the spawned frame — stop capturing so typing is normal
+      if (iBarPendingMessageIdRef.current) {
+        const nodeEl = document.querySelector(
+          `.react-flow__node[data-id="panel-${iBarPendingMessageIdRef.current}"]`
+        )
+        const pm = nodeEl?.querySelector?.('.ProseMirror') as HTMLElement | null
+        if (pm && (document.activeElement === pm || pm.contains(document.activeElement))) {
+          window.dispatchEvent(
+            new CustomEvent('tt-ibar-seed-applied', {
+              detail: { messageId: iBarPendingMessageIdRef.current },
             })
-            .select()
-            .single()
-          
-          if (convError) {
-            console.error('Error creating conversation:', convError)
-            setIsCreatingInlineNote(false)
-            return
-          }
-          
-          currentConversationId = newConversation.id
-          router.replace(`/board/${currentConversationId}`)
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('conversation-created', { detail: { conversationId: currentConversationId } }))
-          }
+          )
+          return // Do not preventDefault — this keystroke goes into TipTap
         }
-        
-        // Create the note with the first character typed as initial content
-        const initialContent = event.key === 'Enter' ? '' : event.key
-        
-        const { error } = await supabase
-          .from('messages')
-          .insert({
-            conversation_id: currentConversationId,
-            user_id: user.id,
-            role: 'user',
-            content: initialContent, // Start with the first character typed
-            metadata: newBlockMetadata({
-              position: notePosition, // Panel position (offset so cursor aligns with I-bar)
-              fadeIn: true, // Trigger fade-in animation
-            }),
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+
+      if (isBackspace) {
+        iBarTypeBufferRef.current = iBarTypeBufferRef.current.slice(0, -1)
+        pushSeed()
+        // Keep optimistic panel content in sync while TipTap isn’t focused yet
+        const mid = iBarPendingMessageIdRef.current
+        if (mid) {
+          const html = bufferToHtml(iBarTypeBufferRef.current)
+          setNodes((nds) =>
+            nds.map((n) =>
+              n.id === `panel-${mid}`
+                ? {
+                    ...n,
+                    data: {
+                      ...n.data,
+                      promptMessage: { ...n.data.promptMessage, content: html },
+                    },
+                  }
+                : n
+            )
+          )
+        }
+        return
+      }
+      if (isEnter) return // Frame owns Enter after focus
+
+      iBarTypeBufferRef.current += event.key
+
+      // First keystroke: spawn the frame immediately (no await) so text never blanks
+      if (!iBarCreatingRef.current) {
+        const pos = iBarPosition ?? iBarCreatePosRef.current
+        if (!pos) return
+
+        iBarCreatingRef.current = true
+        iBarCreatePosRef.current = pos
+        setIBarPosition(null)
+        setIsCreatingInlineNote(true)
+
+        const cursorOffsetX = 40
+        const cursorOffsetY = 20
+        const notePosition = {
+          x: pos.x - cursorOffsetX,
+          y: pos.y - cursorOffsetY,
+        }
+
+        const messageId = generateUUID()
+        iBarPendingMessageIdRef.current = messageId
+        const html = bufferToHtml(iBarTypeBufferRef.current)
+        const optimisticMessage = {
+          id: messageId,
+          role: 'user' as const,
+          content: html,
+          created_at: new Date().toISOString(),
+          metadata: newBlockMetadata({
+            position: notePosition,
+            fadeIn: true,
+          }),
+        }
+
+        // Instant RF node at the I-bar — selected + visible with the typed char already in content
+        const panelId = `panel-${messageId}`
+        originalPositionsRef.current.set(panelId, notePosition)
+        setNodes((nds) => [
+          ...nds.map((n) => ({ ...n, selected: false })),
+          {
+            id: panelId,
+            type: 'chatPanel',
+            position: notePosition,
+            selected: true,
+            data: {
+              promptMessage: optimisticMessage,
+              responseMessage: undefined,
+              conversationId: conversationId || '',
+              isResponseCollapsed: false,
+            },
+          },
+        ])
+
+        // Patch message caches so a later refetch merges instead of dropping the optimistic row
+        const patch = (key: unknown[]) => {
+          queryClient.setQueryData(key, (old: unknown) => {
+            const list = Array.isArray(old) ? old : []
+            if (list.some((m: { id?: string }) => m.id === messageId)) return list
+            return [...list, optimisticMessage]
           })
-          .select()
-          .single()
-        
-        if (error) {
-          console.error('Error creating inline note:', error)
-          setIsCreatingInlineNote(false)
-          return
         }
-        
-        refetchMessages()
-        console.log('✅ Created inline note panel at position:', notePosition)
-      } catch (error) {
-        console.error('Error creating inline note:', error)
-      } finally {
-        setIsCreatingInlineNote(false)
+        if (conversationId) {
+          patch(['messages-for-panels', conversationId])
+          patch(['messages-for-panels', conversationId, 'full'])
+          patch(['messages-for-panels', conversationId, 'embed'])
+        }
+
+        pushSeed()
+
+        // Persist in the background — UI already has the frame
+        void (async () => {
+          try {
+            const supabase = createClient()
+            const {
+              data: { user },
+            } = await supabase.auth.getUser()
+            if (!user) {
+              console.warn('Cannot persist inline note: user not authenticated')
+              return
+            }
+
+            let currentConversationId = conversationId
+            if (!currentConversationId) {
+              const { data: newConversation, error: convError } = await supabase
+                .from('conversations')
+                .insert({
+                  user_id: user.id,
+                  title: 'New Conversation',
+                  metadata: { position: -1 },
+                })
+                .select()
+                .single()
+              if (convError || !newConversation) {
+                console.error('Error creating conversation:', convError)
+                return
+              }
+              currentConversationId = newConversation.id
+              router.replace(`/board/${currentConversationId}`)
+              window.dispatchEvent(
+                new CustomEvent('conversation-created', {
+                  detail: { conversationId: currentConversationId },
+                })
+              )
+              setNodes((nds) =>
+                nds.map((n) =>
+                  n.id === panelId
+                    ? { ...n, data: { ...n.data, conversationId: currentConversationId } }
+                    : n
+                )
+              )
+              patch(['messages-for-panels', currentConversationId])
+              patch(['messages-for-panels', currentConversationId, 'full'])
+            }
+
+            const latestHtml = bufferToHtml(iBarTypeBufferRef.current)
+            const { error } = await supabase.from('messages').insert({
+              id: messageId,
+              conversation_id: currentConversationId,
+              user_id: user.id,
+              role: 'user',
+              content: latestHtml,
+              metadata: optimisticMessage.metadata,
+            })
+            if (error) {
+              console.error('Error persisting inline note:', error)
+              return
+            }
+            // Soft refetch — existing panel id stays mounted (messagesKey adds this id only once)
+            await refetchMessages()
+            pushSeed()
+          } catch (error) {
+            console.error('Error persisting inline note:', error)
+          }
+        })()
+        return
+      }
+
+      // Already spawning — keep buffer + live seed in sync until TipTap focuses
+      pushSeed()
+      const mid = iBarPendingMessageIdRef.current
+      if (mid) {
+        const html = bufferToHtml(iBarTypeBufferRef.current)
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === `panel-${mid}`
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    promptMessage: { ...n.data.promptMessage, content: html },
+                  },
+                }
+              : n
+          )
+        )
       }
     }
-    
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [iBarPosition, isCreatingInlineNote, conversationId, router, refetchMessages])
+
+    // Frame editor took over — stop document capture
+    const onSeedApplied = (event: Event) => {
+      const messageId = (event as CustomEvent<{ messageId?: string }>).detail?.messageId
+      if (!messageId || messageId !== iBarPendingMessageIdRef.current) return
+      iBarTypeBufferRef.current = ''
+      iBarPendingMessageIdRef.current = null
+      iBarCreatePosRef.current = null
+      iBarCreatingRef.current = false
+      setIsCreatingInlineNote(false)
+    }
+
+    document.addEventListener('keydown', handleKeyDown, true) // Capture so nothing else eats keys
+    window.addEventListener('tt-ibar-seed-applied', onSeedApplied)
+    window.addEventListener('tt-ibar-request-seed', onRequestSeed)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown, true)
+      window.removeEventListener('tt-ibar-seed-applied', onSeedApplied)
+      window.removeEventListener('tt-ibar-request-seed', onRequestSeed)
+    }
+  }, [iBarPosition, isCreatingInlineNote, conversationId, router, refetchMessages, setNodes, queryClient])
 
   // Handle double-click on map pane to place I-bar cursor
   // The I-bar shows where the note will be created when user starts typing
@@ -7286,7 +7498,7 @@ function BoardFlowInner({
            }}
          maskColor={resolvedTheme === 'dark'
            ? 'rgba(42, 42, 58, 0.35)' // Dark mode: subtle nav-matching veil
-           : 'rgba(156, 163, 175, 0.2)'} // Light mode: light gray veil (not opaque white)
+           : 'rgba(200, 200, 200, 0.2)'} // Light mode: light gray veil (not opaque white)
          pannable={true}
          zoomable={true}
          className="minimap-custom-size shadow-sm"

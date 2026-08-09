@@ -36,6 +36,9 @@ export function createPanelExtensions(placeholder?: string): any[] {
     StarterKit.configure({
       heading: { levels: [1, 2, 3, 4] }, // Notion H1–H4
       // TaskList replaces default list behavior where needed; keep bullet/ordered
+      // TrailingNode re-inserts an empty <p> after pageLink/atoms, so empty-block
+      // Backspace looked like it deleted the block but left the blank line space.
+      trailingNode: false,
     }),
     Highlight.configure({ multicolor: true }),
     Haze,
@@ -51,7 +54,7 @@ export function createPanelExtensions(placeholder?: string): any[] {
     SyncedBlock,
     Columns,
     PageLink, // Block that links to a child page (Notion child-page block)
-    EmptyBlockBackspace, // Empty block Backspace → delete + caret on previous (skip fresh frame)
+    EmptyBlockBackspace, // Empty block: Backspace → previous; Enter → no new blank line
     BlockHighlight, // Per-content-block menu highlight (not the map card)
   ]
 

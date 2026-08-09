@@ -1,7 +1,7 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-09T06:31:03Z
+# snapped_at=2026-08-09T07:24:20Z
 # postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
 # Note: supabase db dump --linked / projects list need login or SUPABASE_DB_PASSWORD;
 # snapshot via local migrations + apps/web/supabase/.temp service versions.
@@ -39,6 +39,7 @@
 20260809054110_empty_block_backspace.sql
 20260809061713_between_block_insert_line.sql
 20260809063103_add_block_hairline_centered.sql
+20260809072420_ibar_typing_empty_frame_ux.sql
 #
-# No new schema this save (frontend: short centered add hairline in ⋮⋮
-# column, no vertical; slightly darker stroke).
+# No new schema this save (frontend: continuous I-bar typing, empty-frame
+# delete-on-deselect, full-width caret, TrailingNode/empty-block UX).

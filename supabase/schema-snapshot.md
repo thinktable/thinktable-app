@@ -1,16 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T06:31:03Z`
+- Snapped at: `2026-08-09T07:24:20Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 
 ## This save
 
-- No DDL. Marker `20260809063103_add_block_hairline_centered.sql`.
-- App: between-block add mark is a short `w-3` hairline, horizontally centered with the ⋮⋮ grips (no vertical stem); slightly darker stroke.
+- No DDL. Marker `20260809072420_ibar_typing_empty_frame_ux.sql`.
+- App: continuous map I-bar typing (optimistic frame + seed buffer); sole empty frame delete-on-deselect; full-width caret clicks; TrailingNode off + empty-block Backspace/Enter; ⋮⋮ hover vs thin join band; toolbar fill/border transparent preview; logo viewBox refresh.
 - Schema unchanged.
+
+## Prior: add-block hairline centered
+
+- Marker: `20260809063103_add_block_hairline_centered.sql` — short `w-3` hairline centered with ⋮⋮.
 
 ## Prior: between-block insert line
 

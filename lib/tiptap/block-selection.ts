@@ -85,15 +85,21 @@ export function findEditorBlockAtClientY(editor: Editor, clientY: number): Edito
     if (!isHandleBlockType(name)) return true
 
     try {
-      // Atom blocks (pageLink) have no inner text positions — use their DOM rect for the band
+      // Prefer DOM rect (matches visible line / pageLink); coordsAtPos can undershoot empty <p>
       let top: number
       let bottom: number
-      if (node.isAtom || node.isLeaf) {
-        const dom = editor.view.nodeDOM(pos)
-        const rect = dom instanceof HTMLElement ? dom.getBoundingClientRect() : null
-        if (!rect) return true
+      const dom = editor.view.nodeDOM(pos)
+      const rect =
+        dom instanceof HTMLElement
+          ? dom.getBoundingClientRect()
+          : dom?.parentElement instanceof HTMLElement
+            ? dom.parentElement.getBoundingClientRect()
+            : null
+      if (rect && rect.height > 0) {
         top = rect.top
         bottom = rect.bottom
+      } else if (node.isAtom || node.isLeaf) {
+        return true // Atom with no measurable DOM — skip
       } else {
         const start = editor.view.coordsAtPos(pos + 1) // Top of block
         const endPos = Math.max(pos + 1, pos + node.nodeSize - 1)
