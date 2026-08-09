@@ -12,6 +12,7 @@ import { useQueryClient } from '@tanstack/react-query' // Refresh panels after e
 import { createClient } from '@/lib/supabase/client' // Persist a new map card from a dragged line
 import { newBlockMetadata } from '@/lib/blocks' // Canonical isBlock metadata for extracted cards
 import { cn } from '@/lib/utils'
+import { elementUniformScale, screenToLocal } from '@/lib/dom-transform' // Rotation-safe local↔screen
 import {
   BlockActionsMenu,
   type BlockActionId,
@@ -171,6 +172,7 @@ function topmostClientRect(el: HTMLElement): DOMRect | null {
  * Measure handle Y/height in the gutter container’s local CSS pixels.
  * Must divide out React Flow viewport scale — getBoundingClientRect is screen-space,
  * but position:absolute top is pre-transform CSS px inside .react-flow__viewport.
+ * Use rotation-safe scale + screen→local (AABB height/width ratio breaks under frame rotate).
  */
 function layoutForBlock(
   editor: Editor,
@@ -179,16 +181,13 @@ function layoutForBlock(
 ): HandleLayout | null {
   try {
     const el = blockDom(editor, block)
-    const containerRect = container.getBoundingClientRect()
-    // Visual scale from RF zoom (and any nested transforms)
-    const scaleY =
-      container.offsetHeight > 0 ? containerRect.height / container.offsetHeight : 1
-    const safeScale = scaleY > 0.01 ? scaleY : 1
 
     if (el) {
       const blockRect = el.getBoundingClientRect()
-      const top = (blockRect.top - containerRect.top) / safeScale
-      const height = Math.max(22, blockRect.height / safeScale)
+      const topLeft = screenToLocal(container, blockRect.left, blockRect.top)
+      const bottomLeft = screenToLocal(container, blockRect.left, blockRect.bottom)
+      const top = topLeft.y
+      const height = Math.max(22, Math.abs(bottomLeft.y - topLeft.y))
       // pageLink: measure the TITLE label — Range on the NodeView root hits the flex-centered icon first
       // (mid-block on wrapped titles). Plain blocks use the block element itself.
       const label = el.querySelector?.('.tt-page-link-label') as HTMLElement | null
@@ -196,19 +195,24 @@ function layoutForBlock(
       // First-line height (local px): computed line-height is transform-independent already
       const lh = parseFloat(getComputedStyle(textEl).lineHeight)
       const firstLineH = Number.isFinite(lh) && lh > 0 ? lh : Math.min(height, 28)
-      // Center of the FIRST rendered text line (topmost Range rect). Never use the icon/row box.
+      // Center of the FIRST rendered text line — prefer Range mid converted to local; else lh/2.
       let lineCenter = top + Math.min(firstLineH, height) / 2
       const fr = topmostClientRect(textEl)
-      if (fr) lineCenter = ((fr.top + fr.bottom) / 2 - containerRect.top) / safeScale
+      if (fr) {
+        const mid = screenToLocal(container, (fr.left + fr.right) / 2, (fr.top + fr.bottom) / 2)
+        lineCenter = mid.y
+      }
       return { top, height, firstLineH, lineCenter, block }
     }
 
-    // Fallback: coordsAtPos is also screen-space — same scale correction
+    // Fallback: coordsAtPos is also screen-space — same rotation-safe conversion
     const start = editor.view.coordsAtPos(block.from + 1)
     const end = editor.view.coordsAtPos(Math.max(block.from + 1, block.to - 1))
-    const top = (start.top - containerRect.top) / safeScale
-    const height = Math.max(22, (end.bottom - start.top) / safeScale)
-    const lineCenter = ((start.top + start.bottom) / 2 - containerRect.top) / safeScale // First line mid
+    const startLocal = screenToLocal(container, start.left, start.top)
+    const endLocal = screenToLocal(container, end.left, end.bottom)
+    const top = startLocal.y
+    const height = Math.max(22, Math.abs(endLocal.y - startLocal.y))
+    const lineCenter = screenToLocal(container, start.left, (start.top + start.bottom) / 2).y
     return { top, height, firstLineH: Math.min(height, 28), lineCenter, block }
   } catch {
     return null
@@ -356,12 +360,10 @@ export function TipTapBlockHandles({
       const block = findEditorBlockAtClientY(editor, clientY)
       const gap = findBlockInsertGap(editor, clientY)
       if (gap && (!block || Math.abs(clientY - gap.lineTop) <= INSERT_EDGE_PX)) {
-        const containerRect = container.getBoundingClientRect()
-        const scaleY =
-          container.offsetHeight > 0 ? containerRect.height / container.offsetHeight : 1
-        const safeScaleY = scaleY > 0.01 ? scaleY : 1
+        // Gap midpoint in gutter-container local px (rotation-safe — AABB top/height ratio breaks)
+        const local = screenToLocal(container, clientX, gap.lineTop)
         setInsertLine({
-          top: (gap.lineTop - containerRect.top) / safeScaleY, // Gap midpoint in gutter-container local px
+          top: local.y,
           insertPos: gap.insertPos,
         })
         setHover(null) // Thin join only — hide ⋮⋮ while the add line is up
@@ -863,12 +865,7 @@ export function TipTapBlockHandles({
   // inside these transforms, so counter-scaling by 1/scale keeps them a constant SCREEN size
   // (like the portaled actions menu). `rfZoom` in deps forces this to re-measure on zoom.
   void rfZoom // Referenced so zoom changes re-render this component (measurement below reads live DOM)
-  const localToScreen = (() => {
-    if (!container) return 1
-    const rect = container.getBoundingClientRect()
-    const s = container.offsetHeight > 0 ? rect.height / container.offsetHeight : 1
-    return s > 0.01 ? s : 1
-  })()
+  const localToScreen = container ? elementUniformScale(container) : 1 // Rotation-safe (not AABB height ratio)
   // Grip sizing (comfort, not strict screen-constancy):
   //  • Zoomed OUT (localToScreen ≤ 1): scale = 1 → grip rides WITH the content, staying in the
   //    (also-shrinking) gutter, aligned exactly where designed. A constant screen size here would

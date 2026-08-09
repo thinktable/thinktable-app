@@ -69,13 +69,13 @@ export function PillSelect({ options, value, onChange, className }: PillSelectPr
                 type="button"
                 title={`Reset ${option.label}`}
                 aria-label={`Reset ${option.label}`}
-                className="mr-2 inline-flex items-center justify-center rounded-full p-0.5 text-gray-500 hover:text-gray-900 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-gray-100 dark:hover:bg-gray-200/20"
+                className="mr-2 inline-flex items-center justify-center rounded-full p-0.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100/70 dark:text-gray-500 dark:hover:text-gray-300 dark:hover:bg-gray-200/15"
                 onClick={(e) => {
                   e.stopPropagation()
                   option.onReset?.()
                 }}
               >
-                <RotateCcw className="h-3.5 w-3.5" />
+                <RotateCcw className="h-3 w-3" strokeWidth={2.5} />
               </button>
             )}
           </div>

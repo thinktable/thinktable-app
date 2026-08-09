@@ -27,6 +27,9 @@ const TT_TOPPER_STORAGE_KEY_LEGACY = 'thinktable-ai-topper'
 /** Logo circle fill — matches public/thinktable-logo.svg .cls-1 */
 export const LOGO_CIRCLE_COLOR = '#a2a7af'
 
+/** AI sparkles badge fill — yellow accent on brand mark */
+const AI_STAR_COLOR = '#f5c518'
+
 /** Stroke color for custom marks (white cutout look) */
 const DRAW_WHITE = '#ffffff'
 
@@ -70,9 +73,9 @@ export function ThinktableBrandMark({
       className={cn('relative flex-shrink-0', className)}
       style={{ width: size, height: size }}
     >
-      {/* Logo disc — clipped circle */}
+      {/* Logo disc — clipped circle + border matching grey button icons */}
       <div
-        className="h-full w-full overflow-hidden rounded-full"
+        className="h-full w-full overflow-hidden rounded-full border-2 border-gray-500 dark:border-gray-400"
         style={{ backgroundColor: LOGO_CIRCLE_COLOR }}
       >
         {drawingUrl ? (
@@ -97,7 +100,7 @@ export function ThinktableBrandMark({
         )}
       </div>
 
-      {/* AI stars — top-left; main + top spark only (no bottom), logo gray + white outline */}
+      {/* AI stars — top-left; main + top spark only (no bottom), soft yellow + white outline */}
       <svg
         viewBox="0 0 24 24"
         className="absolute pointer-events-none"
@@ -106,7 +109,7 @@ export function ThinktableBrandMark({
           height: badgeSize,
           top: -Math.round(badgeSize * 0.15),
           left: -Math.round(badgeSize * 0.15),
-          color: LOGO_CIRCLE_COLOR,
+          color: AI_STAR_COLOR,
           filter: 'drop-shadow(0 0 0.6px #fff) drop-shadow(0 0 0.6px #fff) drop-shadow(0 0 0.6px #fff)',
         }}
         fill="none"

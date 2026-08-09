@@ -1,7 +1,7 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T19:44:48Z`
+- Snapped at: `2026-08-09T21:20:53Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
@@ -9,10 +9,17 @@
 
 ## This save
 
+- No DDL. Marker `20260809212053_rotation_safe_pagelink_chrome.sql`.
+- **Rotation-safe chrome** (`lib/dom-transform.ts`): `elementUniformScale` via matrix `hypot(a,b)`; `screenToLocal` / `localToScreen` for pageLink icon/menu + ⋮⋮ grip placement (AABB width/height ratios break under frame `rotate`).
+- **pageLink**: title-variant icon LEFT of larger title (same row); glyph-line Range for `iconShiftY`/`menuTop`; open-menu clamp via local↔screen.
+- **Frame chrome when rotated**: AABB bottom-center anchor + counter-rotate so lock/wrap/rotate stay upright; fit-to-text lock icon (`ScanText`).
+- Persisted via existing tables — schema unchanged.
+
+## Prior: Notion mindmap structured database
+
 - No DDL. Marker `20260809194448_notion_mindmap_structured_database.sql`.
 - **Generate mindmap**: walk Notion `child_page` + `child_database` (incl. under headings); resolve `block_id` parents; parent→child `panel_edges` threads; pages → title `pageLink` + Pages menu nesting; databases → one map `databaseBlock` with live Notion-like table (`/api/notion/database/[id]`, property columns + typed cells) — not one frame per row.
 - **Open menu**: Preview/Open/Notion on pageLink + DB title; DB frames skip sole-`databaseBlock`→pageLink migration when `notionObject=database`.
-- Persisted via existing tables — schema unchanged.
 
 ## Prior: thread actions menu + sidebar pin
 

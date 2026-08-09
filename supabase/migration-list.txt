@@ -1,7 +1,7 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-09T19:06:14Z
+# snapped_at=2026-08-09T21:20:53Z
 # postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
 # Note: supabase db dump --linked / projects list need login or SUPABASE_DB_PASSWORD;
 # snapshot via local migrations + apps/web/supabase/.temp service versions.
@@ -53,6 +53,7 @@
 20260809174711_thread_stroke_comfort_zoom.sql
 20260809190614_thread_actions_menu_sidebar_pin.sql
 20260809194448_notion_mindmap_structured_database.sql
+20260809212053_rotation_safe_pagelink_chrome.sql
 #
-# No new schema this save (frontend: Notion mindmap tree/threads + structured
-# database table UI; marker only — schema unchanged).
+# No new schema this save (frontend: rotation-safe pageLink/⋮⋮ chrome + AABB
+# frame chrome when rotated; marker only — schema unchanged).

@@ -20,7 +20,7 @@ import { findEditorBlockAtClientY } from '@/lib/tiptap/block-selection' // Click
 import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Strip blank lines on frame deselect
 import type { PageInTarget } from '@/components/block-actions-menu'
 import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
-import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, Lock, Unlock, WrapText } from 'lucide-react' // Rotate + frame lock / wrap
+import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, ScanText, WrapText } from 'lucide-react' // Rotate + fit-to-text / wrap
 
 // Helper to check if content is effectively empty (handling HTML tags)
 const isContentEmpty = (content: string | undefined | null) => {
@@ -4267,14 +4267,41 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           <div
             data-frame-chrome
             className="nodrag nopan absolute z-[25] flex items-center gap-0.5" // Below connection indicators (z-30)
-            style={{
-              left: 0, // Pin to frame's left edge
-              top: '100%', // Sit just below the frame's bottom edge (top-anchored so scale grows downward)
-              marginLeft: `${-8 * frameChromeScale}px`, // Gap tracks chrome size vs board zoom
-              marginTop: `${frameChromeGapY * frameChromeScale}px`, // Sit below the bottom connection indicator
-              transform: `scale(${frameChromeScale})`, // Zoom comfort × shrink-to-fit on small frames
-              transformOrigin: 'top left', // Anchor to the bottom-left corner while counter-scaling
-            }}
+            style={(() => {
+              // Unrotated: pin under the local bottom-left (historical placement).
+              if (!rotation) {
+                return {
+                  left: 0,
+                  top: '100%',
+                  marginLeft: `${-8 * frameChromeScale}px`,
+                  marginTop: `${frameChromeGapY * frameChromeScale}px`,
+                  transform: `scale(${frameChromeScale})`,
+                  transformOrigin: 'top left' as const,
+                }
+              }
+              // Rotated: local bottom-left becomes a side on screen. Anchor top-center under the
+              // AABB bottom (screen-down) and counter-rotate so controls stay upright + usable.
+              const rad = (rotation * Math.PI) / 180
+              const pw =
+                panelRef.current?.offsetWidth ||
+                resizeDimensions?.width ||
+                intrinsicSize.width
+              const ph =
+                panelRef.current?.offsetHeight ||
+                resizeDimensions?.height ||
+                intrinsicSize.height
+              const aabbHalfH =
+                (Math.abs(pw * Math.sin(rad)) + Math.abs(ph * Math.cos(rad))) / 2
+              const dist = aabbHalfH + frameChromeGapY // Panel center → AABB bottom + gap
+              const tx = Math.sin(rad) * dist // Screen-down expressed in local px
+              const ty = Math.cos(rad) * dist
+              return {
+                left: '50%',
+                top: '50%',
+                transform: `translate(${tx}px, ${ty}px) translate(-50%, 0) rotate(${-rotation}deg) scale(${frameChromeScale})`,
+                transformOrigin: 'top center' as const,
+              }
+            })()}
             onMouseEnter={() => setIsFrameHovering(true)} // Keep hover while on chrome
             onMouseLeave={(e) => {
               const related = e.relatedTarget as HTMLElement | null
@@ -4300,16 +4327,16 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             {hasBlockContent && (
               <button
                 type="button"
-                className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
-                title={frameUnlocked ? 'Lock frame to content' : 'Unlock frame (free resize)'}
-                aria-label={frameUnlocked ? 'Lock frame' : 'Unlock frame'}
+                className={cn(
+                  'flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800',
+                  !frameUnlocked && 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-50' // Active when fitted to text
+                )}
+                title={frameUnlocked ? 'Fit to text' : 'Free resize (keep size)'}
+                aria-label={frameUnlocked ? 'Fit to text' : 'Free resize'}
+                aria-pressed={!frameUnlocked}
                 onClick={handleToggleFrameLock}
               >
-                {frameUnlocked ? (
-                  <Unlock className="h-4 w-4 pointer-events-none" />
-                ) : (
-                  <Lock className="h-4 w-4 pointer-events-none" />
-                )}
+                <ScanText className="h-4 w-4 pointer-events-none" />
               </button>
             )}
             {hasBlockContent && (
