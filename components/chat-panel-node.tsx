@@ -110,6 +110,30 @@ function measureNaturalContentHeight(contentFit: HTMLElement): number {
   return Math.max(1, Math.ceil(contentFit.scrollHeight || contentFit.offsetHeight))
 }
 
+const CLIP_FADE_PX = 16 // Soft edge so half-cut glyphs fade instead of chopping
+
+/** Mask style that fades content out at overflowing frame edges (right / bottom). */
+function clipFadeMaskStyle(
+  overflowRight: boolean,
+  overflowBottom: boolean,
+  fadePx = CLIP_FADE_PX,
+): React.CSSProperties | undefined {
+  if (!overflowRight && !overflowBottom) return undefined
+  const toRight = `linear-gradient(to right, #000 calc(100% - ${fadePx}px), transparent)`
+  const toBottom = `linear-gradient(to bottom, #000 calc(100% - ${fadePx}px), transparent)`
+  if (overflowRight && overflowBottom) {
+    // Intersect both fades so the corner softens on both axes
+    return {
+      WebkitMaskImage: `${toRight}, ${toBottom}`,
+      maskImage: `${toRight}, ${toBottom}`,
+      WebkitMaskComposite: 'source-in',
+      maskComposite: 'intersect',
+    }
+  }
+  const one = overflowRight ? toRight : toBottom
+  return { WebkitMaskImage: one, maskImage: one }
+}
+
 // Visual frame = unscaled content × frameScale + 1px border each side (border-box)
 function scaledFrameSize(
   intrinsic: { width: number; height: number },
@@ -1361,6 +1385,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const [intrinsicSize, setIntrinsicSize] = useState({ width: BLOCK_MIN_FRAME_W, height: 48 }) // Unscaled content box (max-content)
   const [intrinsicMeasured, setIntrinsicMeasured] = useState(false) // True after first contentFit measure (avoid hug flash)
   const [isFrameHovering, setIsFrameHovering] = useState(false) // Frame hover — page-open menu (not lock/rotate)
+  const [clipPreviewReady, setClipPreviewReady] = useState(false) // True after hover dwell — delayed full-content peek
   const [rotation, setRotation] = useState(0) // Degrees of item rotation (persisted in message metadata)
   const isResizingRef = useRef(false) // Track if currently resizing
   const contentFitRef = useRef<HTMLDivElement>(null) // Inner unscaled content wrapper for intrinsic measure
@@ -3222,6 +3247,23 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const unlockedResized = wrapUnlocked || clipUnlocked // Free-resized frame (wrap or nowrap-clip)
   const unlockedInnerW = resizeDimensions ? Math.max(1, resizeDimensions.width - 2) : null // Frame inner (visual)
   const unlockedInnerH = resizeDimensions ? Math.max(1, resizeDimensions.height - 2) : null
+  // Unlocked frame smaller than its visual content → blocks are clipped (nowrap: both axes; wrap: height only)
+  const overflowRight =
+    clipUnlocked && resizeDimensions!.width + 2 < huggedSize.width // Nowrap may hide trailing glyphs
+  const overflowBottom =
+    (clipUnlocked && resizeDimensions!.height + 2 < huggedSize.height) ||
+    (wrapUnlocked && resizeDimensions!.height + 2 < huggedSize.height) // Short frame cuts lower blocks
+  const contentOverflows = overflowRight || overflowBottom
+  // Hover dwell can arm a preview — hide immediately while dragging / page preview / connecting
+  const clipPreviewEligible =
+    contentOverflows && isFrameHovering && !dragging && !pagePreviewOpen && !isThreadConnecting
+  // After ~500ms hover: temporarily unclip so the full blocks read (saved size unchanged)
+  const showClipPreview = clipPreviewEligible && clipPreviewReady
+  // Soften chopped edges while clipped (removed during hover preview)
+  const clipFadeStyle =
+    !showClipPreview && contentOverflows
+      ? clipFadeMaskStyle(overflowRight, overflowBottom)
+      : undefined
   // Content lays out UNSCALED (÷ frameScale) so the CSS scale() lands exactly on the frame inner box.
   // Applies to wrap AND clip — using w-full here double-scaled the content and clipped the text.
   const wrapContentWidth =
@@ -3979,6 +4021,28 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     zIndex: 60, // Above title chip / connection dots so drag hits resize, not node drag
   }
 
+  // Dwell before revealing clipped blocks — leave / drag cancels immediately
+  useEffect(() => {
+    if (!clipPreviewEligible) {
+      setClipPreviewReady(false) // Snap closed the moment hover ends
+      return
+    }
+    const t = window.setTimeout(() => setClipPreviewReady(true), 500) // ~tooltip dwell
+    return () => window.clearTimeout(t)
+  }, [clipPreviewEligible])
+
+  // Hover clip-preview: lift this RF node above siblings so spilled blocks paint on top
+  useEffect(() => {
+    const rfNode = panelRef.current?.closest('.react-flow__node') as HTMLElement | null
+    if (!rfNode) return
+    if (!showClipPreview) return
+    const prev = rfNode.style.zIndex
+    rfNode.style.zIndex = '1000' // Above neighboring frames while the full content peeks out
+    return () => {
+      rfNode.style.zIndex = prev
+    }
+  }, [showClipPreview])
+
   // Map-card frame is a container (like a Notion page) — ⋮⋮ lives on TipTap content blocks inside
   return (
     <div
@@ -3986,6 +4050,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         data-panel-container="true" // Data attribute to help find panel container for comment popup
         data-block-node={isBlock ? 'true' : undefined} // Marks blocks for selected connection-dot styling
         data-block-resized={wrapActive ? 'wrap' : undefined} // Wrap (locked/unlocked): soft-wrap in fixed width; else nowrap / clip
+        data-clip-preview={showClipPreview ? 'true' : undefined} // Unlocked hover: full-content peek
         className={cn(
           'group rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible transition-[opacity,box-shadow,background-color,border-color] duration-300', // Chrome sits outside; clip only inner body
           !isFillTransparent && 'backdrop-blur-sm', // Frost only when a fill is set — blur alone looks like a tinted plate
@@ -4000,7 +4065,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             ? 'shadow-[0_0_8px_rgba(250,204,21,0.6)] dark:shadow-[0_0_8px_rgba(250,204,21,0.4)]'
             : isBorderNone
               ? 'shadow-none' // Transparent / none border — no card shadow (looked like a border)
-              : 'shadow-sm',
+              : showClipPreview
+                ? 'shadow-md' // Soft lift while full clipped content is revealed
+                : 'shadow-sm',
           // Blur non-flashcard panels when flashcard study mode is active
           shouldBlur && 'blur-sm opacity-40 pointer-events-none'
         )}
@@ -4058,12 +4125,19 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         ['--tt-frame-handle' as string]: `${frameHandleSize}px`,
         ['--tt-frame-handle-border' as string]: `${Math.max(1, 1.5 * frameUiScale)}px`,
       }}
-      onPointerDownCapture={() => {
-        // Hide selection chrome until mouseup — gesture may become a drag (blue box only)
-        setPressing(true)
-        const clearPress = () => setPressing(false)
-        window.addEventListener('pointerup', clearPress, { once: true })
-        window.addEventListener('pointercancel', clearPress, { once: true })
+      onPointerDownCapture={(e) => {
+        const t = e.target as HTMLElement | null
+        // Resize / rotate chrome / grips must stay mounted — `pressing` would unmount them mid-gesture
+        const onFrameChrome = !!t?.closest?.(
+          '.react-flow__resize-control, [data-frame-chrome], [data-tt-block-handle], [data-tt-insert-line], .block-actions-menu'
+        )
+        if (!onFrameChrome) {
+          // Hide selection chrome until mouseup — gesture may become a drag (blue box only)
+          setPressing(true)
+          const clearPress = () => setPressing(false)
+          window.addEventListener('pointerup', clearPress, { once: true })
+          window.addEventListener('pointercancel', clearPress, { once: true })
+        }
         // RF snapshots dragItems before onNodeDragStart — a selected wrapper rides along with this frame.
         const store = rfStoreApi.getState() as {
           unselectNodesAndEdges?: (p: { nodes: unknown[]; edges: unknown[] }) => void
@@ -4131,7 +4205,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               key={`line-${position}`} // Side line that joins the four corners
               position={position}
               variant="line" // RF line control (rectangle edges that meet the corner dots)
-              className="nopan tt-frame-resize-line" // Styled as continuous blue border
+              className="nodrag nopan tt-frame-resize-line" // nodrag: resize must not start frame drag
               minWidth={frameMinW}
               minHeight={BLOCK_MIN_FRAME_H}
               keepAspectRatio={!frameUnlocked && hasBlockContent}
@@ -4144,7 +4218,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             <NodeResizeControl
               key={position} // One control per corner
               position={position} // RF places the handle on that corner
-              className="nopan" // Prevent canvas pan while resizing
+              className="nodrag nopan" // Resize only — never start RF frame drag / pan
               style={itemCornerResizeStyle} // White circular handle styling
               minWidth={frameMinW} // pageLink vs plain-text floor
               minHeight={BLOCK_MIN_FRAME_H} // Keep a usable box; pairs with handleResize clamp
@@ -4456,7 +4530,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           !isBlock && 'p-1', // Chat/flashcards keep outer pad; blocks pad inside the scaled wrapper
           // Preview open: fill the card; body editor is hidden (content lives on the nested page)
           pagePreviewOpen && 'flex flex-col h-full min-h-0',
-          unlockedResized ? 'h-full overflow-hidden' : 'overflow-visible', // Clip when unlocked frame < content (wrap + nowrap)
+          // Clip when unlocked frame < content; hover unclips for a full-content preview
+          unlockedResized && !showClipPreview ? 'h-full overflow-hidden' : 'overflow-visible',
           promptMessage?.metadata?.fadeIn === true &&
             isBlockContentEmpty(promptContent) &&
             'animate-note-fade-in' // Empty grip-spawn only — typed I-bar frames stay solid (no opacity blink)
@@ -4465,6 +4540,22 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           backgroundColor: responseAreaBackgroundColor,
         }}
       >
+        {/* Hover full-content preview: fill behind spilled blocks (frame box stays the saved size) */}
+        {showClipPreview && resizeDimensions && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute left-0 top-0 rounded-2xl -z-[1]"
+            style={{
+              width: Math.max(resizeDimensions.width, huggedSize.width),
+              height: Math.max(resizeDimensions.height, huggedSize.height),
+              backgroundColor: responseAreaBackgroundColor || panelBackgroundColor,
+              boxShadow:
+                resolvedTheme === 'dark'
+                  ? '0 10px 28px rgba(0,0,0,0.45)'
+                  : '0 10px 28px rgba(0,0,0,0.12)',
+            }}
+          />
+        )}
         {/* Page frame with regular blocks (no pageLink) — pin open menu to the visible frame edge
             (inside the overflow clip), not to the wider content box. */}
         {showFramePageOpenMenu && linkedPageId && (
@@ -4484,12 +4575,35 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               applyFrameScale
                 ? {
                     // Unlocked resized (wrap or clip): spacer = frame inner box; content is scaled to fill it.
-                    // Locked/other: spacer = scaled content (hug).
-                    width: unlockedResized && unlockedInnerW != null ? unlockedInnerW : scaledLayoutW,
-                    height: unlockedResized && unlockedInnerH != null ? unlockedInnerH : scaledLayoutH,
-                    overflow: unlockedResized ? 'hidden' : 'visible', // Clip overflow inside the frame (wrap = vertical)
+                    // Locked/other: spacer = scaled content (hug). Hover preview grows spacer to full content.
+                    width:
+                      showClipPreview
+                        ? Math.max(unlockedInnerW ?? 0, scaledLayoutW)
+                        : unlockedResized && unlockedInnerW != null
+                          ? unlockedInnerW
+                          : scaledLayoutW,
+                    height:
+                      showClipPreview
+                        ? Math.max(unlockedInnerH ?? 0, scaledLayoutH)
+                        : unlockedResized && unlockedInnerH != null
+                          ? unlockedInnerH
+                          : scaledLayoutH,
+                    overflow: unlockedResized && !showClipPreview ? 'hidden' : 'visible', // Unclip on hover preview
+                    ...clipFadeStyle, // Soften half-cut glyphs at overflowing edges
                   } // CSS scale doesn’t affect layout — spacer holds visual size
-                : undefined
+                : unlockedResized
+                  ? {
+                      // frameScale === 1: no spacer scale, but still clip / unclip on hover
+                      overflow: showClipPreview ? 'visible' : 'hidden',
+                      height: showClipPreview
+                        ? Math.max(unlockedInnerH ?? 0, scaledLayoutH)
+                        : unlockedInnerH ?? undefined,
+                      width: showClipPreview
+                        ? Math.max(unlockedInnerW ?? 0, scaledLayoutW)
+                        : unlockedInnerW ?? undefined,
+                      ...clipFadeStyle, // Soften half-cut glyphs at overflowing edges
+                    }
+                  : undefined
             }
           >
           <div

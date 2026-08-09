@@ -1,7 +1,7 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-09T13:05:53Z
+# snapped_at=2026-08-09T17:43:46Z
 # postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
 # Note: supabase db dump --linked / projects list need login or SUPABASE_DB_PASSWORD;
 # snapshot via local migrations + apps/web/supabase/.temp service versions.
@@ -49,6 +49,7 @@
 20260809153815_pagelink_chrome_deselect_fix.sql
 20260809163216_frame_ui_scale_selection_chrome.sql
 20260809173223_frame_select_click_drag_border.sql
+20260809174346_unlocked_frame_clip_hover_preview.sql
 #
-# No new schema this save (frontend: frame select on click release; drag shows blue box only and
-# never leaves the frame selected; ⋮⋮ drag moves block only when armed via grip click).
+# No new schema this save (frontend: unlocked clipped frames soft-fade overflow edges;
+# hover ~500ms previews full blocks without changing saved size).

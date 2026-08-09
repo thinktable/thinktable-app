@@ -1,7 +1,7 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T17:32:23Z`
+- Snapped at: `2026-08-09T17:43:46Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
@@ -9,11 +9,16 @@
 
 ## This save
 
-- No DDL. Marker `20260809173223_frame_select_click_drag_border.sql`.
-- **Frame select**: click-release only (`board-flow` blocks RF mousedown `select:true` for `chatPanel`; marquee still allowed). Mid-press hides selection chrome; `onNodeClick` selects.
-- **Frame move**: transient blue box only (no resize/connection/rotate chrome); deselect on drag start/end (`lib/frame-drag-transient.ts`).
-- **Blocks**: select frame before caret/text; ⋮⋮ drag moves the **block** only when armed via grip click, else moves the **frame**.
+- No DDL. Marker `20260809174346_unlocked_frame_clip_hover_preview.sql`.
+- **Unlocked clip UX** (`chat-panel-node`): overflowing right/bottom edges use a short `mask-image` fade so half-cut glyphs dissolve instead of chopping.
+- **Hover preview**: after ~500ms dwell on an unlocked clipped frame, temporarily unclip + backdrop + raise RF node z-index to show full blocks; leave cancels immediately; saved `resizeDimensions` unchanged.
 - Persisted via existing tables — schema unchanged.
+
+## Prior: frame select click / drag border
+
+- No DDL. Marker `20260809173223_frame_select_click_drag_border.sql`.
+- **Frame select**: click-release only; mid-press hides selection chrome.
+- **Frame move**: transient blue box only; deselect on drag start/end (`lib/frame-drag-transient.ts`).
 
 ## Prior: frame UI scale selection chrome
 
