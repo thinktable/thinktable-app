@@ -73,14 +73,19 @@ export const EmptyBlockBackspace = Extension.create({
         }
         view.dispatch(tr.scrollIntoView())
 
-        // pageLink: place the I-bar in the editable title (PM can’t caret inside an atom)
-        if (prevNode.type.name === 'pageLink') {
+        // pageLink / databaseBlock: place the I-bar in the editable title (PM can’t caret inside an atom)
+        if (prevNode.type.name === 'pageLink' || prevNode.type.name === 'databaseBlock') {
           requestAnimationFrame(() => {
             if (editor.isDestroyed) return
             const mappedPos = editor.state.selection.from // NodeSelection at atom
             const dom = editor.view.nodeDOM(mappedPos) as HTMLElement | null
-            const root = dom?.closest?.('.tt-page-link') || dom
-            const label = root?.querySelector?.('.tt-page-link-label') as HTMLElement | null
+            const root =
+              dom?.closest?.('.tt-page-link') ||
+              dom?.closest?.('.tt-database-block') ||
+              dom
+            const label = root?.querySelector?.(
+              prevNode.type.name === 'databaseBlock' ? '.tt-database-block-label' : '.tt-page-link-label'
+            ) as HTMLElement | null
             if (!label) return
             label.focus()
             const range = document.createRange()

@@ -1,16 +1,22 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T08:41:52Z`
+- Snapped at: `2026-08-09T10:33:53Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 
 ## This save
 
-- No DDL. Marker `20260809084152_logo_draw_personalize_ai_badge.sql`.
-- App: replace AI toppers with draw-on-solid-circle logo personalize (thickness/eraser/reset, PNG persist); brand mark shows saved image + top-two sparkles badge (logo gray, white outline); logo hover opacity invert + toggle size; Notion color SVG assets; related chrome polish (nav zoom, pills, frames).
+- No DDL. Marker `20260809103353_locked_frame_fit_notion_db_blocks.sql`.
+- Locked frame hug: symmetric width — gutter read from the ⋮⋮ handles row (`pm.closest('.relative')`, not the outer `containerRef` → was ~24px too narrow / right-clipped) and right margin mirrors the frame-left→⋮⋮-icon inset; hug HEIGHT to content on lock/relock/type (no longer keeps the taller resize box).
+- pageLink open-menu spill clamp scoped to the panel (`panel.contains` the `.overflow-hidden`, else panel) — locked frames were matching the canvas-wide React Flow pane, so the menu escaped the right edge.
+- Notion database blocks: `databaseBlock` TipTap atom + NodeView, `migrate-frame` (sole-DB map frame → pageLink), `blocks-to-html` / `import-to-board` updates, Notion mark/color assets, connect/import chrome.
 - Schema unchanged.
+
+## Prior: drawable logo personalize / AI badge
+
+- Marker: `20260809084152_logo_draw_personalize_ai_badge.sql`.
 
 ## Prior: continuous I-bar typing / empty-frame UX
 

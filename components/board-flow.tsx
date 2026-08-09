@@ -7667,7 +7667,7 @@ function BoardFlowInner({
           </div>
           {/* | + pan: gap matches nav p-1 so |↔pan == pan↔right edge; ml gives more air than the / */}
           <div className="flex items-center shrink-0 gap-1 ml-1.5">
-            <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 select-none leading-none" aria-hidden>|</span>
+            <span className="flex h-7 items-center text-2xl font-thin text-gray-400 dark:text-gray-400 select-none leading-none" aria-hidden>|</span>
             <Button
               type="button"
               variant="ghost"

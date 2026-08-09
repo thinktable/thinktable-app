@@ -94,8 +94,9 @@ function blockToHtml(block: NotionBlock): string {
       return `<p>${escapeText(title)}</p>` // Mention as text; mindmap mode maps pages separately
     }
     case 'child_database': {
+      // Emit a TipTap databaseBlock — keeps the DB compact inside the parent frame
       const title = typeof p.title === 'string' ? p.title : 'Untitled database'
-      return `<p>${escapeText(title)}</p>`
+      return `<div data-type="databaseBlock" data-notion-database-id="${escapeAttr(block.id)}" data-title="${escapeAttr(title)}"></div>`
     }
     case 'column_list': {
       const cols = block.children || [] // column blocks

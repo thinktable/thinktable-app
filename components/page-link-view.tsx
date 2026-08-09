@@ -21,6 +21,8 @@ import { PageOpenMenu } from '@/components/page-open-menu' // Shared preview/ope
 import { usePageLinkActions } from '@/lib/page-link-context'
 import { cn } from '@/lib/utils'
 
+const PAGE_OPEN_MENU_FALLBACK_W = 52 // Approx pill width before first layout (preview + open)
+
 export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
   const pageId = (node.attrs.pageId as string | null) || null // Linked child page
   const icon = (node.attrs.icon as string | null) || null // Emoji, else default icon
@@ -34,6 +36,7 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
   // Menu left (local CSS px relative to .tt-page-link) — clamped so it stays inside the visible frame
   const [menuLeft, setMenuLeft] = useState<number | null>(null)
   const titleRef = useRef<HTMLSpanElement>(null) // contentEditable span
+  const iconRef = useRef<HTMLSpanElement>(null) // Page emoji/icon — menu must not cover this
   const chromeRef = useRef<HTMLSpanElement>(null) // Preview/open menu (measured against the frame)
 
   // Keep local title in sync when the node attr changes externally (e.g. page rename)
@@ -45,59 +48,70 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
     }
   }, [node.attrs.title, editing])
 
-  // Place the open menu just right of the title when the frame has room; otherwise overlap the title
-  // end. If the unlocked frame is narrower than the page block (title clipped), pin the menu to the
-  // visible frame’s right edge so it stays clickable inside the frame.
+  // Prefer just right of the title; if that would spill past the frame, slide left over the title
+  // text only — never past the emoji/icon.
   useEffect(() => {
     const chrome = chromeRef.current
     if (!chrome) return
-    const wrapper = chrome.closest('.tt-page-link') as HTMLElement | null // Shrink-wrapped to icon+title
+    const wrapper = chrome.closest('.tt-page-link') as HTMLElement | null // Position containing block
     if (!wrapper) return
-    const panel = wrapper.closest('[data-panel-container="true"]') as HTMLElement | null // Visible frame box
-    const area = wrapper.closest('.ProseMirror') as HTMLElement | null // Text area (may be wider than frame)
-    if (!panel || !area) return
+    const panel = wrapper.closest('[data-panel-container="true"]') as HTMLElement | null // Frame box
+    if (!panel) return
 
     const measure = () => {
-      const wrapRect = wrapper.getBoundingClientRect() // Title block in screen space
-      const panelRect = panel.getBoundingClientRect() // Visible frame (clips when unlocked + small)
-      const scale = wrapper.offsetWidth > 0 ? wrapRect.width / wrapper.offsetWidth : 1 // RF zoom × frameScale
-      const pad = 4 // Keep a hair inside the frame edge
-      const gap = 6 // Gap when sitting just right of the title
-      const chromeLocal = Math.max(chrome.offsetWidth, 1) // Menu width in local CSS px
+      const wrapRect = wrapper.getBoundingClientRect()
+      const titleRect = titleRef.current?.getBoundingClientRect()
+      const iconRect = iconRef.current?.getBoundingClientRect()
+      const scale = wrapper.offsetWidth > 0 ? wrapRect.width / wrapper.offsetWidth : 1
+      const pad = 4
+      const gap = 6
+      const chromeLocal = Math.max(chrome.offsetWidth || chrome.scrollWidth, PAGE_OPEN_MENU_FALLBACK_W)
       const chromeScreen = chromeLocal * scale
 
-      // Prefer the overflow-hidden body as the clip edge when present (unlocked frame < content)
-      const clipEl =
-        (wrapper.closest('.overflow-hidden') as HTMLElement | null) || panel
+      // Visible frame edge — prefer the frame's OWN overflow clip (unlocked+narrow), else the panel.
+      // Must stay inside the panel: locked frames have no inner clip, so an unscoped
+      // `closest('.overflow-hidden')` walked up to the React Flow pane (canvas-wide) → the clamp
+      // never fired and the menu escaped past the frame's right edge.
+      const clipCandidate = wrapper.closest('.overflow-hidden') as HTMLElement | null
+      const clipEl = clipCandidate && panel.contains(clipCandidate) ? clipCandidate : panel
       const clipRect = clipEl.getBoundingClientRect()
-      const frameRight = clipRect.right - pad // Rightmost screen x the menu may occupy
+      const frameRight = clipRect.right - pad
 
-      const titleRight = wrapRect.right
-      let targetLeftScreen: number
-      if (titleRight + gap + chromeScreen <= frameRight) {
-        // Room to the right of the title within the visible frame
-        targetLeftScreen = titleRight + gap
-      } else if (titleRight <= frameRight) {
-        // Title ends inside the frame but no spare room — overlap the title end
-        targetLeftScreen = titleRight - chromeScreen
-      } else {
-        // Title extends past the frame (unlocked frame narrower than page block) — pin inside frame
+      const titleRight = titleRect?.right ?? wrapRect.right
+      // Leftmost the menu may sit: just right of the emoji/icon (never cover it)
+      const iconRight = iconRect?.right ?? wrapRect.left
+      const menuMinLeft = iconRight + gap
+
+      // Ideal: just to the right of the title
+      let targetLeftScreen = titleRight + gap
+      // Not enough room → slide left so the menu’s right edge stays on the frame (overlaps title text)
+      if (targetLeftScreen + chromeScreen > frameRight) {
         targetLeftScreen = frameRight - chromeScreen
       }
-      // Never sit left of the frame’s left edge
-      targetLeftScreen = Math.max(clipRect.left + pad, targetLeftScreen)
+      // Never slide left of the icon — stop overlapping at the title/icon boundary
+      targetLeftScreen = Math.max(menuMinLeft, targetLeftScreen)
 
-      const leftLocal = (targetLeftScreen - wrapRect.left) / scale
-      setMenuLeft(leftLocal)
+      // Round to whole CSS px — subpixel flicker was setState-storming BoardFlow
+      const nextLeft = Math.round((targetLeftScreen - wrapRect.left) / scale)
+      setMenuLeft((prev) => (prev != null && Math.abs(prev - nextLeft) < 1 ? prev : nextLeft))
     }
 
     measure()
-    const ro = new ResizeObserver(measure) // Re-clamp when frame / title / chrome size changes
+    const ro = new ResizeObserver(() => requestAnimationFrame(measure))
     ro.observe(panel)
     ro.observe(wrapper)
-    ro.observe(area)
-    return () => ro.disconnect()
-  }, [title, variant])
+    ro.observe(chrome)
+    if (titleRef.current) ro.observe(titleRef.current)
+    if (iconRef.current) ro.observe(iconRef.current)
+    const onEnter = () => requestAnimationFrame(measure)
+    wrapper.addEventListener('pointerenter', onEnter)
+    panel.addEventListener('pointerenter', onEnter)
+    return () => {
+      ro.disconnect()
+      wrapper.removeEventListener('pointerenter', onEnter)
+      panel.removeEventListener('pointerenter', onEnter)
+    }
+  }, [title, variant, pageId, icon, actions.notionUrl])
 
   // Commit an edited title to the node attr + linked page
   const commitTitle = useCallback(() => {
@@ -126,6 +140,7 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
       data-page-id={pageId || undefined}
     >
       {/* Clickable icon — opens the emoji picker (same as page icons elsewhere) */}
+      <span ref={iconRef} className="tt-page-link-icon-wrap inline-flex flex-shrink-0">
       <DropdownMenu open={iconOpen} onOpenChange={setIconOpen}>
         <DropdownMenuTrigger asChild>
           <button
@@ -173,6 +188,7 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
           </div>
         </DropdownMenuContent>
       </DropdownMenu>
+      </span>
 
       {/* Title — always editable: a click just places the caret (I-bar) to edit, never navigates */}
       <span

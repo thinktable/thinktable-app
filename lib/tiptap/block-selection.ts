@@ -66,7 +66,8 @@ export function isHandleBlockType(name: string): boolean {
     name === 'blockEquation' ||
     name === 'syncedBlock' ||
     name === 'columns' ||
-    name === 'pageLink' // Linked-page block (inline/title) gets the ⋮⋮ grip too
+    name === 'pageLink' || // Linked-page block (inline/title) gets the ⋮⋮ grip too
+    name === 'databaseBlock' // Notion database block gets the ⋮⋮ grip too
   )
 }
 

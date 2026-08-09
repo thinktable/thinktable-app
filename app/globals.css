@@ -1254,8 +1254,10 @@ span[data-added="true"] {
     width: 100%; /* Stretch to frame/editor width even when text is short or empty */
     box-sizing: border-box;
   }
-  /* pageLink atoms also span the row so the grip/I-bar band matches the frame */
-  .ProseMirror[data-single-line="true"] .tt-page-link {
+  /* databaseBlock atoms span the row so the grip/I-bar band matches the frame.
+     pageLink stays shrink-wrapped (no width:100%) so the open menu can sit just right of the
+     title when the frame is wider — not pinned to the frame’s right edge. */ 
+  .ProseMirror[data-single-line="true"] .tt-database-block {
     width: 100%;
     box-sizing: border-box;
   }
@@ -1332,10 +1334,37 @@ span[data-added="true"] {
   .dark .tt-page-link-preview-btn:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
   .tt-page-link-preview-active { color: #2563eb; }
 
+  /* databaseBlock map frames (legacy sole-DB) — same hover reveal as pageLink for PageOpenMenu */
+  .tt-database-block:hover .tt-page-link-preview,
+  .react-flow__node:hover .tt-database-block .tt-page-link-preview {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .tt-database-block-editing .tt-page-link-preview {
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+
   /* pageLink layout (still scoped to the editor) */
   .ProseMirror .tt-page-link {
     position: relative;
     margin: 2px 0;
+    width: max-content; /* Shrink-wrap to icon+title — open menu sits just right of title */
+    max-width: 100%;
+  }
+  /* Single-line frames: don’t clamp pageLink to the (possibly stale) frame width — that made
+     locked hug measure offsetWidth too small so the title overflowed the blue box. */
+  .ProseMirror[data-single-line="true"] .tt-page-link,
+  .ProseMirror[data-single-line="true"] .react-renderer.node-pageLink {
+    max-width: none;
+  }
+  .ProseMirror[data-single-line="true"] .tt-page-link-label {
+    white-space: nowrap; /* Title is one line until Enter; matches body blocks */
+  }
+  /* TipTap wraps NodeViews in a block .react-renderer — keep that shrink-wrapped too */
+  .ProseMirror .react-renderer.node-pageLink {
+    width: max-content;
+    max-width: 100%;
   }
   .ProseMirror .tt-page-link-inline {
     display: inline-flex;
@@ -1372,6 +1401,42 @@ span[data-added="true"] {
     font-weight: 600;            /* Keep the underline (inherited) — matches other page-link text */
   }
   .ProseMirror .tt-page-link-label:empty::before {
+    content: attr(data-placeholder);
+    color: #9ca3af;
+  }
+
+  /* databaseBlock — compact Notion database (one TipTap block, not a map frame) */
+  .ProseMirror .tt-database-block {
+    position: relative;
+    margin: 2px 0;
+  }
+  .ProseMirror .tt-database-block-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 100%;
+  }
+  .ProseMirror .tt-database-block-icon {
+    display: inline-flex;
+    align-items: center;
+  }
+  .ProseMirror .tt-database-block-emoji { font-size: 1.05em; line-height: 1; }
+  .ProseMirror .tt-database-block-label {
+    outline: none;
+    text-decoration: underline;
+    text-decoration-color: rgba(35, 131, 226, 0.35);
+    text-underline-offset: 2px;
+    cursor: text;
+    border-radius: 3px;
+    min-width: 1ch;
+    white-space: pre-wrap;
+    color: #2563eb;
+  }
+  .dark .ProseMirror .tt-database-block-label {
+    color: #60a5fa;
+    text-decoration-color: rgba(96, 165, 250, 0.4);
+  }
+  .ProseMirror .tt-database-block-label:empty::before {
     content: attr(data-placeholder);
     color: #9ca3af;
   }

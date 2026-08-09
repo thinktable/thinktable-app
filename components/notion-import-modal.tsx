@@ -1,9 +1,9 @@
 'use client'
 
-// Mindmap.so-style Notion page picker — tree with Add frame (body in one frame) / Generate mindmap
+// Mindmap.so-style Notion page picker — tree with Add frame (pageLink on map) / Generate mindmap
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, CornerDownLeft, FileText, Search, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, CornerDownLeft, FileText, Search, Table2, X } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -42,7 +42,11 @@ function NotionIcon({ icon, object }: { icon?: NotionPickerNode['icon']; object:
     // eslint-disable-next-line @next/next/no-img-element
     return <img src={url} alt="" className="h-5 w-5 rounded-sm object-cover flex-shrink-0" />
   }
-  return <FileText className={cn('h-4 w-4 flex-shrink-0', object === 'database' ? 'text-blue-500' : 'text-gray-400')} />
+  return object === 'database' ? (
+    <Table2 className="h-4 w-4 flex-shrink-0 text-blue-500" />
+  ) : (
+    <FileText className="h-4 w-4 flex-shrink-0 text-gray-400" />
+  )
 }
 
 function flattenVisible(

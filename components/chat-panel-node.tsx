@@ -1,7 +1,7 @@
 'use client'
 
 // Custom React Flow node for chat panels (prompt + response)
-import { NodeProps, Handle, Position, useReactFlow, useStoreApi, NodeResizeControl } from 'reactflow' // RF node primitives + store (unselect groups before dragItems)
+import { NodeProps, Handle, Position, useReactFlow, useStoreApi, NodeResizeControl, useUpdateNodeInternals } from 'reactflow' // RF node primitives + store (unselect groups before dragItems) + remeasure
 import {
   useIsThreadConnecting,
   INDICATOR_OUTSET,
@@ -28,15 +28,88 @@ const isContentEmpty = (content: string | undefined | null) => {
   return stripped.length === 0
 }
 
-const BLOCK_MIN_FRAME_W = 48 // Unlocked free-resize floor
+const BLOCK_HANDLE_GUTTER_W = 24 // TipTap ⋮⋮ gutter (pl-6)
+const PAGE_LINK_ICON_W = 22 // Title emoji / page icon column
+const PAGE_OPEN_MENU_W = 52 // Open-menu pill ≈ preview + open (Notion adds a bit more)
+const BLOCK_THREE_CHARS_W = 28 // ~3ch of body text for plain frames
 const BLOCK_MIN_FRAME_H = 40 // Keep a usable box when shrinking
-const BLOCK_LOCKED_MIN_W = 80 // Locked proportional floor (matches NodeResizeControl)
+
+/** Min frame width: pageLink → grip+icon+menu; plain text → grip+3 letters. */
+function blockMinFrameWidth(html: string): number {
+  if (/data-type="pageLink"/i.test(html || '')) {
+    return BLOCK_HANDLE_GUTTER_W + PAGE_LINK_ICON_W + PAGE_OPEN_MENU_W
+  }
+  return BLOCK_HANDLE_GUTTER_W + BLOCK_THREE_CHARS_W
+}
+
+const BLOCK_MIN_FRAME_W = BLOCK_HANDLE_GUTTER_W + PAGE_LINK_ICON_W + PAGE_OPEN_MENU_W // Default / pageLink floor
+const BLOCK_LOCKED_MIN_W = BLOCK_HANDLE_GUTTER_W + BLOCK_THREE_CHARS_W // Absolute floor when hugging
+const GRIP_ICON_INSET = 2 // ⋮⋮ glyph (16px) centered in its 20px hit button → (20-16)/2 from the gutter left
+
+/**
+ * Natural content width = longest rendered line of real text, not the stretched w-full box.
+ * Pure measurement via Range (actual glyph extents) — children are width:100%, so offsetWidth /
+ * scrollWidth report the frame width, not the text. Never mutates live styles (RO-safe).
+ */
+function measureNaturalContentWidth(contentFit: HTMLElement): number {
+  const cs = getComputedStyle(contentFit)
+  const padL = parseFloat(cs.paddingLeft) || 0 // Content-box left pad (pl-0.5 on blocks)
+  const pm = contentFit.querySelector('.ProseMirror') as HTMLElement | null
+  if (!pm) return Math.max(1, contentFit.scrollWidth)
+  // Gutter = the ⋮⋮ column pad on the handles row that actually wraps the editor.
+  // `querySelector('.relative')` used to match the outer containerRef (pad 0), so the
+  // locked frame came out ~24px too narrow and clipped the widest line on the right.
+  const row = pm.closest('.relative') as HTMLElement | null
+  const gutter = row && row !== contentFit ? parseFloat(getComputedStyle(row).paddingLeft) || 0 : 0
+
+  // Screen→local scale (RF zoom / frameScale). offsetWidth is local; getBoundingClientRect is screen.
+  const fitRect = contentFit.getBoundingClientRect()
+  const scale = contentFit.offsetWidth > 0 ? fitRect.width / contentFit.offsetWidth : 1
+  const toLocal = (screenW: number) => (scale > 0 ? screenW / scale : screenW)
+  const rangeWidth = (el: Element): number => {
+    try {
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      return toLocal(range.getBoundingClientRect().width) // Real text extent, ignores width:100%
+    } catch {
+      return 0
+    }
+  }
+
+  let maxLine = 0
+  for (const child of Array.from(pm.children) as HTMLElement[]) {
+    const pageLink =
+      (child.classList.contains('tt-page-link') && child) ||
+      (child.querySelector('.tt-page-link') as HTMLElement | null)
+    if (pageLink) {
+      // icon (fixed box) + gap + real title text — not the max-width:100% clamped offsetWidth
+      const label = pageLink.querySelector('.tt-page-link-label') as HTMLElement | null
+      const iconWrap = pageLink.querySelector('.tt-page-link-icon-wrap') as HTMLElement | null
+      const icon = iconWrap || (pageLink.querySelector('.tt-page-link-icon') as HTMLElement | null)
+      const gap = parseFloat(getComputedStyle(pageLink).gap) || 6
+      const iconW = icon ? toLocal(icon.getBoundingClientRect().width) : 0
+      const labelW = label ? rangeWidth(label) : 0
+      maxLine = Math.max(maxLine, iconW + gap + labelW)
+      continue
+    }
+    maxLine = Math.max(maxLine, rangeWidth(child)) // Longest real text line
+  }
+  // Right margin mirrors the frame-left → ⋮⋮ icon inset so both gaps read equal (Notion-style):
+  // width = [left pad + gutter] (where text starts) + text + [same inset on the right].
+  const iconInset = padL + GRIP_ICON_INSET // frame-left → ⋮⋮ glyph-left
+  return Math.ceil(Math.max(1, padL + gutter + maxLine + iconInset))
+}
+
+/** Unscaled content height — prefer scrollHeight so clipped/wrapped overflow still counts. */
+function measureNaturalContentHeight(contentFit: HTMLElement): number {
+  return Math.max(1, Math.ceil(contentFit.scrollHeight || contentFit.offsetHeight))
+}
 
 // Visual frame = unscaled content × frameScale + 1px border each side (border-box)
 function scaledFrameSize(
   intrinsic: { width: number; height: number },
   scale: number,
-  minWidth = BLOCK_MIN_FRAME_W,
+  minWidth = BLOCK_LOCKED_MIN_W,
 ) {
   const safeScale = Math.max(0.15, scale) // Same floor as locked corner-drag
   const border = 2 // Card border occupies layout width/height
@@ -66,6 +139,7 @@ import { PageOpenMenu } from '@/components/page-open-menu' // Preview/open chrom
 import { NestedBoardPreview, prefetchPageEmbed } from './nested-board-preview' // Page-within-page board preview
 import { deleteLinkedPageForBlock, isBlockContentEmpty, isBlockMeta, isPageBodyMeta } from '@/lib/blocks' // Block detection + empty check + delete sync
 import { applyTurnInto } from '@/lib/blocks/turn-into' // Page / Page in from content-block menu
+import { migrateSoleDatabaseBlockToPageLink, ensureNotionMapFrameIsPageLink, isSoleDatabaseBlockContent } from '@/lib/notion/migrate-frame' // Notion DB map frames → pageLink
 
 interface Message {
   id: string
@@ -1229,15 +1303,29 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const router = useRouter()
   const { reactFlowInstance, panelWidth, getSetNodes, flashcardMode, setFlashcardMode, selectedTag } = useReactFlowContext() // Get zoom, panel width, setNodes function, flashcard study mode, and selected tag
   const { setNodes, getNodes } = useReactFlow() // Get setNodes and getNodes for NodeToolbar actions
+  const updateNodeInternals = useUpdateNodeInternals() // Remeasure auto-sized frames without setNodes (avoids RO→setNodes storms)
   const rfStoreApi = useStoreApi() // Unselect legacy wrapper before RF snapshots dragItems (frame-body drag)
   const [promptHasChanges, setPromptHasChanges] = useState(false)
   const [responseHasChanges, setResponseHasChanges] = useState(false)
-  // Single text body: plain-merge legacy prompt + response (no section split)
+  // Single text body: plain-merge legacy prompt + response (no section split).
+  // Sync-migrate sole databaseBlock → pageLink when linkedPageId already exists (fixes grip + open menu).
   const [promptContent, setPromptContent] = useState(() => {
     if (isProjectBoard) return data.boardTitle || ''
     const responseRaw = data.responseMessage?.content
     const responseHtml = responseRaw ? formatResponseContent(responseRaw) : ''
-    return mergePanelHtml(data.promptMessage?.content, responseHtml)
+    const merged = mergePanelHtml(data.promptMessage?.content, responseHtml)
+    const meta = (data.promptMessage?.metadata || {}) as Record<string, unknown>
+    const linkedId = typeof meta.linkedPageId === 'string' ? meta.linkedPageId : null
+    if (!linkedId) return merged
+    const iconMeta = meta.notionIcon as { type?: string; emoji?: string } | null
+    const emoji = iconMeta?.type === 'emoji' && iconMeta.emoji ? iconMeta.emoji : null
+    return (
+      migrateSoleDatabaseBlockToPageLink(merged, {
+        pageId: linkedId,
+        title: typeof meta.blockTitle === 'string' ? meta.blockTitle : null,
+        icon: emoji,
+      }) || merged
+    )
   })
   const [responseContent, setResponseContent] = useState(responseMessage?.content || '')
   const [isDeleting, setIsDeleting] = useState(false)
@@ -1274,7 +1362,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const [frameUnlocked, setFrameUnlocked] = useState(false) // Unlocked: free resize; locked: content scales with frame
   const [frameTextWrap, setFrameTextWrap] = useState(false) // Unlocked only: wrap lines in the frame box instead of clipping
   const [frameScale, setFrameScale] = useState(1) // Uniform content scale while frame is locked
-  const [intrinsicSize, setIntrinsicSize] = useState({ width: 160, height: 48 }) // Unscaled content box (max-content)
+  const [intrinsicSize, setIntrinsicSize] = useState({ width: BLOCK_MIN_FRAME_W, height: 48 }) // Unscaled content box (max-content)
   const [intrinsicMeasured, setIntrinsicMeasured] = useState(false) // True after first contentFit measure (avoid hug flash)
   const [isFrameHovering, setIsFrameHovering] = useState(false) // Frame hover — page-open menu (not lock/rotate)
   const [collapsedFrameSize, setCollapsedFrameSize] = useState<{ width: number; height: number } | null>(null) // Pre-expand box for collapse toggle
@@ -1784,6 +1872,11 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const activePreviewPageId = previewTargetPageId || linkedPageId || null // Page the shell renders
   const blockTitleLabel =
     (promptMessage?.metadata?.blockTitle as string | undefined) || ''
+  // Notion deep link for Open in Notion in the shared page open menu
+  const notionUrl =
+    !isProjectBoard && typeof promptMessage?.metadata?.notionUrl === 'string'
+      ? (promptMessage.metadata.notionUrl as string)
+      : null
   const isPageBody = isPageBodyMeta(promptMessage?.metadata) // Body on its own page — no nested open menu
   // Frame already has a pageLink for this page → that NodeView owns the open menu
   const hasPageLinkForFrame = !!(
@@ -1791,13 +1884,101 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     (promptContent.includes(`data-page-id="${linkedPageId}"`) ||
       promptContent.includes(`data-page-id='${linkedPageId}'`))
   )
-  // Page frames whose content is still regular TipTap blocks (Notion / legacy title) need the menu too
+  // Page frames whose content is still regular TipTap blocks (legacy title) need the menu too
   const showFramePageOpenMenu =
     !!linkedPageId &&
     !isPageBody &&
     !pagePreviewOpen &&
     !hasPageLinkForFrame &&
     (isFrameHovering || selected)
+
+  // One-shot: Notion map frames still on sole databaseBlock → real pageLink (same menu + grip as local pages).
+  // Handles missing linkedPageId by resolving/creating the nested Thinktable page.
+  // Check server content too — useState may already have rewritten promptContent locally.
+  const migratedDbFrameRef = useRef(false)
+  useEffect(() => {
+    if (migratedDbFrameRef.current || isProjectBoard || isPageBody) return
+    if (!promptMessage?.id || !conversationId) return
+    if (hasPageLinkForFrame) return
+    const serverContent = promptMessage.content || ''
+    const needsMigrate =
+      isSoleDatabaseBlockContent(serverContent) || isSoleDatabaseBlockContent(promptContent)
+    if (!needsMigrate) return
+
+    migratedDbFrameRef.current = true
+    void (async () => {
+      try {
+        const client = createClient()
+        const { data: auth } = await client.auth.getUser()
+        const userId = auth.user?.id
+        if (!userId) {
+          migratedDbFrameRef.current = false
+          return
+        }
+        const sourceHtml = isSoleDatabaseBlockContent(serverContent) ? serverContent : promptContent
+
+        // Fast path: linkedPageId already known → rewrite HTML locally + persist
+        if (linkedPageId) {
+          const iconMeta = promptMessage.metadata?.notionIcon as { type?: string; emoji?: string } | null
+          const emoji = iconMeta?.type === 'emoji' && iconMeta.emoji ? iconMeta.emoji : null
+          const next = migrateSoleDatabaseBlockToPageLink(sourceHtml, {
+            pageId: linkedPageId,
+            title: blockTitleLabel || null,
+            icon: emoji,
+          })
+          if (!next) {
+            migratedDbFrameRef.current = false
+            return
+          }
+          setPromptContent(next)
+          setPromptHasChanges(true) // Block content-sync from clobbering until write lands
+          const existingMeta = (promptMessage.metadata as Record<string, unknown>) || {}
+          await client
+            .from('messages')
+            .update({
+              content: next,
+              metadata: { ...existingMeta, isPage: true, blockType: 'page' },
+            })
+            .eq('id', promptMessage.id)
+          setPromptHasChanges(false)
+          await queryClient.invalidateQueries({ queryKey: ['messages', conversationId] })
+          return
+        }
+
+        // Slow path: no linkedPageId yet — resolve/create nested page then rewrite
+        const result = await ensureNotionMapFrameIsPageLink(client, {
+          messageId: promptMessage.id,
+          userId,
+          parentConversationId: conversationId,
+          content: sourceHtml,
+          metadata: (promptMessage.metadata as Record<string, unknown>) || {},
+        })
+        if (!result) {
+          migratedDbFrameRef.current = false
+          return
+        }
+        setPromptContent(result.content)
+        setPromptHasChanges(false)
+        await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+        await queryClient.invalidateQueries({ queryKey: ['messages', conversationId] })
+      } catch (err) {
+        console.error('Failed to migrate Notion DB frame to pageLink:', err)
+        migratedDbFrameRef.current = false
+      }
+    })()
+  }, [
+    isProjectBoard,
+    isPageBody,
+    linkedPageId,
+    promptMessage?.id,
+    promptMessage?.content,
+    promptMessage?.metadata,
+    hasPageLinkForFrame,
+    promptContent,
+    blockTitleLabel,
+    conversationId,
+    queryClient,
+  ])
 
   // Warm lean embed document (and mount hidden iframe) so first nav isn’t a cold boot
   const prefetchPagePreview = () => {
@@ -1807,7 +1988,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     setPagePreviewMounted(true)
   }
 
-  // Actions handed to pageLink NodeViews (open/close preview, open page, prefetch, rename)
+  // Actions handed to pageLink NodeViews (open/close preview, open page, prefetch, rename, Notion)
   const pageLinkActions = useMemo<PageLinkActions>(
     () => ({
       previewPageId: pagePreviewOpen ? activePreviewPageId : null,
@@ -1847,8 +2028,11 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           console.error('Failed to set linked page icon:', err)
         }
       },
+      notionUrl, // Open in Notion button when this frame is Notion-linked
+      // Sole databaseBlock map frames (legacy) reuse this page id for the shared open menu
+      hostLinkedPageId: hasPageLinkForFrame ? null : linkedPageId || null,
     }),
-    [pagePreviewOpen, activePreviewPageId, router, queryClient]
+    [pagePreviewOpen, activePreviewPageId, router, queryClient, notionUrl, hasPageLinkForFrame, linkedPageId]
   )
 
   // Update title-chip perimeter when the note/item box changes size
@@ -1856,10 +2040,13 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     if (!isBlock || !panelRef.current) return
     const updateFromSize = () => {
       if (!panelRef.current) return
-      setItemBoxSize({
-        width: panelRef.current.offsetWidth || 200, // Perimeter width for title chip
-        height: panelRef.current.offsetHeight || 120, // Perimeter height for title chip
-      })
+      const width = panelRef.current.offsetWidth || 200
+      const height = panelRef.current.offsetHeight || 120
+      setItemBoxSize((prev) =>
+        Math.abs(prev.width - width) <= 1 && Math.abs(prev.height - height) <= 1
+          ? prev
+          : { width, height }
+      )
     }
     updateFromSize()
     const resizeObserver = new ResizeObserver(updateFromSize)
@@ -1867,62 +2054,151 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     return () => resizeObserver.disconnect()
   }, [isBlock])
 
-  // Unscaled content box — used for overflow detection + lock scale baseline
+  // Natural content box (not the stretched w-full width when unlocked+resized) — lock hug needs this.
+  // Debounced: RO can fire in bursts; avoid setState storms into BoardFlow.
   useEffect(() => {
     if (!isBlock) return
     const el = contentFitRef.current
     if (!el) return
+    let raf = 0
     const measure = () => {
-      const width = Math.max(1, el.offsetWidth) // Transform does not affect offsetWidth
-      const height = Math.max(1, el.offsetHeight)
-      setIntrinsicMeasured(true) // Safe to hug locked frames to this box
-      setIntrinsicSize((prev) =>
-        prev.width === width && prev.height === height ? prev : { width, height }
-      )
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => {
+        const width = Math.max(1, Math.round(measureNaturalContentWidth(el)))
+        const height = Math.max(1, Math.round(measureNaturalContentHeight(el)))
+        setIntrinsicMeasured(true)
+        setIntrinsicSize((prev) =>
+          Math.abs(prev.width - width) <= 1 && Math.abs(prev.height - height) <= 1
+            ? prev
+            : { width, height }
+        )
+      })
     }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
-    return () => ro.disconnect()
-  }, [isBlock, promptContent, frameUnlocked, frameTextWrap, resizeDimensions?.width, frameScale])
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+    }
+  }, [isBlock, promptContent, frameUnlocked, frameTextWrap, frameScale])
+  // Note: do NOT depend on resizeDimensions — hug writes that and would loop
   
   // Regular chat panels are those that are not flashcards and not notes
   const isRegularChatPanel = !isFlashcard && !isBlock
 
-  // Keep RF node box = panel content box so selection/resize frame hugs the card
+  // Explicit box → RF node style. NEVER drive this from ResizeObserver: RF also writes measured
+  // node.width/height, so RO→setNodes fights those numbers and allocates a new nodes[] every tick
+  // (LOOP-DIAG: nodes(ref) len N→N). Push only when resizeDimensions change.
+  const lastPushedBoxRef = useRef<{ w: number; h: number } | null>(null)
   useEffect(() => {
-    if (!isBlock || !panelRef.current || !isInitialShrinkComplete) return // Wait until block has laid out
-    const el = panelRef.current // Panel DOM for measurement
-    const syncNodeSize = () => {
-      if (isResizingRef.current || !el) return // During active resize, RF owns dimensions
-      const width = Math.ceil(el.offsetWidth) // Content-fitted width
-      const height = Math.ceil(el.offsetHeight) // Content-fitted height
-      if (width <= 0 || height <= 0) return // Ignore empty frames
-      const setNodesFunc = getSetNodes() // Board setNodes from context
-      if (!setNodesFunc) return
-      setNodesFunc((nodes: any[]) =>
-        nodes.map((node: any) => {
-          if (node.id !== id) return node
-          const styleW = typeof node.style?.width === 'number' ? node.style.width : parseFloat(node.style?.width)
-          const styleH = typeof node.style?.height === 'number' ? node.style.height : parseFloat(node.style?.height)
-          if (node.width === width && node.height === height && styleW === width && styleH === height) {
-            return node // Already fitted
-          }
-          // Write width/height + style so RF frame matches content (stale style left empty chrome)
-          return {
-            ...node,
-            width,
-            height,
-            style: { ...node.style, width, height },
-          }
-        })
-      )
+    if (!isBlock || !isUserResized || !resizeDimensions) {
+      if (!isUserResized) lastPushedBoxRef.current = null // Next resize must push fresh
+      return
     }
-    syncNodeSize() // Immediate sync on select/mount
-    const ro = new ResizeObserver(syncNodeSize) // Re-sync when text/layout changes size
+    const boxW = Math.ceil(resizeDimensions.width)
+    const boxH = Math.ceil(resizeDimensions.height)
+    const prev = lastPushedBoxRef.current
+    if (prev && Math.abs(prev.w - boxW) <= 1 && Math.abs(prev.h - boxH) <= 1) return // Already pushed
+    lastPushedBoxRef.current = { w: boxW, h: boxH }
+    const setNodesFunc = getSetNodes()
+    if (!setNodesFunc) return
+    setNodesFunc((nodes: any[]) => {
+      let changed = false
+      const next = nodes.map((node: any) => {
+        if (node.id !== id) return node
+        const styleW =
+          typeof node.style?.width === 'number' ? node.style.width : parseFloat(node.style?.width)
+        const styleH =
+          typeof node.style?.height === 'number' ? node.style.height : parseFloat(node.style?.height)
+        // Compare intended style only — ignore RF measured node.width (drifts vs border-box)
+        const styleOk =
+          Number.isFinite(styleW) &&
+          Number.isFinite(styleH) &&
+          Math.abs(styleW - boxW) <= 1 &&
+          Math.abs(styleH - boxH) <= 1
+        if (styleOk) return node
+        changed = true
+        return {
+          ...node,
+          width: boxW,
+          height: boxH,
+          style: { ...node.style, width: boxW, height: boxH },
+        }
+      })
+      return changed ? next : nodes
+    })
+  }, [isBlock, id, isUserResized, resizeDimensions?.width, resizeDimensions?.height, getSetNodes])
+
+  // Unresized (max-content) frames: remasure handles via updateNodeInternals — never setNodes style.
+  const lastSyncedNodeSizeRef = useRef<{ w: number; h: number } | null>(null)
+  const syncRafRef = useRef<number | null>(null)
+  const syncStormRef = useRef({ n: 0, t: 0 })
+  const clearedAutoSizeStyleRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!isBlock || !panelRef.current || !isInitialShrinkComplete) return
+    if (isUserResized) {
+      clearedAutoSizeStyleRef.current = null // Allow re-strip after unlock→relock → grow-with-line
+      return // Explicit box path owns RF size above
+    }
+    const el = panelRef.current
+    lastSyncedNodeSizeRef.current = null
+    syncStormRef.current = { n: 0, t: Date.now() }
+
+    // One-shot: strip leftover style.width/height so max-content can own size
+    if (clearedAutoSizeStyleRef.current !== id) {
+      clearedAutoSizeStyleRef.current = id
+      const setNodesFunc = getSetNodes()
+      if (setNodesFunc) {
+        setNodesFunc((nodes: any[]) => {
+          let changed = false
+          const next = nodes.map((node: any) => {
+            if (node.id !== id) return node
+            const hasStyleW = node.style?.width != null && node.style?.width !== ''
+            const hasStyleH = node.style?.height != null && node.style?.height !== ''
+            if (!hasStyleW && !hasStyleH) return node
+            changed = true
+            const style = { ...(node.style || {}) }
+            delete style.width
+            delete style.height
+            return { ...node, style, width: undefined, height: undefined }
+          })
+          return changed ? next : nodes
+        })
+      }
+    }
+
+    const syncNodeSize = () => {
+      if (isResizingRef.current || !el) return
+      const width = Math.ceil(el.offsetWidth)
+      const height = Math.ceil(el.offsetHeight)
+      if (width <= 0 || height <= 0) return
+      const prev = lastSyncedNodeSizeRef.current
+      if (prev && Math.abs(prev.w - width) <= 1 && Math.abs(prev.h - height) <= 1) return
+      const now = Date.now()
+      if (now - syncStormRef.current.t > 1000) syncStormRef.current = { n: 0, t: now }
+      syncStormRef.current.n += 1
+      if (syncStormRef.current.n > 20) return // Circuit breaker
+      lastSyncedNodeSizeRef.current = { w: width, h: height }
+      updateNodeInternals(id) // Remeasure only — never setNodes
+    }
+
+    const schedule = () => {
+      if (syncRafRef.current != null) cancelAnimationFrame(syncRafRef.current)
+      syncRafRef.current = requestAnimationFrame(() => {
+        syncRafRef.current = null
+        syncNodeSize()
+      })
+    }
+
+    schedule()
+    const ro = new ResizeObserver(schedule)
     ro.observe(el)
-    return () => ro.disconnect()
-  }, [isBlock, id, getSetNodes, isInitialShrinkComplete, resizeDimensions, selected])
+    return () => {
+      ro.disconnect()
+      if (syncRafRef.current != null) cancelAnimationFrame(syncRafRef.current)
+    }
+  }, [isBlock, id, getSetNodes, isInitialShrinkComplete, isUserResized, updateNodeInternals])
 
   // Persist frame lock / scale / box size (resize end + lock toggle + overflow expand)
   const persistFrameMeta = useCallback(async (patch: Record<string, unknown>) => {
@@ -1960,12 +2236,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     setIsUserResized(true) // Persist mode: explicit frame box
     lockedResizeStartRef.current = null // Drop drag baseline
 
-    const minW = frameUnlocked ? BLOCK_MIN_FRAME_W : BLOCK_LOCKED_MIN_W
+    const minW = blockMinFrameWidth(promptContent)
     let width = Math.max(params?.width ?? resizeDimensions?.width ?? 0, minW)
     let height = Math.max(params?.height ?? resizeDimensions?.height ?? 0, BLOCK_MIN_FRAME_H)
     const finalScale = frameScaleRef.current // Latest scale from the drag (avoid stale closure)
     if (!frameUnlocked) {
-      const hugged = scaledFrameSize(intrinsicSize, finalScale, BLOCK_LOCKED_MIN_W) // Snap to scaled text
+      const hugged = scaledFrameSize(intrinsicSize, finalScale, minW) // Snap to scaled text
       width = hugged.width
       height = hugged.height
     } else if (frameTextWrap) {
@@ -1983,12 +2259,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       frameScale: finalScale,
       fontScale,
     })
-  }, [resizeDimensions, frameUnlocked, frameTextWrap, fontScale, persistFrameMeta, intrinsicSize])
+  }, [resizeDimensions, frameUnlocked, frameTextWrap, fontScale, persistFrameMeta, intrinsicSize, promptContent])
 
   // Corner-drag: locked → proportional content scale; unlocked → free frame (content stays)
   const handleResize = useCallback((_event: any, params: { width: number; height: number }) => {
     if (!isResizingRef.current) return // Ignore mount/select noise — only after handleResizeStart
-    const minW = frameUnlocked ? BLOCK_MIN_FRAME_W : BLOCK_LOCKED_MIN_W
+    const minW = blockMinFrameWidth(promptContent)
     const width = Math.max(params.width, minW)
     const height = Math.max(params.height, BLOCK_MIN_FRAME_H)
     setResizeDimensions({ width, height }) // Drive panel style — matches RF dimension changes
@@ -1997,7 +2273,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       const ratio = width / Math.max(1, start.width) // keepAspectRatio → width tracks height
       setFrameScale(Math.max(0.15, start.scale * ratio)) // Blocks scale with the frame
     }
-  }, [frameUnlocked])
+  }, [frameUnlocked, promptContent])
 
   // Persist item rotation degrees into message metadata after a rotate gesture ends
   const saveRotation = useCallback(async (nextRotation: number) => {
@@ -2068,7 +2344,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       // Snapshot current box so unlock doesn’t snap back to fit-content
       const el = panelRef.current
       const nextDims = resizeDimensions ?? {
-        width: Math.max(BLOCK_MIN_FRAME_W, el?.offsetWidth ?? intrinsicSize.width),
+        width: Math.max(blockMinFrameWidth(promptContent), el?.offsetWidth ?? intrinsicSize.width),
         height: Math.max(BLOCK_MIN_FRAME_H, el?.offsetHeight ?? intrinsicSize.height),
       }
       if (!resizeDimensions) setResizeDimensions(nextDims)
@@ -2082,8 +2358,22 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       })
       return
     }
-    // Relock: snap the frame to scaled text (padding is inside the scaled wrapper)
-    const nextDims = scaledFrameSize(intrinsicSize, frameScale, BLOCK_LOCKED_MIN_W)
+    // Relock: hug width AND height to natural text (locked = hug to content)
+    const fitEl = contentFitRef.current
+    const naturalW = fitEl ? measureNaturalContentWidth(fitEl) : intrinsicSize.width
+    const naturalH = fitEl ? measureNaturalContentHeight(fitEl) : intrinsicSize.height
+    const minW = blockMinFrameWidth(promptContent)
+    const hugged = scaledFrameSize(
+      { width: naturalW, height: naturalH },
+      frameScale,
+      minW
+    )
+    const nextDims = { width: hugged.width, height: hugged.height }
+    setIntrinsicSize((prev) =>
+      Math.abs(prev.width - naturalW) <= 1 && Math.abs(prev.height - naturalH) <= 1
+        ? prev
+        : { width: naturalW, height: naturalH }
+    )
     setResizeDimensions(nextDims)
     setIsUserResized(true)
     setCollapsedFrameSize(null) // Lock mode doesn’t use expand/collapse
@@ -2095,7 +2385,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       collapsedFrameSize: null,
       frameTextWrap: false,
     })
-  }, [frameUnlocked, frameScale, resizeDimensions, intrinsicSize, collapsedFrameSize, frameTextWrap, persistFrameMeta])
+  }, [frameUnlocked, frameScale, resizeDimensions, intrinsicSize, collapsedFrameSize, frameTextWrap, persistFrameMeta, promptContent])
 
   // Unlocked: wrap lines inside the frame width (vs clip overflow)
   const handleToggleFrameTextWrap = useCallback((e: React.MouseEvent) => {
@@ -2151,20 +2441,31 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     })
   }, [intrinsicSize, frameScale, resizeDimensions, collapsedFrameSize, persistFrameMeta])
 
-  // Locked + resized: keep the frame hugging scaled text as the user types
+  // Locked + resized: hug WIDTH and HEIGHT to natural text (locked = hug to content) —
+  // shrink/grow both dimensions on lock/type instead of keeping the taller resize box.
   useEffect(() => {
-    if (!isBlock || frameUnlocked || !isUserResized || pagePreviewOpen) return // Unlocked / unresized use other sizing
-    if (!intrinsicMeasured || isResizingRef.current) return // Wait for a real measure; don’t fight a live drag
-    const next = scaledFrameSize(intrinsicSize, frameScale, BLOCK_LOCKED_MIN_W)
-    let changed = true // Assume we need a persist unless the box already matches
+    if (!isBlock || frameUnlocked || !isUserResized || pagePreviewOpen) return
+    if (!intrinsicMeasured || isResizingRef.current) return
+    const minW = blockMinFrameWidth(promptContent)
+    const natural = scaledFrameSize(intrinsicSize, frameScale, minW)
+    let next = natural
+    let changed = true
     setResizeDimensions((prev) => {
-      if (prev && prev.width === next.width && prev.height === next.height) {
-        changed = false // Already hugging — skip DB write
+      const width = natural.width
+      // Hug height to content too (was: keep the taller box until a manual resize)
+      const height = natural.height
+      next = { width, height }
+      if (
+        prev &&
+        Math.abs(prev.width - width) <= 1 &&
+        Math.abs(prev.height - height) <= 1
+      ) {
+        changed = false
         return prev
       }
       return next
     })
-    if (!changed) return // No size change
+    if (!changed) return
     if (persistFrameMetaTimerRef.current) clearTimeout(persistFrameMetaTimerRef.current)
     persistFrameMetaTimerRef.current = setTimeout(() => {
       void persistFrameMeta({
@@ -2172,7 +2473,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         frameUnlocked: false,
         frameScale,
       })
-    }, 250) // Debounce DB writes while typing
+    }, 250)
     return () => {
       if (persistFrameMetaTimerRef.current) clearTimeout(persistFrameMetaTimerRef.current)
     }
@@ -2185,18 +2486,16 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     intrinsicSize,
     frameScale,
     persistFrameMeta,
+    promptContent,
   ])
 
-  // Unlocked: height hugs content — wrap always matches; non-wrap only shrinks empty bottom slack (never un-clips)
+  // Unlocked WRAP: height hugs wrapped content. Non-wrap free resize does NOT auto-adjust height —
+  // the frame stays exactly where the user dragged it (no snapping to text).
   useEffect(() => {
-    if (!isBlock || !frameUnlocked || !isUserResized || pagePreviewOpen) return
+    if (!isBlock || !frameUnlocked || !frameTextWrap || !isUserResized || pagePreviewOpen) return
     if (!intrinsicMeasured || isResizingRef.current || !resizeDimensions) return
     const huggedH = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(intrinsicSize.height * Math.max(0.15, frameScale)) + 2)
-    if (frameTextWrap) {
-      if (Math.abs(resizeDimensions.height - huggedH) < 2) return // Already matching wrapped height
-    } else if (resizeDimensions.height <= huggedH + 1) {
-      return // Tight or intentionally clipped shorter — leave width-only free resize
-    }
+    if (Math.abs(resizeDimensions.height - huggedH) < 2) return // Already matching wrapped height
     const nextDims = { width: resizeDimensions.width, height: huggedH }
     setResizeDimensions(nextDims)
     if (persistFrameMetaTimerRef.current) clearTimeout(persistFrameMetaTimerRef.current)
@@ -2822,6 +3121,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // Block panels grow with the longest TipTap line until manually resized
   const isBlockPanel = isBlockMeta(promptMessage?.metadata)
   const usesFitContent = isBlockPanel // Legacy name: block auto-width (measured px, not CSS fit-content)
+  const frameMinW = blockMinFrameWidth(promptContent) // Grip+icon+menu, or grip+3ch for plain text
   const growsWithLine = usesFitContent && !isUserResized && !pagePreviewOpen // Line runs until Enter / corner resize
   const hasBlockContent = isBlock && !isBlockContentEmpty(promptContent) // Lock only when a content block exists
   const wrapUnlocked =
@@ -2833,14 +3133,18 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     isUserResized &&
     !!resizeDimensions &&
     !pagePreviewOpen // Free frame may hide overflow when not wrapping
-  const huggedSize = scaledFrameSize(intrinsicSize, frameScale, BLOCK_MIN_FRAME_W) // Scaled text + border
+  const huggedSize = scaledFrameSize(intrinsicSize, frameScale, frameMinW) // Scaled text + border
   const applyFrameScale = isBlock && isUserResized && frameScale !== 1 // Layout spacer + CSS scale
   const scaledLayoutW = Math.ceil(intrinsicSize.width * Math.max(0.15, frameScale)) // Visual content width (no border)
   const scaledLayoutH = Math.ceil(intrinsicSize.height * Math.max(0.15, frameScale)) // Visual content height (no border)
-  // Unscaled content width when wrapping = frame inner width ÷ scale (padding lives inside contentFit)
+  const unlockedResized = wrapUnlocked || clipUnlocked // Free-resized frame (wrap or nowrap-clip)
+  const unlockedInnerW = resizeDimensions ? Math.max(1, resizeDimensions.width - 2) : null // Frame inner (visual)
+  const unlockedInnerH = resizeDimensions ? Math.max(1, resizeDimensions.height - 2) : null
+  // Content lays out UNSCALED (÷ frameScale) so the CSS scale() lands exactly on the frame inner box.
+  // Applies to wrap AND clip — using w-full here double-scaled the content and clipped the text.
   const wrapContentWidth =
-    wrapUnlocked && resizeDimensions
-      ? Math.max(1, Math.floor((resizeDimensions.width - 2) / Math.max(0.15, frameScale)))
+    unlockedResized && unlockedInnerW != null
+      ? Math.max(1, Math.floor(unlockedInnerW / Math.max(0.15, frameScale)))
       : null
   const contentOverflows =
     clipUnlocked &&
@@ -2852,7 +3156,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     resizeDimensions!.width + 2 >= huggedSize.width &&
     resizeDimensions!.height + 2 >= huggedSize.height // Expand toggle flipped to collapse
   // Blocks start narrow; chat/flashcards use their fixed starting widths
-  const initialWidth = isFlashcard ? 600 : (usesFitContent ? 200 : 768)
+  const initialWidth = isFlashcard ? 600 : (usesFitContent ? BLOCK_MIN_FRAME_W : 768)
   const [panelWidthToUse, setPanelWidthToUse] = useState(initialWidth)
   // Ref to track current width (avoids stale closures in callbacks)
   const panelWidthRef = useRef(initialWidth)
@@ -2984,15 +3288,17 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     if (pagePreviewOpen) return
     if (growsWithLine) {
       // Unresized blocks: CSS max-content owns size — clear any stale inline px width
-      if (panelRef.current) {
-        panelRef.current.style.width = 'max-content'
-        panelRef.current.style.height = 'fit-content'
+      const panel = panelRef.current
+      if (panel) {
+        if (panel.style.width !== 'max-content') panel.style.width = 'max-content'
+        if (panel.style.height !== 'fit-content') panel.style.height = 'fit-content'
       }
       return
     }
     if (isUserResized && resizeDimensions) return // Explicit box owns width
     if (panelRef.current && panelWidthRef.current) {
-      panelRef.current.style.width = `${panelWidthRef.current}px`
+      const next = `${panelWidthRef.current}px`
+      if (panelRef.current.style.width !== next) panelRef.current.style.width = next
     }
   })
 
@@ -3149,7 +3455,20 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       const responseHtml = responseMessage?.content
         ? formatResponseContent(responseMessage.content)
         : ''
-      const merged = mergePanelHtml(promptMessage?.content, responseHtml)
+      let merged = mergePanelHtml(promptMessage?.content, responseHtml)
+      // Keep Notion DB map frames as pageLink when the server row is still a sole databaseBlock
+      const meta = (promptMessage?.metadata || {}) as Record<string, unknown>
+      const linkedId = typeof meta.linkedPageId === 'string' ? meta.linkedPageId : null
+      if (linkedId && isSoleDatabaseBlockContent(merged)) {
+        const iconMeta = meta.notionIcon as { type?: string; emoji?: string } | null
+        const emoji = iconMeta?.type === 'emoji' && iconMeta.emoji ? iconMeta.emoji : null
+        merged =
+          migrateSoleDatabaseBlockToPageLink(merged, {
+            pageId: linkedId,
+            title: typeof meta.blockTitle === 'string' ? meta.blockTitle : null,
+            icon: emoji,
+          }) || merged
+      }
       // Accept server content when idle, or when Turn into rewrote blockType + HTML
       if (merged !== promptContent && (!promptHasChanges || blockTypeChanged)) {
         setPromptContent(merged)
@@ -3631,10 +3950,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               : undefined,
         minWidth: pagePreviewOpen
           ? '520px'
-          : growsWithLine
-            ? '160px' // Empty/short blocks stay usable; grow with longest line
-            : usesFitContent
-              ? '200px'
+          : usesFitContent
+            ? `${frameMinW}px` // pageLink: grip+icon+menu; plain: grip+3ch
               : isFlashcard
                 ? '300px'
                 : '200px',
@@ -3719,7 +4036,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               position={position}
               variant="line" // RF line control (rectangle edges that meet the corner dots)
               className="nopan tt-frame-resize-line" // Styled as continuous blue border
-              minWidth={frameUnlocked ? BLOCK_MIN_FRAME_W : BLOCK_LOCKED_MIN_W}
+              minWidth={frameMinW}
               minHeight={BLOCK_MIN_FRAME_H}
               keepAspectRatio={!frameUnlocked && hasBlockContent}
               onResizeStart={handleResizeStart}
@@ -3733,7 +4050,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               position={position} // RF places the handle on that corner
               className="nopan" // Prevent canvas pan while resizing
               style={itemCornerResizeStyle} // White circular handle styling
-              minWidth={frameUnlocked ? BLOCK_MIN_FRAME_W : BLOCK_LOCKED_MIN_W} // Unlocked can shrink below content; locked keeps a usable scaled box
+              minWidth={frameMinW} // pageLink vs plain-text floor
               minHeight={BLOCK_MIN_FRAME_H} // Keep a usable box; pairs with handleResize clamp
               keepAspectRatio={!frameUnlocked && hasBlockContent} // Locked + content: proportional only
               onResizeStart={handleResizeStart} // Arm user-resize mode (line-grow off)
@@ -4059,6 +4376,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           <PageLinkProvider value={pageLinkActions}>
             <PageOpenMenu
               pageId={linkedPageId}
+              notionUrl={notionUrl}
               forceVisible
               className="!right-1 !top-2 !translate-y-0"
             />
@@ -4070,13 +4388,11 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             style={
               applyFrameScale
                 ? {
-                    width: wrapUnlocked && resizeDimensions
-                      ? Math.max(1, resizeDimensions.width - 2) // Visual width matches frame inner box
-                      : scaledLayoutW,
-                    height: wrapUnlocked && resizeDimensions
-                      ? Math.max(1, resizeDimensions.height - 2)
-                      : scaledLayoutH,
-                    overflow: clipUnlocked ? 'hidden' : 'visible',
+                    // Unlocked resized (wrap or clip): spacer = frame inner box; content is scaled to fill it.
+                    // Locked/other: spacer = scaled content (hug).
+                    width: unlockedResized && unlockedInnerW != null ? unlockedInnerW : scaledLayoutW,
+                    height: unlockedResized && unlockedInnerH != null ? unlockedInnerH : scaledLayoutH,
+                    overflow: clipUnlocked ? 'hidden' : 'visible', // Clip nowrap overflow inside the frame
                   } // CSS scale doesn’t affect layout — spacer holds visual size
                 : undefined
             }
@@ -4085,13 +4401,15 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             ref={contentFitRef} // Unscaled content box (offsetWidth ignores CSS scale)
             className={cn(
               'relative', // Anchor for in-content absolute chrome
-              // Resized / fixed box: fill frame so short+empty blocks span the full row.
-              // Unresized hug: w-max from longest line; children still width:100% of that box.
+              // Locked+resized: natural width so hug measures real text (not the stretched box).
+              // Unlocked resized / wrap: fill the free frame. Unresized: w-max from longest line.
               wrapContentWidth != null
                 ? undefined
-                : isUserResized || !growsWithLine
-                  ? 'w-full'
-                  : 'w-max',
+                : !frameUnlocked && isUserResized
+                  ? 'w-max'
+                  : isUserResized || !growsWithLine
+                    ? 'w-full'
+                    : 'w-max',
               // Blocks: horizontal pad only in class; equal tight vertical pad via style (avoids asymmetric leftovers)
               isBlock ? 'pr-4 pl-0.5' : 'px-3 py-3'
             )}

@@ -3,7 +3,6 @@
 // Top-bar Notion connect control — starts Mindmap.so-style OAuth hosted by Notion
 
 import { useEffect, useState } from 'react'
-import Image from 'next/image'
 import { usePathname, useRouter } from 'next/navigation'
 import { useQueryClient } from '@tanstack/react-query'
 import { Button } from './ui/button'
@@ -14,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from './ui/dropdown-menu'
 import { NotionImportModal } from './notion-import-modal'
+import { NotionMarkIcon } from './notion-mark-icon' // Monochrome — matches other top-bar icons
 import { cn } from '@/lib/utils'
 
 type NotionStatus = {
@@ -134,13 +134,7 @@ export function NotionConnectButton() {
               title={status.workspaceName ? `Notion · ${status.workspaceName}` : 'Notion connected'}
               disabled={loading}
             >
-              <Image
-                src="/notion-color.svg"
-                alt="Notion"
-                width={14}
-                height={14}
-                className="h-3.5 w-3.5"
-              />
+              <NotionMarkIcon className="h-3.5 w-3.5" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
@@ -163,13 +157,7 @@ export function NotionConnectButton() {
           onClick={startConnect}
           disabled={loading}
         >
-          <Image
-            src="/notion-color.svg"
-            alt="Notion"
-            width={14}
-            height={14}
-            className="h-3.5 w-3.5"
-          />
+          <NotionMarkIcon className="h-3.5 w-3.5" />
         </Button>
       )}
 

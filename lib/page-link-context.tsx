@@ -20,6 +20,10 @@ export type PageLinkActions = {
   renameTitle: (pageId: string, title: string) => void | Promise<void>
   /** Persist the page icon (emoji or null to clear) so the nav/menu match. */
   setIcon: (pageId: string, icon: string | null) => void | Promise<void>
+  /** Notion deep link for this host frame (Open in Notion in the shared menu), or null. */
+  notionUrl?: string | null
+  /** Host frame's linkedPageId — lets sole databaseBlock frames use the same open menu. */
+  hostLinkedPageId?: string | null
 }
 
 // Safe no-op default so NodeViews used outside a host frame don't crash.
@@ -32,6 +36,8 @@ const PageLinkContext = createContext<PageLinkActions>({
   prefetch: noop,
   renameTitle: noop,
   setIcon: noop,
+  notionUrl: null,
+  hostLinkedPageId: null,
 })
 
 export const PageLinkProvider = PageLinkContext.Provider // Provided by the host frame (chat-panel-node)
