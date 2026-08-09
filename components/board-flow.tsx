@@ -24,6 +24,14 @@ import ELK from 'elkjs/lib/elk.bundled.js'
 import { ChatPanelNode } from './chat-panel-node'
 import { BlockGroupNode } from './block-group-node' // Legacy dashed wrapper around frames
 import {
+  EditableThread,
+  ThreadConnectionLine,
+  DEFAULT_THREAD_ALGORITHM,
+  normalizeHandleId,
+  type ThreadEdgeData,
+} from '@/components/threads' // Miro-style editable threads + connection preview
+import { useIsThreadConnecting } from '@/components/threads/use-is-thread-connecting' // Pane class while connecting
+import {
   BlockActionsMenu,
   type BlockActionId,
   type BlockActionPayload,
@@ -219,7 +227,9 @@ function AnimatedDottedEdge({
 // Fetch edges (connections) for a conversation - lightweight query (just message IDs)
 // For homepage boards, uses API route (public access via service role)
 // For regular boards, requires authentication and ownership
-async function fetchEdgesForConversation(conversationId: string): Promise<Array<{ source_message_id: string; target_message_id: string }>> {
+async function fetchEdgesForConversation(conversationId: string): Promise<
+  Array<{ source_message_id: string; target_message_id: string; metadata?: ThreadEdgeData | null }>
+> {
   const supabase = createClient()
   
   // Always check if this is the homepage board first (system user's board)
@@ -230,7 +240,11 @@ async function fetchEdgesForConversation(conversationId: string): Promise<Array<
       const data = await response.json()
       // Check if this is the homepage board
       if (data.conversation?.id === conversationId) {
-        return (data.edges || []) as Array<{ source_message_id: string; target_message_id: string }>
+        return (data.edges || []) as Array<{
+          source_message_id: string
+          target_message_id: string
+          metadata?: ThreadEdgeData | null
+        }>
       }
     }
   } catch (error) {
@@ -245,10 +259,20 @@ async function fetchEdgesForConversation(conversationId: string): Promise<Array<
   }
 
   // Authenticated user - fetch their own boards (RLS will enforce ownership)
-  const { data, error } = await supabase
+  // Prefer metadata (control points); fall back if column not migrated yet
+  let { data, error } = await supabase
     .from('panel_edges')
-    .select('source_message_id, target_message_id')
+    .select('source_message_id, target_message_id, metadata')
     .eq('conversation_id', conversationId)
+
+  if (error && String(error.message || '').includes('metadata')) {
+    const fallback = await supabase
+      .from('panel_edges')
+      .select('source_message_id, target_message_id')
+      .eq('conversation_id', conversationId)
+    data = fallback.data as typeof data
+    error = fallback.error
+  }
 
   if (error) {
     console.error('Error fetching edges:', error)
@@ -339,11 +363,12 @@ const nodeTypes = Object.freeze({
 
 // Define edgeTypes outside component as a module-level constant
 const edgeTypes = Object.freeze({
-  animatedDotted: AnimatedDottedEdge,
+  editable: EditableThread, // Miro-style adjustable thread (default)
+  animatedDotted: EditableThread, // Same path editor; dashed via data.dotted
   placeholder: PlaceholderEdge, // Placeholder edge for dynamic layouting
 })
 
-/** Drag thread follows the pointer (toX/toY), not a stale handle-bound offset. */
+/** @deprecated Prefer ThreadConnectionLine — kept so older imports keep working. */
 function PointerConnectionLine({
   fromX,
   fromY,
@@ -355,23 +380,7 @@ function PointerConnectionLine({
   toX: number
   toY: number
 }) {
-  const [path] = getSmoothStepPath({
-    sourceX: fromX,
-    sourceY: fromY,
-    targetX: toX,
-    targetY: toY,
-  })
-  return (
-    <g className="react-flow__connectionline">
-      <path
-        d={path}
-        fill="none"
-        className="react-flow__connectionline-path"
-        stroke="#b1b1b7"
-        strokeWidth={2}
-      />
-    </g>
-  )
+  return <ThreadConnectionLine fromX={fromX} fromY={fromY} toX={toX} toY={toY} />
 }
 
 // Return to bottom — portals into the right chat sidebar above the prompt
@@ -437,7 +446,8 @@ function BoardFlowInner({
   
   // Track when a selected node is being dragged to hide placeholders
   const [isSelectedNodeDragging, setIsSelectedNodeDragging] = useState(false)
-  
+  const isThreadConnecting = useIsThreadConnecting() // Miro: hide frame adjust chrome; reveal snap targets
+
   // Placeholder manager - shows placeholders where next chat panel will be added
   // Hide placeholders when a selected node is being dragged
   const { updatePlaceholders } = usePlaceholderManager(nodes, edges, conversationId, isSelectedNodeDragging)
@@ -2652,11 +2662,9 @@ function BoardFlowInner({
     const targetWidth = targetNode.width || 400
     const targetHeight = targetNode.height || 400
 
-    // Nodules sit 12px outside selected block frames (Handle style offset)
-    const sourceOut =
-      sourceNode.selected && sourceNode.data?.promptMessage?.metadata?.isBlock === true ? 14 : 0
-    const targetOut =
-      targetNode.selected && targetNode.data?.promptMessage?.metadata?.isBlock === true ? 14 : 0
+    // Connection points sit on the frame edge (indicators are outer-only, not edge geometry)
+    const sourceOut = 0
+    const targetOut = 0
 
     // Calculate all 4 handle positions for source node (top, bottom, left, right)
     const sourceHandles = {
@@ -2819,7 +2827,12 @@ function BoardFlowInner({
               target: finalTarget,
               sourceHandle: finalSourceHandle,
               targetHandle: finalTargetHandle,
-              type: lineStyle === 'dotted' ? 'animatedDotted' : 'smoothstep', // Use animated dotted edge if selected, otherwise smoothstep
+              type: 'editable', // Miro-style adjustable thread
+              data: {
+                algorithm: savedEdge.metadata?.algorithm ?? DEFAULT_THREAD_ALGORITHM,
+                points: savedEdge.metadata?.points ?? [],
+                dotted: savedEdge.metadata?.dotted ?? lineStyle === 'dotted',
+              } satisfies ThreadEdgeData,
             })
             console.log(`🔄 BoardFlow: Prepared edge: ${finalSource}(${finalSourceHandle}) -> ${finalTarget}(${finalTargetHandle})`)
           } else {
@@ -2918,10 +2931,15 @@ function BoardFlowInner({
               target: actualTargetId,
               sourceHandle: handles.sourceHandle,
               targetHandle: handles.targetHandle,
-              type: lineStyle === 'dotted' ? 'animatedDotted' : 'smoothstep', // Use animated dotted edge if selected, otherwise smoothstep
+              type: 'editable', // Miro-style adjustable thread
+              data: {
+                algorithm: DEFAULT_THREAD_ALGORITHM,
+                points: [],
+                dotted: lineStyle === 'dotted',
+              } satisfies ThreadEdgeData,
             }
             newEdges.push(newEdge)
-            console.log(`🔄 BoardFlow: Preparing edge: ${finalSource}(${finalSourceHandle}) -> ${finalTarget}(${finalTargetHandle})`)
+            console.log(`🔄 BoardFlow: Preparing edge: ${actualSourceId}(${handles.sourceHandle}) -> ${actualTargetId}(${handles.targetHandle})`)
           } else {
             console.warn(`🔄 BoardFlow: Could not find nodes for edge: ${sourceNodeId} -> ${targetNodeId}`, {
               sourceNode: sourceNode ? sourceNode.id : 'not found',
@@ -5286,14 +5304,26 @@ function BoardFlowInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode]) // Only run when viewMode changes, ignore nodes dependency to avoid loops
 
-  // Update edge types to use smoothstep (ELK-style routing)
+  // Migrate legacy smoothstep/animatedDotted edges once onto editable threads
   useEffect(() => {
-    setEdges((eds) =>
-      eds.map((edge) => ({
-        ...edge,
-        type: 'smoothstep', // Use smoothstep for ELK-style routing
-      }))
-    )
+    setEdges((eds) => {
+      let changed = false
+      const next = eds.map((edge) => {
+        if (edge.type === 'placeholder' || edge.type === 'editable') return edge
+        changed = true
+        return {
+          ...edge,
+          type: 'editable' as const,
+          data: {
+            algorithm: DEFAULT_THREAD_ALGORITHM,
+            points: [],
+            dotted: edge.type === 'animatedDotted',
+            ...((edge.data as ThreadEdgeData | undefined) || {}),
+          } satisfies ThreadEdgeData,
+        }
+      })
+      return changed ? next : eds // Avoid churn when already migrated
+    })
   }, [setEdges])
 
   // Handle node right-click to show popup (select node if not selected, then show popup)
@@ -6221,20 +6251,107 @@ function BoardFlowInner({
   const handleToggleEdgeStyle = useCallback(() => {
     if (!clickedEdge) return
 
-    const isCurrentlyDotted = clickedEdge.type === 'animatedDotted'
-    const newType = isCurrentlyDotted ? 'smoothstep' : 'animatedDotted'
+    const prev = (clickedEdge.data as ThreadEdgeData | undefined) || {}
+    const isCurrentlyDotted = prev.dotted === true || clickedEdge.type === 'animatedDotted'
+    const dotted = !isCurrentlyDotted
+    const nextData: ThreadEdgeData = {
+      ...prev,
+      dotted,
+      algorithm: prev.algorithm ?? DEFAULT_THREAD_ALGORITHM,
+      points: prev.points ?? [],
+    }
 
     setEdges((eds) =>
       eds.map((e) =>
-        e.id === clickedEdge.id
-          ? { ...e, type: newType }
-          : e
+        e.id === clickedEdge.id ? { ...e, type: 'editable', data: nextData } : e
       )
     )
 
-    // Update clickedEdge to reflect the change
-    setClickedEdge({ ...clickedEdge, type: newType })
+    setClickedEdge({ ...clickedEdge, type: 'editable', data: nextData })
   }, [clickedEdge, setEdges])
+
+  // Miro: drag a thread endpoint to detach and snap onto another frame's connection point
+  const handleThreadReconnect = useCallback(
+    async (
+      oldEdge: Edge,
+      newConnection: {
+        source: string | null
+        target: string | null
+        sourceHandle: string | null
+        targetHandle: string | null
+      }
+    ) => {
+      if (isLocked || !newConnection.source || !newConnection.target) return
+      if (newConnection.source === newConnection.target) return
+
+      const sourceNode = nodes.find((n) => n.id === newConnection.source)
+      const targetNode = nodes.find((n) => n.id === newConnection.target)
+      if (!sourceNode?.data?.promptMessage?.id || !targetNode?.data?.promptMessage?.id) return
+
+      takeSnapshot()
+
+      const handles = findClosestHandles(sourceNode, targetNode) // Magnetic mid-side snap
+      const nextEdge: Edge = {
+        ...oldEdge,
+        source: newConnection.source,
+        target: newConnection.target,
+        // Remap indicator ids → edge anchors so threads stay glued to the frame
+        sourceHandle:
+          normalizeHandleId(newConnection.sourceHandle) ||
+          handles?.sourceHandle ||
+          newConnection.sourceHandle,
+        targetHandle:
+          normalizeHandleId(newConnection.targetHandle) ||
+          handles?.targetHandle ||
+          newConnection.targetHandle,
+        type: 'editable',
+        data: {
+          ...((oldEdge.data as ThreadEdgeData | undefined) || {}),
+          algorithm:
+            (oldEdge.data as ThreadEdgeData | undefined)?.algorithm ?? DEFAULT_THREAD_ALGORITHM,
+          points: [], // Reset bends after reattach
+        } satisfies ThreadEdgeData,
+      }
+
+      setEdges((eds) => eds.map((e) => (e.id === oldEdge.id ? nextEdge : e)))
+
+      if (!conversationId) return
+      try {
+        const supabase = createClient()
+        const oldSource = nodes.find((n) => n.id === oldEdge.source)?.data?.promptMessage?.id
+        const oldTarget = nodes.find((n) => n.id === oldEdge.target)?.data?.promptMessage?.id
+        if (!oldSource || !oldTarget) return
+
+        const { error } = await supabase
+          .from('panel_edges')
+          .update({
+            source_message_id: sourceNode.data.promptMessage.id,
+            target_message_id: targetNode.data.promptMessage.id,
+            metadata: nextEdge.data ?? {},
+          })
+          .eq('conversation_id', conversationId)
+          .eq('source_message_id', oldSource)
+          .eq('target_message_id', oldTarget)
+
+        if (error && String(error.message || '').includes('metadata')) {
+          await supabase
+            .from('panel_edges')
+            .update({
+              source_message_id: sourceNode.data.promptMessage.id,
+              target_message_id: targetNode.data.promptMessage.id,
+            })
+            .eq('conversation_id', conversationId)
+            .eq('source_message_id', oldSource)
+            .eq('target_message_id', oldTarget)
+        } else if (error) {
+          console.error('Error updating thread reconnect:', error)
+        }
+      } catch (err) {
+        console.error('Error updating thread reconnect:', err)
+      }
+    },
+    [conversationId, findClosestHandles, isLocked, nodes, setEdges, takeSnapshot]
+  )
 
   // Update edge popup position when edge, nodes, or viewport changes
   // Position follows the click position on the edge as viewport changes
@@ -6609,8 +6726,11 @@ function BoardFlowInner({
         edgeTypes={memoizedEdgeTypes}
         connectionMode={ConnectionMode.Loose}
         connectionLineType={ConnectionLineType.SmoothStep}
-        connectionLineComponent={PointerConnectionLine} // Thread end tracks the cursor
-        connectionRadius={20}
+        connectionLineComponent={ThreadConnectionLine} // Thread free end tracks the cursor
+        connectionRadius={36} // Larger snap radius for Miro-like proximity targets
+        edgesUpdatable={!isLocked} // Drag either end to detach / reconnect
+        edgeUpdaterRadius={16} // Hit area for grabbing a thread endpoint
+        onEdgeUpdate={handleThreadReconnect}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
         onConnect={async (params) => {
@@ -6648,21 +6768,34 @@ function BoardFlowInner({
             // Take snapshot before creating edge for undo support
             takeSnapshot()
             
-            // Find closest handles - all handles are equal, use closest pair
+            // Prefer the side the user dragged from (indicator → edge id); else closest pair
             const handles = findClosestHandles(sourceNode, targetNode)
-            if (!handles) {
+            if (!handles && !params.sourceHandle) {
               console.warn('🔄 BoardFlow: Could not find closest handles for edge creation')
               return
             }
             
-            // Use closest handles instead of manually selected handles - all handles are equal
             const newEdge: Edge = {
               id: `${params.source}-${params.target}`,
               source: params.source,
               target: params.target,
-              sourceHandle: handles.sourceHandle, // Use closest handle
-              targetHandle: handles.targetHandle, // Use closest handle
-              type: lineStyle === 'dotted' ? 'animatedDotted' : 'smoothstep', // Use animated dotted edge if selected, otherwise smoothstep
+              // Always store edge-anchor ids (never *-indicator) so geometry stays on the frame
+              sourceHandle:
+                normalizeHandleId(params.sourceHandle) ||
+                normalizeHandleId(handles?.sourceHandle) ||
+                handles?.sourceHandle ||
+                null,
+              targetHandle:
+                normalizeHandleId(params.targetHandle) ||
+                normalizeHandleId(handles?.targetHandle) ||
+                handles?.targetHandle ||
+                null,
+              type: 'editable', // Miro-style adjustable thread
+              data: {
+                algorithm: DEFAULT_THREAD_ALGORITHM,
+                points: [],
+                dotted: lineStyle === 'dotted',
+              } satisfies ThreadEdgeData,
             }
 
             // Add to React Flow state immediately (optimistic update)
@@ -6753,36 +6886,51 @@ function BoardFlowInner({
                     user_id: user.id,
                     source_message_id: sourceMessageId,
                     target_message_id: targetMessageId,
+                    metadata: newEdge.data ?? {},
                   })
 
                 if (error) {
-                  console.error('Error saving edge to database:', error)
-                  // Log full error details for debugging
-                  try {
-                    const errorDetails = {
-                      message: error?.message || 'Unknown error',
-                      code: error?.code || 'Unknown code',
-                      details: error?.details || null,
-                      hint: error?.hint || null,
-                      name: error?.name || null,
-                      fullError: error ? JSON.stringify(error, Object.getOwnPropertyNames(error)) : 'Error object is null or undefined'
+                  // Retry without metadata if column not migrated yet
+                  if (String(error.message || '').includes('metadata')) {
+                    const retry = await supabase.from('panel_edges').insert({
+                      conversation_id: currentConversationId,
+                      user_id: user.id,
+                      source_message_id: sourceMessageId,
+                      target_message_id: targetMessageId,
+                    })
+                    if (retry.error) {
+                      console.error('Error saving edge to database:', retry.error)
+                      setEdges((eds) => eds.filter((e) => e.id !== newEdge.id))
+                      return
                     }
-                    console.error('Error details:', errorDetails)
-                  } catch (stringifyError) {
-                    console.error('Error stringifying error object:', stringifyError)
-                    console.error('Raw error:', error)
-                  }
-                  // Check if it's a duplicate edge error (unique constraint violation)
-                  if (error.code === '23505') {
-                    console.log('Edge already exists in database (duplicate), keeping in React Flow')
-                    // Don't remove from React Flow - edge already exists
+                    console.log('✅ Saved edge to database (without metadata column)')
+                    refetchEdges()
                   } else {
-                    // Remove edge from React Flow state if database save failed
-                    setEdges((eds) => eds.filter(e => e.id !== newEdge.id))
+                    console.error('Error saving edge to database:', error)
+                    try {
+                      const errorDetails = {
+                        message: error?.message || 'Unknown error',
+                        code: error?.code || 'Unknown code',
+                        details: error?.details || null,
+                        hint: error?.hint || null,
+                        name: error?.name || null,
+                        fullError: error
+                          ? JSON.stringify(error, Object.getOwnPropertyNames(error))
+                          : 'Error object is null or undefined',
+                      }
+                      console.error('Error details:', errorDetails)
+                    } catch (stringifyError) {
+                      console.error('Error stringifying error object:', stringifyError)
+                      console.error('Raw error:', error)
+                    }
+                    if (error.code === '23505') {
+                      console.log('Edge already exists in database (duplicate), keeping in React Flow')
+                    } else {
+                      setEdges((eds) => eds.filter((e) => e.id !== newEdge.id))
+                    }
                   }
                 } else {
                   console.log('✅ Saved edge to database')
-                  // Refetch edges to ensure consistency
                   refetchEdges()
                 }
               } else {
@@ -6866,7 +7014,10 @@ function BoardFlowInner({
         // Embedded previews: no continuous fitView (fights pan/zoom); host keeps canvas fitView
         fitView={!embedded && viewMode === 'canvas'}
         fitViewOptions={{ padding: 0.2, minZoom: 0.3, maxZoom: 2 }}
-        className="h-full w-full bg-gray-50 dark:bg-[#0f0f0f]"
+        className={cn(
+          'h-full w-full bg-gray-50 dark:bg-[#0f0f0f]',
+          isThreadConnecting && 'tt-thread-connecting' // Invisible edge points stay snappable while dragging a thread
+        )}
         onInit={(instance) => {
           const currentViewport = instance.getViewport()
           if (!isFinite(currentViewport.x) || !isFinite(currentViewport.y) || !isFinite(currentViewport.zoom)) {
@@ -7571,9 +7722,15 @@ function BoardFlowInner({
                 handleToggleEdgeStyle()
               }}
               className="justify-start text-sm"
-              title={clickedEdge.type === 'animatedDotted' ? 'Make solid' : 'Make dotted'}
+              title={
+                ((clickedEdge.data as ThreadEdgeData | undefined)?.dotted ||
+                  clickedEdge.type === 'animatedDotted')
+                  ? 'Make solid'
+                  : 'Make dotted'
+              }
             >
-              {clickedEdge.type === 'animatedDotted' ? (
+              {((clickedEdge.data as ThreadEdgeData | undefined)?.dotted ||
+                clickedEdge.type === 'animatedDotted') ? (
                 <div className="w-[2px] h-4 bg-gray-600 mr-2" />
               ) : (
                 <div className="flex flex-col gap-0.5 h-4 items-center mr-2">
@@ -7582,7 +7739,10 @@ function BoardFlowInner({
                   <div className="w-0.5 h-1 bg-gray-600" />
                 </div>
               )}
-              {clickedEdge.type === 'animatedDotted' ? 'Solid' : 'Dotted'}
+              {((clickedEdge.data as ThreadEdgeData | undefined)?.dotted ||
+                clickedEdge.type === 'animatedDotted')
+                ? 'Solid'
+                : 'Dotted'}
             </Button>
             <Button
               variant="ghost"

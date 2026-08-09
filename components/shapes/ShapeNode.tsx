@@ -13,6 +13,7 @@ import {
 import { useTheme } from '@/components/theme-provider';
 import Shape from './Shape';
 import { type ShapeNodeData } from './types';
+import { useIsThreadConnecting } from '@/components/threads'; // Reveal anchors while a thread end is dragged
 
 const handlePositions = [
   Position.Top,
@@ -128,9 +129,9 @@ export function ShapeNode({
   const strokeColor = borderColor || color || fillColor || '#3F8AE2';
   const strokeWidth = borderWeight || 2;
 
-  // Calculate handle border color - similar to panel handles
-  // Default border color based on theme (same as panel handles)
-  const handleBorderColor = borderColor || (resolvedTheme === 'dark' ? '#2f2f2f' : '#e5e7eb');
+  // Connection points: blue fill + white border (same as frame handles)
+  const handleBorderColor = '#ffffff'
+  const isThreadConnecting = useIsThreadConnecting() // Miro: show snap targets; hide resize chrome
 
   return (
     <div ref={nodeRef} className="w-full h-full relative">
@@ -138,7 +139,7 @@ export function ShapeNode({
       {/* Hold Shift to lock aspect ratio while resizing */}
       <NodeResizer
         keepAspectRatio={shiftKeyPressed}
-        isVisible={selected}
+        isVisible={selected && !isThreadConnecting}
         handleStyle={{
           width: '12px',
           height: '12px',
@@ -188,7 +189,9 @@ export function ShapeNode({
           style={{ 
             width: '10px',
             height: '10px',
-            backgroundColor: shapeColor,
+            backgroundColor: isThreadConnecting ? '#ffffff' : '#3b82f6', // Hollow while snapping
+            border: '1.5px solid #3b82f6',
+            opacity: selected || isThreadConnecting ? 1 : 0, // Show on select or while a thread is dragged
             '--handle-border-color': handleBorderColor,
           } as React.CSSProperties}
           type="source"

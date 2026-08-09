@@ -2,14 +2,21 @@
 
 // Custom React Flow node for chat panels (prompt + response)
 import { NodeProps, Handle, Position, useReactFlow, useStoreApi, NodeResizeControl } from 'reactflow' // RF node primitives + store (unselect groups before dragItems)
+import {
+  useIsThreadConnecting,
+  INDICATOR_OUTSET,
+  ConnectionIndicator,
+} from '@/components/threads' // Miro: DOM indicators arm edge connection points
+
+
 import { cn, generateUUID } from '@/lib/utils'
 import { useEditor, EditorContent } from '@tiptap/react'
 import { DOMParser as PMDOMParser } from '@tiptap/pm/model' // Parse stored HTML → PM doc for exact (non-string) sync compare
 import { createPanelExtensions } from '@/lib/tiptap/extensions' // StarterKit + Turn into nodes
 import { TipTapBlockHandles } from '@/components/tiptap-block-handles' // Per-content-block ⋮⋮ (Notion)
 import type { PageInTarget } from '@/components/block-actions-menu'
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, Lock, Unlock, ChevronDown, ChevronUp } from 'lucide-react' // Rotate + frame lock / overflow expand·collapse
+import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
+import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, Lock, Unlock, ChevronDown, ChevronUp, WrapText } from 'lucide-react' // Rotate + frame lock / wrap / overflow expand·collapse
 
 // Helper to check if content is effectively empty (handling HTML tags)
 const isContentEmpty = (content: string | undefined | null) => {
@@ -38,29 +45,6 @@ function scaledFrameSize(
   }
 }
 
-// Helper to blend a foreground hex color with a background hex color using opacity
-const blendHexColors = (fgHex: string, bgHex: string, opacity: number): string => {
-  // Simple hex parsing (assumes 6-digit hex)
-  const parse = (hex: string) => {
-    const clean = hex.replace('#', '')
-    return {
-      r: parseInt(clean.substring(0, 2), 16),
-      g: parseInt(clean.substring(2, 4), 16),
-      b: parseInt(clean.substring(4, 6), 16)
-    }
-  }
-
-  const fg = parse(fgHex)
-  const bg = parse(bgHex)
-
-  const blend = (c1: number, c2: number) => Math.round(c1 * opacity + c2 * (1 - opacity))
-
-  const r = blend(fg.r, bg.r).toString(16).padStart(2, '0')
-  const g = blend(fg.g, bg.g).toString(16).padStart(2, '0')
-  const b = blend(fg.b, bg.b).toString(16).padStart(2, '0')
-
-  return `#${r}${g}${b}`
-}
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -311,7 +295,8 @@ function TipTapContent({
           return false
         },
         paste: (view, event) => {
-          // Handle paste to insert text on same line with wrapping, not new lines
+          // Single-line frames: paste as one visual line (Enter still creates blocks)
+          if (view.dom.getAttribute('data-single-line') !== 'true') return false // Wrap mode keeps normal multi-line paste
           const clipboardData = (event as ClipboardEvent).clipboardData
           if (clipboardData) {
             // Get plain text from clipboard
@@ -1324,6 +1309,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const [isUserResized, setIsUserResized] = useState(false) // True only after corner-drag or saved resizeDimensions — not auto line-grow
   const [fontScale, setFontScale] = useState(1) // Legacy editor font-size scale (blocks use frameScale instead)
   const [frameUnlocked, setFrameUnlocked] = useState(false) // Unlocked: free resize; locked: content scales with frame
+  const [frameTextWrap, setFrameTextWrap] = useState(false) // Unlocked only: wrap lines in the frame box instead of clipping
   const [frameScale, setFrameScale] = useState(1) // Uniform content scale while frame is locked
   const [intrinsicSize, setIntrinsicSize] = useState({ width: 160, height: 48 }) // Unscaled content box (max-content)
   const [intrinsicMeasured, setIntrinsicMeasured] = useState(false) // True after first contentFit measure (avoid hug flash)
@@ -1395,49 +1381,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     return 'transparent' // Fully transparent when no fill color is set
   }, [data.fillColor, resolvedTheme, hexToRgba])
 
-  // Calculate handle dot color to match panel fill color
-  // Calculate handle dot color to match panel fill color
-  const handleColor = useMemo(() => {
-    // Determine foreground color and opacity (same logic as responseAreaBackgroundColor)
-    let fgColor, opacity, bgColor
-
-    if (data.fillColor) {
-      fgColor = data.fillColor
-      opacity = resolvedTheme === 'dark' ? 0.35 : 0.35 // Adjusted opacity for balanced visibility (between 0.20 "too light" and 0.60 "too dark")
-    } else {
-      fgColor = resolvedTheme === 'dark' ? '#171717' : '#ffffff'
-      opacity = resolvedTheme === 'dark' ? 0.35 : 0.35
-    }
-
-    // Map background color (from globals.css)
-    // dark: #0f0f0f, light: #ffffff
-    bgColor = resolvedTheme === 'dark' ? '#0f0f0f' : '#ffffff'
-
-    // Return the solid blended color
-    return blendHexColors(fgColor, bgColor, opacity)
-  }, [data.fillColor, resolvedTheme])
-
-  // Calculate hover/active handle color - same as handleColor (matches panel background color)
-  // Uses same calculation as handleColor to match prompt panel background (with transparency blended to solid)
-  const handleHoverColor = useMemo(() => {
-    // Use the same color as default handleColor - matches panel background color calculation
-    // This ensures hover/click state uses the panel background color, not black
-    return handleColor
-  }, [handleColor])
-
-  // Calculate handle border color to match panel border
-  // Always use default theme border, ignore selection (dot should not turn blue) and custom colors
-  const handleBorderColor = useMemo(() => {
-    // If custom border color is set, use it
-    if (data.borderColor) {
-      return data.borderColor
-    }
-
-    // Default border color based on theme
-    // light: border-gray-200 (#e5e7eb)
-    // dark: border-[#2f2f2f] (#2f2f2f)
-    return resolvedTheme === 'dark' ? '#2f2f2f' : '#e5e7eb'
-  }, [data.borderColor, resolvedTheme])
+  // Connection points: blue fill + white border (matches selection chrome blue-500)
+  const handleColor = '#3b82f6'
+  const handleHoverColor = '#2563eb' // Slightly darker on hover/active
+  const handleBorderColor = '#ffffff'
 
   // Check if panel is minimal (transparent fill + no border)
   // When minimal and not selected, handles should be hidden
@@ -1574,6 +1521,9 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         // Frame lock: default locked; unlocked lets the box resize independently of content
         if (isBlockPanel && typeof metadata.frameUnlocked === 'boolean') {
           setFrameUnlocked(metadata.frameUnlocked)
+        }
+        if (isBlockPanel && typeof metadata.frameTextWrap === 'boolean') {
+          setFrameTextWrap(metadata.frameTextWrap) // Restore wrap-in-frame preference (unlocked chrome)
         }
         if (isBlockPanel && typeof metadata.frameScale === 'number' && metadata.frameScale > 0) {
           setFrameScale(metadata.frameScale) // Locked proportional scale
@@ -1826,25 +1776,32 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
      !responseMessage && 
      (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
 
-  // Offset **connection points** outside the resize rectangle so RF handleBounds match the visual dots
-  const noduleOut = isBlock && selected ? 14 : 0 // Match CSS offset outside the blue frame
-  const noduleHandleStyle = (side: 'left' | 'right' | 'top' | 'bottom'): React.CSSProperties => ({
-    width: '10px',
-    height: '10px',
-    backgroundColor: handleColor,
-    border: `1px solid ${handleBorderColor}`,
-    '--handle-color': handleColor,
-    '--handle-hover-color': handleHoverColor,
-    ...(noduleOut
-      ? side === 'left'
-        ? { left: -noduleOut, top: '50%', transform: 'translate(-50%, -50%)' }
-        : side === 'right'
-          ? { right: -noduleOut, top: '50%', transform: 'translate(50%, -50%)' }
-          : side === 'top'
-            ? { top: -noduleOut, left: '50%', transform: 'translate(-50%, -50%)' }
-            : { bottom: -noduleOut, left: '50%', transform: 'translate(-50%, 50%)' }
-      : {}),
+  // Miro split (locked):
+  // • Connection **point** = invisible RF Handle on the frame edge (geometry + snap)
+  // • Connection **indicator** = plain DOM dot outside — starts drag on the edge point (not an RF Handle)
+  const isThreadConnecting = useIsThreadConnecting() // Hide adjust chrome; reveal snap targets while dragging
+  const showAdjustFrame = Boolean(selected && isBlock && !isThreadConnecting) // Deselect visual during thread drag
+  const showIndicators = showAdjustFrame && !shouldHideHandles // Outer blue dots while adjust frame is up
+
+  // Invisible edge connection point — idle: no hit/cursor; while selected, source can be armed by indicator
+  const connectionPointStyle = (): React.CSSProperties => ({
+    width: '8px',
+    height: '8px',
+    opacity: 0,
+    backgroundColor: 'transparent',
+    border: 'none',
+    boxShadow: 'none',
+    cursor: 'default',
   }) as React.CSSProperties
+
+  // Outer indicator (DOM only) placement
+  const connectionIndicatorStyle = (side: 'left' | 'right' | 'top' | 'bottom'): React.CSSProperties => {
+    const out = INDICATOR_OUTSET
+    if (side === 'left') return { left: -out, top: '50%', transform: 'translate(-50%, -50%)' }
+    if (side === 'right') return { right: -out, top: '50%', transform: 'translate(50%, -50%)' }
+    if (side === 'top') return { top: -out, left: '50%', transform: 'translate(-50%, -50%)' }
+    return { bottom: -out, left: '50%', transform: 'translate(-50%, 50%)' }
+  }
   
   // Measured item box for edge-title perimeter math (items = former notes)
   const [itemBoxSize, setItemBoxSize] = useState({ width: 200, height: 120 })
@@ -1944,7 +1901,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [isBlock, promptContent, frameUnlocked])
+  }, [isBlock, promptContent, frameUnlocked, frameTextWrap, resizeDimensions?.width, frameScale])
   
   // Regular chat panels are those that are not flashcards and not notes
   const isRegularChatPanel = !isFlashcard && !isBlock
@@ -2028,6 +1985,9 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       const hugged = scaledFrameSize(intrinsicSize, finalScale, BLOCK_LOCKED_MIN_W) // Snap to scaled text
       width = hugged.width
       height = hugged.height
+    } else if (frameTextWrap) {
+      // Keep user width; hug height to wrapped content after the drag
+      height = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(intrinsicSize.height * Math.max(0.15, finalScale)) + 2)
     }
     if (width > 0 && height > 0) {
       setResizeDimensions({ width, height }) // Lock final box size into local state
@@ -2036,10 +1996,11 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     await persistFrameMeta({
       resizeDimensions: { width, height },
       frameUnlocked,
+      frameTextWrap: frameUnlocked ? frameTextWrap : false,
       frameScale: finalScale,
       fontScale,
     })
-  }, [resizeDimensions, frameUnlocked, fontScale, persistFrameMeta, intrinsicSize])
+  }, [resizeDimensions, frameUnlocked, frameTextWrap, fontScale, persistFrameMeta, intrinsicSize])
 
   // Corner-drag: locked → proportional content scale; unlocked → free frame (content stays)
   const handleResize = useCallback((_event: any, params: { width: number; height: number }) => {
@@ -2134,6 +2095,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         frameScale,
         resizeDimensions: nextDims,
         collapsedFrameSize,
+        frameTextWrap,
       })
       return
     }
@@ -2142,13 +2104,32 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     setResizeDimensions(nextDims)
     setIsUserResized(true)
     setCollapsedFrameSize(null) // Lock mode doesn’t use expand/collapse
+    setFrameTextWrap(false) // Wrap is unlocked-only chrome
     void persistFrameMeta({
       frameUnlocked: false,
       frameScale,
       resizeDimensions: nextDims,
       collapsedFrameSize: null,
+      frameTextWrap: false,
     })
-  }, [frameUnlocked, frameScale, resizeDimensions, intrinsicSize, collapsedFrameSize, persistFrameMeta])
+  }, [frameUnlocked, frameScale, resizeDimensions, intrinsicSize, collapsedFrameSize, frameTextWrap, persistFrameMeta])
+
+  // Unlocked: wrap lines inside the frame width (vs clip overflow)
+  const handleToggleFrameTextWrap = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    if (!frameUnlocked) return // Wrap only applies while unlocked
+    const next = !frameTextWrap
+    setFrameTextWrap(next)
+    if (next) setCollapsedFrameSize(null) // Wrap replaces expand/collapse overflow UX
+    void persistFrameMeta({
+      frameTextWrap: next,
+      frameUnlocked: true,
+      frameScale,
+      resizeDimensions,
+      collapsedFrameSize: next ? null : collapsedFrameSize,
+    })
+  }, [frameUnlocked, frameTextWrap, frameScale, resizeDimensions, collapsedFrameSize, persistFrameMeta])
 
   // Expand clipped frame to content, or collapse back to the pre-expand box
   const handleToggleOverflow = useCallback((e: React.MouseEvent) => {
@@ -2219,6 +2200,41 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     pagePreviewOpen,
     intrinsicMeasured,
     intrinsicSize,
+    frameScale,
+    persistFrameMeta,
+  ])
+
+  // Unlocked + wrap: hug height to wrapped text; width stays user-controlled
+  useEffect(() => {
+    if (!isBlock || !frameUnlocked || !frameTextWrap || !isUserResized || pagePreviewOpen) return
+    if (!intrinsicMeasured || isResizingRef.current || !resizeDimensions) return
+    const safeScale = Math.max(0.15, frameScale)
+    const nextH = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(intrinsicSize.height * safeScale) + 2)
+    if (Math.abs(resizeDimensions.height - nextH) < 2) return // Already hugging wrapped height
+    const nextDims = { width: resizeDimensions.width, height: nextH }
+    setResizeDimensions(nextDims)
+    if (persistFrameMetaTimerRef.current) clearTimeout(persistFrameMetaTimerRef.current)
+    persistFrameMetaTimerRef.current = setTimeout(() => {
+      void persistFrameMeta({
+        resizeDimensions: nextDims,
+        frameUnlocked: true,
+        frameTextWrap: true,
+        frameScale,
+        collapsedFrameSize: null,
+      })
+    }, 250) // Debounce while typing reflows wrap height
+    return () => {
+      if (persistFrameMetaTimerRef.current) clearTimeout(persistFrameMetaTimerRef.current)
+    }
+  }, [
+    isBlock,
+    frameUnlocked,
+    frameTextWrap,
+    isUserResized,
+    pagePreviewOpen,
+    intrinsicMeasured,
+    intrinsicSize.height,
+    resizeDimensions,
     frameScale,
     persistFrameMeta,
   ])
@@ -2776,12 +2792,24 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const usesFitContent = isBlockPanel // Legacy name: block auto-width (measured px, not CSS fit-content)
   const growsWithLine = usesFitContent && !isUserResized && !pagePreviewOpen // Line runs until Enter / corner resize
   const hasBlockContent = isBlock && !isBlockContentEmpty(promptContent) // Lock only when a content block exists
+  const wrapUnlocked =
+    isBlock && frameUnlocked && frameTextWrap && isUserResized && !!resizeDimensions && !pagePreviewOpen // Soft-wrap in the fixed box
   const clipUnlocked =
-    isBlock && frameUnlocked && isUserResized && !!resizeDimensions && !pagePreviewOpen // Free frame may hide overflow
+    isBlock &&
+    frameUnlocked &&
+    !frameTextWrap &&
+    isUserResized &&
+    !!resizeDimensions &&
+    !pagePreviewOpen // Free frame may hide overflow when not wrapping
   const huggedSize = scaledFrameSize(intrinsicSize, frameScale, BLOCK_MIN_FRAME_W) // Scaled text + border
   const applyFrameScale = isBlock && isUserResized && frameScale !== 1 // Layout spacer + CSS scale
   const scaledLayoutW = Math.ceil(intrinsicSize.width * Math.max(0.15, frameScale)) // Visual content width (no border)
   const scaledLayoutH = Math.ceil(intrinsicSize.height * Math.max(0.15, frameScale)) // Visual content height (no border)
+  // Unscaled content width when wrapping = frame inner width ÷ scale (padding lives inside contentFit)
+  const wrapContentWidth =
+    wrapUnlocked && resizeDimensions
+      ? Math.max(1, Math.floor((resizeDimensions.width - 2) / Math.max(0.15, frameScale)))
+      : null
   const contentOverflows =
     clipUnlocked &&
     (resizeDimensions!.width + 2 < huggedSize.width ||
@@ -2936,10 +2964,11 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     }
   })
 
-  // Horizontal chrome around TipTap text: padding + border + optional ⋮⋮ gutter
+  // Horizontal chrome around TipTap text: padding + border + optional +/⋮⋮ gutter
   const blockWidthChrome = useCallback(() => {
-    // px-3 (24) + border (2) + buffer (10) + p-1 (8) + pl-6 gutter when block handles on
-    return 24 + 2 + 10 + 8 + (usesFitContent ? 24 : 0)
+    // Blocks: pl-0.5 (2) + pr-4 (16) + border (2) + buffer (10) + pl-10 gutter (40)
+    // Non-blocks: px-3 (24) + border (2) + buffer (10) + p-1 (8)
+    return usesFitContent ? 2 + 16 + 2 + 10 + 40 : 24 + 2 + 10 + 8
   }, [usesFitContent])
 
   // Measure longest TipTap line as nowrap (Enter = new block, not wrap)
@@ -3473,7 +3502,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         ref={panelRef}
         data-panel-container="true" // Data attribute to help find panel container for comment popup
         data-block-node={isBlock ? 'true' : undefined} // Marks blocks for selected connection-dot styling
-        data-block-resized={undefined} // Blocks stay nowrap; unlocked clip hides overflow instead of wrapping
+        data-block-resized={wrapUnlocked ? 'wrap' : undefined} // Unlocked wrap: soft-wrap in fixed width; else nowrap / clip
         className={cn(
           'group rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible transition-[opacity,box-shadow,background-color,border-color] duration-300', // Chrome sits outside; clip only inner body
           !isFillTransparent && 'backdrop-blur-sm', // Frost only when a fill is set — blur alone looks like a tinted plate
@@ -3576,8 +3605,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         }
       }}
     >
-      {/* Selected blocks: connected blue rectangle + circular corner handles */}
-      {selected && isBlock && (
+      {/* Selected blocks: connected blue rectangle + circular corner handles (hidden while dragging a thread) */}
+      {showAdjustFrame && (
         <>
           {(['top', 'right', 'bottom', 'left'] as const).map((position) => (
             <NodeResizeControl
@@ -3610,8 +3639,21 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         </>
       )}
 
-      {/* Frame chrome — rotate · lock (if content) · overflow expand/collapse; hover / clipped / selected */}
-      {isBlock && !pagePreviewOpen && (selected || isFrameHovering || contentOverflows || frameExpanded) && (
+      {/* Connection indicators — DOM only (not RF Handles); arm the edge connection point */}
+      {showIndicators && (
+        <>
+          {(['left', 'right', 'top', 'bottom'] as const).map((side) => (
+            <ConnectionIndicator
+              key={`indicator-${side}`}
+              side={side}
+              style={connectionIndicatorStyle(side)}
+            />
+          ))}
+        </>
+      )}
+
+      {/* Frame chrome — rotate · wrap (unlocked) · lock (if content) · overflow expand/collapse */}
+      {isBlock && !pagePreviewOpen && !isThreadConnecting && (selected || isFrameHovering || contentOverflows || frameExpanded) && (
         <div
           data-frame-chrome
           className="nodrag nopan absolute z-50 flex items-center gap-0.5"
@@ -3638,6 +3680,21 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           >
             <RotateCw className="h-4 w-4 pointer-events-none" />
           </button>
+          {hasBlockContent && frameUnlocked && (
+            <button
+              type="button"
+              className={cn(
+                'flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800',
+                frameTextWrap && 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-50' // Active wrap state
+              )}
+              title={frameTextWrap ? 'Unwrap text (clip overflow)' : 'Wrap text in frame'}
+              aria-label={frameTextWrap ? 'Unwrap text' : 'Wrap text'}
+              aria-pressed={frameTextWrap}
+              onClick={handleToggleFrameTextWrap}
+            >
+              <WrapText className="h-4 w-4 pointer-events-none" />
+            </button>
+          )}
           {hasBlockContent && (
             <button
               type="button"
@@ -3749,102 +3806,41 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         </div>
       ) : !shouldHideHandles ? (
         <>
-          {/* Left handle - target (can receive connections) */}
-          <Handle
-            type="target"
-            position={Position.Left}
-            id="left"
-            isConnectable={true}
-            className={cn(
-              'handle-dot',
-              selected ? 'handle-dot-selected' : 'handle-dot-default'
-            )}
-            style={noduleHandleStyle('left')}
-          />
-          {/* Left handle - source (can send connections) */}
-          <Handle
-            type="source"
-            position={Position.Left}
-            id="left"
-            isConnectable={true}
-            className={cn(
-              'handle-dot',
-              selected ? 'handle-dot-selected' : 'handle-dot-default'
-            )}
-            style={noduleHandleStyle('left')}
-          />
-          {/* Top handle - target (can receive connections) */}
-          <Handle
-            type="target"
-            position={Position.Top}
-            id="top"
-            isConnectable={true}
-            className={cn(
-              'handle-dot',
-              selected ? 'handle-dot-selected' : 'handle-dot-default'
-            )}
-            style={noduleHandleStyle('top')}
-          />
-          {/* Top handle - source (can send connections) */}
-          <Handle
-            type="source"
-            position={Position.Top}
-            id="top"
-            isConnectable={true}
-            className={cn(
-              'handle-dot',
-              selected ? 'handle-dot-selected' : 'handle-dot-default'
-            )}
-            style={noduleHandleStyle('top')}
-          />
-          {/* Bottom handle - target (can receive connections) */}
-          <Handle
-            type="target"
-            position={Position.Bottom}
-            id="bottom"
-            isConnectable={true}
-            className={cn(
-              'handle-dot',
-              selected ? 'handle-dot-selected' : 'handle-dot-default'
-            )}
-            style={noduleHandleStyle('bottom')}
-          />
-          {/* Bottom handle - source (can send connections) */}
-          <Handle
-            type="source"
-            position={Position.Bottom}
-            id="bottom"
-            isConnectable={true}
-            className={cn(
-              'handle-dot',
-              selected ? 'handle-dot-selected' : 'handle-dot-default'
-            )}
-            style={noduleHandleStyle('bottom')}
-          />
-          {/* Right handle - target (can receive connections) */}
-          <Handle
-            type="target"
-            position={Position.Right}
-            id="right"
-            isConnectable={true}
-            className={cn(
-              'handle-dot',
-              selected ? 'handle-dot-selected' : 'handle-dot-default'
-            )}
-            style={noduleHandleStyle('right')}
-          />
-          {/* Right handle - source (can send connections) */}
-          <Handle
-            type="source"
-            position={Position.Right}
-            id="right"
-            isConnectable={true}
-            className={cn(
-              'handle-dot',
-              selected ? 'handle-dot-selected' : 'handle-dot-default'
-            )}
-            style={noduleHandleStyle('right')}
-          />
+          {/* Connection points — invisible edge anchors only (never start a drag) */}
+          {(['left', 'right', 'top', 'bottom'] as const).map((side) => {
+            const position =
+              side === 'left'
+                ? Position.Left
+                : side === 'right'
+                  ? Position.Right
+                  : side === 'top'
+                    ? Position.Top
+                    : Position.Bottom
+            return (
+              <Fragment key={`cp-${side}`}>
+                <Handle
+                  type="target"
+                  position={position}
+                  id={side}
+                  isConnectable
+                  isConnectableStart={false}
+                  isConnectableEnd
+                  className="handle-dot tt-connection-point"
+                  style={connectionPointStyle()}
+                />
+                <Handle
+                  type="source"
+                  position={position}
+                  id={side}
+                  isConnectable
+                  isConnectableStart={false} // Drag starts from ConnectionIndicator (DOM), not this Handle
+                  isConnectableEnd
+                  className="handle-dot tt-connection-point"
+                  style={connectionPointStyle()}
+                />
+              </Fragment>
+            )
+          })}
         </>
       ) : null}
 
@@ -3951,15 +3947,28 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           <div
             style={
               applyFrameScale
-                ? { width: scaledLayoutW, height: scaledLayoutH, overflow: clipUnlocked ? 'hidden' : 'visible' } // CSS scale doesn’t affect layout — spacer holds visual size
+                ? {
+                    width: wrapUnlocked && resizeDimensions
+                      ? Math.max(1, resizeDimensions.width - 2) // Visual width matches frame inner box
+                      : scaledLayoutW,
+                    height: wrapUnlocked && resizeDimensions
+                      ? Math.max(1, resizeDimensions.height - 2)
+                      : scaledLayoutH,
+                    overflow: clipUnlocked ? 'hidden' : 'visible',
+                  } // CSS scale doesn’t affect layout — spacer holds visual size
                 : undefined
             }
           >
           <div
             ref={contentFitRef} // Unscaled content box (offsetWidth ignores CSS scale)
-            className={cn('w-max', isBlock ? 'p-4' : 'px-3 py-3')} // Blocks: former p-1 + px-3/py-3, inside scale
+            className={cn(
+              wrapContentWidth != null ? undefined : 'w-max', // Wrap: fixed width; else hug longest line
+              // Blocks: keep top/right/bottom pad; left matches ⋮⋮→text gap (~2px) so + isn’t inset farther than the grip
+              isBlock ? 'pt-4 pr-4 pb-4 pl-0.5' : 'px-3 py-3'
+            )}
             style={{
               lineHeight: '1.7', // Stable typography — height-based line-height broke lock-to-text
+              ...(wrapContentWidth != null ? { width: wrapContentWidth, maxWidth: wrapContentWidth } : {}), // Soft-wrap inside frame
               ...(applyFrameScale
                 ? { transform: `scale(${frameScale})`, transformOrigin: 'top left' }
                 : {}),
@@ -4007,7 +4016,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               onBlur={handleEditorBlur}
               onEditorActiveChange={handleEditorActiveChange}
               enableBlockHandles={isBlock && !isFlashcard} // ⋮⋮ on each TipTap block, not this frame
-              singleLineUntilEnter={isBlock && !isFlashcard} // nowrap; unlocked clip hides overflow instead of wrapping
+              singleLineUntilEnter={isBlock && !isFlashcard && !wrapUnlocked} // nowrap until Enter; wrap mode soft-wraps
               hostNodeId={id}
               conversationId={conversationId}
               pageInTargets={(() => {
@@ -4144,25 +4153,9 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             <ChevronRight className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
           </div>
         </div>
-      ) : !shouldHideHandles ? (
-        <Handle
-          type="source"
-          position={Position.Right}
-          id="right"
-          className={cn(
-            'handle-dot',
-            selected ? 'handle-dot-selected' : 'handle-dot-default'
-          )}
-          style={{
-            width: '10px',
-            height: '10px',
-            backgroundColor: handleColor,
-            border: `1px solid ${handleBorderColor}`,
-            '--handle-color': handleColor,
-            '--handle-hover-color': handleHoverColor,
-          } as React.CSSProperties}
-        />
       ) : null}
+      {/* Non-flashcard right Handle removed — edge connection points cover all sides above */}
+
 
       {/* New comment box - appears to the right when creating a comment */}
       {newCommentData && (

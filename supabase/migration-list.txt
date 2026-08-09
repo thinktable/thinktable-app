@@ -1,10 +1,10 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-08T19:20:38Z
-# postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
+# snapped_at=2026-08-09T05:02:30Z
+# postgres=17.6.1.052 gotrue=v2.195.0 rest=v13.0.5 storage=v1.68.1
 # Note: supabase db dump --linked needs SUPABASE_DB_PASSWORD (cli_login_postgres alter denied);
-# snapshot via local migrations + .temp service versions. Access token OK for projects list.
+# snapshot via local migrations + .temp service versions. Access token OK for projects list / SQL API.
 #
 # Local migration files:
 20251203111351_schema_documentation.md
@@ -32,8 +32,9 @@
 20260808032600_official_definitions_page_frame_block.sql
 20260808043513_free_nav_zoom_minimap_chrome.sql
 20260808052455_map_fill_preview_zindex_notion_body_import.sql
+20260808160000_panel_edges_thread_metadata.sql
 20260808192038_page_links_title_ui_preview_menu.sql
 #
-# No new schema this save (frontend: pageLink block feature — link node/NodeView, title UI with
-# left icon + underline, icon-only preview menu that slides right of the title, click-to-edit,
-# multi-block select, snapshot-to-page; content-sync doc.eq() loop fix; stable RF keycodes).
+# Schema this save: panel_edges.metadata jsonb + UPDATE RLS for Miro-style thread path/reconnect.
+# Applied remotely via Management SQL API and registered as 20260808160000.
+# Frontend: ConnectionIndicator (DOM) arms invisible edge connection points; editable threads.

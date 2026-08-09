@@ -537,71 +537,78 @@ span[data-added="true"] {
   }
   
   /* Custom handle positioning - override React Flow defaults */
-  /* Left handle: center vertically (half on, half off) */
-  /* Target by ID, position attribute, and React Flow classes - exclude flashcard handles */
-  .react-flow__handle#left:not(.handle-dot-flashcard-large),
-  .react-flow__handle[id="left"]:not(.handle-dot-flashcard-large),
-  .react-flow__handle.handle-dot[data-handlepos="left"]:not(.handle-dot-flashcard-large),
-  .react-flow__handle.handle-dot.react-flow__handle-left:not(.handle-dot-flashcard-large),
-  .react-flow__handle[data-handlepos="left"].handle-dot:not(.handle-dot-flashcard-large),
-  .react-flow__handle.react-flow__handle-left.handle-dot:not(.handle-dot-flashcard-large),
-  /* Fallback for any left handle - exclude flashcard handles */
-  .react-flow__node .react-flow__handle[data-handlepos="left"]:not(.handle-dot-flashcard-large),
-  .react-flow__node .react-flow__handle.react-flow__handle-left:not(.handle-dot-flashcard-large) {
+  /* Edge connection points on the frame edge (skip while arming from outer indicator) */
+  .react-flow__handle#left:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__handle[id="left"]:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__handle.handle-dot[data-handlepos="left"]:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__handle.handle-dot.react-flow__handle-left:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__node .react-flow__handle[data-handlepos="left"]:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__node .react-flow__handle.react-flow__handle-left:not(.handle-dot-flashcard-large):not(.tt-arming-connection) {
     left: 0 !important;
     top: 50% !important;
     right: auto !important;
     transform: translate(-50%, -50%) !important;
   }
-  
-  /* Right handle: center vertically (half on, half off) */
-  /* Target by ID, position attribute, and React Flow classes - exclude flashcard handles */
-  .react-flow__handle#right:not(.handle-dot-flashcard-large),
-  .react-flow__handle[id="right"]:not(.handle-dot-flashcard-large),
-  .react-flow__handle.handle-dot[data-handlepos="right"]:not(.handle-dot-flashcard-large),
-  .react-flow__handle.handle-dot.react-flow__handle-right:not(.handle-dot-flashcard-large),
-  .react-flow__handle[data-handlepos="right"].handle-dot:not(.handle-dot-flashcard-large),
-  .react-flow__handle.react-flow__handle-right.handle-dot:not(.handle-dot-flashcard-large),
-  /* Fallback for any right handle - exclude flashcard handles */
-  .react-flow__node .react-flow__handle[data-handlepos="right"]:not(.handle-dot-flashcard-large),
-  .react-flow__node .react-flow__handle.react-flow__handle-right:not(.handle-dot-flashcard-large) {
+
+  .react-flow__handle#right:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__handle[id="right"]:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__handle.handle-dot[data-handlepos="right"]:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__handle.handle-dot.react-flow__handle-right:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__node .react-flow__handle[data-handlepos="right"]:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__node .react-flow__handle.react-flow__handle-right:not(.handle-dot-flashcard-large):not(.tt-arming-connection) {
     right: 0 !important;
     top: 50% !important;
     left: auto !important;
     transform: translate(50%, -50%) !important;
   }
-  
-  /* Top handle: center horizontally (half on, half off) */
-  /* Target by ID, position attribute, and React Flow classes - exclude flashcard handles */
-  .react-flow__handle#top:not(.handle-dot-flashcard-large),
-  .react-flow__handle[id="top"]:not(.handle-dot-flashcard-large),
-  .react-flow__handle.handle-dot[data-handlepos="top"]:not(.handle-dot-flashcard-large),
-  .react-flow__handle.handle-dot.react-flow__handle-top:not(.handle-dot-flashcard-large),
-  .react-flow__handle[data-handlepos="top"].handle-dot:not(.handle-dot-flashcard-large),
-  .react-flow__handle.react-flow__handle-top.handle-dot:not(.handle-dot-flashcard-large),
-  /* Fallback for any top handle - exclude flashcard handles */
-  .react-flow__node .react-flow__handle[data-handlepos="top"]:not(.handle-dot-flashcard-large),
-  .react-flow__node .react-flow__handle.react-flow__handle-top:not(.handle-dot-flashcard-large) {
+
+  .react-flow__handle#top:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__handle[id="top"]:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__handle.handle-dot[data-handlepos="top"]:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__handle.handle-dot.react-flow__handle-top:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__node .react-flow__handle[data-handlepos="top"]:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__node .react-flow__handle.react-flow__handle-top:not(.handle-dot-flashcard-large):not(.tt-arming-connection) {
     top: 0 !important;
     left: 50% !important;
     right: auto !important;
     transform: translate(-50%, -50%) !important;
   }
-  
-  /* Bottom handle: center horizontally (half on, half off) */
-  /* Target by ID, position attribute, and React Flow classes - exclude flashcard handles */
-  .react-flow__handle#bottom:not(.handle-dot-flashcard-large),
-  .react-flow__handle[id="bottom"]:not(.handle-dot-flashcard-large),
-  .react-flow__handle.handle-dot[data-handlepos="bottom"]:not(.handle-dot-flashcard-large),
-  .react-flow__handle.handle-dot.react-flow__handle-bottom:not(.handle-dot-flashcard-large),
-  .react-flow__handle[data-handlepos="bottom"].handle-dot:not(.handle-dot-flashcard-large),
-  .react-flow__handle.react-flow__handle-bottom.handle-dot:not(.handle-dot-flashcard-large),
-  /* Fallback for any bottom handle - exclude flashcard handles */
-  .react-flow__node .react-flow__handle[data-handlepos="bottom"]:not(.handle-dot-flashcard-large),
-  .react-flow__node .react-flow__handle.react-flow__handle-bottom:not(.handle-dot-flashcard-large) {
+
+  .react-flow__handle#bottom:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__handle[id="bottom"]:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__handle.handle-dot[data-handlepos="bottom"]:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__handle.handle-dot.react-flow__handle-bottom:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__node .react-flow__handle[data-handlepos="bottom"]:not(.handle-dot-flashcard-large):not(.tt-arming-connection),
+  .react-flow__node .react-flow__handle.react-flow__handle-bottom:not(.handle-dot-flashcard-large):not(.tt-arming-connection) {
     bottom: 0 !important;
     left: 50% !important;
     right: auto !important;
+    transform: translate(-50%, 50%) !important;
+  }
+
+  /* While arming from outer indicator: park edge Handle under the blue dot for elementFromPoint */
+  .react-flow__handle.tt-arming-connection.react-flow__handle-left {
+    left: -14px !important;
+    right: auto !important;
+    top: 50% !important;
+    transform: translate(-50%, -50%) !important;
+  }
+  .react-flow__handle.tt-arming-connection.react-flow__handle-right {
+    right: -14px !important;
+    left: auto !important;
+    top: 50% !important;
+    transform: translate(50%, -50%) !important;
+  }
+  .react-flow__handle.tt-arming-connection.react-flow__handle-top {
+    top: -14px !important;
+    left: 50% !important;
+    bottom: auto !important;
+    transform: translate(-50%, -50%) !important;
+  }
+  .react-flow__handle.tt-arming-connection.react-flow__handle-bottom {
+    bottom: -14px !important;
+    left: 50% !important;
+    top: auto !important;
     transform: translate(-50%, 50%) !important;
   }
   
@@ -692,10 +699,53 @@ span[data-added="true"] {
     width: 10px !important; /* Optimal size for visibility */
     height: 10px !important;
     border-radius: 50% !important;
+    background-color: #3b82f6; /* blue-500 fill */
+    border: 1px solid #ffffff; /* White ring */
     transition: background-color 0.2s ease;
     z-index: 20 !important; /* Ensure handles appear above prompt area (z-10) */
   }
-  
+
+  /*
+   * Connection **point** (`tt-connection-point`): RF Handle on the frame edge (geometry + snap).
+   * Always visually invisible so settled threads meet the frame itself — never a visible knob.
+   * While connecting: still hit-testable for proximity snap; look stays transparent.
+   * Connection **indicator**: plain DOM outside the frame — arms the edge point.
+   */
+  .react-flow__handle.handle-dot.tt-connection-point,
+  .react-flow__handle.handle-dot.tt-connection-point:hover,
+  .react-flow__handle.handle-dot.tt-connection-point:active,
+  .react-flow__handle.handle-dot.tt-connection-point.connectionindicator,
+  .react-flow__handle.handle-dot.tt-connection-point.connecting,
+  .react-flow__handle.handle-dot.tt-connection-point.valid,
+  .react-flow__handle.handle-dot.tt-connection-point.react-flow__handle-connecting,
+  .react-flow__handle.handle-dot.tt-connection-point.react-flow__handle-valid,
+  .react-flow.tt-thread-connecting .react-flow__handle.handle-dot.tt-connection-point,
+  .react-flow.tt-thread-connecting .react-flow__handle.handle-dot.tt-connection-point:hover,
+  .react-flow.tt-thread-connecting .react-flow__handle.handle-dot.tt-connection-point:active,
+  .react-flow.tt-thread-connecting .react-flow__handle.handle-dot.tt-connection-point.connectionindicator,
+  .react-flow.tt-thread-connecting .react-flow__handle.handle-dot.tt-connection-point.connecting,
+  .react-flow.tt-thread-connecting .react-flow__handle.handle-dot.tt-connection-point.valid {
+    width: 8px !important;
+    height: 8px !important;
+    min-width: 8px !important;
+    min-height: 8px !important;
+    opacity: 0 !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    cursor: default !important;
+  }
+  /* Idle: no hit target. Connecting: invisible but snappable. */
+  .react-flow__handle.handle-dot.tt-connection-point {
+    pointer-events: none !important;
+  }
+  .react-flow.tt-thread-connecting .react-flow__handle.handle-dot.tt-connection-point,
+  .react-flow.tt-thread-connecting .react-flow__handle.handle-dot.tt-connection-point.connectionindicator {
+    pointer-events: all !important;
+    cursor: crosshair !important;
+  }
+
   /* Override React Flow's default positioning for top/bottom handles to ensure half-on-half-off */
   /* This ensures handles are positioned at the edge, then transformed to be half outside */
   .react-flow__handle.handle-dot[id="top"],
@@ -715,14 +765,11 @@ span[data-added="true"] {
     transform: none !important;
   }
 
-  /* Default state - light grey (fallback only, inline styles take precedence) */
-  .react-flow__handle.handle-dot-default {
-    background-color: #e5e7eb; /* Light grey - fallback only */
-  }
-
-  /* Selected state - darker grey (fallback only, inline styles take precedence) */
+  /* Default/selected fallbacks — blue fill + white border (inline styles take precedence) */
+  .react-flow__handle.handle-dot-default,
   .react-flow__handle.handle-dot-selected {
-    background-color: #9ca3af; /* Darker grey when selected - fallback only */
+    background-color: #3b82f6; /* blue-500 */
+    border: 1px solid #ffffff;
   }
 
   /* Hover/active state - uses CSS variable for handle hover color (darker version of panel background) */
@@ -1051,44 +1098,37 @@ span[data-added="true"] {
   .react-flow__node-shape .react-flow__handle.handle-dot {
     width: 10px !important; /* Same as panel handles */
     height: 10px !important; /* Same as panel handles */
-    border: 1px solid var(--handle-border-color, #e5e7eb) !important; /* Border like panel handles */
+    border: 1px solid #ffffff !important; /* White border on blue connection points */
     border-radius: 50% !important;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1) !important;
   }
 
-  /* Selected items: solid dark mid-side connection dots (mockup) */
-  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot:not(.handle-dot-flashcard-large) {
-    background-color: #1f2937 !important; /* Near-black filled node */
-    border: none !important; /* No ring — solid dot */
-    width: 8px !important; /* Slightly tighter than default 10px */
-    height: 8px !important;
-  }
-
-  /* Sit fully outside the connected resize rectangle (beats global left/top: 0 !important) */
-  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot[data-handlepos="left"]:not(.handle-dot-flashcard-large),
-  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.react-flow__handle-left:not(.handle-dot-flashcard-large) {
-    left: -14px !important;
+  /* Frame connection points stay on the edge; selected state must NOT un-hide them (indicators are separate) */
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.tt-connection-point {
+    left: 0 !important;
+    right: auto !important;
+    top: 50% !important;
+    bottom: auto !important;
     transform: translate(-50%, -50%) !important;
   }
-  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot[data-handlepos="right"]:not(.handle-dot-flashcard-large),
-  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.react-flow__handle-right:not(.handle-dot-flashcard-large) {
-    right: -14px !important;
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.tt-connection-point[data-handlepos="right"],
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.tt-connection-point.react-flow__handle-right {
+    left: auto !important;
+    right: 0 !important;
     transform: translate(50%, -50%) !important;
   }
-  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot[data-handlepos="top"]:not(.handle-dot-flashcard-large),
-  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.react-flow__handle-top:not(.handle-dot-flashcard-large) {
-    top: -14px !important;
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.tt-connection-point[data-handlepos="top"],
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.tt-connection-point.react-flow__handle-top {
+    left: 50% !important;
+    top: 0 !important;
     transform: translate(-50%, -50%) !important;
   }
-  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot[data-handlepos="bottom"]:not(.handle-dot-flashcard-large),
-  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.react-flow__handle-bottom:not(.handle-dot-flashcard-large) {
-    bottom: -14px !important;
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.tt-connection-point[data-handlepos="bottom"],
+  .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot.tt-connection-point.react-flow__handle-bottom {
+    left: 50% !important;
+    top: auto !important;
+    bottom: 0 !important;
     transform: translate(-50%, 50%) !important;
-  }
-
-  /* Dark mode: invert connection-dot fill for contrast on dark boards */
-  .dark .react-flow__node-chatPanel.selected [data-block-node="true"] .react-flow__handle.handle-dot:not(.handle-dot-flashcard-large) {
-    background-color: #e5e7eb !important;
   }
 
   /* Connected selection rectangle — RF line controls meet the corner dots */

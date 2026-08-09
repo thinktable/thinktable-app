@@ -152,8 +152,8 @@ export function FreehandNode({
         style={{
           width: '10px',
           height: '10px',
-          backgroundColor: resolvedTheme === 'dark' ? '#9ca3af' : '#e5e7eb', // Match panel handle colors
-          border: `1px solid ${resolvedTheme === 'dark' ? '#2f2f2f' : '#e5e7eb'}`,
+          backgroundColor: '#3b82f6', // blue-500 fill
+          border: '1px solid #ffffff', // White ring
         } as React.CSSProperties}
       />
       {/* Bottom handle - can send connections downward */}
@@ -166,8 +166,8 @@ export function FreehandNode({
         style={{
           width: '10px',
           height: '10px',
-          backgroundColor: resolvedTheme === 'dark' ? '#9ca3af' : '#e5e7eb', // Match panel handle colors
-          border: `1px solid ${resolvedTheme === 'dark' ? '#2f2f2f' : '#e5e7eb'}`,
+          backgroundColor: '#3b82f6', // blue-500 fill
+          border: '1px solid #ffffff', // White ring
         } as React.CSSProperties}
       />
     </>
