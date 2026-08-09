@@ -1310,7 +1310,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const { setNodes, getNodes } = useReactFlow() // Get setNodes and getNodes for NodeToolbar actions
   const updateNodeInternals = useUpdateNodeInternals() // Remeasure auto-sized frames without setNodes (avoids RO→setNodes storms)
   const rfStoreApi = useStoreApi() // Unselect legacy wrapper before RF snapshots dragItems (frame-body drag)
-  const rfZoom = useStore((s) => s.transform[2] || 1) // Live board zoom — counter-scale chrome so it stays screen-constant
+  const rfZoom = useStore((s) => s.transform[2] || 1) // Live board zoom — re-render chrome on zoom (comfort scale)
   const [promptHasChanges, setPromptHasChanges] = useState(false)
   const [responseHasChanges, setResponseHasChanges] = useState(false)
   // Single text body: plain-merge legacy prompt + response (no section split).
@@ -1864,9 +1864,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     cursor: 'default',
   }) as React.CSSProperties
 
-  // Outer indicator (DOM only) placement
-  const connectionIndicatorStyle = (side: 'left' | 'right' | 'top' | 'bottom'): React.CSSProperties => {
-    const out = INDICATOR_OUTSET
+  // Outer indicator (DOM only) placement — outset scales with frame UI size
+  const connectionIndicatorStyle = (
+    side: 'left' | 'right' | 'top' | 'bottom',
+    uiScale = 1
+  ): React.CSSProperties => {
+    const out = INDICATOR_OUTSET * uiScale
     if (side === 'left') return { left: -out, top: '50%', transform: 'translate(-50%, -50%)' }
     if (side === 'right') return { right: -out, top: '50%', transform: 'translate(50%, -50%)' }
     if (side === 'top') return { top: -out, left: '50%', transform: 'translate(-50%, -50%)' }
@@ -3177,6 +3180,25 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const frameMinW = blockMinFrameWidth(promptContent) // Grip+icon+menu, or grip+3ch for plain text
   const growsWithLine = usesFitContent && !isUserResized && !pagePreviewOpen // Line runs until Enter / corner resize
   const hasBlockContent = isBlock && !isBlockContentEmpty(promptContent) // Lock only when a content block exists
+  // Shared size-with-frame scale for selection chrome: resize handles, blue lines, connection
+  // indicators, and rotate/lock/wrap. Small frames shrink; large grow ~linear (was √ + 2.25 cap — too timid).
+  const FRAME_UI_REF_W = 78 // Natural chrome row width — scale=1 near this / 0.7
+  const FRAME_UI_MAX_FIT = 4 // Allow large frames to get substantially bigger chrome
+  const frameUiHostW =
+    itemBoxSize.width || panelRef.current?.offsetWidth || resizeDimensions?.width || 200
+  const rawFrameUiFit = (frameUiHostW * 0.7) / FRAME_UI_REF_W
+  const frameUiScale =
+    rawFrameUiFit <= 1
+      ? Math.max(0.55, rawFrameUiFit) // Floor so tiny frames keep a grabable handle
+      : Math.min(FRAME_UI_MAX_FIT, Math.pow(rawFrameUiFit, 0.85)) // Near-linear growth on big frames
+  // Rotate/lock/wrap also eases vs board zoom (handles/lines ride the viewport already)
+  const frameChromeZoom = 1 / Math.max(1, Math.pow(rfZoom || 1, 0.35))
+  const frameChromeScale = frameChromeZoom * frameUiScale
+  const frameChromeGapY = INDICATOR_OUTSET * frameUiScale + 8 // Clear scaled bottom connection indicator
+  const frameIndicatorSize = 10 * frameUiScale // Matches h-2.5 at scale 1
+  const frameHandleSize = 10 * frameUiScale // Corner resize dots
+  const frameLineW = Math.max(1, 1.5 * frameUiScale) // Blue selection stroke
+  const frameLineHit = Math.max(4, 6 * frameUiScale) // Line hit target thickness
   const wrapActive =
     isBlock && frameTextWrap && isUserResized && !!resizeDimensions && !pagePreviewOpen // Soft-wrap in a fixed width (locked or unlocked)
   const wrapUnlocked = wrapActive && frameUnlocked // Unlocked wrap: fixed width + free/clip height
@@ -3940,13 +3962,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // - Even focused flashcard comments should blur
   const shouldBlurComments = flashcardMode !== null && !isZoomedOutInNavMode
 
-  // Corner resize dots match mockup: white fill, thin gray ring, circular
-  // Slightly larger than the visual ring so the hit target is easier to grab than the node body
+  // Corner resize dots — size tracks frameUiScale (small frame → smaller dots, big → larger)
   const itemCornerResizeStyle = {
-    width: 10, // Circle sits on the connected blue rectangle
-    height: 10,
+    width: frameHandleSize,
+    height: frameHandleSize,
     background: resolvedTheme === 'dark' ? '#1a1a1a' : '#ffffff', // Contrast against board
-    border: '1.5px solid #9ca3af', // Neutral ring (not selection blue)
+    border: `${Math.max(1, 1.5 * frameUiScale)}px solid #9ca3af`, // Ring scales with the dot
     borderRadius: '50%', // Circular corner handles
     boxSizing: 'border-box' as const, // Include border in box size
     zIndex: 60, // Above title chip / connection dots so drag hits resize, not node drag
@@ -4024,6 +4045,12 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             : (data.borderWeight || undefined),
         transform: rotation ? `rotate(${rotation}deg)` : undefined, // Apply persisted/live item rotation
         transformOrigin: 'center center', // Rotate around panel center (matches drag math)
+        // Selection chrome (blue lines + corner handles) reads these — scales with frame size
+        ['--tt-frame-ui-scale' as string]: frameUiScale,
+        ['--tt-frame-line-w' as string]: `${frameLineW}px`,
+        ['--tt-frame-line-hit' as string]: `${frameLineHit}px`,
+        ['--tt-frame-handle' as string]: `${frameHandleSize}px`,
+        ['--tt-frame-handle-border' as string]: `${Math.max(1, 1.5 * frameUiScale)}px`,
       }}
       onPointerDownCapture={() => {
         // RF snapshots dragItems before onNodeDragStart — a selected wrapper rides along with this frame.
@@ -4115,34 +4142,38 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             <ConnectionIndicator
               key={`indicator-${side}`}
               side={side}
-              style={connectionIndicatorStyle(side)}
+              className="nodrag nopan absolute z-[30] cursor-crosshair rounded-full border border-white bg-blue-500 shadow-sm hover:bg-blue-600"
+              style={{
+                ...connectionIndicatorStyle(side, frameUiScale), // Outset scales with frame
+                width: frameIndicatorSize, // Dot grows/shrinks with frame size
+                height: frameIndicatorSize,
+              }}
             />
           ))}
         </>
       )}
 
-      {/* Frame chrome — rotate · lock · wrap (only while selected) */}
+      {/* Frame chrome — rotate · lock · wrap (only while selected; screen-constant via frameChromeScale) */}
       {isBlock && !pagePreviewOpen && !isThreadConnecting && selected && (
-        <div
-          data-frame-chrome
-          className="nodrag nopan absolute z-50 flex items-center gap-0.5"
-          style={{
-            left: 0, // Pin to frame's left edge
-            top: '100%', // Sit just below the frame's bottom edge (top-anchored so scale grows downward)
-            marginLeft: `${-8 / rfZoom}px`, // Constant 8px SCREEN nudge left (÷zoom cancels the viewport transform)
-            marginTop: `${10 / rfZoom}px`, // Constant 10px SCREEN gap under the frame (was 4px — too tight zoomed in)
-            transform: `scale(${1 / rfZoom})`, // Counter board zoom → constant screen size (like the portaled handle menu)
-            transformOrigin: 'top left', // Anchor to the bottom-left corner while counter-scaling
-          }}
-          onMouseEnter={() => setIsFrameHovering(true)} // Keep hover while on chrome
-          onMouseLeave={(e) => {
-            const related = e.relatedTarget as HTMLElement | null
-            if (related?.closest?.('[data-panel-container="true"]') === panelRef.current) return
-            setIsFrameHovering(false)
-          }}
-          onMouseDown={(e) => e.stopPropagation()} // Don’t start node drag
-        >
-          {selected && (
+          <div
+            data-frame-chrome
+            className="nodrag nopan absolute z-[25] flex items-center gap-0.5" // Below connection indicators (z-30)
+            style={{
+              left: 0, // Pin to frame's left edge
+              top: '100%', // Sit just below the frame's bottom edge (top-anchored so scale grows downward)
+              marginLeft: `${-8 * frameChromeScale}px`, // Gap tracks chrome size vs board zoom
+              marginTop: `${frameChromeGapY * frameChromeScale}px`, // Sit below the bottom connection indicator
+              transform: `scale(${frameChromeScale})`, // Zoom comfort × shrink-to-fit on small frames
+              transformOrigin: 'top left', // Anchor to the bottom-left corner while counter-scaling
+            }}
+            onMouseEnter={() => setIsFrameHovering(true)} // Keep hover while on chrome
+            onMouseLeave={(e) => {
+              const related = e.relatedTarget as HTMLElement | null
+              if (related?.closest?.('[data-panel-container="true"]') === panelRef.current) return
+              setIsFrameHovering(false)
+            }}
+            onMouseDown={(e) => e.stopPropagation()} // Don't start node drag
+          >
             <button
               type="button"
               className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
@@ -4157,38 +4188,37 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
             >
               <RotateCw className="h-4 w-4 pointer-events-none" />
             </button>
-          )}
-          {selected && hasBlockContent && (
-            <button
-              type="button"
-              className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
-              title={frameUnlocked ? 'Lock frame to content' : 'Unlock frame (free resize)'}
-              aria-label={frameUnlocked ? 'Lock frame' : 'Unlock frame'}
-              onClick={handleToggleFrameLock}
-            >
-              {frameUnlocked ? (
-                <Unlock className="h-4 w-4 pointer-events-none" />
-              ) : (
-                <Lock className="h-4 w-4 pointer-events-none" />
-              )}
-            </button>
-          )}
-          {selected && hasBlockContent && (
-            <button
-              type="button"
-              className={cn(
-                'flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800',
-                frameTextWrap && 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-50' // Active wrap state
-              )}
-              title={frameTextWrap ? 'Unwrap text (clip overflow)' : 'Wrap text in frame'}
-              aria-label={frameTextWrap ? 'Unwrap text' : 'Wrap text'}
-              aria-pressed={frameTextWrap}
-              onClick={handleToggleFrameTextWrap}
-            >
-              <WrapText className="h-4 w-4 pointer-events-none" />
-            </button>
-          )}
-        </div>
+            {hasBlockContent && (
+              <button
+                type="button"
+                className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
+                title={frameUnlocked ? 'Lock frame to content' : 'Unlock frame (free resize)'}
+                aria-label={frameUnlocked ? 'Lock frame' : 'Unlock frame'}
+                onClick={handleToggleFrameLock}
+              >
+                {frameUnlocked ? (
+                  <Unlock className="h-4 w-4 pointer-events-none" />
+                ) : (
+                  <Lock className="h-4 w-4 pointer-events-none" />
+                )}
+              </button>
+            )}
+            {hasBlockContent && (
+              <button
+                type="button"
+                className={cn(
+                  'flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800',
+                  frameTextWrap && 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-50' // Active wrap state
+                )}
+                title={frameTextWrap ? 'Unwrap text (clip overflow)' : 'Wrap text in frame'}
+                aria-label={frameTextWrap ? 'Unwrap text' : 'Wrap text'}
+                aria-pressed={frameTextWrap}
+                onClick={handleToggleFrameTextWrap}
+              >
+                <WrapText className="h-4 w-4 pointer-events-none" />
+              </button>
+            )}
+          </div>
       )}
 
       {/* Page titles/links now render inline as pageLink blocks inside the editor (no edge chip). */}

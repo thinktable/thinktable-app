@@ -46,6 +46,9 @@
 20260809130553_frame_unlock_return_remove_caret.sql
 20260809132139_menu_placement_zoom_and_nav.sql
 20260809142717_screen_relative_frame_chrome_and_handles.sql
+20260809153815_pagelink_chrome_deselect_fix.sql
+20260809163216_frame_ui_scale_selection_chrome.sql
 #
-# No new schema this save (frontend: frame chrome + ⋮⋮ block handles sized relative to the screen —
-# counter-scaled against board zoom/frameScale; grips centered in the gutter and dropped onto the first line).
+# No new schema this save (frontend: selection chrome — resize handles, blue lines, connection
+# indicators, rotate/lock/wrap — scales with frame size via shared frameUiScale; pageLink frames
+# show lock/wrap).

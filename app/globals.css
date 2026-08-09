@@ -1139,7 +1139,8 @@ span[data-added="true"] {
     transform: translate(-50%, 50%) !important;
   }
 
-  /* Connected selection rectangle — RF line controls meet the corner dots */
+  /* Connected selection rectangle — RF line controls meet the corner dots.
+     Stroke/hit thickness come from --tt-frame-line-* on the panel (scales with frame size). */
   .react-flow__node-chatPanel .react-flow__resize-control.line,
   .react-flow__node-chatPanel .tt-frame-resize-line {
     border: none !important;
@@ -1148,23 +1149,23 @@ span[data-added="true"] {
   }
   .react-flow__node-chatPanel .react-flow__resize-control.line.top,
   .react-flow__node-chatPanel .tt-frame-resize-line.top {
-    border-top: 1.5px solid #3b82f6 !important; /* Continuous top edge */
-    height: 6px !important; /* Hit target; visual is the 1.5px border */
+    border-top: var(--tt-frame-line-w, 1.5px) solid #3b82f6 !important;
+    height: var(--tt-frame-line-hit, 6px) !important;
   }
   .react-flow__node-chatPanel .react-flow__resize-control.line.bottom,
   .react-flow__node-chatPanel .tt-frame-resize-line.bottom {
-    border-bottom: 1.5px solid #3b82f6 !important;
-    height: 6px !important;
+    border-bottom: var(--tt-frame-line-w, 1.5px) solid #3b82f6 !important;
+    height: var(--tt-frame-line-hit, 6px) !important;
   }
   .react-flow__node-chatPanel .react-flow__resize-control.line.left,
   .react-flow__node-chatPanel .tt-frame-resize-line.left {
-    border-left: 1.5px solid #3b82f6 !important;
-    width: 6px !important;
+    border-left: var(--tt-frame-line-w, 1.5px) solid #3b82f6 !important;
+    width: var(--tt-frame-line-hit, 6px) !important;
   }
   .react-flow__node-chatPanel .react-flow__resize-control.line.right,
   .react-flow__node-chatPanel .tt-frame-resize-line.right {
-    border-right: 1.5px solid #3b82f6 !important;
-    width: 6px !important;
+    border-right: var(--tt-frame-line-w, 1.5px) solid #3b82f6 !important;
+    width: var(--tt-frame-line-hit, 6px) !important;
   }
   .dark .react-flow__node-chatPanel .react-flow__resize-control.line.top,
   .dark .react-flow__node-chatPanel .tt-frame-resize-line.top,
@@ -1179,15 +1180,15 @@ span[data-added="true"] {
     border-color: #60a5fa !important;
   }
 
-  /* Item corner resize handles — circular white dots (override RF defaults) */
+  /* Item corner resize handles — circular dots; size from --tt-frame-handle on the panel */
   .react-flow__node-chatPanel .react-flow__resize-control.handle {
     border-radius: 50% !important; /* Circles, not RF squares */
-    width: 10px !important; /* Visual size matches mockup; hit still easy */
-    height: 10px !important;
-    min-width: 10px !important;
-    min-height: 10px !important;
+    width: var(--tt-frame-handle, 10px) !important;
+    height: var(--tt-frame-handle, 10px) !important;
+    min-width: var(--tt-frame-handle, 10px) !important;
+    min-height: var(--tt-frame-handle, 10px) !important;
     background-color: #ffffff !important;
-    border: 1.5px solid #9ca3af !important;
+    border: var(--tt-frame-handle-border, 1.5px) solid #9ca3af !important;
     box-sizing: border-box !important;
     pointer-events: all !important; /* Must receive drag (nodrag) before node drag */
     z-index: 60 !important;

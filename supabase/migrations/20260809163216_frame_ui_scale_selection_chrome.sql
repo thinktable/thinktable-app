@@ -1,0 +1,11 @@
+-- No DDL. Frontend-only save (selection chrome scales with frame size).
+-- Shared `frameUiScale` (chat-panel-node): shrink when frame < ref/0.7 wide (floor 0.55);
+--   grow widthRatio^0.85 up to 4× on large frames. Applied to:
+--   • corner resize handles + blue resize lines (`--tt-frame-line-w` / `--tt-frame-line-hit` /
+--     `--tt-frame-handle` CSS vars on the panel)
+--   • connection indicators (dot size + INDICATOR_OUTSET)
+--   • rotate · lock · wrap (same fit × soft board-zoom comfort `1/max(1, rfZoom^0.35)`;
+--     gap clears scaled bottom indicator; z below indicators)
+-- `isBlockContentEmpty`: pageLink / databaseBlock atoms count as content (title in attrs) so
+--   lock/wrap show on page frames.
+-- Persisted via existing tables — schema unchanged.
