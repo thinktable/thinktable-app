@@ -51,13 +51,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { ChevronDown, ArrowDown, ChevronUp, Trash2, Plus, GripVertical } from 'lucide-react'
+import { ChevronDown, ArrowDown, ChevronUp, Trash2, Plus, GripVertical, MousePointer2, Hand } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
@@ -460,6 +457,7 @@ function BoardFlowInner({
   // Initialize with consistent defaults to avoid hydration mismatch
   // Then update from localStorage in useEffect after hydration
   const [isScrollMode, setIsScrollMode] = useState(false) // false = Zoom, true = Scroll
+  const [mapPointerTool, setMapPointerTool] = useState<'select' | 'pan'>('select') // Drag-select default; pan via nav toggle
   const [viewMode, setViewModeState] = useState<'linear' | 'canvas'>('canvas')
   
   // Linear mode navigation state
@@ -1277,7 +1275,7 @@ function BoardFlowInner({
     if (boardStyle === 'grid') return BackgroundVariant.Lines // Grid pattern (both horizontal and vertical lines)
     return null // Default to none
   }, [boardStyle])
-  const { setIsMobileMode, isChatSidebarOpen, toggleChatSidebar, topperId } = useSidebarContext()
+  const { setIsMobileMode, isChatSidebarOpen, toggleChatSidebar, logoDrawing } = useSidebarContext()
   useChatSidebarViewportAdjust(reactFlowInstance, isChatSidebarOpen) // Shrink/grow map zoom with chat column
   const originalPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map()) // Store original positions for Linear mode
   const isLinearModeRef = useRef(false) // Track if we're currently in Linear mode
@@ -7237,7 +7235,8 @@ function BoardFlowInner({
         fitViewOptions={{ padding: 0.2, minZoom: 0.3, maxZoom: 2 }}
         className={cn(
           'h-full w-full bg-gray-50 dark:bg-[#0f0f0f]',
-          isThreadConnecting && 'tt-thread-connecting' // Invisible edge points stay snappable while dragging a thread
+          isThreadConnecting && 'tt-thread-connecting', // Invisible edge points stay snappable while dragging a thread
+          !embedded && mapPointerTool === 'pan' && !isDrawing && 'tt-map-pan-tool' // Grab cursor while pan tool is active
         )}
         onInit={(instance) => {
           const currentViewport = instance.getViewport()
@@ -7249,8 +7248,17 @@ function BoardFlowInner({
           setReactFlowInstance(instance)
           if (embedded) setEmbedFlowReady(true) // Host can drop loading veil once messages also resolve
         }}
-        // Embedded: always pan/zoom; host still respects draw/scroll modes
-        panOnDrag={embedded ? true : !isDrawing}
+        // Host default = drag-select; pan tool / embed / middle-right mouse pan instead
+        panOnDrag={
+          embedded
+            ? true
+            : isDrawing
+              ? false
+              : mapPointerTool === 'pan'
+                ? true
+                : [1, 2] // Select tool: middle/right still pan; left drag = selection box
+        }
+        selectionOnDrag={!embedded && !isDrawing && mapPointerTool === 'select'} // Left-drag marquee without Shift
         zoomOnScroll={embedded ? true : !isScrollMode && !isDrawing}
         zoomOnPinch={true}
         zoomOnDoubleClick={false}
@@ -7260,7 +7268,11 @@ function BoardFlowInner({
         autoPanOnNodeDrag={false}
         selectNodesOnDrag={embedded ? false : !isDrawing} // Preview: drag starts pan, not selection box
         multiSelectionKeyCode={MULTI_SELECT_KEYS}
-        selectionKeyCode={SELECTION_BOX_KEYS} // Shift+drag a box to select multiple frames for snapshot
+        selectionKeyCode={
+          embedded || isDrawing || mapPointerTool === 'select'
+            ? null // Select tool uses selectionOnDrag; no Shift required
+            : SELECTION_BOX_KEYS // Pan tool: Shift+drag still draws a selection box
+        }
         // Backspace edits TipTap blocks (empty block → previous line). Only Delete removes selected frames.
         // RF's isInputDOMNode misses <p>/<br> inside ProseMirror (no contenteditable attr), so Backspace
         // was deleting the whole frame while typing — editor also has class `nokey` as a second guard.
@@ -7626,56 +7638,64 @@ function BoardFlowInner({
         <div
           className={cn(
             // Flat bottom sits on minimap (minimap top corners are square); round only when minimap is hidden
-            "bg-gray-100 dark:bg-[#2a2a3a] p-1 flex items-center gap-1 relative w-[179px]",
+            "bg-gray-100 dark:bg-[#2a2a3a] p-1 flex items-center gap-1 relative min-w-[179px]",
             isMinimapHidden ? "rounded-lg shadow-sm" : "rounded-t-lg rounded-b-none"
           )}
         >
-          {/* Nav select — slightly over half; label is the active wheel mode (Scroll or Zoom) */}
-          <div className="flex-[1.25] basis-0 min-w-0">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full h-auto py-1 px-0 text-xs rounded-lg bg-transparent text-gray-900 dark:text-gray-100 hover:bg-gray-200/60 dark:hover:bg-gray-700/60 focus-visible:ring-0 focus-visible:ring-offset-0 justify-evenly"
-                >
-                  <span>{isScrollMode ? 'Scroll' : 'Zoom'}</span>
-                  <ChevronDown className="h-3 w-3 shrink-0 text-gray-700 dark:text-gray-300" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" side="top" className="w-32">
-                <DropdownMenuLabel>Navigation</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  value={isScrollMode ? 'scroll' : 'zoom'}
-                  onValueChange={(value) => {
-                    setIsScrollMode(value === 'scroll') // Wheel pans (scroll) vs zooms
-                    if (viewMode !== 'canvas') setViewMode('canvas') // Free-only nav; leave Linear behind
-                  }}
-                >
-                  <DropdownMenuRadioItem value="scroll">Scroll</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="zoom">Zoom</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
+          {/* Wheel mode — click toggles Scroll ↔ Zoom (no menu) */}
+          <div className="flex-[1.25] basis-0 min-w-0 flex items-center justify-center">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full h-auto py-1 px-0 text-xs rounded-lg bg-transparent text-gray-900 dark:text-gray-100 hover:bg-gray-200/60 dark:hover:bg-gray-700/60 focus-visible:ring-0 focus-visible:ring-offset-0 justify-center"
+              title={isScrollMode ? 'Scroll — click for Zoom' : 'Zoom — click for Scroll'}
+              aria-label={isScrollMode ? 'Switch to Zoom' : 'Switch to Scroll'}
+              onClick={() => {
+                setIsScrollMode((s) => !s) // Toggle wheel: pan vs zoom
+                if (viewMode !== 'canvas') setViewMode('canvas') // Free-only nav; leave Linear behind
+              }}
+            >
+              <span>{isScrollMode ? 'Scroll' : 'Zoom'}</span>
+            </Button>
           </div>
-          {/* Same hairline divider as top-bar toolbar */}
-          <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-1 flex-shrink-0" />
+          {/* Same forward-slash divider as top-bar path / toolbar */}
+          <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-0.5 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
           {/* Zoom % — remaining space, no chip background */}
           <div className="flex-1 basis-0 flex items-center justify-center min-w-0">
             <NavZoomControl />
+          </div>
+          {/* | + pan: gap matches nav p-1 so |↔pan == pan↔right edge; ml gives more air than the / */}
+          <div className="flex items-center shrink-0 gap-1 ml-1.5">
+            <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 select-none leading-none" aria-hidden>|</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0 shrink-0 rounded-lg text-gray-900 dark:text-gray-100 hover:bg-gray-200/60 dark:hover:bg-gray-700/60 focus-visible:ring-0 focus-visible:ring-offset-0"
+              title={mapPointerTool === 'select' ? 'Select — click for pan' : 'Pan — click for select'}
+              aria-label={mapPointerTool === 'select' ? 'Switch to pan' : 'Switch to select'}
+              onClick={() => setMapPointerTool((t) => (t === 'select' ? 'pan' : 'select'))}
+            >
+              {mapPointerTool === 'select' ? (
+                <MousePointer2 className="h-3.5 w-3.5" />
+              ) : (
+                <Hand className="h-3.5 w-3.5" />
+              )}
+            </Button>
           </div>
         </div>
       </div>
       )}
 
-      {/* Brand logo + topper — opens chat sidebar; hidden while chat is open; bottom-right of map */}
+      {/* Brand logo — opens chat sidebar; hidden while chat is open; bottom-right of map */}
       {/* Omitted in embedded page-preview boards (chrome belongs to the parent map) */}
       {!embedded && !isChatSidebarOpen && (
         <button
           type="button"
           data-chat-sidebar-toggle
           onClick={() => toggleChatSidebar()}
-          className="z-10 flex items-center justify-center bg-transparent hover:opacity-80 transition-opacity p-0 border-0 overflow-visible"
+          className="z-10 flex items-center justify-center bg-transparent opacity-80 hover:opacity-100 transition-opacity p-0 border-0 overflow-visible"
           style={{
             position: 'absolute', // Same BoardFlow root as minimap / nav
             bottom: `${MINIMAP_BOTTOM}px`,
@@ -7684,7 +7704,7 @@ function BoardFlowInner({
           title="Show chat"
           aria-label="Show chat sidebar"
         >
-          <ThinktableBrandMark topperId={topperId} size={36} />
+          <ThinktableBrandMark drawingUrl={logoDrawing} size={42} />
         </button>
       )}
 

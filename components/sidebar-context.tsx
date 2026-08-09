@@ -10,7 +10,7 @@ import {
   useEffect,
   ReactNode,
 } from 'react'
-import { getStoredTopperId, TT_TOPPER_STORAGE_KEY } from './personalize-ai-modal'
+import { getStoredLogoDrawing, TT_LOGO_DRAWING_STORAGE_KEY } from './personalize-ai-modal'
 
 /** Width of the right chat sidebar when open (keeps top bar / map shrunk left). Notion-like panel width. */
 export const CHAT_SIDEBAR_WIDTH = 360
@@ -27,8 +27,8 @@ interface SidebarContextType {
   isChatSidebarOpen: boolean // True when right chat sidebar is visible
   toggleChatSidebar: () => void // Toggle right chat sidebar (logo by minimap)
   setChatSidebarOpen: (open: boolean) => void // Explicit open/close for chat sidebar
-  topperId: string | null // AI brand topper (shared by chat + map open icon)
-  setTopperId: (id: string | null) => void // Persist + sync topper across chrome
+  logoDrawing: string | null // Custom logo PNG data URL (shared by chat + map open icon)
+  setLogoDrawing: (url: string | null) => void // Persist + sync custom logo across chrome
 }
 
 const SidebarContext = createContext<SidebarContextType | undefined>(undefined)
@@ -37,19 +37,19 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
   const [isMobileMode, setIsMobileMode] = useState(false) // Compact layout flag from board flows
   const [isSidebarOpen, setIsSidebarOpen] = useState(false) // Left nav popup visibility
   const [isChatSidebarOpen, setIsChatSidebarOpen] = useState(false) // Right chat sidebar — hidden by default
-  const [topperId, setTopperIdState] = useState<string | null>(null) // Shared Thinktable AI topper
+  const [logoDrawing, setLogoDrawingState] = useState<string | null>(null) // Shared custom logo drawing
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Delayed-close handle for left nav
 
-  // Hydrate topper from localStorage after mount
+  // Hydrate custom logo drawing from localStorage after mount
   useEffect(() => {
-    setTopperIdState(getStoredTopperId())
+    setLogoDrawingState(getStoredLogoDrawing())
   }, [])
 
-  const setTopperId = useCallback((id: string | null) => {
-    setTopperIdState(id) // Sync map open icon + chat brand mark
+  const setLogoDrawing = useCallback((url: string | null) => {
+    setLogoDrawingState(url) // Sync map open icon + chat brand mark
     if (typeof window === 'undefined') return
-    if (id) localStorage.setItem(TT_TOPPER_STORAGE_KEY, id)
-    else localStorage.removeItem(TT_TOPPER_STORAGE_KEY)
+    if (url) localStorage.setItem(TT_LOGO_DRAWING_STORAGE_KEY, url)
+    else localStorage.removeItem(TT_LOGO_DRAWING_STORAGE_KEY)
   }, [])
 
   const cancelCloseSidebar = useCallback(() => {
@@ -104,8 +104,8 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
         isChatSidebarOpen,
         toggleChatSidebar,
         setChatSidebarOpen,
-        topperId,
-        setTopperId,
+        logoDrawing,
+        setLogoDrawing,
       }}
     >
       {children}
@@ -129,8 +129,8 @@ export function useSidebarContext() {
       isChatSidebarOpen: false,
       toggleChatSidebar: () => {},
       setChatSidebarOpen: () => {},
-      topperId: null as string | null,
-      setTopperId: () => {},
+      logoDrawing: null as string | null,
+      setLogoDrawing: () => {},
     }
   }
   return context

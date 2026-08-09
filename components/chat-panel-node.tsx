@@ -1276,7 +1276,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   const [frameScale, setFrameScale] = useState(1) // Uniform content scale while frame is locked
   const [intrinsicSize, setIntrinsicSize] = useState({ width: 160, height: 48 }) // Unscaled content box (max-content)
   const [intrinsicMeasured, setIntrinsicMeasured] = useState(false) // True after first contentFit measure (avoid hug flash)
-  const [isFrameHovering, setIsFrameHovering] = useState(false) // Hover chrome (overflow chevron when unselected)
+  const [isFrameHovering, setIsFrameHovering] = useState(false) // Frame hover — page-open menu (not lock/rotate)
   const [collapsedFrameSize, setCollapsedFrameSize] = useState<{ width: number; height: number } | null>(null) // Pre-expand box for collapse toggle
   const [rotation, setRotation] = useState(0) // Degrees of item rotation (persisted in message metadata)
   const isResizingRef = useRef(false) // Track if currently resizing
@@ -2187,25 +2187,28 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     persistFrameMeta,
   ])
 
-  // Unlocked + wrap: hug height to wrapped text; width stays user-controlled
+  // Unlocked: height hugs content — wrap always matches; non-wrap only shrinks empty bottom slack (never un-clips)
   useEffect(() => {
-    if (!isBlock || !frameUnlocked || !frameTextWrap || !isUserResized || pagePreviewOpen) return
+    if (!isBlock || !frameUnlocked || !isUserResized || pagePreviewOpen) return
     if (!intrinsicMeasured || isResizingRef.current || !resizeDimensions) return
-    const safeScale = Math.max(0.15, frameScale)
-    const nextH = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(intrinsicSize.height * safeScale) + 2)
-    if (Math.abs(resizeDimensions.height - nextH) < 2) return // Already hugging wrapped height
-    const nextDims = { width: resizeDimensions.width, height: nextH }
+    const huggedH = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(intrinsicSize.height * Math.max(0.15, frameScale)) + 2)
+    if (frameTextWrap) {
+      if (Math.abs(resizeDimensions.height - huggedH) < 2) return // Already matching wrapped height
+    } else if (resizeDimensions.height <= huggedH + 1) {
+      return // Tight or intentionally clipped shorter — leave width-only free resize
+    }
+    const nextDims = { width: resizeDimensions.width, height: huggedH }
     setResizeDimensions(nextDims)
     if (persistFrameMetaTimerRef.current) clearTimeout(persistFrameMetaTimerRef.current)
     persistFrameMetaTimerRef.current = setTimeout(() => {
       void persistFrameMeta({
         resizeDimensions: nextDims,
         frameUnlocked: true,
-        frameTextWrap: true,
+        frameTextWrap,
         frameScale,
-        collapsedFrameSize: null,
+        collapsedFrameSize: frameTextWrap ? null : collapsedFrameSize,
       })
-    }, 250) // Debounce while typing reflows wrap height
+    }, 250) // Debounce while typing / pad reflow
     return () => {
       if (persistFrameMetaTimerRef.current) clearTimeout(persistFrameMetaTimerRef.current)
     }
@@ -2219,6 +2222,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     intrinsicSize.height,
     resizeDimensions,
     frameScale,
+    collapsedFrameSize,
     persistFrameMeta,
   ])
 
@@ -3678,10 +3682,10 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           )
         }
       }}
-      onMouseEnter={() => setIsFrameHovering(true)} // Overflow chevron on hover even when unselected
+      onMouseEnter={() => setIsFrameHovering(true)} // Page-open menu + keep chrome hover bridge
       onMouseLeave={(e) => {
         const related = e.relatedTarget as HTMLElement | null
-        if (related?.closest?.('[data-frame-chrome]')) return // Moving onto lock/rotate/expand
+        if (related?.closest?.('[data-frame-chrome]')) return // Moving onto overflow caret / selected chrome
         setIsFrameHovering(false)
       }}
       onClick={(e) => {
@@ -3753,8 +3757,8 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
         </>
       )}
 
-      {/* Frame chrome — rotate · wrap (unlocked) · lock (if content) · overflow expand/collapse */}
-      {isBlock && !pagePreviewOpen && !isThreadConnecting && (selected || isFrameHovering || contentOverflows || frameExpanded) && (
+      {/* Frame chrome — rotate · overflow caret · lock · wrap; caret keeps x on deselect via offset */}
+      {isBlock && !pagePreviewOpen && !isThreadConnecting && (selected || contentOverflows || frameExpanded) && (
         <div
           data-frame-chrome
           className="nodrag nopan absolute z-50 flex items-center gap-0.5"
@@ -3767,36 +3771,40 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
           }}
           onMouseDown={(e) => e.stopPropagation()} // Don’t start node drag
         >
-          <button
-            type="button"
-            className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
-            style={{ cursor: 'grab' }}
-            title="Rotate"
-            aria-label="Rotate item"
-            onPointerDown={handleRotatePointerDown}
-            onPointerMove={handleRotatePointerMove}
-            onPointerUp={handleRotatePointerUp}
-            onPointerCancel={handleRotatePointerUp}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <RotateCw className="h-4 w-4 pointer-events-none" />
-          </button>
-          {hasBlockContent && frameUnlocked && (
+          {selected && (
             <button
               type="button"
-              className={cn(
-                'flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800',
-                frameTextWrap && 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-50' // Active wrap state
-              )}
-              title={frameTextWrap ? 'Unwrap text (clip overflow)' : 'Wrap text in frame'}
-              aria-label={frameTextWrap ? 'Unwrap text' : 'Wrap text'}
-              aria-pressed={frameTextWrap}
-              onClick={handleToggleFrameTextWrap}
+              className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
+              style={{ cursor: 'grab' }}
+              title="Rotate"
+              aria-label="Rotate item"
+              onPointerDown={handleRotatePointerDown}
+              onPointerMove={handleRotatePointerMove}
+              onPointerUp={handleRotatePointerUp}
+              onPointerCancel={handleRotatePointerUp}
+              onClick={(e) => e.stopPropagation()}
             >
-              <WrapText className="h-4 w-4 pointer-events-none" />
+              <RotateCw className="h-4 w-4 pointer-events-none" />
             </button>
           )}
-          {hasBlockContent && (
+          {(contentOverflows || frameExpanded) && (
+            <button
+              type="button"
+              className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
+              // Unselected: offset by rotate slot (24px + 2px gap) so caret doesn’t jump left
+              style={!selected ? { marginLeft: 26 } : undefined}
+              title={frameExpanded ? 'Collapse to previous size' : 'Show hidden content'}
+              aria-label={frameExpanded ? 'Collapse frame' : 'Expand frame to content'}
+              onClick={handleToggleOverflow}
+            >
+              {frameExpanded ? (
+                <ChevronUp className="h-4 w-4 pointer-events-none" />
+              ) : (
+                <ChevronDown className="h-4 w-4 pointer-events-none" />
+              )}
+            </button>
+          )}
+          {selected && hasBlockContent && (
             <button
               type="button"
               className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
@@ -3811,19 +3819,19 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
               )}
             </button>
           )}
-          {(contentOverflows || frameExpanded) && (
+          {selected && hasBlockContent && frameUnlocked && (
             <button
               type="button"
-              className="flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
-              title={frameExpanded ? 'Collapse to previous size' : 'Show hidden content'}
-              aria-label={frameExpanded ? 'Collapse frame' : 'Expand frame to content'}
-              onClick={handleToggleOverflow}
-            >
-              {frameExpanded ? (
-                <ChevronUp className="h-4 w-4 pointer-events-none" />
-              ) : (
-                <ChevronDown className="h-4 w-4 pointer-events-none" />
+              className={cn(
+                'flex h-6 w-6 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800',
+                frameTextWrap && 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-50' // Active wrap state
               )}
+              title={frameTextWrap ? 'Unwrap text (clip overflow)' : 'Wrap text in frame'}
+              aria-label={frameTextWrap ? 'Unwrap text' : 'Wrap text'}
+              aria-pressed={frameTextWrap}
+              onClick={handleToggleFrameTextWrap}
+            >
+              <WrapText className="h-4 w-4 pointer-events-none" />
             </button>
           )}
         </div>
@@ -4084,10 +4092,11 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
                 : isUserResized || !growsWithLine
                   ? 'w-full'
                   : 'w-max',
-              // Blocks: keep top/right/bottom pad; left matches ⋮⋮→text gap (~2px) so + isn’t inset farther than the grip
-              isBlock ? 'pt-4 pr-4 pb-4 pl-0.5' : 'px-3 py-3'
+              // Blocks: horizontal pad only in class; equal tight vertical pad via style (avoids asymmetric leftovers)
+              isBlock ? 'pr-4 pl-0.5' : 'px-3 py-3'
             )}
             style={{
+              ...(isBlock ? { paddingTop: 4, paddingBottom: 4 } : {}), // Equal 4px top/bottom — less than legacy pt-4/pb-4
               lineHeight: '1.7', // Stable typography — height-based line-height broke lock-to-text
               ...(wrapContentWidth != null ? { width: wrapContentWidth, maxWidth: wrapContentWidth } : {}), // Soft-wrap inside frame
               ...(applyFrameScale

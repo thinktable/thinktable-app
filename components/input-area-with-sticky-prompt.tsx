@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { EditPanel } from './sticky-prompt-panel'
 import { cn } from '@/lib/utils'
 import { useReactFlowContext } from './react-flow-context'
+import { useEditorContext } from './editor-context' // Home reset → clear TipTap formatting
 import { PillSelect } from './pill-select'
 import { useUserPreference } from '@/lib/hooks/use-user-preferences'
 import { createClient } from '@/lib/supabase/client'
@@ -54,7 +55,31 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
   const isPromptHidingRef = useRef(false) // Track if prompt box is in the process of hiding (to keep pill visible during transition)
   const [isPromptFadingOut, setIsPromptFadingOut] = useState(false) // Track if prompt box is fading out (for smooth opacity transition)
   const [minimapRight, setMinimapRight] = useState(15) // Track minimap right position to align hover area
-  const { setPanelWidth, setIsPromptBoxCentered, editMenuPillMode, setEditMenuPillMode } = useReactFlowContext() // Get setPanelWidth, setIsPromptBoxCentered, and editMenuPillMode from context
+  const { setPanelWidth, setIsPromptBoxCentered, editMenuPillMode, setEditMenuPillMode, setIsDrawing, setDrawTool, setBoardRule, setBoardStyle, setFillColor, setBorderColor, setBorderWeight, setBorderStyle } = useReactFlowContext() // Mode pill + reset targets for Home/Draw/View
+  const { activeEditor } = useEditorContext() // Home reset clears TipTap marks/nodes on the focused editor
+
+  // Home: strip marks + block formatting on the active editor
+  const handleResetHome = useCallback(() => {
+    const editor = activeEditor
+    if (!editor || editor.isDestroyed) return
+    editor.chain().focus().clearNodes().unsetAllMarks().run()
+  }, [activeEditor])
+
+  // Draw: drop active tool and leave drawing mode
+  const handleResetDraw = useCallback(() => {
+    setDrawTool(null)
+    setIsDrawing(false)
+  }, [setDrawTool, setIsDrawing])
+
+  // View: restore default board rule/style + transparent frame chrome
+  const handleResetView = useCallback(() => {
+    setBoardRule('college')
+    setBoardStyle('dotted')
+    setFillColor('')
+    setBorderColor('')
+    setBorderWeight(1)
+    setBorderStyle('solid')
+  }, [setBoardRule, setBoardStyle, setFillColor, setBorderColor, setBorderWeight, setBorderStyle])
 
   // Calculate available width for input - switches between left-aligned and centered based on right gap
   useEffect(() => {
@@ -699,18 +724,17 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
       >
         <PillSelect
           options={[
-            { value: 'home', label: 'Home' },
-            { value: 'insert', label: 'Insert' },
-            { value: 'draw', label: 'Draw' },
-            { value: 'view', label: 'View' },
+            { value: 'home', label: 'Home', onReset: handleResetHome },
+            { value: 'insert', label: 'Insert' }, // No sticky tool state to clear
+            { value: 'draw', label: 'Draw', onReset: handleResetDraw },
+            { value: 'view', label: 'View', onReset: handleResetView },
           ]}
           value={editMenuPillMode}
           onChange={(value) => {
             // Update mode when pill select changes - updates context shared with EditorToolbar
             setEditMenuPillMode(value as 'home' | 'insert' | 'draw' | 'view')
           }}
-        />
-      </div>
+        />      </div>
       
       {/* Context menu for edit menu control */}
       {contextMenuPosition && (

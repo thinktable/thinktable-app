@@ -44,7 +44,7 @@ export default function Home() {
       {/* Navigation - sticky banner matching dashboard top bar height (52px) */}
       <nav className="sticky top-0 z-50 h-[52px] bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b border-border">
         <div className="container mx-auto h-full px-6 flex justify-between items-center">
-        <Link href="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+        <Link href="/" className="flex items-center gap-2 opacity-80 hover:opacity-100 transition-opacity">
           <Image
             src="/thinktable-logo.svg"
             alt="ThinkTable"

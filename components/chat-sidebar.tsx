@@ -22,8 +22,8 @@ interface ChatSidebarProps {
 }
 
 export function ChatSidebar({ conversationId, projectId }: ChatSidebarProps) {
-  const { isChatSidebarOpen, setChatSidebarOpen, topperId, setTopperId } = useSidebarContext()
-  const [personalizeOpen, setPersonalizeOpen] = useState(false) // Sample personalize modal
+  const { isChatSidebarOpen, setChatSidebarOpen, logoDrawing, setLogoDrawing } = useSidebarContext()
+  const [personalizeOpen, setPersonalizeOpen] = useState(false) // Logo draw personalize modal
   const [hoverBrand, setHoverBrand] = useState(false) // Show Personalize pill on logo hover
 
   if (!isChatSidebarOpen) return null // Hidden by default; opened via board brand logo
@@ -85,11 +85,11 @@ export function ChatSidebar({ conversationId, projectId }: ChatSidebarProps) {
               <button
                 type="button"
                 onClick={() => setPersonalizeOpen(true)}
-                className="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                className="rounded-full overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
                 title="Personalize Thinktable AI"
                 aria-label="Personalize Thinktable AI"
               >
-                <ThinktableBrandMark topperId={topperId} size={52} />
+                <ThinktableBrandMark drawingUrl={logoDrawing} size={52} />
               </button>
 
               {/* Personalize pill — appears on hover, Notion-style */}
@@ -161,12 +161,12 @@ export function ChatSidebar({ conversationId, projectId }: ChatSidebarProps) {
         </div>
       </aside>
 
-      {/* Sample personalize popup — topper picker */}
+      {/* Personalize popup — draw inside logo circle */}
       <PersonalizeAiModal
         open={personalizeOpen}
         onOpenChange={setPersonalizeOpen}
-        topperId={topperId}
-        onTopperChange={setTopperId}
+        drawingUrl={logoDrawing}
+        onDrawingChange={setLogoDrawing}
       />
     </div>
   )

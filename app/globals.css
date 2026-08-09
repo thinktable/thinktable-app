@@ -746,6 +746,14 @@ span[data-added="true"] {
     cursor: crosshair !important;
   }
 
+  /* Pan tool (nav hand icon): grab cursor on empty page; grabbing while dragging */
+  .react-flow.tt-map-pan-tool .react-flow__pane {
+    cursor: grab;
+  }
+  .react-flow.tt-map-pan-tool .react-flow__pane:active {
+    cursor: grabbing;
+  }
+
   /* Override React Flow's default positioning for top/bottom handles to ensure half-on-half-off */
   /* This ensures handles are positioned at the edge, then transformed to be half outside */
   .react-flow__handle.handle-dot[id="top"],

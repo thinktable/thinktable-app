@@ -573,7 +573,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
     if (boardStyle === 'grid') return BackgroundVariant.Lines // Grid pattern (both horizontal and vertical lines)
     return null // Default to none
   }, [boardStyle])
-  const { setIsMobileMode, isChatSidebarOpen, toggleChatSidebar, topperId } = useSidebarContext()
+  const { setIsMobileMode, isChatSidebarOpen, toggleChatSidebar, logoDrawing } = useSidebarContext()
   useChatSidebarViewportAdjust(reactFlowInstance, isChatSidebarOpen) // Shrink/grow map zoom with chat column
   const originalPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map()) // Store original positions for Linear mode
   const isLinearModeRef = useRef(false) // Track if we're currently in Linear mode
@@ -5466,13 +5466,13 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
         </div>
       </div>
 
-      {/* Brand logo + topper — opens chat sidebar; hidden while chat is open; bottom-right of map */}
+      {/* Brand logo — opens chat sidebar; hidden while chat is open; bottom-right of map */}
       {!isChatSidebarOpen && (
         <button
           type="button"
           data-chat-sidebar-toggle
           onClick={() => toggleChatSidebar()}
-          className="absolute z-10 flex items-center justify-center bg-transparent hover:opacity-80 transition-opacity p-0 border-0 overflow-visible"
+          className="absolute z-10 flex items-center justify-center bg-transparent opacity-80 hover:opacity-100 transition-opacity p-0 border-0 overflow-visible"
           style={{
             bottom: '12px',
             right: '12px',
@@ -5480,7 +5480,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
           title="Show chat"
           aria-label="Show chat sidebar"
         >
-          <ThinktableBrandMark topperId={topperId} size={36} />
+          <ThinktableBrandMark drawingUrl={logoDrawing} size={42} />
         </button>
       )}
 

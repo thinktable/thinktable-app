@@ -21,11 +21,20 @@ export function NavZoomControl({ className }: { className?: string }) {
   const [zoomEditValue, setZoomEditValue] = useState('100') // Draft string while editing
   const zoomInputRef = useRef<HTMLInputElement>(null) // Focus target for inline edit
   const [menuOpen, setMenuOpen] = useState(false) // Preset menu open state
+  const [isDraggingZoom, setIsDraggingZoom] = useState(false) // Vertical scrub in progress
+  // Pointer scrub: drag up = zoom in, down = zoom out; click still opens presets
+  const dragRef = useRef<{
+    pointerId: number
+    startY: number
+    startZoom: number
+    dragging: boolean
+  } | null>(null)
+  const suppressMenuOpenRef = useRef(false) // Block preset menu after a scrub gesture
 
   // Keep display in sync with viewport; snap near-100% to exactly 100%
   useEffect(() => {
     const updateZoom = () => {
-      if (isEditingZoom) return // Don't overwrite while typing
+      if (isEditingZoom || isDraggingZoom) return // Don't overwrite while typing or scrubbing
       const currentZoom = reactFlowInstance.getViewport().zoom
       if (currentZoom >= 0.98 && currentZoom <= 1.02 && currentZoom !== 1) {
         const viewport = reactFlowInstance.getViewport()
@@ -40,7 +49,55 @@ export function NavZoomControl({ className }: { className?: string }) {
     updateZoom()
     const interval = setInterval(updateZoom, 100)
     return () => clearInterval(interval)
-  }, [reactFlowInstance, isEditingZoom])
+  }, [reactFlowInstance, isEditingZoom, isDraggingZoom])
+
+  // Apply zoom centered on the map (same feel as wheel zoom)
+  const applyScrubZoom = (rawZoom: number) => {
+    let next = Math.max(0.1, Math.min(2, rawZoom)) // Clamp 10%–200%
+    if (next >= 0.98 && next <= 1.02) next = 1 // Soft snap to 100%
+    reactFlowInstance.zoomTo(next)
+    setZoom(next)
+    setZoomEditValue(Math.round(next * 100).toString())
+  }
+
+  const handleZoomPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (e.button !== 0) return // Left button only
+    dragRef.current = {
+      pointerId: e.pointerId,
+      startY: e.clientY,
+      startZoom: reactFlowInstance.getViewport().zoom,
+      dragging: false,
+    }
+    // Don't capture yet — early capture breaks the click that opens the preset menu
+  }
+
+  const handleZoomPointerMove = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+    const dy = e.clientY - drag.startY
+    if (!drag.dragging && Math.abs(dy) < 4) return // Treat tiny moves as a click
+    if (!drag.dragging) {
+      drag.dragging = true
+      setIsDraggingZoom(true)
+      setMenuOpen(false) // Close presets if open while scrubbing
+      e.currentTarget.setPointerCapture(e.pointerId) // Capture only once scrubbing starts
+    }
+    // Drag up (negative dy) → zoom in; ~0.5% per pixel
+    applyScrubZoom(drag.startZoom - dy * 0.005)
+  }
+
+  const handleZoomPointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+    if (drag.dragging) {
+      suppressMenuOpenRef.current = true // Next click is leftover from scrub — don't open menu
+      setIsDraggingZoom(false)
+    }
+    dragRef.current = null
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+  }
 
   const handleZoomInputFocus = () => {
     setIsEditingZoom(true) // Swap button for input
@@ -179,22 +236,48 @@ export function NavZoomControl({ className }: { className?: string }) {
   }
 
   return (
-    <DropdownMenu modal={false} open={menuOpen} onOpenChange={setMenuOpen}>
+    <DropdownMenu
+      modal={false}
+      open={menuOpen}
+      onOpenChange={(open) => {
+        // After a vertical scrub, the pointer-up click must not open presets
+        if (open && suppressMenuOpenRef.current) {
+          suppressMenuOpenRef.current = false
+          setMenuOpen(false)
+          return
+        }
+        setMenuOpen(open)
+      }}
+    >
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
           size="sm"
           className={cn(
-            'h-6 px-1.5 text-xs text-gray-900 dark:text-gray-100 hover:bg-gray-200 dark:hover:bg-[#2a2a2a]',
+            'h-6 px-1.5 text-xs text-gray-900 dark:text-gray-100 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] cursor-ns-resize',
+            isDraggingZoom && 'bg-gray-200 dark:bg-[#2a2a2a]',
             className
           )}
           style={{ minWidth: '40px' }} // Stable width as % digits change
+          onPointerDown={handleZoomPointerDown}
+          onPointerMove={handleZoomPointerMove}
+          onPointerUp={handleZoomPointerUp}
+          onPointerCancel={handleZoomPointerUp}
+          onClick={(e) => {
+            // After a scrub, kill the leftover click so the menu stays closed
+            if (suppressMenuOpenRef.current) {
+              suppressMenuOpenRef.current = false
+              e.preventDefault()
+              e.stopPropagation()
+            }
+            // Otherwise Radix trigger opens/closes the preset menu as usual
+          }}
           onDoubleClick={(e) => {
             e.preventDefault() // Double-click edits the % inline (same as former top-bar click)
             e.stopPropagation()
             handleZoomInputFocus()
           }}
-          title="Zoom — click for presets, double-click to type"
+          title="Zoom — drag up/down to adjust, click for presets, double-click to type"
         >
           <span className="inline-block text-center" style={{ width: '28px' }}>
             {Math.round(zoom * 100)}%

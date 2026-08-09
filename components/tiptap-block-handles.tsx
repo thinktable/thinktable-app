@@ -821,7 +821,7 @@ export function TipTapBlockHandles({
         >
           {/* Pill hairline centered in the same column as ⋮⋮ */}
           <div
-            className="pointer-events-none absolute left-1/2 top-1/2 h-px w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/20 dark:bg-white/25"
+            className="pointer-events-none absolute left-1/2 top-1/2 h-[1.5px] w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/20 dark:bg-white/25"
             aria-hidden
           />
         </div>

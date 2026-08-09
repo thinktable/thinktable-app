@@ -1,7 +1,7 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-09T07:24:20Z
+# snapped_at=2026-08-09T08:41:52Z
 # postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
 # Note: supabase db dump --linked / projects list need login or SUPABASE_DB_PASSWORD;
 # snapshot via local migrations + apps/web/supabase/.temp service versions.
@@ -40,6 +40,7 @@
 20260809061713_between_block_insert_line.sql
 20260809063103_add_block_hairline_centered.sql
 20260809072420_ibar_typing_empty_frame_ux.sql
+20260809084152_logo_draw_personalize_ai_badge.sql
 #
-# No new schema this save (frontend: continuous I-bar typing, empty-frame
-# delete-on-deselect, full-width caret, TrailingNode/empty-block UX).
+# No new schema this save (frontend: drawable logo personalize, AI sparkles
+# badge, logo chrome, Notion color assets).

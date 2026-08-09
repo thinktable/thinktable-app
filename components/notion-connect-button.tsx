@@ -135,11 +135,11 @@ export function NotionConnectButton() {
               disabled={loading}
             >
               <Image
-                src="/notion-logo.svg"
+                src="/notion-color.svg"
                 alt="Notion"
                 width={14}
                 height={14}
-                className="h-3.5 w-3.5 dark:invert"
+                className="h-3.5 w-3.5"
               />
             </Button>
           </DropdownMenuTrigger>
@@ -164,11 +164,11 @@ export function NotionConnectButton() {
           disabled={loading}
         >
           <Image
-            src="/notion-logo.svg"
+            src="/notion-color.svg"
             alt="Notion"
             width={14}
             height={14}
-            className="h-3.5 w-3.5 dark:invert"
+            className="h-3.5 w-3.5"
           />
         </Button>
       )}

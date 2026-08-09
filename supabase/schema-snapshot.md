@@ -1,16 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T07:24:20Z`
+- Snapped at: `2026-08-09T08:41:52Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 
 ## This save
 
-- No DDL. Marker `20260809072420_ibar_typing_empty_frame_ux.sql`.
-- App: continuous map I-bar typing (optimistic frame + seed buffer); sole empty frame delete-on-deselect; full-width caret clicks; TrailingNode off + empty-block Backspace/Enter; ⋮⋮ hover vs thin join band; toolbar fill/border transparent preview; logo viewBox refresh.
+- No DDL. Marker `20260809084152_logo_draw_personalize_ai_badge.sql`.
+- App: replace AI toppers with draw-on-solid-circle logo personalize (thickness/eraser/reset, PNG persist); brand mark shows saved image + top-two sparkles badge (logo gray, white outline); logo hover opacity invert + toggle size; Notion color SVG assets; related chrome polish (nav zoom, pills, frames).
 - Schema unchanged.
+
+## Prior: continuous I-bar typing / empty-frame UX
+
+- Marker: `20260809072420_ibar_typing_empty_frame_ux.sql`.
 
 ## Prior: add-block hairline centered
 
@@ -61,6 +65,7 @@ Columns:
 
 ## Prior saves
 
+- Marker: `20260809072420_ibar_typing_empty_frame_ux.sql` (I-bar typing / empty-frame UX).
 - Marker: `20260809061713_between_block_insert_line.sql` (between-block hairline).
 - Marker: `20260809054110_empty_block_backspace.sql` (empty-block Backspace).
 - Marker: `20260809053310_page_open_menu_frame_clamp.sql` (page open menu clamp).
