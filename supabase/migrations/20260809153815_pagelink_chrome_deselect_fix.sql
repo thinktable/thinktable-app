@@ -1,0 +1,11 @@
+-- No DDL. Frontend-only save (pageLink screen-relative chrome + deselection fix).
+-- pageLink icon + open-menu (page-link-view): comfort counter-scale chromeScale =
+--   1/max(1,√scale) via useStore zoom; TRANSFORM ONLY (no marginRight/width compensation —
+--   that shrank the flow box → locked hug → setResizeDimensions → setNodes = nodes(ref) storm /
+--   max update depth / client crash). Menu/grip share first rendered title-line center (menuTop /
+--   iconShiftY / lineCenter). Hug width uses icon offsetWidth (layout), never icon gBCR.
+-- Deselect: onEditorActiveChange counts only non-empty TextSelection — pageLink NodeSelection
+--   is from≠to and was re-selecting the frame after pane click. Pane click blurs focus inside
+--   .react-flow__node; deselected frames collapse leftover NodeSelection.
+-- ⋮⋮ grips: lineCenter + translateY(-50%); skip grip layout setState when geometry unchanged.
+-- Persisted via existing tables — schema unchanged.

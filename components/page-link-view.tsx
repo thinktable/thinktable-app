@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react'
+import { useStore } from 'reactflow' // Live zoom → counter-scale the icon + open menu (screen-relative)
 import { FileText } from 'lucide-react'
 import { useTheme } from '@/components/theme-provider'
 import Picker from '@emoji-mart/react'
@@ -29,12 +30,18 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
   const variant = (node.attrs.variant as string) === 'title' ? 'title' : 'inline' // Layout mode
   const actions = usePageLinkActions() // Host frame preview / open / rename / setIcon bridge
   const { resolvedTheme } = useTheme() // Emoji picker theme
+  const zoom = useStore((s) => s.transform[2] || 1) // Re-render on board zoom so the icon/menu re-measure
+  const [chromeScale, setChromeScale] = useState(1) // Comfort counter-scale for icon + open menu (transform-only)
 
   const [title, setTitle] = useState<string>((node.attrs.title as string) || '') // Local editable label
   const [editing, setEditing] = useState(false) // True while the title span holds focus (caret editing)
   const [iconOpen, setIconOpen] = useState(false) // Emoji picker open
   // Menu left (local CSS px relative to .tt-page-link) — clamped so it stays inside the visible frame
   const [menuLeft, setMenuLeft] = useState<number | null>(null)
+  // Menu top (local CSS px) — the center of the TITLE's FIRST text line (not the taller row/block center)
+  const [menuTop, setMenuTop] = useState<number | null>(null)
+  // Icon vertical shift (local CSS px) → pin the icon to the label's first text line (not flex center)
+  const [iconShiftY, setIconShiftY] = useState(0)
   const titleRef = useRef<HTMLSpanElement>(null) // contentEditable span
   const iconRef = useRef<HTMLSpanElement>(null) // Page emoji/icon — menu must not cover this
   const chromeRef = useRef<HTMLSpanElement>(null) // Preview/open menu (measured against the frame)
@@ -63,10 +70,16 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
       const titleRect = titleRef.current?.getBoundingClientRect()
       const iconRect = iconRef.current?.getBoundingClientRect()
       const scale = wrapper.offsetWidth > 0 ? wrapRect.width / wrapper.offsetWidth : 1
+      // Comfort counter-scale (same curve as the ⋮⋮ grips): 1 when zoomed out (rides with content),
+      // shrinks ∝ 1/√scale when zoomed in so the icon + menu don't balloon with huge text.
+      // TRANSFORM ONLY — never marginRight/width compensation: that shrunk the pageLink flow box,
+      // which fed locked hug → setResizeDimensions → setNodes (nodes(ref) storm / max update depth).
+      const factor = 1 / Math.max(1, Math.sqrt(scale))
+      setChromeScale((p) => (Math.abs(p - factor) < 0.01 ? p : factor)) // Avoid setState storms on subpixel drift
       const pad = 4
       const gap = 6
       const chromeLocal = Math.max(chrome.offsetWidth || chrome.scrollWidth, PAGE_OPEN_MENU_FALLBACK_W)
-      const chromeScreen = chromeLocal * scale
+      const chromeScreen = chromeLocal * scale * factor // Menu is visually scaled → reserve the scaled width
 
       // Visible frame edge — prefer the frame's OWN overflow clip (unlocked+narrow), else the panel.
       // Must stay inside the panel: locked frames have no inner clip, so an unscoped
@@ -78,8 +91,11 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
       const frameRight = clipRect.right - pad
 
       const titleRight = titleRect?.right ?? wrapRect.right
-      // Leftmost the menu may sit: just right of the emoji/icon (never cover it)
-      const iconRight = iconRect?.right ?? wrapRect.left
+      // Leftmost the menu may sit: just right of the icon's LAYOUT box (offsetWidth), not the
+      // counter-scaled gBCR — transform shrinks the visual icon but must not move the clamp.
+      const iconLayoutW = iconRef.current?.offsetWidth ?? 0
+      const iconRight =
+        iconLayoutW > 0 ? wrapRect.left + iconLayoutW * scale : (iconRect?.right ?? wrapRect.left)
       const menuMinLeft = iconRight + gap
 
       // Ideal: just to the right of the title
@@ -94,6 +110,45 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
       // Round to whole CSS px — subpixel flicker was setState-storming BoardFlow
       const nextLeft = Math.round((targetLeftScreen - wrapRect.left) / scale)
       setMenuLeft((prev) => (prev != null && Math.abs(prev - nextLeft) < 1 ? prev : nextLeft))
+
+      // Vertical: center the menu on the TITLE's FIRST rendered line — never half of the full
+      // multiline titleRect (that recentered chrome on wrapped page blocks). `line-height:normal`
+      // parses as NaN, so prefer a Range rect; fall back to computed lh, then ~1em.
+      const labelEl = titleRef.current
+      let lineCenterLocal: number | null = null
+      if (labelEl) {
+        try {
+          const rr = labelEl.ownerDocument.createRange()
+          rr.selectNodeContents(labelEl)
+          const rects = rr.getClientRects()
+          let fr: DOMRect | null = null
+          for (let i = 0; i < rects.length; i++) {
+            if (rects[i].height > 0 && (!fr || rects[i].top < fr.top)) fr = rects[i]
+          }
+          if (fr) lineCenterLocal = ((fr.top + fr.bottom) / 2 - wrapRect.top) / scale
+        } catch {
+          // fall through
+        }
+      }
+      if (lineCenterLocal == null && titleRect) {
+        const labelLH = labelEl ? parseFloat(getComputedStyle(labelEl).lineHeight) : NaN
+        const half =
+          Number.isFinite(labelLH) && labelLH > 0
+            ? labelLH / 2
+            : (parseFloat(getComputedStyle(labelEl || wrapper).fontSize) || 16) / 2
+        lineCenterLocal = (titleRect.top - wrapRect.top) / scale + half
+      }
+      const nextTop = lineCenterLocal != null ? Math.round(lineCenterLocal) : null
+      setMenuTop((prev) => (prev != null && nextTop != null && Math.abs(prev - nextTop) < 1 ? prev : nextTop))
+
+      // Icon: row is flex-start; nudge so the icon's center matches the first text line (same Y as menu/grip).
+      let iconShift = 0
+      if (lineCenterLocal != null && iconRef.current) {
+        const iconH = iconRef.current.offsetHeight // Local px (transform doesn't affect offset*)
+        const iconCenterLocal = iconH / 2 // flex-start → icon top ≈ wrapper top
+        iconShift = lineCenterLocal - iconCenterLocal
+      }
+      setIconShiftY((prev) => (Math.abs(prev - iconShift) < 0.5 ? prev : iconShift))
     }
 
     measure()
@@ -111,7 +166,7 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
       wrapper.removeEventListener('pointerenter', onEnter)
       panel.removeEventListener('pointerenter', onEnter)
     }
-  }, [title, variant, pageId, icon, actions.notionUrl])
+  }, [title, variant, pageId, icon, actions.notionUrl, zoom])
 
   // Commit an edited title to the node attr + linked page
   const commitTitle = useCallback(() => {
@@ -140,7 +195,15 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
       data-page-id={pageId || undefined}
     >
       {/* Clickable icon — opens the emoji picker (same as page icons elsewhere) */}
-      <span ref={iconRef} className="tt-page-link-icon-wrap inline-flex flex-shrink-0">
+      <span
+        ref={iconRef}
+        className="tt-page-link-icon-wrap inline-flex flex-shrink-0"
+        style={{
+          // Transform-only chrome: layout box stays natural so hug / RF node size stay stable.
+          transform: `translateY(${iconShiftY}px) scale(${chromeScale})`, // Pin to first text line + comfort scale
+          transformOrigin: 'left center', // Keep left edge + vertical center; shrink toward the title
+        }}
+      >
       <DropdownMenu open={iconOpen} onOpenChange={setIconOpen}>
         <DropdownMenuTrigger asChild>
           <button
@@ -239,11 +302,12 @@ export function PageLinkView({ node, updateAttributes }: NodeViewProps) {
         <PageOpenMenu
           ref={chromeRef}
           pageId={pageId}
-          style={
-            menuLeft != null
-              ? { left: menuLeft, right: 'auto' } // Measured local px; overrides CSS right:0
-              : undefined
-          }
+          style={{
+            ...(menuLeft != null ? { left: menuLeft, right: 'auto' } : {}), // Measured local px; overrides CSS right:0
+            ...(menuTop != null ? { top: menuTop } : {}), // Align to the TITLE's first-line center (overrides top:50%)
+            transform: `translateY(-50%) scale(${chromeScale})`, // Center the box on that point + comfort scale
+            transformOrigin: 'left center', // Anchor the left edge (matches the placement math)
+          }}
         />
       )}
     </NodeViewWrapper>

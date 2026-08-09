@@ -12,6 +12,7 @@ import {
 import { cn, generateUUID } from '@/lib/utils'
 import { useEditor, EditorContent } from '@tiptap/react'
 import { DOMParser as PMDOMParser } from '@tiptap/pm/model' // Parse stored HTML → PM doc for exact (non-string) sync compare
+import { TextSelection } from '@tiptap/pm/state' // Only text ranges keep a frame "active" — not pageLink NodeSelection
 import { createPanelExtensions } from '@/lib/tiptap/extensions' // StarterKit + Turn into nodes
 import { TipTapBlockHandles } from '@/components/tiptap-block-handles' // Per-content-block ⋮⋮ (Notion)
 import { findEditorBlockAtClientY } from '@/lib/tiptap/block-selection' // Click in frame padding → block at Y
@@ -82,12 +83,14 @@ function measureNaturalContentWidth(contentFit: HTMLElement): number {
       (child.classList.contains('tt-page-link') && child) ||
       (child.querySelector('.tt-page-link') as HTMLElement | null)
     if (pageLink) {
-      // icon (fixed box) + gap + real title text — not the max-width:100% clamped offsetWidth
+      // icon LAYOUT box + gap + real title text — never getBoundingClientRect on the icon:
+      // pageLink chromeScale is a CSS transform, and gBCR would report the counter-scaled
+      // visual width → locked hug / RF node box thrash (nodes(ref) storm / max update depth).
       const label = pageLink.querySelector('.tt-page-link-label') as HTMLElement | null
       const iconWrap = pageLink.querySelector('.tt-page-link-icon-wrap') as HTMLElement | null
       const icon = iconWrap || (pageLink.querySelector('.tt-page-link-icon') as HTMLElement | null)
       const gap = parseFloat(getComputedStyle(pageLink).gap) || 6
-      const iconW = icon ? toLocal(icon.getBoundingClientRect().width) : 0
+      const iconW = icon ? (icon as HTMLElement).offsetWidth : 0 // Local layout px (transform-agnostic)
       const labelW = label ? rangeWidth(label) : 0
       maxLine = Math.max(maxLine, iconW + gap + labelW)
       continue
@@ -411,11 +414,12 @@ function TipTapContent({
       if (onBlur) {
         onBlur()
       }
-      // Check if editor still has selection even after blur
+      // Keep frame selected only for a real TEXT range (format popup). pageLink atoms use
+      // NodeSelection (from≠to) — counting that re-selected the frame on every pane click.
       if (editor && onEditorActiveChange) {
-        const { from, to } = editor.state.selection
-        const hasSelection = from !== to
-        onEditorActiveChange(hasSelection)
+        const sel = editor.state.selection
+        const hasTextRange = sel instanceof TextSelection && !sel.empty
+        onEditorActiveChange(hasTextRange)
       } else if (onEditorActiveChange) {
         onEditorActiveChange(false)
       }
@@ -502,11 +506,12 @@ function TipTapContent({
 
     const checkEditorActive = () => {
       try {
-        const { from, to } = editor.state.selection
-        const hasSelection = from !== to
+        const sel = editor.state.selection
+        // Text range only — NodeSelection on pageLink/databaseBlock is from≠to and must NOT
+        // keep/re-select the host frame after a board (pane) click deselects it.
+        const hasTextRange = sel instanceof TextSelection && !sel.empty
         const isFocused = editor.view.dom === document.activeElement || editor.view.dom.contains(document.activeElement)
-        const isActive = hasSelection || isFocused
-        onEditorActiveChange(isActive)
+        onEditorActiveChange(hasTextRange || isFocused)
       } catch (error) {
         // Ignore errors
       }
@@ -2551,7 +2556,7 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
   // Unlocked WRAP no longer auto-hugs height: like non-wrap clip, the frame keeps the user's box
   // and a frame shorter than the wrapped content clips the overflow + shows the expand chevron.
 
-  // Auto-select panel when editor is focused or has selection (text edit mode)
+  // Auto-select panel when editor is focused or has a text range (not pageLink NodeSelection)
   const handleEditorActiveChange = useCallback((isActive: boolean) => {
     if (isActive && !selected) {
       // Editor is active (focused or has selection) but panel is not selected - auto-select it
@@ -2565,6 +2570,28 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
       )
     }
   }, [id, selected, setNodes])
+
+  // Pane click deselected this frame — drop editor/title focus + atom NodeSelection so the
+  // auto-select effect cannot immediately re-select (pageLink title is contentEditable inside PM).
+  useEffect(() => {
+    if (selected) return
+    const ed = promptEditorRef.current
+    if (!ed || ed.isDestroyed) return
+    const root = ed.view.dom as HTMLElement
+    const ae = document.activeElement as HTMLElement | null
+    if (ae && (ae === root || root.contains(ae))) {
+      ae.blur() // Title label or PM surface
+    }
+    const sel = ed.state.selection
+    if (sel instanceof TextSelection && sel.empty) return // Already a caret — nothing to clear
+    // near() lands a caret beside atoms (TextSelection.create at a pageLink pos throws)
+    try {
+      const pos = Math.max(0, Math.min(sel.from, ed.state.doc.content.size))
+      ed.view.dispatch(ed.state.tr.setSelection(TextSelection.near(ed.state.doc.resolve(pos))))
+    } catch {
+      // ignore invalid pos
+    }
+  }, [selected])
 
   // Flashcard navigation - get all flashcards in the same board/project/study set
   // For regular boards that are part of a project, also enable cross-board navigation

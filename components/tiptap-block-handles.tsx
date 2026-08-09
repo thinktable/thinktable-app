@@ -48,6 +48,7 @@ type HandleLayout = {
   top: number // CSS px relative to editor gutter container (local, not screen)
   height: number
   firstLineH: number // First-line box height (local px) — grip centers vertically on the first line
+  lineCenter: number // Vertical center of the FIRST rendered text line (local px) — where the grip sits
   block: EditorBlockRef
 }
 
@@ -146,6 +147,24 @@ function blockDom(editor: Editor, block: EditorBlockRef): HTMLElement | null {
   return null
 }
 
+/** Topmost non-empty client rect from a Range — the FIRST visual text line (not a flex-centered icon). */
+function topmostClientRect(el: HTMLElement): DOMRect | null {
+  try {
+    const r = el.ownerDocument.createRange()
+    r.selectNodeContents(el)
+    const rects = r.getClientRects()
+    let best: DOMRect | null = null
+    for (let i = 0; i < rects.length; i++) {
+      const fr = rects[i]
+      if (fr.height <= 0 || fr.width <= 0) continue
+      if (!best || fr.top < best.top) best = fr
+    }
+    return best
+  } catch {
+    return null
+  }
+}
+
 /**
  * Measure handle Y/height in the gutter container’s local CSS pixels.
  * Must divide out React Flow viewport scale — getBoundingClientRect is screen-space,
@@ -168,10 +187,18 @@ function layoutForBlock(
       const blockRect = el.getBoundingClientRect()
       const top = (blockRect.top - containerRect.top) / safeScale
       const height = Math.max(22, blockRect.height / safeScale)
+      // pageLink: measure the TITLE label — Range on the NodeView root hits the flex-centered icon first
+      // (mid-block on wrapped titles). Plain blocks use the block element itself.
+      const label = el.querySelector?.('.tt-page-link-label') as HTMLElement | null
+      const textEl = label || el
       // First-line height (local px): computed line-height is transform-independent already
-      const lh = parseFloat(getComputedStyle(el).lineHeight)
+      const lh = parseFloat(getComputedStyle(textEl).lineHeight)
       const firstLineH = Number.isFinite(lh) && lh > 0 ? lh : Math.min(height, 28)
-      return { top, height, firstLineH, block }
+      // Center of the FIRST rendered text line (topmost Range rect). Never use the icon/row box.
+      let lineCenter = top + Math.min(firstLineH, height) / 2
+      const fr = topmostClientRect(textEl)
+      if (fr) lineCenter = ((fr.top + fr.bottom) / 2 - containerRect.top) / safeScale
+      return { top, height, firstLineH, lineCenter, block }
     }
 
     // Fallback: coordsAtPos is also screen-space — same scale correction
@@ -179,7 +206,8 @@ function layoutForBlock(
     const end = editor.view.coordsAtPos(Math.max(block.from + 1, block.to - 1))
     const top = (start.top - containerRect.top) / safeScale
     const height = Math.max(22, (end.bottom - start.top) / safeScale)
-    return { top, height, firstLineH: Math.min(height, 28), block }
+    const lineCenter = ((start.top + start.bottom) / 2 - containerRect.top) / safeScale // First line mid
+    return { top, height, firstLineH: Math.min(height, 28), lineCenter, block }
   } catch {
     return null
   }
@@ -357,6 +385,15 @@ export function TipTapBlockHandles({
     const container = editor.view.dom.parentElement
     if (!container) return
 
+    // Same block + ~same geometry → keep prior layout object (avoids RO/transaction setState thrash)
+    const sameLayout = (prev: HandleLayout | null, next: HandleLayout | null) =>
+      !!prev &&
+      !!next &&
+      prev.block.from === next.block.from &&
+      Math.abs(prev.top - next.top) < 0.5 &&
+      Math.abs(prev.height - next.height) < 0.5 &&
+      Math.abs(prev.lineCenter - next.lineCenter) < 0.5
+
     const syncFocus = () => {
       if (menu) return
       if (!editor.isFocused) return // blur handler decides whether to clear
@@ -365,7 +402,8 @@ export function TipTapBlockHandles({
         setFocusLayout(null)
         return
       }
-      setFocusLayout(layoutForBlock(editor, container, block))
+      const next = layoutForBlock(editor, container, block)
+      setFocusLayout((prev) => (sameLayout(prev, next) ? prev : next))
     }
 
     const onBlur = ({ event }: { event?: FocusEvent }) => {
@@ -382,15 +420,15 @@ export function TipTapBlockHandles({
       if (menu) {
         const next = layoutForBlock(editor, container, menu.block)
         if (next) {
-          setHover(next)
-          setFocusLayout(next)
+          setHover((prev) => (sameLayout(prev, next) ? prev : next))
+          setFocusLayout((prev) => (sameLayout(prev, next) ? prev : next))
         }
         return
       }
       const h = hoverRef.current
       if (h) {
         const next = layoutForBlock(editor, container, h.block)
-        if (next) setHover(next)
+        if (next) setHover((prev) => (sameLayout(prev, next) ? prev : next))
         else setHover(null)
       }
       syncFocus()
@@ -825,8 +863,8 @@ export function TipTapBlockHandles({
             )}
             style={{
               left: gutterCenterLeft, // Centered in the gutter (between frame-left and block-text)
-              top: gl.top + gl.firstLineH / 2 - GRIP_H / 2, // Drop down onto the FIRST line's center (not block-box top)
-              transform: `scale(${chromeScale})`, // Screen-constant out, gently larger in (comfort)
+              top: gl.lineCenter, // Anchor to the FIRST rendered text line center (Range-measured)
+              transform: `translateY(-50%) scale(${chromeScale})`, // Center on that line via the true height (like the menu) + comfort
               transformOrigin: 'center', // Scale about the center so it stays gutter-centered + line-centered
             }}
             title="Drag to move · click for actions · Shift/⌘-click to multi-select"

@@ -7208,6 +7208,15 @@ function BoardFlowInner({
           // Left click on empty map only
           if (!reactFlowInstance || event.button !== 0) return
 
+          // Blur pageLink title / TipTap focus BEFORE deselection settles. Otherwise
+          // onEditorActiveChange still sees focus inside the frame and re-selects it
+          // (pageLink contentEditable lives inside the ProseMirror DOM).
+          const ae = document.activeElement as HTMLElement | null
+          if (ae && ae !== document.body && typeof ae.blur === 'function') {
+            const inFrame = ae.closest?.('.react-flow__node')
+            if (inFrame) ae.blur()
+          }
+
           // If a panel is selected, let React Flow deselect — don't place I-bar on that click
           const hasSelectedPanel = selectedNodeIdsRef.current.length > 0
           if (hasSelectedPanel) {

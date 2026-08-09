@@ -1368,13 +1368,13 @@ span[data-added="true"] {
   }
   .ProseMirror .tt-page-link-inline {
     display: inline-flex;
-    align-items: center;
+    align-items: flex-start; /* Pin icon to the first title line (not the tall wrapped block center) */
     gap: 0.35rem;
     max-width: 100%;
   }
   .ProseMirror .tt-page-link-title {
     display: inline-flex;        /* Icon LEFT of the title (row), same axis as inline */
-    align-items: center;
+    align-items: flex-start; /* Same: first-line align — JS nudges icon to the glyph center */
     gap: 0.4rem;
     margin-bottom: 0.4rem;
     max-width: 100%;
