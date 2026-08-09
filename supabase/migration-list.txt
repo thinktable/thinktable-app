@@ -1,10 +1,10 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-09T05:41:10Z
-# postgres=17.6.1.052 gotrue=v2.195.0 rest=v13.0.5 storage=v1.68.1
-# Note: supabase db dump --linked needs SUPABASE_DB_PASSWORD (cli_login_postgres alter denied);
-# snapshot via local migrations + .temp service versions. Access token OK for projects list / SQL API.
+# snapped_at=2026-08-09T06:17:13Z
+# postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
+# Note: supabase db dump --linked / projects list need login or SUPABASE_DB_PASSWORD;
+# snapshot via local migrations + apps/web/supabase/.temp service versions.
 #
 # Local migration files:
 20251203111351_schema_documentation.md
@@ -37,7 +37,7 @@
 20260809011319_thread_style_smooth_sharp_linear.sql
 20260809053310_page_open_menu_frame_clamp.sql
 20260809054110_empty_block_backspace.sql
+20260809061713_between_block_insert_line.sql
 #
-# No new schema this save (frontend: Backspace on empty TipTap block deletes that block only
-# and moves the I-bar up; fresh frame sole empty block is a no-op; RF deleteKeyCode=Delete;
-# ProseMirror nokey so RF does not steal Backspace while typing).
+# No new schema this save (frontend: remove gutter +; between-block hairline add
+# in ⋮⋮ column, grip width, mid-gap; pl-6 gutter; click inserts block).

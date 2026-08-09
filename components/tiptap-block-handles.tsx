@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { Editor } from '@tiptap/react'
-import { GripVertical, Plus } from 'lucide-react' // ⋮⋮ grip + "+" add-block control
+import { GripVertical } from 'lucide-react' // ⋮⋮ grip; between-block add is a light horizontal line
 import { useReactFlow } from 'reactflow' // screenToFlowPosition when extracting a line onto the map
 import { useQueryClient } from '@tanstack/react-query' // Refresh panels after extract-to-card
 import { createClient } from '@/lib/supabase/client' // Persist a new map card from a dragged line
@@ -60,6 +60,81 @@ type TipTapBlockHandlesProps = {
 }
 
 type DropLine = { top: number; left: number; width: number } // Viewport dashed insert marker
+type InsertLine = { top: number; insertPos: number } // Gap mid in editor-container local CSS px
+const INSERT_EDGE_PX = 14 // Screen px around a block join → show the add line
+const GRIP_W = 20 // Matches ⋮⋮ `w-5` — insert line uses the same width
+const GRIP_H = 24 // Matches ⋮⋮ `h-6` — vertical align / hit band
+
+/** Gap between blocks (or above/below) under clientY — lineTop is the visual midpoint. */
+function findBlockInsertGap(
+  editor: Editor,
+  clientY: number
+): { insertPos: number; lineTop: number } | null {
+  const blocks: { from: number; to: number; top: number; bottom: number }[] = []
+  editor.state.doc.descendants((node, pos) => {
+    const name = node.type.name
+    if (name === 'bulletList' || name === 'orderedList' || name === 'taskList') return true
+    if (!isHandleBlockType(name)) return true
+    try {
+      const el = editor.view.nodeDOM(pos)
+      const rect = el instanceof HTMLElement ? el.getBoundingClientRect() : null
+      if (rect && rect.height > 0) {
+        blocks.push({ from: pos, to: pos + node.nodeSize, top: rect.top, bottom: rect.bottom })
+      } else {
+        const start = editor.view.coordsAtPos(pos + 1)
+        const end = editor.view.coordsAtPos(Math.max(pos + 1, pos + node.nodeSize - 1))
+        blocks.push({
+          from: pos,
+          to: pos + node.nodeSize,
+          top: start.top,
+          bottom: Math.max(start.bottom, end.bottom),
+        })
+      }
+    } catch {
+      // skip
+    }
+    // Don’t flatten nested handle units inside lists / quotes / toggles
+    if (
+      name === 'listItem' ||
+      name === 'taskItem' ||
+      name === 'blockquote' ||
+      name === 'toggleList' ||
+      name === 'toggleHeading' ||
+      name === 'callout' ||
+      name === 'columns'
+    ) {
+      return false
+    }
+    return true
+  })
+  if (blocks.length === 0) return null
+
+  // Paragraphs use margin 0 — joins touch. Hit a band around each join, place line at midpoint.
+  let best: { insertPos: number; lineTop: number; dist: number } | null = null
+  for (let i = 0; i < blocks.length - 1; i++) {
+    const a = blocks[i]
+    const b = blocks[i + 1]
+    const mid = (a.bottom + b.top) / 2 // Center between the two block boxes
+    const lo = Math.min(a.bottom, b.top) - INSERT_EDGE_PX
+    const hi = Math.max(a.bottom, b.top) + INSERT_EDGE_PX
+    if (clientY < lo || clientY > hi) continue
+    const dist = Math.abs(clientY - mid)
+    if (!best || dist < best.dist) {
+      best = { insertPos: a.to, lineTop: mid, dist }
+    }
+  }
+  if (best) return { insertPos: best.insertPos, lineTop: best.lineTop }
+
+  const first = blocks[0]
+  const last = blocks[blocks.length - 1]
+  if (clientY <= first.top + INSERT_EDGE_PX) {
+    return { insertPos: first.from, lineTop: first.top } // Above first block
+  }
+  if (clientY >= last.bottom - INSERT_EDGE_PX) {
+    return { insertPos: last.to, lineTop: last.bottom } // Below last block
+  }
+  return null
+}
 
 /** Resolve the DOM element for a ProseMirror block (handles sit beside this). */
 function blockDom(editor: Editor, block: EditorBlockRef): HTMLElement | null {
@@ -129,6 +204,7 @@ export function TipTapBlockHandles({
     blockType: BlockTypeId
   } | null>(null)
   const [dropLine, setDropLine] = useState<DropLine | null>(null) // Dashed insert line while dragging a content block
+  const [insertLine, setInsertLine] = useState<InsertLine | null>(null) // Hover gap → + shaped add line
   const [ghost, setGhost] = useState<{ x: number; y: number; text: string; width: number } | null>(null) // Floating preview of the dragged line
   // In-frame multi-block selection (Shift = range, Cmd/Ctrl = toggle). Empty = no multi-selection.
   const [selection, setSelection] = useState<EditorBlockRef[]>([])
@@ -201,8 +277,8 @@ export function TipTapBlockHandles({
     const resolveFromPoint = (clientX: number, clientY: number, target: EventTarget | null) => {
       if (menu || draggingRef.current) return // Keep handle on the open-menu / in-drag block
       const el = target as HTMLElement | null
-      // Pointer on the grip / menu — keep current hover
-      if (el?.closest?.('[data-tt-block-handle], .block-actions-menu')) return
+      // Pointer on the grip / add-line / menu — keep current hover
+      if (el?.closest?.('[data-tt-block-handle], [data-tt-insert-line], .block-actions-menu')) return
 
       // Only while over this map-card frame (full width)
       if (!frame.contains(el) && el !== frame) {
@@ -215,9 +291,26 @@ export function TipTapBlockHandles({
           clientY > fr.bottom
         ) {
           setHover(null)
+          setInsertLine(null)
           return
         }
       }
+
+      // Near a gap → short line in the ⋮⋮ column, mid-gap (same width as the grip button)
+      const gap = findBlockInsertGap(editor, clientY)
+      if (gap) {
+        const containerRect = container.getBoundingClientRect()
+        const scaleY =
+          container.offsetHeight > 0 ? containerRect.height / container.offsetHeight : 1
+        const safeScaleY = scaleY > 0.01 ? scaleY : 1
+        setInsertLine({
+          top: (gap.lineTop - containerRect.top) / safeScaleY, // Gap midpoint in gutter-container local px
+          insertPos: gap.insertPos,
+        })
+        setHover(null) // Gap wins — hide ⋮⋮ while the add line is up
+        return
+      }
+      setInsertLine(null)
 
       const block = findEditorBlockAtClientY(editor, clientY)
       if (!block) {
@@ -234,11 +327,12 @@ export function TipTapBlockHandles({
     const onLeave = (event: MouseEvent) => {
       if (menu || draggingRef.current) return
       const related = event.relatedTarget as HTMLElement | null
-      // Leaving into grip / menu keeps hover so the control stays clickable
-      if (related?.closest?.('[data-tt-block-handle], .block-actions-menu')) return
+      // Leaving into grip / add-line / menu keeps hover so the control stays clickable
+      if (related?.closest?.('[data-tt-block-handle], [data-tt-insert-line], .block-actions-menu')) return
       // Leaving to another node inside the same frame — mousemove will re-resolve
       if (related && frame.contains(related)) return
       setHover(null)
+      setInsertLine(null)
     }
 
     // Listen on the frame so empty padding / right side of short lines still count
@@ -270,13 +364,14 @@ export function TipTapBlockHandles({
     const onBlur = ({ event }: { event?: FocusEvent }) => {
       if (menu) return
       const related = event?.relatedTarget as HTMLElement | null
-      // Keep handle when focus moves to the grip / actions menu
-      if (related?.closest?.('[data-tt-block-handle], .block-actions-menu')) return
+      // Keep handle when focus moves to the grip / add-line / actions menu
+      if (related?.closest?.('[data-tt-block-handle], [data-tt-insert-line], .block-actions-menu')) return
       setFocusLayout(null)
     }
 
     // Re-measure after typing / Enter / zoom-driven reflow so grips stay glued to lines
     const refreshLayouts = () => {
+      setInsertLine(null) // Gap line re-resolves on next mousemove after doc shift
       if (menu) {
         const next = layoutForBlock(editor, container, menu.block)
         if (next) {
@@ -345,24 +440,22 @@ export function TipTapBlockHandles({
     [editor]
   )
 
-  // "+" grip: click inserts an empty block below the target block; Option-click inserts above
-  const onAddBlock = useCallback(
-    (e: React.MouseEvent, target?: EditorBlockRef) => {
+  // Between-block add line: click inserts an empty paragraph at the hovered gap
+  const onInsertLineClick = useCallback(
+    (e: React.MouseEvent) => {
       e.stopPropagation() // Don't bubble to frame / RF
       e.preventDefault()
-      if (!editor || editor.isDestroyed) return
-      const block = target ?? menu?.block ?? (hover ?? focusLayout)?.block // Same block the grip targets
-      if (!block) return
-      const above = e.altKey // Option/Alt → insert above; otherwise below
-      const at = above ? block.from : block.to // from = before block, to = after block
+      if (!editor || editor.isDestroyed || !insertLine) return
+      const at = insertLine.insertPos // Doc edge between (or above/below) blocks
       editor
         .chain()
-        .insertContentAt(at, { type: 'paragraph' }) // New empty line at the edge
+        .insertContentAt(at, { type: 'paragraph' }) // New empty block at the gap
         .setTextSelection(at + 1) // Caret inside the new block
         .focus()
         .run()
+      setInsertLine(null) // Hide until next hover
     },
-    [editor, hover, focusLayout, menu]
+    [editor, insertLine]
   )
 
   // Click vs drag: nodrag so RF never starts; pointermove/up on window for this content block only
@@ -659,7 +752,7 @@ export function TipTapBlockHandles({
       if (gl) gripLayouts.set(b.from, gl)
     }
   }
-  const hoverLayout = hover ?? focusLayout // Hover (full-frame band) wins; else caret block
+  const hoverLayout = insertLine ? null : hover ?? focusLayout // Gap line hides hover/caret grip
   if (hoverLayout && !gripLayouts.has(hoverLayout.block.from)) {
     gripLayouts.set(hoverLayout.block.from, hoverLayout)
   }
@@ -677,33 +770,7 @@ export function TipTapBlockHandles({
     <>
       {Array.from(gripLayouts.values()).map((gl) => (
         <div key={gl.block.from} data-tt-block-handle>
-          {/* "+" add-block control — left of the ⋮⋮ grip (Notion-style) */}
-          <div
-            role="button"
-            tabIndex={0}
-            data-tt-block-handle
-            className={cn(
-              'nodrag nopan absolute z-[60] w-5 h-6 flex items-center justify-center rounded',
-              'text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/10',
-              'pointer-events-auto cursor-pointer select-none'
-            )}
-            style={{
-              left: 0, // Leftmost control in the gutter
-              top: gl.top, // Align to top of the content block
-            }}
-            title="Click to add below · Option-click to add above"
-            onPointerDown={(e) => e.stopPropagation()} // Never start RF frame drag
-            onClick={(e) => onAddBlock(e, gl.block)}
-            onKeyDown={(e) => {
-              if (e.key !== 'Enter' && e.key !== ' ') return
-              e.preventDefault()
-              onAddBlock(e as unknown as React.MouseEvent, gl.block)
-            }}
-          >
-            <Plus className="h-4 w-4 pointer-events-none" />
-          </div>
-
-          {/* ⋮⋮ grip — right of the "+" control */}
+          {/* ⋮⋮ grip — sole gutter control (add-block is the between-line) */}
           <div
             role="button"
             tabIndex={0}
@@ -714,7 +781,7 @@ export function TipTapBlockHandles({
               'pointer-events-auto cursor-grab active:cursor-grabbing select-none'
             )}
             style={{
-              left: 18, // Sits to the right of the "+" control
+              left: 0, // Sole control in the narrowed gutter
               top: gl.top, // Align grip to top of the content block (not vertically centered)
             }}
             title="Drag to move · click for actions · Shift/⌘-click to multi-select"
@@ -730,6 +797,32 @@ export function TipTapBlockHandles({
           </div>
         </div>
       ))}
+
+      {/* Same column/width as ⋮⋮ grip; vertically centered on the gap */}
+      {insertLine && (
+        <div
+          role="button"
+          tabIndex={0}
+          data-tt-insert-line
+          className="nodrag nopan absolute z-[61] cursor-pointer select-none"
+          style={{
+            left: 0, // Same gutter column as ⋮⋮
+            top: insertLine.top - GRIP_H / 2, // Vertically center the grip-sized hit band on the gap
+            width: GRIP_W, // Same width as the ⋮⋮ handle button
+            height: GRIP_H,
+          }}
+          title="Add block"
+          onPointerDown={(e) => e.stopPropagation()} // Never start RF frame drag
+          onClick={onInsertLineClick}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return
+            e.preventDefault()
+            onInsertLineClick(e as unknown as React.MouseEvent)
+          }}
+        >
+          <div className="pointer-events-none absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-black/10 dark:bg-white/15" />
+        </div>
+      )}
 
       {dropLine &&
         createPortal(

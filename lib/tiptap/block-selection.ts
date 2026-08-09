@@ -66,7 +66,7 @@ export function isHandleBlockType(name: string): boolean {
     name === 'blockEquation' ||
     name === 'syncedBlock' ||
     name === 'columns' ||
-    name === 'pageLink' // Linked-page block (inline/title) gets the ⋮⋮ + "+" gutter too
+    name === 'pageLink' // Linked-page block (inline/title) gets the ⋮⋮ grip too
   )
 }
 

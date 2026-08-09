@@ -1,15 +1,15 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T05:41:10Z`
+- Snapped at: `2026-08-09T06:17:13Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
-- CLI note: `supabase db dump --linked` failed without `SUPABASE_DB_PASSWORD` (cli_login_postgres permission). Access token works for `projects list` + Management SQL API; migration files remain source of truth.
-- Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
+- CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
+- Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 
 ## This save
 
-- No DDL. Marker `20260809054110_empty_block_backspace.sql`.
-- App: empty TipTap block Backspace deletes that block only (not the frame) and moves the I-bar to the previous line; fresh frame sole empty block is a no-op; RF `deleteKeyCode` is Delete-only; ProseMirror/`pageLink` use `nokey` so RF does not steal Backspace while typing.
+- No DDL. Marker `20260809061713_between_block_insert_line.sql`.
+- App: remove per-block gutter `+`; tighten frame gutter (`pl-10` → `pl-6`); hover between TipTap blocks shows a light hairline the same width as the ⋮⋮ grip, in the grip column, mid-gap; click inserts a block.
 - Schema unchanged.
 
 ## Prior: `panel_edges.metadata`
@@ -53,6 +53,7 @@ Columns:
 
 ## Prior saves
 
+- Marker: `20260809054110_empty_block_backspace.sql` (empty-block Backspace).
 - Marker: `20260809053310_page_open_menu_frame_clamp.sql` (page open menu clamp).
 - Marker: `20260809011319_thread_style_smooth_sharp_linear.sql` (thread styles).
 - Marker: `20260808192038_page_links_title_ui_preview_menu.sql` (pageLink block feature).

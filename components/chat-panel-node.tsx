@@ -725,7 +725,7 @@ function TipTapContent({
       <div
         className={cn(
           'relative',
-          enableBlockHandles && 'pl-10', // Gutter for per-block "+" and ⋮⋮ (outside content; not frame chrome)
+          enableBlockHandles && 'pl-6', // Gutter for ⋮⋮ only (add-block is the between-line)
           isLoading && !isFlashcard && 'shimmer'
         )}
       >
@@ -2985,11 +2985,11 @@ export function ChatPanelNode({ data, selected, id }: NodeProps<PanelNodeData>) 
     }
   })
 
-  // Horizontal chrome around TipTap text: padding + border + optional +/⋮⋮ gutter
+  // Horizontal chrome around TipTap text: padding + border + optional ⋮⋮ gutter
   const blockWidthChrome = useCallback(() => {
-    // Blocks: pl-0.5 (2) + pr-4 (16) + border (2) + buffer (10) + pl-10 gutter (40)
+    // Blocks: pl-0.5 (2) + pr-4 (16) + border (2) + buffer (10) + pl-6 gutter (24)
     // Non-blocks: px-3 (24) + border (2) + buffer (10) + p-1 (8)
-    return usesFitContent ? 2 + 16 + 2 + 10 + 40 : 24 + 2 + 10 + 8
+    return usesFitContent ? 2 + 16 + 2 + 10 + 24 : 24 + 2 + 10 + 8
   }, [usesFitContent])
 
   // Measure longest TipTap line as nowrap (Enter = new block, not wrap)
