@@ -266,7 +266,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
   const { activeEditor } = useEditorContext()
   const [isHidden, setIsHidden] = useState(false) // Track if top bar is hidden
   const [isHovering, setIsHovering] = useState(false) // Track if mouse is hovering over pill
-  const { openSidebar, scheduleCloseSidebar, toggleSidebar, isMobileMode } = useSidebarContext()
+  const { openSidebar, scheduleCloseSidebar, toggleSidebar, isSidebarPinned, isMobileMode } = useSidebarContext()
   const supabase = createClient() // Client for board/project title lookup
 
   // Boards for sibling menus (separate key so we don't clash with sidebar Conversation shape)
@@ -415,23 +415,24 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
             boxSizing: 'border-box', // Ensure padding is included in height
           }}
         >
-          {/* Menu icon — hover/click opens rounded nav popup (path stays separate so sibling menus work) */}
+          {/* Menu icon — hover opens; click pins open until clicked again (survives page switch) */}
           <div
             data-nav-logo-trigger
             className="flex items-center flex-shrink-0"
             onMouseEnter={() => {
-              if (!isMobileMode) openSidebar() // Desktop: open on hover
+              if (!isMobileMode) openSidebar() // Desktop: open on hover (not pinned)
             }}
             onMouseLeave={() => {
-              if (!isMobileMode) scheduleCloseSidebar() // Allow pointer to reach popup
+              if (!isMobileMode) scheduleCloseSidebar() // No-op when click-pinned
             }}
           >
             <button
               type="button"
-              onClick={() => toggleSidebar()} // Mobile / click: toggle popup
+              onClick={() => toggleSidebar()} // Pin open / unpin close — persists across pages
               className="w-8 h-8 flex-shrink-0 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex items-center justify-center"
-              title="Open menu"
-              aria-label="Open navigation menu"
+              title={isSidebarPinned ? 'Close menu' : 'Open menu'}
+              aria-label={isSidebarPinned ? 'Close navigation menu' : 'Open navigation menu'}
+              aria-pressed={isSidebarPinned}
             >
               <Menu className="h-5 w-5 text-gray-700 dark:text-gray-300" />
             </button>

@@ -28,7 +28,9 @@ import {
   EditableThread,
   ThreadConnectionLine,
   DEFAULT_THREAD_ALGORITHM,
+  ThreadAlgorithm,
   threadAlgorithmFromStyle,
+  threadStyleFromAlgorithm,
   normalizeHandleId,
   type ThreadEdgeData,
 } from '@/components/threads' // Miro-style editable threads + connection preview
@@ -39,6 +41,10 @@ import {
   type BlockActionPayload,
   type BlockTypeId,
 } from './block-actions-menu' // Notion-style block actions + Turn into baseline
+import {
+  ThreadActionsMenu,
+  type ThreadActionId,
+} from './thread-actions-menu' // Thread click menu (same chrome as handle menu)
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useRef, useMemo, useState, useCallback } from 'react'
@@ -55,7 +61,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { ChevronDown, ArrowDown, ChevronUp, Trash2, Plus, GripVertical, MousePointer2, Hand } from 'lucide-react'
+import { ArrowDown, GripVertical, MousePointer2, Hand } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
@@ -1652,6 +1658,11 @@ function BoardFlowInner({
   const minimapDragStartRef = useRef<{ x: number; y: number; isDragging?: boolean } | null>(null) // Track minimap drag start position and drag state
   const edgePopupZoomRef = useRef<number | null>(null) // Track zoom when popup was opened
   const edgeClickPositionRef = useRef<{ x: number; y: number } | null>(null) // Store click position in flow coordinates
+  const threadStyleClipboardRef = useRef<{
+    algorithm: ThreadAlgorithm
+    dotted: boolean
+  } | null>(null) // Copy style / Paste style payload
+  const [hasThreadStyleClipboard, setHasThreadStyleClipboard] = useState(false) // Enables Paste style row
   const nodePopupZoomRef = useRef<number | null>(null) // Track zoom when node popup was opened
   const nodeClickPositionRef = useRef<{ x: number; y: number } | null>(null) // Store click position in flow coordinates
   const scrollAccumulatorRef = useRef<number>(0) // Accumulate scroll delta for controlled navigation
@@ -6296,6 +6307,88 @@ function BoardFlowInner({
     setClickedEdge({ ...clickedEdge, type: 'editable', data: nextData })
   }, [clickedEdge, setEdges])
 
+  // Apply path algorithm + optional dotted flag to the open thread menu target
+  const patchClickedThreadData = useCallback(
+    (patch: Partial<ThreadEdgeData>) => {
+      if (!clickedEdge) return
+      const prev = (clickedEdge.data as ThreadEdgeData | undefined) || {}
+      const nextData: ThreadEdgeData = {
+        ...prev,
+        algorithm: prev.algorithm ?? DEFAULT_THREAD_ALGORITHM,
+        points: prev.points ?? [],
+        ...patch,
+      }
+      setEdges((eds) =>
+        eds.map((e) =>
+          e.id === clickedEdge.id ? { ...e, type: 'editable', data: nextData } : e
+        )
+      )
+      setClickedEdge({ ...clickedEdge, type: 'editable', data: nextData })
+    },
+    [clickedEdge, setEdges]
+  )
+
+  // ThreadActionsMenu → existing handlers + style clipboard; stubs close the menu
+  const handleThreadMenuAction = useCallback(
+    (action: ThreadActionId) => {
+      if (!clickedEdge) return
+      const prev = (clickedEdge.data as ThreadEdgeData | undefined) || {}
+
+      switch (action) {
+        case 'delete':
+          handleDeleteEdge()
+          return
+        case 'insertBetween':
+          insertNodeBetween(clickedEdge.id)
+          setClickedEdge(null)
+          return
+        case 'collapse':
+          handleCollapseTarget()
+          return
+        case 'toggleDotted':
+          handleToggleEdgeStyle()
+          return
+        case 'copyStyle':
+          threadStyleClipboardRef.current = {
+            algorithm: prev.algorithm ?? DEFAULT_THREAD_ALGORITHM,
+            dotted: prev.dotted === true || clickedEdge.type === 'animatedDotted',
+          }
+          setHasThreadStyleClipboard(true) // Re-render so Paste style enables
+          return // Keep menu open
+        case 'pasteStyle': {
+          const clip = threadStyleClipboardRef.current
+          if (!clip) return
+          patchClickedThreadData({ algorithm: clip.algorithm, dotted: clip.dotted })
+          setClickedEdge(null)
+          return
+        }
+        case 'styleSmooth':
+          patchClickedThreadData({ algorithm: ThreadAlgorithm.BezierCatmullRom })
+          setClickedEdge(null)
+          return
+        case 'styleSharp':
+          patchClickedThreadData({ algorithm: ThreadAlgorithm.Orthogonal })
+          setClickedEdge(null)
+          return
+        case 'styleLinear':
+          patchClickedThreadData({ algorithm: ThreadAlgorithm.Linear })
+          setClickedEdge(null)
+          return
+        default:
+          // Stubs (copy / duplicate / lock / template / info…) — close for now
+          setClickedEdge(null)
+      }
+    },
+    [
+      clickedEdge,
+      handleDeleteEdge,
+      insertNodeBetween,
+      handleCollapseTarget,
+      handleToggleEdgeStyle,
+      patchClickedThreadData,
+    ]
+  )
+
   // Miro: drag a thread endpoint to detach and snap onto another frame's connection point
   const handleThreadReconnect = useCallback(
     async (
@@ -7904,140 +7997,51 @@ function BoardFlowInner({
         />
       )}
 
-      {/* Edge popup - shows collapse and delete options */}
+      {/* Thread click menu — same chrome as ⋮⋮ handle / text-select menus */}
       {clickedEdge && reactFlowInstance && (
-        <div
-          className="edge-popup absolute z-[1000] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2"
-          style={{
-            left: `${edgePopupPosition.x}px`,
-            top: `${edgePopupPosition.y}px`,
-            transform: `translate(-50%, -100%) scale(${reactFlowInstance.getViewport().zoom})`, // Scale with zoom, center above edge
-            transformOrigin: 'center bottom', // Scale from bottom center
-            marginTop: '-8px', // Small gap above edge
-          }}
-          onClick={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-          }}
-          onMouseDown={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-          }}
-        >
-          <div className="flex flex-col gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.preventDefault() // Prevent default behavior
-                e.stopPropagation() // Prevent event bubbling
-                // Insert node between connected nodes - creates placeholder where node will be inserted
-                insertNodeBetween(clickedEdge.id)
-                setClickedEdge(null) // Close popup
-              }}
-              className="justify-start text-sm"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Insert Node
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleCollapseTarget}
-              className="justify-start text-sm"
-            >
-              {(() => {
-                // Find all connected nodes to determine button label
-                const connectedNodeIds = new Set<string>()
-                const visited = new Set<string>()
-                const startNodes = [clickedEdge.source, clickedEdge.target]
-                const queue = [...startNodes]
-
-                while (queue.length > 0) {
-                  const currentNodeId = queue.shift()!
-                  if (visited.has(currentNodeId)) continue
-                  visited.add(currentNodeId)
-                  connectedNodeIds.add(currentNodeId)
-
-                  edges.forEach(edge => {
-                    if (edge.source === currentNodeId && !visited.has(edge.target)) {
-                      queue.push(edge.target)
-                    }
-                    if (edge.target === currentNodeId && !visited.has(edge.source)) {
-                      queue.push(edge.source)
-                    }
-                  })
+        <ThreadActionsMenu
+          x={edgePopupPosition.x}
+          y={edgePopupPosition.y}
+          isDotted={
+            (clickedEdge.data as ThreadEdgeData | undefined)?.dotted === true ||
+            clickedEdge.type === 'animatedDotted'
+          }
+          isCollapsedLabel={(() => {
+            // Collapse when every connected frame is expanded; else Expand
+            const connectedNodeIds = new Set<string>()
+            const visited = new Set<string>()
+            const queue = [clickedEdge.source, clickedEdge.target]
+            while (queue.length > 0) {
+              const currentNodeId = queue.shift()!
+              if (visited.has(currentNodeId)) continue
+              visited.add(currentNodeId)
+              connectedNodeIds.add(currentNodeId)
+              edges.forEach((edge) => {
+                if (edge.source === currentNodeId && !visited.has(edge.target)) {
+                  queue.push(edge.target)
                 }
-
-                const connectedNodes = nodes.filter(n => connectedNodeIds.has(n.id))
-                const allExpanded = connectedNodes.length > 0 && connectedNodes.every(n => !(n.data.isResponseCollapsed || false))
-                const someCollapsed = connectedNodes.some(n => n.data.isResponseCollapsed || false)
-
-                // Show "Collapse" only if all are expanded, otherwise show "Expand"
-                if (allExpanded) {
-                  return (
-                    <>
-                      <ChevronUp className="h-4 w-4 mr-2" />
-                      Collapse
-                    </>
-                  )
-                } else {
-                  return (
-                    <>
-                      <ChevronDown className="h-4 w-4 mr-2" />
-                      Expand
-                    </>
-                  )
+                if (edge.target === currentNodeId && !visited.has(edge.source)) {
+                  queue.push(edge.source)
                 }
-              })()}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.preventDefault() // Prevent default behavior
-                e.stopPropagation() // Prevent event bubbling
-                handleToggleEdgeStyle()
-              }}
-              className="justify-start text-sm"
-              title={
-                ((clickedEdge.data as ThreadEdgeData | undefined)?.dotted ||
-                  clickedEdge.type === 'animatedDotted')
-                  ? 'Make solid'
-                  : 'Make dotted'
-              }
-            >
-              {((clickedEdge.data as ThreadEdgeData | undefined)?.dotted ||
-                clickedEdge.type === 'animatedDotted') ? (
-                <div className="w-[2px] h-4 bg-gray-600 mr-2" />
-              ) : (
-                <div className="flex flex-col gap-0.5 h-4 items-center mr-2">
-                  <div className="w-0.5 h-1 bg-gray-600" />
-                  <div className="w-0.5 h-1 bg-gray-600" />
-                  <div className="w-0.5 h-1 bg-gray-600" />
-                </div>
-              )}
-              {((clickedEdge.data as ThreadEdgeData | undefined)?.dotted ||
-                clickedEdge.type === 'animatedDotted')
-                ? 'Solid'
-                : 'Dotted'}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.preventDefault() // Prevent default behavior
-                e.stopPropagation() // Prevent event bubbling
-                console.log('🗑️ Delete button clicked, calling handleDeleteEdge')
-                handleDeleteEdge()
-              }}
-              className="justify-start text-sm text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              Delete
-            </Button>
-          </div>
-        </div>
+              })
+            }
+            const connectedNodes = nodes.filter((n) => connectedNodeIds.has(n.id))
+            const allExpanded =
+              connectedNodes.length > 0 &&
+              connectedNodes.every((n) => !(n.data.isResponseCollapsed || false))
+            return allExpanded ? 'Collapse' : 'Expand'
+          })()}
+          canPasteStyle={hasThreadStyleClipboard}
+          currentStyle={threadStyleFromAlgorithm(
+            (clickedEdge.data as ThreadEdgeData | undefined)?.algorithm
+          )}
+          onAction={handleThreadMenuAction}
+          onClose={() => {
+            setClickedEdge(null)
+            edgeClickPositionRef.current = null
+            edgePopupZoomRef.current = null
+          }}
+        />
       )}
 
       {/* Context menu for minimap control */}

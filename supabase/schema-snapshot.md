@@ -1,7 +1,7 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T17:47:11Z`
+- Snapped at: `2026-08-09T19:06:14Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
@@ -9,9 +9,15 @@
 
 ## This save
 
+- No DDL. Marker `20260809190614_thread_actions_menu_sidebar_pin.sql`.
+- **Thread click menu** (`thread-actions-menu.tsx` + `board-flow` `onEdgeClick`): Notion-style chrome matching ⋮⋮ / text-select menus; wired Delete, Insert frame, Collapse/Expand, Dotted/Solid, Arrange→Smooth/Sharp/Linear, Copy/Paste style; other rows stubs.
+- **Pages nav pin** (`sidebar-context` / top-bar menu / `app-sidebar`): click pins open across leave + page switch; hover still temporary.
+- Persisted via existing tables — schema unchanged.
+
+## Prior: thread stroke comfort zoom
+
 - No DDL. Marker `20260809174711_thread_stroke_comfort_zoom.sql`.
 - **Thread stroke comfort** (`EditableThread` / `ThreadConnectionLine` / `ControlPoint`): `threadComfortScale(zoom) = 1/max(1,√zoom)` — thins on zoom-out (rides with content); soft counter-scale on zoom-in. Replaces full `1/zoom` screen-constant stroke that looked fat when zoomed out. Hit band stays `×1/zoom`.
-- Persisted via existing tables — schema unchanged.
 
 ## Prior: unlocked frame clip hover preview
 

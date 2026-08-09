@@ -1015,12 +1015,13 @@ export default function AppSidebar({ user }: AppSidebarProps) {
   const projectsExpandedInitializedRef = useRef(false) // Track if we've initialized project expansion
   const supabase = createClient()
   const queryClient = useQueryClient()
-  const { isMobileMode, isSidebarOpen, closeSidebar, openSidebar, scheduleCloseSidebar, cancelCloseSidebar } = useSidebarContext()
+  const { isMobileMode, isSidebarOpen, isSidebarPinned, closeSidebar, openSidebar, scheduleCloseSidebar, cancelCloseSidebar } = useSidebarContext()
 
-  // Close nav popup when the route changes (board/project selected)
+  // Close hover-only nav on route change; click-pinned stays open across page switches
   useEffect(() => {
+    if (isSidebarPinned) return // Keep open until menu button clicked again
     closeSidebar()
-  }, [pathname, closeSidebar])
+  }, [pathname, closeSidebar, isSidebarPinned])
 
   // Fetch user profile for name/username and subscription tier
   const { data: profile } = useQuery({
