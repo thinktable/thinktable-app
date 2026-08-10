@@ -17,8 +17,11 @@ The database includes the following tables:
 
 See `migration-list.txt` + `schema-snapshot.md` for the full local/remote snapshot.
 
-Latest DDL on thinkable:
+Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
+
+Latest local marker (no DDL):
+- `20260810132851_ai_edit_review_session` — AI Edit review UX (pending session / Save-Remove)
 
 Earlier foundation:
 - `20251124231547_create_saas_schema` - Initial schema creation

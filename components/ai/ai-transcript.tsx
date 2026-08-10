@@ -1,25 +1,23 @@
 'use client'
 
-// Transcript of AI turns — each turn is a draggable block for drop-onto-page
+// Transcript of AI turns — each turn is a draggable block (page frame or composer context)
 import { useState } from 'react' // Local edit state
 import type { AiMessage, AiChatBlockDragPayload } from '@/lib/ai/types' // Types
 import { AI_CHAT_BLOCK_MIME } from '@/lib/ai/types' // MIME
-import { plainToHtml } from '@/lib/ai/context-pack' // HTML for drop
+import { plainToHtml } from '@/lib/ai/context-pack' // HTML for page drop
 import { cn } from '@/lib/utils' // cn
-import { GripVertical, Bookmark, Loader2 } from 'lucide-react' // Icons
+import { GripVertical, Loader2 } from 'lucide-react' // Icons
 
 interface AiTranscriptProps {
   messages: AiMessage[] // Turns
   streamingId?: string | null // Assistant id currently streaming
   onEditUserMessage: (messageId: string, content: string) => Promise<void> // Cursor-style edit
-  onSaveSnapshot: (message: AiMessage) => Promise<void> // Save context snapshot
 }
 
 export function AiTranscript({
   messages,
   streamingId,
   onEditUserMessage,
-  onSaveSnapshot,
 }: AiTranscriptProps) {
   const [editingId, setEditingId] = useState<string | null>(null) // Inline edit target
   const [draft, setDraft] = useState('') // Edit draft
@@ -52,12 +50,13 @@ export function AiTranscript({
     const payload: AiChatBlockDragPayload = {
       source: 'ai-chat-block', // Discriminator
       messageId: m.id, // Origin
-      plain, // Text
-      html, // HTML
+      plain, // Text (for snapshot / page)
+      html, // HTML (page frame)
+      role: m.role, // Provenance: only assistant text is AI-written
     }
     event.dataTransfer.setData(AI_CHAT_BLOCK_MIME, JSON.stringify(payload)) // Primary MIME
-    event.dataTransfer.setData('text/plain', plain) // Fallback
-    event.dataTransfer.effectAllowed = 'copy' // Copy onto page
+    // Intentionally no text/plain — avoids pasting full text into the composer on drop
+    event.dataTransfer.effectAllowed = 'copy' // Copy to page or attach as context
   }
 
   if (messages.length === 0) return null // Empty handled by parent
@@ -82,8 +81,8 @@ export function AiTranscript({
                 draggable
                 onDragStart={(e) => onDragStart(e, m)}
                 className="mt-0.5 flex-shrink-0 w-5 h-5 flex items-center justify-center rounded text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 cursor-grab active:cursor-grabbing"
-                title="Drag onto page as a frame"
-                aria-label="Drag chat block onto page"
+                title="Drag onto page as a frame, or onto the input as context"
+                aria-label="Drag chat block"
               >
                 <GripVertical className="h-3.5 w-3.5" />
               </button>
@@ -135,24 +134,6 @@ export function AiTranscript({
                   </div>
                 )}
               </div>
-
-              <button
-                type="button"
-                className="opacity-0 group-hover:opacity-100 flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-black/[0.04]"
-                title="Save as context snapshot"
-                aria-label="Save as context snapshot"
-                disabled={busyId === m.id}
-                onClick={async () => {
-                  setBusyId(m.id)
-                  try {
-                    await onSaveSnapshot(m)
-                  } finally {
-                    setBusyId(null)
-                  }
-                }}
-              >
-                <Bookmark className="h-3.5 w-3.5" />
-              </button>
             </div>
           </div>
         )

@@ -144,17 +144,41 @@ export function formatContextPack(pack: AiContextPack): string {
 
 /** Ask-mode system prompt — answers in chat; never claims to have placed on the page. */
 export function askSystemPrompt(extraSkillHints: string[] = []): string {
-  const base = [ // Core instructions
-    'You are Thinktable Copilot in Ask mode.', // Identity
-    'Thinktable is a spatial mind-map: pages hold frames; frames hold blocks; threads connect frames.', // Domain
-    'Respond helpfully in the chat sidebar using clear markdown.', // Channel
-    'You may SUGGEST placements or edits, but you must NOT claim you placed or edited anything on the page.', // Invariant
-    'The user places content by dragging chat blocks onto the page.', // Placement model
-    'Be concise unless the user asks for depth.', // Style
+  const base = [
+    'You are Thinktable Copilot in Ask mode.',
+    'Thinktable is a spatial mind-map: pages hold frames; frames hold blocks; threads connect frames.',
+    'Respond helpfully in the chat sidebar using clear markdown.',
+    'You may SUGGEST placements or edits, but you must NOT claim you placed or edited anything on the page.',
+    'The user places content by dragging chat blocks onto the page.',
+    'Be concise unless the user asks for depth.',
   ]
-  if (extraSkillHints.length) { // Optional skills
-    base.push('Additional skill hints:') // Header
-    for (const h of extraSkillHints) base.push(`- ${h}`) // Bullets
+  if (extraSkillHints.length) {
+    base.push('Additional skill hints:')
+    for (const h of extraSkillHints) base.push(`- ${h}`)
   }
-  return base.join('\n') // Single system string
+  return base.join('\n')
 }
+
+/** Edit-mode system prompt — propose surgical page edits; user reviews before save. */
+export function editSystemPrompt(extraSkillHints: string[] = []): string {
+  const base = [
+    'You are Thinktable Copilot in Edit mode.',
+    'Thinktable is a spatial mind-map: pages hold frames; frames hold blocks; threads connect frames.',
+    'Propose the SMALLEST possible edits. Prefer one-word or short phrase replacements.',
+    'For each edit, use replacements: [{ oldText, newText }] with exact substrings from the frame text.',
+    'oldText MUST appear verbatim in the frame text from the context pack. newText is only what changes.',
+    'Example: to change "cat" to "dog" in a longer sentence, replacements: [{ "oldText": "cat", "newText": "dog" }] and contentHtml: "".',
+    'Do NOT rewrite the whole frame unless the user explicitly asks for a full rewrite.',
+    'Only use contentHtml (full frame HTML) as a last resort when a full rewrite is required; otherwise set contentHtml to "".',
+    'Prefer editing selected frames when listed. Do not invent frame ids.',
+    'Also include a short reply summarizing what you changed.',
+    'If nothing should change, return an empty edits array and explain why in reply.',
+    'Edits are proposals — the user will review, save, or discard them on the page.',
+  ]
+  if (extraSkillHints.length) {
+    base.push('Additional skill hints:')
+    for (const h of extraSkillHints) base.push(`- ${h}`)
+  }
+  return base.join('\n')
+}
+

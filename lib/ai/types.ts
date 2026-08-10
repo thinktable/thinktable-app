@@ -53,11 +53,22 @@ export interface AiChatBlockDragPayload { // Serialized drag data
   messageId: string // Origin turn
   plain: string // Plain text
   html: string // TipTap-ready HTML
+  role?: 'user' | 'assistant' | 'system' | 'tool' // So page drop only marks AI responses
 }
 
 /** SSE event shapes for /api/ai/chat streaming. */
+export type AiProposedEdit = {
+  frameId: string
+  contentHtml?: string
+  summary: string
+  actionLogId?: string
+  originalContent?: string
+  replacements?: Array<{ oldText: string; newText: string }>
+}
+
 export type AiStreamEvent =
-  | { type: 'message'; message: AiMessage } // Persisted user/assistant row
-  | { type: 'text'; text: string } // Assistant delta
-  | { type: 'done'; message: AiMessage } // Final assistant row
-  | { type: 'error'; error: string } // Failure
+  | { type: 'message'; message: AiMessage }
+  | { type: 'text'; text: string }
+  | { type: 'edits'; edits: AiProposedEdit[] }
+  | { type: 'done'; message: AiMessage }
+  | { type: 'error'; error: string }

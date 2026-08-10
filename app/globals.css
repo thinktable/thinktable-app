@@ -1235,6 +1235,87 @@ span[data-added="true"] {
     background: rgba(255, 255, 255, 0.08);
   }
 
+  /* AI pending edit — rainbow sheer mask (always visible while pending) */
+  .ProseMirror span.tt-ai-pending[data-ai-pending="true"] {
+    background: linear-gradient(
+      120deg,
+      rgba(255, 99, 132, 0.28),
+      rgba(255, 205, 86, 0.28),
+      rgba(75, 192, 192, 0.28),
+      rgba(54, 162, 235, 0.28),
+      rgba(153, 102, 255, 0.28)
+    );
+    background-size: 200% 200%;
+    animation: tt-ai-rainbow-shift 3s ease infinite;
+    border-radius: 2px;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+    cursor: pointer;
+  }
+
+  /* Persisted AI origin — reddish sheer only when top-bar toggle is on */
+  .ProseMirror span.tt-ai-origin[data-ai-origin="true"] {
+    background: transparent;
+  }
+  html.tt-show-ai-origin .ProseMirror span.tt-ai-origin[data-ai-origin="true"] {
+    background: rgba(220, 38, 38, 0.22);
+    border-radius: 2px;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+  html.tt-show-ai-origin.dark .ProseMirror span.tt-ai-origin[data-ai-origin="true"],
+  .dark html.tt-show-ai-origin .ProseMirror span.tt-ai-origin[data-ai-origin="true"] {
+    background: rgba(248, 113, 113, 0.28);
+  }
+
+  /* Frame / block rainbow glow while AI edit is pending */
+  .react-flow__node.tt-ai-pending-frame > div,
+  .tt-ai-pending-frame {
+    box-shadow:
+      0 0 0 2px rgba(255, 99, 132, 0.55),
+      0 0 12px 2px rgba(153, 102, 255, 0.45),
+      0 0 24px 4px rgba(54, 162, 235, 0.25) !important;
+    animation: tt-ai-glow-pulse 2.4s ease-in-out infinite;
+  }
+
+  /* ⋮⋮ grip on a block with a pending AI edit — tint + soft glow, no filled rectangle */
+  [data-tt-block-handle].tt-ai-pending-handle {
+    background: transparent !important;
+    border-radius: 6px;
+    color: rgb(124, 58, 237);
+    filter: drop-shadow(0 0 3px rgba(236, 72, 153, 0.7))
+      drop-shadow(0 0 5px rgba(99, 102, 241, 0.55));
+    animation: tt-ai-grip-pulse 2.4s ease-in-out infinite;
+  }
+  .dark [data-tt-block-handle].tt-ai-pending-handle {
+    color: rgb(196, 181, 253);
+    filter: drop-shadow(0 0 3px rgba(244, 114, 182, 0.75))
+      drop-shadow(0 0 5px rgba(129, 140, 248, 0.6));
+  }
+
+  @keyframes tt-ai-grip-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.72; }
+  }
+
+  /* Thread rainbow stroke while pending */
+  .react-flow__edge.tt-ai-pending-thread path.react-flow__edge-path {
+    stroke: url(#tt-ai-rainbow-stroke) !important;
+    filter: drop-shadow(0 0 4px rgba(153, 102, 255, 0.8));
+    stroke-width: 2.5 !important;
+  }
+
+  @keyframes tt-ai-rainbow-shift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+
+  @keyframes tt-ai-glow-pulse {
+    0%, 100% { filter: saturate(1); }
+    50% { filter: saturate(1.35); }
+  }
+
   /* Frame blocks: fill the content box so empty/short lines stay full-row clickable.
      min-width:max-content still lets unresized frames hug the longest nowrap line. */
   .ProseMirror[data-single-line="true"] {

@@ -70,6 +70,40 @@ const HANDLE_GUTTER = 24 // Text starts here (row `pl-6`), in local px — where
 const GRIP_H = 24 // ⋮⋮ button height (`h-6`) — used to vertically center it on the first line
 const GUTTER_EDGE_PAD = 6 // Extra gutter height so top/bottom hairlines stay inside the hover group
 
+/** True when a TipTap block range contains an aiPending mark. */
+function blockHasAiPending(editor: Editor, block: EditorBlockRef): boolean {
+  let found = false
+  editor.state.doc.nodesBetween(block.from, block.to, (node) => {
+    if (found) return false
+    if (node.isText && node.marks.some((m) => m.type.name === 'aiPending')) {
+      found = true
+      return false
+    }
+    return true
+  })
+  return found
+}
+
+/** All handle-blocks in the doc that contain a pending AI edit span. */
+function collectAiPendingBlocks(editor: Editor): EditorBlockRef[] {
+  const out: EditorBlockRef[] = []
+  editor.state.doc.descendants((node, pos) => {
+    const name = node.type.name
+    if (name === 'bulletList' || name === 'orderedList' || name === 'taskList') return true
+    if (!isHandleBlockType(name)) return true
+    const block: EditorBlockRef = {
+      from: pos,
+      to: pos + node.nodeSize,
+      node,
+      typeName: name,
+    }
+    if (blockHasAiPending(editor, block)) out.push(block)
+    if (name === 'listItem' || name === 'taskItem') return false
+    return true
+  })
+  return out
+}
+
 /** Resolve the DOM element for a ProseMirror block (handles sit beside this). */
 function blockDom(editor: Editor, block: EditorBlockRef): HTMLElement | null {
   const node = editor.view.nodeDOM(block.from)
@@ -172,6 +206,7 @@ export function TipTapBlockHandles({
   const rfZoom = useStore((s) => s.transform[2] || 1) // Live zoom — re-render on board zoom so grips can counter-scale to a constant screen size
   const queryClient = useQueryClient() // Refetch messages after extract
   const [hover, setHover] = useState<HandleLayout | null>(null) // Handle beside hovered block
+  const [aiPendingBlocks, setAiPendingBlocks] = useState<EditorBlockRef[]>([]) // Blocks with rainbow AI edits
   const [focusLayout, setFocusLayout] = useState<HandleLayout | null>(null) // Handle beside focused/caret block
   const [menu, setMenu] = useState<{
     x: number // viewport
@@ -203,6 +238,20 @@ export function TipTapBlockHandles({
     registerHostEditor(hostNodeId, editor)
     return () => unregisterHostEditor(hostNodeId, editor)
   }, [editor, hostNodeId])
+
+  // Keep ⋮⋮ grips visible + rainbow-styled for blocks with pending AI edits
+  useEffect(() => {
+    if (!editor || !enabled || editor.isDestroyed) {
+      setAiPendingBlocks([])
+      return
+    }
+    const refresh = () => setAiPendingBlocks(collectAiPendingBlocks(editor))
+    refresh()
+    editor.on('transaction', refresh)
+    return () => {
+      editor.off('transaction', refresh)
+    }
+  }, [editor, enabled])
 
   // Drop block wash + selection + menu (frame deselect, click away, etc.)
   const clearBlockSelection = useCallback(() => {
@@ -809,6 +858,12 @@ export function TipTapBlockHandles({
       const gl = layoutForBlock(editor, container, b)
       if (gl) gripLayouts.set(b.from, gl)
     }
+    // Always show grips on blocks with pending AI edits (rainbow handle)
+    for (const b of aiPendingBlocks) {
+      if (gripLayouts.has(b.from)) continue
+      const gl = layoutForBlock(editor, container, b)
+      if (gl) gripLayouts.set(b.from, gl)
+    }
   }
   const hoverLayout = hover ?? focusLayout
   if (hoverLayout && !gripLayouts.has(hoverLayout.block.from)) {
@@ -829,6 +884,7 @@ export function TipTapBlockHandles({
       {Array.from(gripLayouts.values()).map((gl) => {
         // nodrag only when this block is armed — otherwise RF must receive the pointer to drag the frame
         const armed = isPanelSelected && isBlockArmed(gl.block)
+        const aiPending = blockHasAiPending(editor, gl.block)
         // First-line band only — do NOT grow with wrapped multi-line text (add lines stay by the ⋮⋮)
         const lineH = Math.max(gl.firstLineH || GRIP_H, GRIP_H)
         const firstLineTop = gl.lineCenter - lineH / 2
@@ -904,10 +960,13 @@ export function TipTapBlockHandles({
               role="button"
               tabIndex={0}
               data-tt-block-handle
+              data-ai-pending-handle={aiPending ? 'true' : undefined}
               className={cn(
                 'absolute left-0 z-[2] w-5 h-6 flex items-center justify-center rounded',
                 armed ? 'nodrag nopan' : 'nopan',
-                'text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/10',
+                aiPending
+                  ? 'tt-ai-pending-handle text-violet-600 dark:text-violet-300'
+                  : 'text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/10',
                 'pointer-events-auto cursor-grab active:cursor-grabbing select-none'
               )}
               style={{

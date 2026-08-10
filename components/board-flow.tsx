@@ -67,6 +67,9 @@ import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
 import { setAiSelectedFrameIds } from '@/lib/ai/selection-bridge' // Bridge RF selection → AI Ask context
 import { AI_CHAT_BLOCK_MIME, type AiChatBlockDragPayload } from '@/lib/ai/types' // Drag chat turn onto page
+import { markHtmlWithAiOrigin } from '@/lib/ai/wrap-ai-html' // Persist AI provenance on chat-drop
+import { AiEditReviewBar } from '@/components/ai/ai-edit-review-bar' // Pending edit review chrome
+import { useAiEditSession } from '@/lib/ai/edit-session' // Frame pending glow / focus
 import {
   BLOCK_GROUP_PADDING,
   blockGroupNodeId,
@@ -1864,6 +1867,31 @@ function BoardFlowInner({
       return previousData
     },
   })
+
+  // Refetch frames when AI edit session saves/discards/applies pending
+  useEffect(() => {
+    const onMutated = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        contentUpdates?: Array<{ messageId: string; content: string }>
+      }>).detail
+      // Optimistic patch so Save isn't wiped by a stale refetch racing the DB write
+      if (detail?.contentUpdates?.length) {
+        const map = new Map(detail.contentUpdates.map((u) => [u.messageId, u.content]))
+        const patch = (old: unknown) => {
+          if (!Array.isArray(old)) return old
+          return old.map((m: { id?: string; content?: string }) =>
+            m?.id && map.has(m.id) ? { ...m, content: map.get(m.id) } : m
+          )
+        }
+        queryClient.setQueriesData({ queryKey: ['messages-for-panels', conversationId] }, patch)
+        queryClient.setQueriesData({ queryKey: ['messages-for-panels', conversationId, 'full'] }, patch)
+        queryClient.setQueriesData({ queryKey: ['messages-for-panels', conversationId, 'embed'] }, patch)
+      }
+      void refetchMessages()
+    }
+    window.addEventListener('ai-edits-mutated', onMutated)
+    return () => window.removeEventListener('ai-edits-mutated', onMutated)
+  }, [refetchMessages, queryClient, conversationId])
 
   // Signal host as soon as RF can pan/zoom — don’t wait on messages (that delayed the veil)
   useEffect(() => {
@@ -6932,7 +6960,10 @@ function BoardFlowInner({
           const { data: { user } } = await supabase.auth.getUser()
           if (!user || !conversationId) return
           takeSnapshot()
-          const content = payload.html || `<p>${payload.plain}</p>`
+          const rawContent = payload.html || `<p>${payload.plain}</p>`
+          // Only assistant (AI) response text gets persistent AI-origin marks — not user prompts
+          const content =
+            payload.role === 'assistant' ? markHtmlWithAiOrigin(rawContent) : rawContent
           const { error } = await supabase
             .from('messages')
             .insert({
@@ -6944,6 +6975,7 @@ function BoardFlowInner({
                 position,
                 fadeIn: true,
                 fromAiChat: true,
+                hasAiOrigin: payload.role === 'assistant',
                 aiMessageId: payload.messageId,
               }),
             })
@@ -7054,6 +7086,7 @@ function BoardFlowInner({
       className="absolute inset-0"
       onDoubleClick={embedded ? undefined : handlePaneDoubleClick}
     >
+      {!embedded && <AiEditReviewBar />}
       <ReactFlow
         // Hide React Flow watermark; Pro license by launch
         proOptions={{ hideAttribution: true }}

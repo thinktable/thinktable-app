@@ -21,6 +21,7 @@ import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Str
 import type { PageInTarget } from '@/components/block-actions-menu'
 import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
 import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, ScanText, WrapText } from 'lucide-react' // Rotate + fit-to-text / wrap
+import { useAiEditSession } from '@/lib/ai/edit-session' // Pending rainbow / review focus
 
 // Helper to check if content is effectively empty (handling HTML tags)
 const isContentEmpty = (content: string | undefined | null) => {
@@ -340,6 +341,7 @@ function TipTapContent({
   pageInTargets,
   onPageTurnInto,
   suspendContentSync = false, // True while RF frame-dragging — skip setContent remounts
+  forceContentSyncKey = 0, // Bump to setContent even while editor is focused (AI eye / remove / save)
 }: {
   content: string
   className?: string
@@ -367,12 +369,14 @@ function TipTapContent({
   pageInTargets?: PageInTarget[]
   onPageTurnInto?: (blockType: 'page' | 'pageIn', pageInParentId?: string | null) => void
   suspendContentSync?: boolean
+  forceContentSyncKey?: number
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { setActiveEditor } = useEditorContext()
   // Live frame-selected flag for TipTap DOM handlers (useEditor config is not recreated each render)
   const isPanelSelectedRef = useRef(!!isPanelSelected)
   isPanelSelectedRef.current = !!isPanelSelected
+  const lastAiForceSyncRef = useRef(0) // Last forceContentSyncKey we allowed while focused
   // Keep latest callbacks in refs so editorProps / onUpdate stay referentially stable across
   // RF drag re-renders (unstable options → useEditor setOptions every frame → databaseBlock NodeView remounts → table vanishes).
   const originalContentRef = useRef(originalContent)
@@ -692,7 +696,11 @@ function TipTapContent({
 
   useEffect(() => {
     if (editor) {
-      if (editor.isFocused) return // Caret owns the doc while typing; parent catches up on blur/save
+      // Caret owns the doc while typing — except when AI review forces a content swap
+      if (editor.isFocused && forceContentSyncKey === lastAiForceSyncRef.current) return
+      if (forceContentSyncKey !== lastAiForceSyncRef.current) {
+        lastAiForceSyncRef.current = forceContentSyncKey
+      }
       if (suspendContentSync) return // Frame drag: never setContent (remounts databaseBlock NodeView → table vanishes)
       // Compare DOCUMENTS, not HTML strings. The pageLink NodeView adds a class and TipTap emits
       // attributes in its own order, so editor.getHTML() never byte-equals the stored HTML once a
@@ -709,7 +717,9 @@ function TipTapContent({
       }
       // Sync prop → editor only when the document actually changed
       if (differs) {
-        editor.commands.setContent(content || '<p></p>')
+        // emitUpdate:false — programmatic AI eye/discard/save must not fire onUpdate
+        // (that set promptHasChanges and blocked discard from restoring the original)
+        editor.commands.setContent(content || '<p></p>', { emitUpdate: false })
         // Ensure cursor is visible by focusing if editor is empty
         if (!content || content.trim() === '' || content === '<p></p>') {
           // Set cursor position to start to show cursor
@@ -741,7 +751,7 @@ function TipTapContent({
         }
       }
     }
-  }, [editor, content, comments, suspendContentSync])
+  }, [editor, content, comments, suspendContentSync, forceContentSyncKey])
 
   // Reposition extension UI elements (like Grammarly) when panel moves
   useEffect(() => {
@@ -1363,6 +1373,17 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const supabase = createClient()
   const queryClient = useQueryClient()
   const router = useRouter()
+  const {
+    displayContentFor,
+    isFramePending,
+    pendingForMessage,
+    setFocusedEditId,
+    previewOriginal,
+    justRestoredByMessage,
+    consumeRestoredContent,
+  } = useAiEditSession() // AI edit review session
+  const wasAiPendingRef = useRef(false) // Detect pending → cleared (Remove / Save)
+  const [aiForceSyncKey, setAiForceSyncKey] = useState(0) // Bump to setContent even while focused
   const { reactFlowInstance, panelWidth, getSetNodes, flashcardMode, setFlashcardMode, selectedTag } = useReactFlowContext() // Get zoom, panel width, setNodes function, flashcard study mode, and selected tag
   const { setNodes, getNodes } = useReactFlow() // Get setNodes and getNodes for NodeToolbar actions
   const updateNodeInternals = useUpdateNodeInternals() // Remeasure auto-sized frames without setNodes (avoids RO→setNodes storms)
@@ -3735,10 +3756,22 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             icon: emoji,
           }) || merged
       }
-      // Accept server content when idle, or when Turn into rewrote blockType + HTML
-      if (merged !== promptContent && (!promptHasChanges || blockTypeChanged)) {
+      // When this frame has a pending AI edit, always show session display
+      // (proposed, or original when eye preview is on) — never clobber with raw server HTML.
+      if (promptMessage?.id && isFramePending(promptMessage.id)) {
+        const next = displayContentFor(promptMessage.id, merged)
+        if (next !== promptContent) setPromptContent(next)
+      } else if (promptMessage?.id && justRestoredByMessage[promptMessage.id] !== undefined) {
+        // Sticky Save/Remove content — ignore stale cache until it catches up
+        const sticky = justRestoredByMessage[promptMessage.id]
+        if (sticky !== promptContent) setPromptContent(sticky)
+      } else if (
+        merged !== promptContent &&
+        (!promptHasChanges || blockTypeChanged || wasAiPendingRef.current)
+      ) {
+        // Accept server content when idle, after Turn into, or right after AI Remove/Save
         setPromptContent(merged)
-        if (blockTypeChanged) setPromptHasChanges(false)
+        if (blockTypeChanged || wasAiPendingRef.current) setPromptHasChanges(false)
       }
     }
 
@@ -3758,6 +3791,10 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     promptMessage?.metadata?.notionObject,
     promptMessage?.metadata?.blockTitle,
     remoteBlockType,
+    isFramePending,
+    displayContentFor,
+    previewOriginal,
+    justRestoredByMessage,
   ])
 
   // Keep responseContent mirror for width-measurement helpers that still read it
@@ -3877,6 +3914,10 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     } else {
       // For regular panels, update message in database
       if (promptMessage) {
+        // While an AI proposal is pending, keep DB at the original so eye/remove stay correct
+        if (isFramePending(promptMessage.id)) {
+          return
+        }
         const { error } = await supabase
           .from('messages')
           .update({ content: newContent })
@@ -4203,6 +4244,60 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     }
   }, [showClipPreview])
 
+  // AI pending edits: show proposed (or original when eye preview is on); restore on Remove/Save
+  useEffect(() => {
+    if (isProjectBoard || !promptMessage?.id) {
+      wasAiPendingRef.current = false
+      return
+    }
+    const mid = promptMessage.id
+    const pending = isFramePending(mid)
+    if (pending) {
+      const next = displayContentFor(mid, promptMessage.content || '')
+      setPromptContent(next)
+      setPromptHasChanges(false)
+      wasAiPendingRef.current = true
+      setAiForceSyncKey((k) => k + 1) // Sync TipTap even if caret is in the frame
+      return
+    }
+    // Prefer session original/final from Remove/Save — query cache may still be stale
+    const restored = justRestoredByMessage[mid]
+    if (restored !== undefined) {
+      if (promptContent !== restored) {
+        setPromptContent(restored)
+        setPromptHasChanges(false)
+        setAiForceSyncKey((k) => k + 1)
+      }
+      wasAiPendingRef.current = false
+      // Hold sticky until optimistic/refetch content matches (prevents Save → revert race)
+      if ((promptMessage.content || '') === restored) {
+        consumeRestoredContent(mid)
+      }
+      return
+    }
+    // Pending just cleared without restore map — fall back to message content
+    if (wasAiPendingRef.current) {
+      const responseHtml = responseMessage?.content
+        ? formatResponseContent(responseMessage.content)
+        : ''
+      const merged = mergePanelHtml(promptMessage.content, responseHtml)
+      setPromptContent(merged)
+      setPromptHasChanges(false)
+      wasAiPendingRef.current = false
+      setAiForceSyncKey((k) => k + 1)
+    }
+  }, [
+    isProjectBoard,
+    promptMessage?.id,
+    promptMessage?.content,
+    responseMessage?.content,
+    previewOriginal,
+    isFramePending,
+    displayContentFor,
+    justRestoredByMessage,
+    consumeRestoredContent,
+  ])
+
   // Map-card frame is a container (like a Notion page) — ⋮⋮ lives on TipTap content blocks inside
   return (
     <div
@@ -4211,6 +4306,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         data-block-node={isBlock ? 'true' : undefined} // Marks blocks for selected connection-dot styling
         data-block-resized={wrapActive ? 'wrap' : undefined} // Wrap (locked/unlocked): soft-wrap in fixed width; else nowrap / clip
         data-clip-preview={showClipPreview ? 'true' : undefined} // Unlocked hover: full-content peek
+        data-ai-pending-frame={
+          !isProjectBoard && promptMessage?.id && isFramePending(promptMessage.id) ? 'true' : undefined
+        }
         className={cn(
           'group rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible transition-[opacity,box-shadow,background-color,border-color] duration-300', // Chrome sits outside; clip only inner body
           !isFillTransparent && 'backdrop-blur-sm', // Frost only when a fill is set — blur alone looks like a tinted plate
@@ -4229,7 +4327,11 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                 ? 'shadow-md' // Soft lift while full clipped content is revealed
                 : 'shadow-sm',
           // Blur non-flashcard panels when flashcard study mode is active
-          shouldBlur && 'blur-sm opacity-40 pointer-events-none'
+          shouldBlur && 'blur-sm opacity-40 pointer-events-none',
+          !isProjectBoard &&
+            promptMessage?.id &&
+            isFramePending(promptMessage.id) &&
+            'tt-ai-pending-frame'
         )}
       style={{
         // Unresized blocks: max-content × fit-content so the frame hugs text (nowrap until Enter)
@@ -4325,7 +4427,14 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         setIsFrameHovering(false)
       }}
       onClick={(e) => {
-        // Single-section items: no collapse expand-on-click
+        // Click rainbow pending span → focus that edit in the review bar
+        const pendingSpan = (e.target as HTMLElement | null)?.closest?.(
+          '[data-ai-pending="true"]'
+        )
+        if (pendingSpan && promptMessage?.id) {
+          const edit = pendingForMessage(promptMessage.id)
+          if (edit) setFocusedEditId(edit.id)
+        }
       }}
       onDoubleClick={(e) => {
         // Double-click anywhere on panel focuses the single text editor
@@ -4872,6 +4981,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               isFlashcard={isFlashcard}
               isPanelSelected={!!selected && !dragging} // Mid-drag: treat as unselected so ⋮⋮ / caret stay off
               suspendContentSync={!!dragging} // Keep databaseBlock NodeView mounted while the frame moves
+              forceContentSyncKey={aiForceSyncKey} // AI eye / remove / save swaps content even while focused
               isLoading={false}
               onBlur={handleEditorBlur}
               onEditorActiveChange={handleEditorActiveChange}

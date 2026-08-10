@@ -1,92 +1,93 @@
-// POST /api/ai/chat — Ask-mode streaming; never inserts into messages (page frames)
-import { createClient } from '@/lib/supabase/server' // Auth
+// POST /api/ai/chat — Ask streams in sidebar; Edit proposes page mutations (pending review)
+import { createClient } from '@/lib/supabase/server'
 import {
   askSystemPrompt,
+  editSystemPrompt,
   buildContextPack,
   formatContextPack,
   plainToHtml,
-} from '@/lib/ai/context-pack' // Context helpers
-import { skillHintsForIds } from '@/lib/ai/skills' // Skill hints
-import { NextRequest } from 'next/server' // Types
-import OpenAI from 'openai' // OpenAI SDK
+} from '@/lib/ai/context-pack'
+import { skillHintsForIds } from '@/lib/ai/skills'
+import { isSelectableAiMode } from '@/lib/ai/modes'
+import { NextRequest } from 'next/server'
+import OpenAI from 'openai'
 
-const openai = new OpenAI({ // Shared client
-  apiKey: process.env.OPENAI_API_KEY, // Env key
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
 })
 
-function sse(data: unknown): string { // Encode one SSE event
-  return `data: ${JSON.stringify(data)}\n\n` // Standard SSE
+function sse(data: unknown): string {
+  return `data: ${JSON.stringify(data)}\n\n`
 }
 
 export async function POST(request: NextRequest) {
-  const supabase = await createClient() // Cookie client
+  const supabase = await createClient()
   const {
     data: { user },
-  } = await supabase.auth.getUser() // Auth
-  if (!user) return new Response('Unauthorized', { status: 401 }) // 401
+  } = await supabase.auth.getUser()
+  if (!user) return new Response('Unauthorized', { status: 401 })
 
-  if (!process.env.OPENAI_API_KEY) { // Missing key
+  if (!process.env.OPENAI_API_KEY) {
     return new Response(JSON.stringify({ error: 'OPENAI_API_KEY not configured' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     })
   }
 
-  const body = await request.json().catch(() => ({})) // Parse body
-  const message = typeof body.message === 'string' ? body.message.trim() : '' // User text
-  let threadId = typeof body.threadId === 'string' ? body.threadId : null // Existing thread
-  const pageId = typeof body.pageId === 'string' ? body.pageId : null // Current page
+  const body = await request.json().catch(() => ({}))
+  const message = typeof body.message === 'string' ? body.message.trim() : ''
+  let threadId = typeof body.threadId === 'string' ? body.threadId : null
+  const pageId = typeof body.pageId === 'string' ? body.pageId : null
+  const mode = isSelectableAiMode(body.mode) ? body.mode : 'ask'
   const selectedFrameIds = Array.isArray(body.selectedFrameIds)
     ? body.selectedFrameIds.filter((id: unknown) => typeof id === 'string')
-    : [] // Selection
+    : []
   const snapshotIds = Array.isArray(body.snapshotIds)
     ? body.snapshotIds.filter((id: unknown) => typeof id === 'string')
-    : [] // Attached snapshots
-  const skipUserInsert = body.skipUserInsert === true // Edit-rewind already updated the user row
+    : []
+  const skipUserInsert = body.skipUserInsert === true
 
-  if (!message) return new Response('Missing message', { status: 400 }) // Require text
+  if (!message) return new Response('Missing message', { status: 400 })
 
-  // Ensure thread exists (create if needed) and belongs to user
   if (!threadId) {
-    const { data: created, error: createErr } = await supabase // New thread
-      .from('ai_threads') // Table
+    const { data: created, error: createErr } = await supabase
+      .from('ai_threads')
       .insert({
-        user_id: user.id, // Owner
-        title: message.slice(0, 60) || 'New AI chat', // Seed title from prompt
-        mode: 'ask', // Ask only for now
-        page_id: pageId, // Associate with current page when present
-        metadata: {}, // Empty
+        user_id: user.id,
+        title: message.slice(0, 60) || 'New AI chat',
+        mode,
+        page_id: pageId,
+        metadata: {},
       })
-      .select() // Return
-      .single() // One
+      .select()
+      .single()
     if (createErr || !created) {
       return new Response(JSON.stringify({ error: createErr?.message || 'Failed to create thread' }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' },
       })
     }
-    threadId = created.id // Use new id
+    threadId = created.id
   } else {
-    const { data: thread } = await supabase // Verify
-      .from('ai_threads') // Table
-      .select('id, metadata, page_id') // Fields
-      .eq('id', threadId) // Match
-      .eq('user_id', user.id) // Own
-      .maybeSingle() // One
-    if (!thread) return new Response('Thread not found', { status: 404 }) // Missing
+    const { data: thread } = await supabase
+      .from('ai_threads')
+      .select('id, metadata, page_id')
+      .eq('id', threadId)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (!thread) return new Response('Thread not found', { status: 404 })
   }
 
-  // Touch thread updated_at + optionally keep page association fresh
   await supabase
     .from('ai_threads')
     .update({
-      updated_at: new Date().toISOString(), // Activity
-      ...(pageId ? { page_id: pageId } : {}), // Refresh association when on a page
+      updated_at: new Date().toISOString(),
+      mode,
+      ...(pageId ? { page_id: pageId } : {}),
     })
     .eq('id', threadId)
     .eq('user_id', user.id)
 
-  // Load thread metadata for skills
   const { data: threadRow } = await supabase
     .from('ai_threads')
     .select('metadata')
@@ -97,7 +98,6 @@ export async function POST(request: NextRequest) {
     ? (meta.skillIds as unknown[]).filter((x): x is string => typeof x === 'string')
     : []
 
-  // Persist user message (unless edit-rewind already did)
   let userMessage: Record<string, unknown> | null = null
   if (!skipUserInsert) {
     const { data: inserted, error: userErr } = await supabase
@@ -109,7 +109,7 @@ export async function POST(request: NextRequest) {
         content: message,
         parts: [{ type: 'text', text: message }],
         status: 'complete',
-        metadata: {},
+        metadata: { mode },
       })
       .select()
       .single()
@@ -122,7 +122,6 @@ export async function POST(request: NextRequest) {
     userMessage = inserted
   }
 
-  // Prior transcript for model context
   const { data: history } = await supabase
     .from('ai_messages')
     .select('role, content')
@@ -139,8 +138,13 @@ export async function POST(request: NextRequest) {
     snapshotIds,
   })
 
+  const systemPrompt =
+    mode === 'edit'
+      ? editSystemPrompt(skillHintsForIds(skillIds))
+      : askSystemPrompt(skillHintsForIds(skillIds))
+
   const openaiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-    { role: 'system', content: askSystemPrompt(skillHintsForIds(skillIds)) },
+    { role: 'system', content: systemPrompt },
     { role: 'system', content: formatContextPack(pack) },
     ...((history || []) as Array<{ role: string; content: string }>).map((m) => ({
       role: m.role as 'user' | 'assistant',
@@ -148,7 +152,6 @@ export async function POST(request: NextRequest) {
     })),
   ]
 
-  // Ensure the latest user turn is present (covers skipUserInsert + rare read lag after insert)
   const last = history?.[history.length - 1]
   if (!last || last.role !== 'user' || last.content !== message) {
     openaiMessages.push({ role: 'user', content: message })
@@ -162,7 +165,6 @@ export async function POST(request: NextRequest) {
       try {
         if (userMessage) send({ type: 'message', message: userMessage })
 
-        // Placeholder assistant row (streaming)
         const { data: assistantRow, error: asstErr } = await supabase
           .from('ai_messages')
           .insert({
@@ -172,7 +174,7 @@ export async function POST(request: NextRequest) {
             content: '',
             parts: [],
             status: 'streaming',
-            metadata: { mode: 'ask' },
+            metadata: { mode },
           })
           .select()
           .single()
@@ -185,20 +187,140 @@ export async function POST(request: NextRequest) {
 
         send({ type: 'message', message: assistantRow })
 
-        const completion = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          messages: openaiMessages,
-          stream: true,
-          temperature: 0.7,
-          max_tokens: 2048,
-        })
-
         let full = ''
-        for await (const chunk of completion) {
-          const delta = chunk.choices[0]?.delta?.content || ''
-          if (!delta) continue
-          full += delta
-          send({ type: 'text', text: delta })
+
+        if (mode === 'edit') {
+          const completion = await openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            messages: openaiMessages,
+            temperature: 0.5,
+            max_tokens: 3000,
+            response_format: {
+              type: 'json_schema',
+              json_schema: {
+                name: 'thinktable_edit_response',
+                strict: true,
+                schema: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['reply', 'edits'],
+                  properties: {
+                    reply: { type: 'string' },
+                    edits: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        required: ['frameId', 'summary', 'replacements', 'contentHtml'],
+                        properties: {
+                          frameId: { type: 'string' },
+                          summary: { type: 'string' },
+                          // Prefer surgical replacements; leave empty when using contentHtml full rewrite
+                          replacements: {
+                            type: 'array',
+                            items: {
+                              type: 'object',
+                              additionalProperties: false,
+                              required: ['oldText', 'newText'],
+                              properties: {
+                                oldText: { type: 'string' },
+                                newText: { type: 'string' },
+                              },
+                            },
+                          },
+                          // Full-frame HTML only when a full rewrite is required; otherwise ""
+                          contentHtml: { type: 'string' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          })
+
+          const raw = completion.choices[0]?.message?.content || '{"reply":"","edits":[]}'
+          let parsed: {
+            reply?: string
+            edits?: Array<{
+              frameId: string
+              contentHtml?: string
+              summary: string
+              replacements?: Array<{ oldText: string; newText: string }>
+            }>
+          }
+          try {
+            parsed = JSON.parse(raw)
+          } catch {
+            parsed = { reply: raw, edits: [] }
+          }
+          full = parsed.reply || ''
+          if (full) send({ type: 'text', text: full })
+
+          const frameIds = new Set(pack.frames.map((f) => f.id))
+          const validEdits = (parsed.edits || []).filter((e) => frameIds.has(e.frameId))
+
+          const enriched: Array<{
+            frameId: string
+            contentHtml?: string
+            summary: string
+            actionLogId?: string
+            originalContent?: string
+            replacements?: Array<{ oldText: string; newText: string }>
+          }> = []
+
+          for (const e of validEdits) {
+            const { data: msg } = await supabase
+              .from('messages')
+              .select('id, content')
+              .eq('id', e.frameId)
+              .maybeSingle()
+            if (!msg) continue
+            const replacements = (e.replacements || []).filter((r) => (r.oldText || '').trim())
+            const { data: action } = await supabase
+              .from('ai_action_log')
+              .insert({
+                user_id: user.id,
+                thread_id: threadId,
+                message_id: assistantRow.id,
+                kind: 'update_frame',
+                payload: {
+                  frameId: e.frameId,
+                  contentHtml: e.contentHtml || '',
+                  replacements,
+                  summary: e.summary,
+                },
+                inverse: { frameId: e.frameId, contentHtml: msg.content },
+                status: 'pending',
+              })
+              .select('id')
+              .single()
+            enriched.push({
+              frameId: e.frameId,
+              contentHtml: e.contentHtml || '',
+              summary: e.summary || 'Update frame',
+              actionLogId: action?.id,
+              originalContent: msg.content as string,
+              replacements,
+            })
+          }
+
+          if (enriched.length) send({ type: 'edits', edits: enriched })
+        } else {
+          const completion = await openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            messages: openaiMessages,
+            stream: true,
+            temperature: 0.7,
+            max_tokens: 2048,
+          })
+
+          for await (const chunk of completion) {
+            const delta = chunk.choices[0]?.delta?.content || ''
+            if (!delta) continue
+            full += delta
+            send({ type: 'text', text: delta })
+          }
         }
 
         const parts = [{ type: 'text', text: full }]
@@ -209,7 +331,7 @@ export async function POST(request: NextRequest) {
             parts,
             status: 'complete',
             metadata: {
-              mode: 'ask',
+              mode,
               html: plainToHtml(full),
             },
           })
@@ -224,7 +346,6 @@ export async function POST(request: NextRequest) {
           return
         }
 
-        // Bump thread title on first exchange if still default
         await supabase
           .from('ai_threads')
           .update({ updated_at: new Date().toISOString() })

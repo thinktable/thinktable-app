@@ -8,6 +8,7 @@ import { ChatSidebar } from '@/components/chat-sidebar'
 import { EditorProvider } from '@/components/editor-context'
 import { ReactFlowContextProvider } from '@/components/react-flow-context'
 import { PreviewFocusProvider } from '@/lib/preview-focus-context'
+import { AiEditSessionProvider } from '@/lib/ai/edit-session'
 
 export default async function ConversationPage({
   params,
@@ -40,13 +41,15 @@ export default async function ConversationPage({
     <EditorProvider>
       <ReactFlowContextProvider conversationId={conversationId}>
         <PreviewFocusProvider>
-          <div className="h-full flex">
-            <div className="flex-1 relative min-w-0 h-full">
-              <BoardFlow conversationId={conversationId} />
-              <InputAreaWithStickyPrompt conversationId={conversationId} />
+          <AiEditSessionProvider>
+            <div className="h-full flex">
+              <div className="flex-1 relative min-w-0 h-full">
+                <BoardFlow conversationId={conversationId} />
+                <InputAreaWithStickyPrompt conversationId={conversationId} />
+              </div>
+              <ChatSidebar conversationId={conversationId} />
             </div>
-            <ChatSidebar conversationId={conversationId} />
-          </div>
+          </AiEditSessionProvider>
         </PreviewFocusProvider>
       </ReactFlowContextProvider>
     </EditorProvider>

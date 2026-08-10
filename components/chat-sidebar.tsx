@@ -8,7 +8,8 @@ import { AiThreadPicker, type AiThreadFilter } from './ai/ai-thread-picker' // H
 import { AiTranscript } from './ai/ai-transcript' // Turns
 import { AiComposer, regenerateAfterEdit } from './ai/ai-composer' // Composer
 import type { AiContextSnapshot, AiMessage, AiThread } from '@/lib/ai/types' // Types
-import type { AiModeId } from '@/lib/ai/modes' // Mode
+import { isSelectableAiMode } from '@/lib/ai/modes'
+import { useAiEditSession, buildFramePendingEdit } from '@/lib/ai/edit-session'
 import { htmlToPlain } from '@/lib/ai/context-pack' // Plain excerpts for snapshots
 import { createClient } from '@/lib/supabase/client' // Snapshot frame load
 import { cn } from '@/lib/utils' // cn
@@ -28,13 +29,14 @@ interface ChatSidebarProps {
 
 export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   const { isChatSidebarOpen, setChatSidebarOpen, logoDrawing, setLogoDrawing } = useSidebarContext()
+  const { addPendingEdits } = useAiEditSession()
   const [personalizeOpen, setPersonalizeOpen] = useState(false) // Logo modal
   const [hoverBrand, setHoverBrand] = useState(false) // Personalize pill
   const [thread, setThread] = useState<AiThread | null>(null) // Active thread
   const [filter, setFilter] = useState<AiThreadFilter>('all') // History filter
   const [messages, setMessages] = useState<AiMessage[]>([]) // Transcript
   const [streamingId, setStreamingId] = useState<string | null>(null) // Live assistant
-  const [mode, setMode] = useState<AiModeId>('ask') // Composer mode
+  const [mode, setMode] = useState<'ask' | 'edit'>('ask') // Composer mode
   const [seedPrompt, setSeedPrompt] = useState<string | undefined>(undefined) // Quick action
   const [attachedSnapshots, setAttachedSnapshots] = useState<AiContextSnapshot[]>([]) // Chips
   const [refreshKey, setRefreshKey] = useState(0) // Thread list refresh
@@ -157,6 +159,33 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     [conversationId]
   )
 
+  /** Drop chat turn onto composer → save + attach context (not paste into the box). */
+  const handleAttachChatBlock = useCallback(
+    async (payload: { messageId: string; plain: string }) => {
+      const existing = messages.find((m) => m.id === payload.messageId)
+      const message: AiMessage =
+        existing ||
+        ({
+          id: payload.messageId,
+          thread_id: thread?.id || '',
+          user_id: '',
+          role: 'assistant',
+          content: payload.plain,
+          parts: [{ type: 'text', text: payload.plain }],
+          parent_id: null,
+          status: 'complete',
+          metadata: {},
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } as AiMessage)
+      // Reuse if this message already has an attached snapshot chip
+      const already = attachedSnapshots.find((s) => s.message_id === payload.messageId)
+      if (already) return
+      await handleSaveSnapshot(message)
+    },
+    [messages, thread?.id, attachedSnapshots, handleSaveSnapshot]
+  )
+
   if (!isChatSidebarOpen) return null
 
   const hasTranscript = messages.length > 0
@@ -180,7 +209,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
             onFilterChange={setFilter}
             onSelect={(t) => {
               setThread(t)
-              setMode(t.mode || 'ask')
+              setMode(isSelectableAiMode(t.mode) ? t.mode : 'ask')
             }}
             onNew={handleNew}
             refreshKey={refreshKey}
@@ -250,7 +279,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                   What&apos;s on your mind?
                 </h2>
                 <p className="mt-1.5 text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-                  Ask in the sidebar. Drag any reply onto the page as a frame.
+                  Ask in the sidebar. Drag a reply onto the page as a frame, or onto the input as context.
                 </p>
               </div>
 
@@ -315,7 +344,6 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
               messages={messages}
               streamingId={streamingId}
               onEditUserMessage={handleEditUserMessage}
-              onSaveSnapshot={handleSaveSnapshot}
             />
           )}
 
@@ -337,6 +365,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                 onRemoveSnapshot={(id) =>
                   setAttachedSnapshots((prev) => prev.filter((s) => s.id !== id))
                 }
+                onAttachChatBlock={handleAttachChatBlock}
                 onThreadEnsured={(t) => {
                   setThread(t)
                   setRefreshKey((k) => k + 1)
@@ -345,6 +374,20 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                 onStreamingId={setStreamingId}
                 seedPrompt={seedPrompt}
                 onSeedConsumed={() => setSeedPrompt(undefined)}
+                onEdits={async (edits) => {
+                  await addPendingEdits(
+                    edits.map((e) =>
+                      buildFramePendingEdit({
+                        messageId: e.frameId,
+                        originalContent: e.originalContent,
+                        contentHtml: e.contentHtml,
+                        replacements: e.replacements,
+                        summary: e.summary,
+                        actionLogId: e.actionLogId,
+                      })
+                    )
+                  )
+                }}
               />
             </div>
           </div>

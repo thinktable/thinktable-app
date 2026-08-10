@@ -9,6 +9,7 @@ import Placeholder from '@tiptap/extension-placeholder'
 import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
 import { Haze } from '@/lib/tiptap/haze'
+import { AiPending, AiOrigin } from '@/lib/tiptap/ai-marks' // AI edit review + provenance
 import {
   BlockEquation,
   Callout,
@@ -43,6 +44,8 @@ export function createPanelExtensions(placeholder?: string): any[] {
     }),
     Highlight.configure({ multicolor: true }),
     Haze,
+    AiPending, // Rainbow pending AI edits
+    AiOrigin, // Persisted AI-written spans (toggleable reddish mask)
     TextStyle,
     Color,
     TextAlign.configure({ types: ['heading', 'paragraph'] }),

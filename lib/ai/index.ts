@@ -1,10 +1,13 @@
 // Barrel export for Thinktable AI foundation
-export * from './modes' // Modes
-export * from './skills' // Skills
-export * from './agents' // Agents
-export * from './connectors' // Connectors
-export * from './actions' // Actions
-export * from './types' // Types + MIME
-export * from './context-pack' // Context pack helpers
-export * from './selection-bridge' // Selection bridge
-export * from './stream' // SSE client helpers
+export * from './modes'
+export * from './skills'
+export * from './agents'
+export * from './connectors'
+export * from './actions'
+export * from './types'
+export * from './context-pack'
+export * from './selection-bridge'
+export * from './stream'
+export * from './wrap-ai-html'
+export * from './edit-session'
+export * from './apply-replacements'

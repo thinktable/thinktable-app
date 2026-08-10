@@ -1,12 +1,18 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-10T02:38:15Z`
+- Snapped at: `2026-08-10T13:28:51Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
-- Remote applied includes `20260810020000_ai_copilot_foundation` (AI tables live on thinkable)
+- Remote applied still tops out at `20260810020000_ai_copilot_foundation` (no new DDL this save)
 
 ## This save
+
+- No DDL. Marker `20260810132851_ai_edit_review_session.sql`.
+- **AI Edit review UX**: Ask/Edit modes; surgical `replacements`; in-memory pending proposals (DB keeps original until Save); TipTap `aiPending` / `aiOrigin` marks; bottom review bar (eye / Remove / Save); rainbow frame glow; soft ⋮⋮ grip tint; optimistic message-cache patch so Save/Remove survive refetch races.
+- Persisted via existing `messages.content` + `ai_action_log` — schema unchanged.
+
+## Prior: AI copilot foundation
 
 - **DDL** `20260810020000_ai_copilot_foundation.sql` applied on thinkable:
   - `ai_threads` — universal per-user sidebar chats (`page_id` filter association)
