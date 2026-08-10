@@ -973,7 +973,7 @@ export function DatabaseViewToolbar({
   return (
     <div
       className={cn(
-        'relative flex items-center gap-1 border-b border-gray-100 px-2 py-1.5 bg-white',
+        'relative flex items-center gap-1 px-1 py-1 bg-transparent',
         className
       )}
       onPointerDown={(e) => e.stopPropagation()}

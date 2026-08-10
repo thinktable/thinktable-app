@@ -2,6 +2,14 @@
 
 import { NOTION_VERSION } from './config'
 import { normalizeNotionId } from './pages'
+import {
+  notionQuickFiltersToFilter,
+  notionViewTypeToLayout,
+  queryNotionViewPageIds,
+  resolveNotionViewForDatabase,
+  type NotionView,
+  type NotionViewSummary,
+} from './views'
 
 /** One property column in a Notion database. */
 export type NotionDbProperty = {
@@ -30,11 +38,14 @@ export type NotionDbRow = {
 /** Full payload for the structured database table UI. */
 export type NotionDatabaseTable = {
   id: string
+  dataSourceId: string // Data source used for query / create row (2025-09-03)
   title: string
   url?: string
   icon?: string | null
   properties: NotionDbProperty[] // Column order (title first)
   rows: NotionDbRow[]
+  /** Notion Views API slice — filter/sorts already applied server-side; layout for client seed. */
+  notionView?: NotionViewSummary | null
 }
 
 /** Pull plain text from a Notion rich_text array. */
@@ -135,6 +146,182 @@ function emojiFromIcon(icon: { type?: string; emoji?: string } | null | undefine
   return icon?.type === 'emoji' && icon.emoji ? icon.emoji : null
 }
 
+/** Pull a Notion UUID from a deep link (linked views often URL to the source DB). */
+function notionIdFromUrl(url: string): string | null {
+  const dashed = url.match(
+    /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
+  )
+  if (dashed) return dashed[1].toLowerCase()
+  const compact = url.match(/([0-9a-f]{32})/i)
+  if (!compact) return null
+  const h = compact[1].toLowerCase()
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
+function normalizeNotionIdLoose(id: string): string {
+  const h = id.replace(/-/g, '').toLowerCase()
+  if (h.length !== 32) return id.toLowerCase()
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
+/** Normalize a DB / view title for matching (drop view-type suffixes). */
+function normalizeDbTitle(s: string): string {
+  return s
+    .replace(/\s*[—–-]\s*(list|board|table|gallery|calendar|timeline|chart|folder|view)\s*$/i, '')
+    .trim()
+    .toLowerCase()
+}
+
+/** Token set for fuzzy title overlap (ignore tiny words). */
+function titleTokens(s: string): Set<string> {
+  return new Set(
+    normalizeDbTitle(s)
+      .split(/[^a-z0-9]+/i)
+      .map((t) => t.trim())
+      .filter((t) => t.length > 1)
+  )
+}
+
+function titleScore(hint: string, candidate: string): number {
+  const a = normalizeDbTitle(hint)
+  const b = normalizeDbTitle(candidate)
+  if (!a || !b) return 0
+  if (a === b) return 100
+  if (a.includes(b) || b.includes(a)) return 80
+  const ta = titleTokens(a)
+  const tb = titleTokens(b)
+  if (!ta.size || !tb.size) return 0
+  let hit = 0
+  for (const t of ta) if (tb.has(t)) hit += 1
+  return (hit / Math.max(ta.size, tb.size)) * 60
+}
+
+type ResolvedDataSource = {
+  dataSourceId: string
+  databaseId?: string
+  title?: string
+  url?: string
+  icon?: string | null
+}
+
+/**
+ * Linked Notion views often retrieve as a database with an empty `data_sources` list
+ * (API does not expose the link target). Find an accessible data_source by title —
+ * targeted search first, then a broader scan of shared data_sources.
+ */
+async function resolveDataSourceByTitleSearch(
+  headers: Record<string, string>,
+  titleHint: string
+): Promise<ResolvedDataSource | null> {
+  const query = normalizeDbTitle(titleHint) || titleHint.trim()
+  if (!query) return null
+
+  const titleOf = (obj: {
+    title?: Array<{ plain_text?: string }>
+    name?: string
+  }) => {
+    const fromArr = (obj.title || []).map((t) => t.plain_text || '').join('').trim()
+    return fromArr || (typeof obj.name === 'string' ? obj.name.trim() : '')
+  }
+
+  type SearchHit = {
+    object?: string
+    id?: string
+    url?: string
+    icon?: unknown
+    title?: Array<{ plain_text?: string }>
+    name?: string
+    parent?: { database_id?: string; type?: string }
+  }
+
+  const pickFromHits = async (results: SearchHit[]): Promise<ResolvedDataSource | null> => {
+    let best: { score: number; hit: ResolvedDataSource } | null = null
+
+    const consider = (score: number, hit: ResolvedDataSource) => {
+      if (score < 30) return // Allow single shared token (e.g. "tasks") across view vs source titles
+      if (!best || score > best.score) best = { score, hit }
+    }
+
+    for (const r of results) {
+      if (!r.id) continue
+      if (r.object === 'data_source') {
+        const t = titleOf(r)
+        consider(titleScore(titleHint, t), {
+          dataSourceId: r.id,
+          databaseId: r.parent?.database_id,
+          title: t || undefined,
+          url: r.url,
+          icon: emojiFromIcon(r.icon as { type?: string; emoji?: string } | null),
+        })
+        continue
+      }
+      if (r.object !== 'database') continue
+      const t = titleOf(r)
+      const score = titleScore(titleHint, t)
+      if (score < 30) continue
+      const dbRes = await fetch(`https://api.notion.com/v1/databases/${r.id}`, {
+        method: 'GET',
+        headers,
+      })
+      const dbPayload = await dbRes.json().catch(() => ({}))
+      const sources =
+        (dbPayload?.data_sources as Array<{ id?: string; name?: string }> | undefined) || []
+      if (!dbRes.ok || !sources.length) continue
+      const named =
+        sources.find((s) => titleScore(titleHint, s.name || '') >= 80) ||
+        sources.find((s) => titleScore(titleHint, s.name || '') >= 30) ||
+        sources[0]
+      if (!named?.id) continue
+      consider(Math.max(score, titleScore(titleHint, named.name || t)), {
+        dataSourceId: named.id,
+        databaseId: dbPayload.id || r.id,
+        title: named.name || t || undefined,
+        url: dbPayload.url || r.url,
+        icon: emojiFromIcon((dbPayload.icon || r.icon) as { type?: string; emoji?: string } | null),
+      })
+    }
+
+    return best?.hit || null
+  }
+
+  // 1) Targeted search with the cleaned title
+  const targeted = await fetch('https://api.notion.com/v1/search', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ query, page_size: 25 }),
+  })
+  const targetedPayload = await targeted.json().catch(() => ({}))
+  if (targeted.ok) {
+    const hit = await pickFromHits((targetedPayload.results || []) as SearchHit[])
+    if (hit) return hit
+  }
+
+  // 2) Broader scan — linked views often need the *source* DB which has a different title
+  const pool: SearchHit[] = []
+  let cursor: string | undefined
+  let pages = 0
+  do {
+    const res = await fetch('https://api.notion.com/v1/search', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        page_size: 100,
+        start_cursor: cursor,
+        sort: { direction: 'descending', timestamp: 'last_edited_time' },
+      }),
+    })
+    const payload = await res.json().catch(() => ({}))
+    if (!res.ok) break
+    for (const r of payload.results || []) {
+      if (r?.object === 'data_source' || r?.object === 'database') pool.push(r)
+    }
+    cursor = payload.has_more ? payload.next_cursor : undefined
+    pages += 1
+  } while (cursor && pages < 5)
+
+  return pickFromHits(pool)
+}
+
 /**
  * Load database title/properties + all queryable rows for the structured table UI.
  * Accepts a Notion **database** id (container) or **data_source** id (table).
@@ -157,6 +344,7 @@ export async function fetchNotionDatabaseTable(
   let url: string | undefined
   let icon: string | null = null
   let dbErrorMessage: string | null = null
+  let emptySources = false // Linked views often return database + [] data_sources
 
   const dbRes = await fetch(`https://api.notion.com/v1/databases/${databaseOrDataSourceId}`, {
     method: 'GET',
@@ -171,15 +359,16 @@ export async function fetchNotionDatabaseTable(
     icon = emojiFromIcon(dbPayload.icon)
     const sources = (dbPayload.data_sources as Array<{ id?: string; name?: string }> | undefined) || []
     if (sources.length === 0) {
-      throw new Error(
-        'No data sources accessible for this database. In Notion, open the database → ••• → Connections and share it with Thinktable.'
-      )
+      // Don't throw — linked views / partial share leave this empty; try other resolvers
+      emptySources = true
+    } else {
+      // Prefer a source whose name matches the DB title; else first accessible source
+      const named =
+        sources.find((s) => (s.name || '').trim().toLowerCase() === title.toLowerCase()) ||
+        sources[0]
+      dataSourceId = named.id || null
+      if (named.name?.trim()) title = named.name.trim()
     }
-    // Prefer a source whose name matches the DB title; else first accessible source
-    const named =
-      sources.find((s) => (s.name || '').trim().toLowerCase() === title.toLowerCase()) || sources[0]
-    dataSourceId = named.id || null
-    if (named.name?.trim()) title = named.name.trim()
   } else {
     dbErrorMessage = dbPayload?.message || `Failed to load Notion database ${databaseOrDataSourceId}`
   }
@@ -201,11 +390,96 @@ export async function fetchNotionDatabaseTable(
       if (dsTitle) title = dsTitle
       url = dsProbePayload.url || url
       icon = emojiFromIcon(dsProbePayload.icon) || icon
-    } else if (dbErrorMessage) {
-      throw new Error(dbErrorMessage)
-    } else {
-      throw new Error(dsProbePayload?.message || 'Notion data source unavailable')
     }
+  }
+
+  // Always resolve views against the *request* id (linked embed container), not the source DB
+  const embedDatabaseId = databaseOrDataSourceId
+  let notionView: NotionView | null = null
+  try {
+    notionView = await resolveNotionViewForDatabase(accessToken, {
+      databaseId: embedDatabaseId,
+      dataSourceId,
+      titleHint: title,
+      url,
+      embedOnly: emptySources, // Don't list source “All” views for linked embeds
+    })
+  } catch (e) {
+    console.warn('[notion/database] resolve view failed', e)
+    notionView = null
+  }
+  if (notionView?.data_source_id && !dataSourceId) {
+    dataSourceId = notionView.data_source_id
+  }
+  // Prefer the embed/view label over the underlying source DB name for linked views
+  const keepLinkedTitle: string | null = emptySources
+    ? notionView?.name?.trim() || title || null
+    : null
+
+  // Linked view URL often points at the *source* database — try that id’s data_sources
+  if (!dataSourceId && emptySources && url) {
+    const fromUrl = notionIdFromUrl(url)
+    if (fromUrl && fromUrl !== normalizeNotionIdLoose(databaseOrDataSourceId)) {
+      const srcRes = await fetch(`https://api.notion.com/v1/databases/${fromUrl}`, {
+        method: 'GET',
+        headers,
+      })
+      const srcPayload = await srcRes.json().catch(() => ({}))
+      const sources =
+        (srcPayload?.data_sources as Array<{ id?: string; name?: string }> | undefined) || []
+      if (srcRes.ok && sources.length) {
+        const named =
+          sources.find((s) => titleScore(title, s.name || '') >= 40) || sources[0]
+        if (named?.id) {
+          dataSourceId = named.id
+          databaseId = srcPayload.id || fromUrl
+          if (named.name?.trim() && !keepLinkedTitle) title = named.name.trim()
+          if (srcPayload.url) url = srcPayload.url
+          icon = emojiFromIcon(srcPayload.icon) || icon
+        }
+      }
+    }
+  }
+
+  // Linked view / empty data_sources → find the real source via search (title / fuzzy)
+  if (!dataSourceId && (emptySources || dbErrorMessage)) {
+    const found = await resolveDataSourceByTitleSearch(headers, title)
+    if (found) {
+      dataSourceId = found.dataSourceId
+      if (found.databaseId) databaseId = found.databaseId
+      if (found.title && !keepLinkedTitle) title = found.title
+      if (found.url) url = found.url
+      if (found.icon) icon = found.icon
+    }
+  }
+
+  // Retry once we know the data_source (linked embeds can title-match a source view)
+  if (dataSourceId && !notionView) {
+    try {
+      notionView = await resolveNotionViewForDatabase(accessToken, {
+        databaseId: embedDatabaseId,
+        dataSourceId,
+        titleHint: keepLinkedTitle || title,
+        url,
+        embedOnly: emptySources,
+      })
+      if (notionView?.data_source_id && notionView.data_source_id !== dataSourceId) {
+        // Prefer the view’s declared source when present
+        dataSourceId = notionView.data_source_id
+      }
+    } catch {
+      /* keep null */
+    }
+  }
+
+  if (!dataSourceId) {
+    if (emptySources) {
+      throw new Error(
+        'Linked Notion view — share the original database with Thinktable (••• → Connections), not only this view.'
+      )
+    }
+    if (dbErrorMessage) throw new Error(dbErrorMessage)
+    throw new Error('Notion data source unavailable')
   }
 
   // Schema lives on the data source (not the database container)
@@ -218,11 +492,15 @@ export async function fetchNotionDatabaseTable(
     throw new Error(dsPayload?.message || `Failed to load Notion data source ${dataSourceId}`)
   }
 
-  // Prefer data-source title/url/icon when present
+  // Prefer data-source title/url/icon when present (keep linked-view label when applicable)
   const dsTitleArr = (dsPayload.title as Array<{ plain_text?: string }> | undefined) || []
   const dsTitle = dsTitleArr.map((t) => t.plain_text || '').join('').trim()
-  if (dsTitle) title = dsTitle
-  if (dsPayload.url) url = dsPayload.url
+  if (keepLinkedTitle) {
+    title = keepLinkedTitle
+  } else if (dsTitle) {
+    title = dsTitle
+  }
+  if (dsPayload.url && !emptySources) url = dsPayload.url
   if (dsPayload.icon) icon = emojiFromIcon(dsPayload.icon)
 
   const propsObj = (dsPayload.properties || {}) as Record<
@@ -261,42 +539,108 @@ export async function fetchNotionDatabaseTable(
     return a.name.localeCompare(b.name)
   })
 
-  const rows: NotionDbRow[] = []
-  let startCursor: string | undefined
-  do {
-    const qRes = await fetch(`https://api.notion.com/v1/data_sources/${dataSourceId}/query`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ page_size: 100, start_cursor: startCursor }),
+  // Prefer official view-query (Notion applies filter/sorts server-side). Copying
+  // filter onto data_source query often no-ops or fails; we used to silently dump the whole DB.
+  let viewPageIds: string[] | null = null
+  if (notionView?.id) {
+    viewPageIds = await queryNotionViewPageIds(accessToken, notionView.id)
+    console.info('[notion/database] view query', {
+      viewId: notionView.id,
+      viewName: notionView.name,
+      pageCount: viewPageIds?.length ?? null,
+      hasFilter: !!(notionView.filter && Object.keys(notionView.filter).length),
+      hasQuickFilters: !!(notionView.quick_filters && Object.keys(notionView.quick_filters).length),
     })
-    const qPayload = await qRes.json()
-    if (!qRes.ok) {
-      throw new Error(qPayload?.message || `Failed to query Notion data source ${dataSourceId}`)
-    }
-    for (const result of qPayload.results || []) {
-      if (result?.object !== 'page') continue
-      const pageProps = (result.properties || {}) as Record<string, Record<string, unknown>>
-      const cells: Record<string, NotionDbCell> = {}
-      for (const [name, prop] of Object.entries(pageProps)) {
-        cells[name] = cellFromProperty(prop)
-      }
-      rows.push({
-        id: result.id,
-        url: result.url,
-        icon: emojiFromIcon(result.icon),
-        cells,
+  }
+
+  const viewFilter =
+    (notionView?.filter && Object.keys(notionView.filter).length > 0
+      ? notionView.filter
+      : null) || notionQuickFiltersToFilter(notionView?.quick_filters)
+  const viewSorts =
+    Array.isArray(notionView?.sorts) && notionView!.sorts!.length > 0 ? notionView!.sorts : null
+
+  /** Paginate data_source query; optionally apply view filter/sorts as a secondary path. */
+  const queryAllRows = async (withView: boolean): Promise<NotionDbRow[]> => {
+    const out: NotionDbRow[] = []
+    let cursor: string | undefined
+    do {
+      const body: Record<string, unknown> = { page_size: 100, start_cursor: cursor }
+      if (withView && viewFilter) body.filter = viewFilter
+      if (withView && viewSorts) body.sorts = viewSorts
+      const qRes = await fetch(`https://api.notion.com/v1/data_sources/${dataSourceId}/query`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
       })
+      const qPayload = await qRes.json()
+      if (!qRes.ok) {
+        throw new Error(qPayload?.message || `Failed to query Notion data source ${dataSourceId}`)
+      }
+      for (const result of qPayload.results || []) {
+        if (result?.object !== 'page') continue
+        const pageProps = (result.properties || {}) as Record<string, Record<string, unknown>>
+        const cells: Record<string, NotionDbCell> = {}
+        for (const [name, prop] of Object.entries(pageProps)) {
+          cells[name] = cellFromProperty(prop)
+        }
+        out.push({
+          id: result.id,
+          url: result.url,
+          icon: emojiFromIcon(result.icon),
+          cells,
+        })
+      }
+      cursor = qPayload.has_more ? qPayload.next_cursor : undefined
+    } while (cursor)
+    return out
+  }
+
+  let rows: NotionDbRow[]
+  if (viewPageIds) {
+    // Hydrate properties from data_source, then keep/order only view-query page ids
+    const all = await queryAllRows(false)
+    const byId = new Map(all.map((r) => [r.id.replace(/-/g, '').toLowerCase(), r]))
+    rows = viewPageIds
+      .map((id) => byId.get(id.replace(/-/g, '').toLowerCase()))
+      .filter((r): r is NotionDbRow => !!r)
+  } else if (viewFilter || viewSorts) {
+    try {
+      rows = await queryAllRows(true)
+    } catch (e) {
+      console.warn('[notion/database] filter query failed; not dumping full DB', e)
+      rows = []
     }
-    startCursor = qPayload.has_more ? qPayload.next_cursor : undefined
-  } while (startCursor)
+  } else if (emptySources) {
+    // Linked embed without a resolvable view — refuse to dump the unfiltered source
+    console.warn('[notion/database] linked embed: no view resolved; returning empty rows', {
+      embedDatabaseId,
+      title,
+    })
+    rows = []
+  } else {
+    rows = await queryAllRows(false)
+  }
+
+  const notionViewSummary: NotionViewSummary | null = notionView
+    ? {
+        id: notionView.id,
+        name: notionView.name || title,
+        type: notionView.type,
+        layout: notionViewTypeToLayout(notionView.type),
+      }
+    : null
 
   return {
-    id: databaseId,
+    // Keep the request/embed id so the client keeps fetching the linked container (not the source DS)
+    id: embedDatabaseId,
+    dataSourceId: dataSourceId!,
     title,
     url,
     icon,
     properties,
     rows,
+    notionView: notionViewSummary,
   }
 }
 
@@ -452,5 +796,66 @@ export async function updateNotionPageProperty(
   const payload = await res.json().catch(() => ({}))
   if (!res.ok) {
     throw new Error(payload?.message || `Failed to update Notion page ${pageId}`)
+  }
+}
+
+/**
+ * Create a new empty row (page) in a Notion data source.
+ * Returns a render-ready row for optimistic UI.
+ */
+export async function createNotionDatabaseRow(
+  accessToken: string,
+  dataSourceId: string,
+  titlePropertyName: string
+): Promise<NotionDbRow> {
+  const properties: Record<string, unknown> = {
+    [titlePropertyName]: {
+      title: [{ type: 'text', text: { content: '' } }],
+    },
+  }
+  const res = await fetch('https://api.notion.com/v1/pages', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Notion-Version': NOTION_VERSION,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      parent: { type: 'data_source_id', data_source_id: dataSourceId },
+      properties,
+    }),
+  })
+  const payload = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(payload?.message || 'Failed to create Notion database row')
+  }
+  const cells: Record<string, NotionDbCell> = {
+    [titlePropertyName]: { type: 'title', text: '' },
+  }
+  return {
+    id: payload.id,
+    url: payload.url,
+    icon: emojiFromIcon(payload.icon),
+    cells,
+  }
+}
+
+/** Archive (soft-delete) a Notion page / database row. */
+export async function archiveNotionPage(
+  accessToken: string,
+  pageId: string
+): Promise<void> {
+  const res = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Notion-Version': NOTION_VERSION,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ archived: true }),
+  })
+  const payload = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(payload?.message || `Failed to archive Notion page ${pageId}`)
   }
 }

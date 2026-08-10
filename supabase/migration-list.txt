@@ -1,10 +1,10 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-09T22:00:49Z
-# postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
+# snapped_at=2026-08-10T00:00:40Z
+# postgres=17.6.1.052 gotrue=v2.195.0 rest=v13.0.5 storage=v1.68.1
 # Note: supabase db dump --linked / projects list need login or SUPABASE_DB_PASSWORD;
-# snapshot via local migrations + apps/web/supabase/.temp service versions.
+# snapshot via local migrations + supabase/.temp service versions.
 #
 # Local migration files:
 20251203111351_schema_documentation.md
@@ -55,6 +55,4 @@
 20260809194448_notion_mindmap_structured_database.sql
 20260809212053_rotation_safe_pagelink_chrome.sql
 20260809220049_notion_db_edit_and_view_settings.sql
-#
-# No new schema this save (frontend: Notion DB cell editing + data_sources API
-# + Thinktable view settings; marker only — schema unchanged).
+20260810000100_notion_views_api_linked_filters.sql

@@ -75,7 +75,7 @@ export function ThinktableBrandMark({
     >
       {/* Logo disc — clipped circle + border matching grey button icons */}
       <div
-        className="h-full w-full overflow-hidden rounded-full border-2 border-gray-500 dark:border-gray-400"
+        className="h-full w-full overflow-hidden rounded-full border-[1.5px] border-gray-500 dark:border-gray-400"
         style={{ backgroundColor: LOGO_CIRCLE_COLOR }}
       >
         {drawingUrl ? (

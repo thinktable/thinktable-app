@@ -6,6 +6,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import {
   isNotionPropertyEditable,
   updateNotionPageProperty,
+  archiveNotionPage,
   type NotionPropertyEditValue,
 } from '@/lib/notion/database'
 
@@ -98,6 +99,46 @@ export async function PATCH(
   } catch (error) {
     console.error('Notion page property update failed:', error)
     const message = error instanceof Error ? error.message : 'Failed to update Notion page'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}
+
+/** Archive (soft-delete) a Notion page / database row. */
+export async function DELETE(
+  _request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id: pageId } = await context.params
+    if (!pageId) {
+      return NextResponse.json({ error: 'Missing page id' }, { status: 400 })
+    }
+
+    const supabase = await createClient()
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
+    if (userError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const admin = createAdminClient()
+    const { data: connection, error: connError } = await admin
+      .from('notion_connections')
+      .select('access_token')
+      .eq('user_id', user.id)
+      .maybeSingle()
+
+    if (connError || !connection?.access_token) {
+      return NextResponse.json({ error: 'Notion is not connected' }, { status: 400 })
+    }
+
+    await archiveNotionPage(connection.access_token, pageId)
+    return NextResponse.json({ ok: true, pageId })
+  } catch (error) {
+    console.error('Notion page archive failed:', error)
+    const message = error instanceof Error ? error.message : 'Failed to delete Notion page'
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

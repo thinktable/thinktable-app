@@ -3,7 +3,18 @@
 // Editable Notion database with Thinktable view settings (layout / filter / sort / group / color / sub-tasks).
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Check, ChevronDown, ChevronRight, Hash, List, Loader2, Type } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  GripVertical,
+  Hash,
+  List,
+  Loader2,
+  Plus,
+  Trash2,
+  Type,
+} from 'lucide-react'
 import {
   applyEditToCell,
   isNotionPropertyEditable,
@@ -17,6 +28,7 @@ import {
 import {
   applyViewRows,
   buildSubTaskTree,
+  defaultDatabaseViewSettings,
   groupRows,
   normalizeViewSettings,
   parseViewSettings,
@@ -34,6 +46,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
+
+const ROW_GUTTER = 20 // Left padding so overlay ⋮⋮ / + sit outside the first property column
 
 type NotionDatabaseTableViewProps = {
   notionDatabaseId: string // Notion DB UUID to load
@@ -460,6 +474,102 @@ function EditableCell({
   )
 }
 
+/** Left-gutter ⋮⋮ for a database row — overlays outside the first cell (no empty column). */
+function RowHandle({
+  row,
+  selected,
+  onSelect,
+  onDelete,
+  onOpen,
+}: {
+  row: NotionDbRow
+  selected: boolean
+  onSelect: () => void
+  onDelete: () => void
+  onOpen: () => void
+}) {
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            'tt-db-row-handle flex h-5 w-5 items-center justify-center rounded text-gray-400',
+            'opacity-0 group-hover/row:opacity-100 focus:opacity-100 hover:bg-black/5 hover:text-gray-800',
+            'group-hover/gutter:opacity-100',
+            selected && 'opacity-100 bg-blue-50 text-blue-600'
+          )}
+          title="Row actions"
+          aria-label="Row handle"
+          onClick={(e) => {
+            e.stopPropagation()
+            onSelect()
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <GripVertical className="h-3.5 w-3.5" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="z-[220] min-w-[160px]" side="left">
+        {row.url ? (
+          <DropdownMenuItem onSelect={() => onOpen()}>Open</DropdownMenuItem>
+        ) : null}
+        <DropdownMenuItem
+          className="text-red-600 focus:text-red-600"
+          onSelect={() => onDelete()}
+        >
+          <Trash2 className="mr-2 h-3.5 w-3.5" />
+          Delete
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * Between-row add control — 1px hairline on the row border (same #e5e7eb as table rules);
+ * darkens on hover. Hit target is taller; the stroke sits on the cell edge (no ±50% drift).
+ */
+function RowInsertBar({
+  onAdd,
+  edge,
+}: {
+  onAdd: () => void
+  edge: 'top' | 'bottom'
+}) {
+  return (
+    <button
+      type="button"
+      data-tt-db-insert
+      className={cn(
+        'group/insert absolute left-0 z-[6] h-3 w-5 cursor-pointer select-none',
+        'opacity-0 group-hover/gutter:opacity-100',
+        // Flush to the cell edge where border-collapse paints the row rule
+        edge === 'top' ? 'top-0' : 'bottom-0'
+      )}
+      title="Add row"
+      aria-label="Add row"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation()
+        onAdd()
+      }}
+    >
+      {/* 1px stroke on the cell edge — rounded ends like TipTap add lines; soft → dark on hover */}
+      <span
+        className={cn(
+          'pointer-events-none absolute left-1/2 h-px w-3 -translate-x-1/2 rounded-full',
+          'bg-[#e5e7eb] transition-colors group-hover/insert:bg-black/35',
+          'dark:bg-gray-600 dark:group-hover/insert:bg-white/40',
+          // Center the 1px stroke on the collapsed border (sits outside the padding edge)
+          edge === 'top' ? 'top-0 -translate-y-1/2' : 'bottom-0 translate-y-1/2'
+        )}
+        aria-hidden
+      />
+    </button>
+  )
+}
+
 /**
  * Fetches a Notion database and renders it with Thinktable view settings.
  * Cell edits write through to Notion; view config (layout/filter/sort/…) is Thinktable-owned.
@@ -480,6 +590,13 @@ export function NotionDatabaseTableView({
     normalizeViewSettings(parseViewSettings(viewSettingsJson), [])
   )
   const [expandedParents, setExpandedParents] = useState<Set<string>>(() => new Set())
+  const [selectedRowId, setSelectedRowId] = useState<string | null>(null)
+  const [rowBusy, setRowBusy] = useState(false)
+
+  /** Open a DB row — Notion page URL (layout open mode reserved for Thinktable peeks later). */
+  const openRow = useCallback((row: NotionDbRow) => {
+    if (row.url) window.open(row.url, '_blank', 'noopener,noreferrer')
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -493,7 +610,20 @@ export function NotionDatabaseTableView({
         if (!cancelled) {
           const table = json as NotionDatabaseTable
           setData(table)
-          setSettings(normalizeViewSettings(parseViewSettings(viewSettingsJson), table.properties))
+          // Seed layout/name from Notion Views API when TipTap has no saved viewSettings
+          const saved = parseViewSettings(viewSettingsJson)
+          const seeded =
+            !saved && table.notionView
+              ? {
+                  ...defaultDatabaseViewSettings(table.notionView.name || 'Default'),
+                  layout: table.notionView.layout,
+                  name: table.notionView.name || 'Default',
+                }
+              : saved
+          const normalized = normalizeViewSettings(seeded, table.properties)
+          setSettings(normalized)
+          // Persist seeded layout once so reload doesn't re-seed against user edits later
+          if (!saved && table.notionView) onViewSettingsChange?.(JSON.stringify(normalized))
         }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load database')
@@ -576,6 +706,81 @@ export function NotionDatabaseTableView({
     [data?.properties, notionDatabaseId]
   )
 
+  /** Create a Notion page (row) and insert it after `afterId` (null = top). */
+  const createRow = useCallback(
+    async (afterId: string | null) => {
+      if (rowBusy || !data) return
+      setRowBusy(true)
+      setSaveError(null)
+      try {
+        const res = await fetch(`/api/notion/database/${encodeURIComponent(notionDatabaseId)}`, {
+          method: 'POST',
+        })
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(json.error || 'Failed to add row')
+        const row = json.row as NotionDbRow
+        // Seed empty cells for every property so editors work immediately
+        const cells: Record<string, NotionDbCell> = { ...row.cells }
+        for (const prop of data.properties) {
+          if (!cells[prop.name]) {
+            cells[prop.name] =
+              prop.type === 'checkbox'
+                ? { type: 'checkbox', checked: false }
+                : prop.type === 'multi_select' || prop.type === 'select' || prop.type === 'status'
+                  ? { type: prop.type, tags: [], text: '' }
+                  : { type: prop.type, text: '' }
+          }
+        }
+        const fullRow: NotionDbRow = { ...row, cells }
+        setData((prev) => {
+          if (!prev) return prev
+          const rows = [...prev.rows]
+          if (afterId == null) {
+            rows.unshift(fullRow)
+          } else {
+            const i = rows.findIndex((r) => r.id === afterId)
+            if (i >= 0) rows.splice(i + 1, 0, fullRow)
+            else rows.push(fullRow)
+          }
+          return { ...prev, rows }
+        })
+        setSelectedRowId(fullRow.id)
+      } catch (e) {
+        setSaveError(e instanceof Error ? e.message : 'Failed to add row')
+      } finally {
+        setRowBusy(false)
+      }
+    },
+    [data, notionDatabaseId, rowBusy]
+  )
+
+  /** Archive a Notion page (row) and remove it from the table. */
+  const deleteRow = useCallback(
+    async (pageId: string) => {
+      if (rowBusy) return
+      setRowBusy(true)
+      setSaveError(null)
+      const prevRows = data?.rows
+      setData((prev) =>
+        prev ? { ...prev, rows: prev.rows.filter((r) => r.id !== pageId) } : prev
+      )
+      if (selectedRowId === pageId) setSelectedRowId(null)
+      try {
+        const res = await fetch(`/api/notion/page/${encodeURIComponent(pageId)}`, {
+          method: 'DELETE',
+        })
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(json.error || 'Failed to delete row')
+      } catch (e) {
+        setSaveError(e instanceof Error ? e.message : 'Failed to delete row')
+        if (prevRows && data) setData({ ...data, rows: prevRows })
+      } finally {
+        setRowBusy(false)
+      }
+    },
+    [data, rowBusy, selectedRowId]
+  )
+
   const columns = useMemo(
     () => (data ? visibleProperties(data.properties, settings) : []),
     [data, settings]
@@ -599,6 +804,13 @@ export function NotionDatabaseTableView({
   }
 
   if (error || !data) {
+    const linked =
+      !!error &&
+      (/linked notion view/i.test(error) ||
+        /no data sources accessible/i.test(error) ||
+        /share the original database/i.test(error))
+    // Linked views: title + Notion open chrome already render above — skip the noisy line
+    if (linked) return null
     return (
       <div className={cn('py-2 text-sm text-red-600', className)}>
         {error || 'Database unavailable'}
@@ -607,19 +819,51 @@ export function NotionDatabaseTableView({
   }
 
   const titleProp = data.properties.find((p) => p.type === 'title')
+  const vLines = settings.layoutOptions.showVerticalLines
 
-  const renderRowCells = (row: NotionDbRow, depth = 0) => (
+  const renderRowCells = (
+    row: NotionDbRow,
+    depth: number,
+    opts: { insertBeforeAfterId: string | null }
+  ) => (
     <>
       {columns.map((prop, colIndex) => (
         <td
           key={prop.id}
           className={cn(
-            'px-2 py-1.5 align-middle max-w-[220px]',
-            prop.type === 'title' && 'min-w-[180px]',
-            settings.layoutOptions.showVerticalLines && 'border-r border-gray-100'
+            'relative px-2 py-1 align-middle max-w-[220px] text-[13px]',
+            prop.type === 'title' && 'min-w-[160px]',
+            // Vertical dividers only BETWEEN columns (never outer left/right)
+            vLines && colIndex < columns.length - 1 && 'border-r border-gray-200',
+            selectedRowId === row.id && 'bg-blue-50/40',
+            !settings.layoutOptions.wrapAllContent && 'whitespace-nowrap'
           )}
           style={colIndex === 0 && depth ? { paddingLeft: 8 + depth * 16 } : undefined}
         >
+          {colIndex === 0 ? (
+            <>
+              {/* Full row-height gutter — CSS group-hover shows top+bottom add lines together */}
+              <div
+                data-tt-db-gutter
+                className="group/gutter absolute -left-5 top-0 bottom-0 z-[2] w-5"
+              >
+                <div className="absolute left-0 top-1/2 -translate-y-1/2">
+                  <RowHandle
+                    row={row}
+                    selected={selectedRowId === row.id}
+                    onSelect={() => setSelectedRowId(row.id)}
+                    onDelete={() => void deleteRow(row.id)}
+                    onOpen={() => openRow(row)}
+                  />
+                </div>
+                <RowInsertBar
+                  edge="top"
+                  onAdd={() => void createRow(opts.insertBeforeAfterId)}
+                />
+                <RowInsertBar edge="bottom" onAdd={() => void createRow(row.id)} />
+              </div>
+            </>
+          ) : null}
           {prop.type === 'title' && settings.subTasks.enabled && depth === 0 ? (
             <div className="flex items-center gap-0.5">
               {(() => {
@@ -628,7 +872,7 @@ export function NotionDatabaseTableView({
                   settings.subTasks.relationProperty
                 )
                 const kids = childrenOf.get(row.id) || []
-                if (!kids.length) return <span className="w-4" />
+                if (!kids.length) return <span className="w-3" />
                 const open = expandedParents.has(row.id)
                 return (
                   <button
@@ -683,8 +927,21 @@ export function NotionDatabaseTableView({
     if (!rows.length) {
       return (
         <tr>
-          <td colSpan={Math.max(1, columns.length)} className="px-2 py-3 text-sm text-gray-400">
-            No rows
+          <td
+            colSpan={Math.max(1, columns.length)}
+            className="relative px-2 py-2 text-sm text-gray-400"
+          >
+            <div className="absolute -left-5 top-1/2 -translate-y-1/2">
+              <button
+                type="button"
+                className="flex h-5 w-5 items-center justify-center rounded text-blue-500 hover:bg-blue-50"
+                title="Add row"
+                onClick={() => void createRow(null)}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            No rows — click + to add
           </td>
         </tr>
       )
@@ -692,17 +949,9 @@ export function NotionDatabaseTableView({
     const { roots, childrenOf } = settings.subTasks.enabled
       ? buildSubTaskTree(rows, settings.subTasks.relationProperty)
       : { roots: rows, childrenOf: new Map<string, NotionDbRow[]>() }
-    const out: React.ReactNode[] = []
+    const flat: Array<{ row: NotionDbRow; depth: number }> = []
     const walk = (row: NotionDbRow, depth: number) => {
-      out.push(
-        <tr
-          key={row.id}
-          className="border-b border-gray-100 hover:bg-[#fafafa]"
-          style={{ background: rowBackground(row, settings.conditionalColors) }}
-        >
-          {renderRowCells(row, depth)}
-        </tr>
-      )
+      flat.push({ row, depth })
       if (
         settings.subTasks.enabled &&
         settings.subTasks.display === 'nested' &&
@@ -712,53 +961,72 @@ export function NotionDatabaseTableView({
       }
     }
     for (const row of settings.subTasks.enabled ? roots : rows) walk(row, 0)
-    return out
+
+    return flat.map(({ row, depth }, index) => {
+      const isFirst = index === 0
+      // Top add inserts after previous row (null = before first)
+      const insertBeforeAfterId = isFirst ? null : flat[index - 1].row.id
+      return (
+        <tr
+          key={row.id}
+          className={cn(
+            'group/row relative hover:bg-[#fafafa]',
+            // Row rules painted on td via globals.css — avoid a second tr border (misaligns add lines)
+            selectedRowId === row.id && 'bg-blue-50/30'
+          )}
+          style={{ background: rowBackground(row, settings.conditionalColors) }}
+          onClick={() => setSelectedRowId(row.id)}
+        >
+          {renderRowCells(row, depth, { insertBeforeAfterId })}
+        </tr>
+      )
+    })
   }
 
   const tableLayout = (
-    <table
-      className={cn(
-        'w-full border-collapse text-left',
-        settings.layoutOptions.wrapAllContent ? '' : 'whitespace-nowrap'
-      )}
-    >
-      <thead>
-        <tr className="border-b border-gray-200 bg-[#f7f6f3]">
-          {columns.map((prop) => (
-            <th
-              key={prop.id}
-              className={cn(
-                'sticky top-0 z-[1] whitespace-nowrap px-2 py-1.5 text-[12px] font-medium text-gray-500 bg-[#f7f6f3]',
-                settings.layoutOptions.showVerticalLines && 'border-r border-gray-200'
-              )}
-            >
-              <span className="inline-flex items-center gap-1">
-                <PropertyTypeIcon type={prop.type} />
-                {prop.name}
-              </span>
-            </th>
+    <div className="relative" style={{ paddingLeft: ROW_GUTTER }}>
+      {/* Left gutter for overlay grips / + — not a visible empty column */}
+      <table className="w-full border-collapse text-left border-0">
+        <thead>
+          {/* No top perimeter; header↔body rule only (not a full box) */}
+          <tr className="border-b border-gray-200">
+            {columns.map((prop, colIndex) => (
+              <th
+                key={prop.id}
+                className={cn(
+                  'sticky top-0 z-[1] whitespace-nowrap px-2 py-1 text-[12px] font-medium text-gray-500 bg-transparent',
+                  // Column dividers only when "Show vertical lines" is on — never outer L/R
+                  vLines && colIndex < columns.length - 1 && 'border-r border-gray-200'
+                )}
+              >
+                <span className="inline-flex items-center gap-1">
+                  <PropertyTypeIcon type={prop.type} />
+                  {prop.name}
+                </span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map((g) => (
+            <FragmentGroup key={g.key || '__all'}>
+              {settings.groupBy && g.key ? (
+                <tr>
+                  <td
+                    colSpan={Math.max(1, columns.length)}
+                    className="px-2 py-1 text-[12px] font-semibold text-gray-600 border-b border-gray-200"
+                  >
+                    {g.key}
+                    <span className="ml-2 font-normal text-gray-400">{g.rows.length}</span>
+                  </td>
+                </tr>
+              ) : null}
+              {renderTableBody(g.rows)}
+            </FragmentGroup>
           ))}
-        </tr>
-      </thead>
-      <tbody>
-        {groups.map((g) => (
-          <FragmentGroup key={g.key || '__all'}>
-            {settings.groupBy && g.key ? (
-              <tr className="bg-gray-50">
-                <td
-                  colSpan={Math.max(1, columns.length)}
-                  className="px-2 py-1.5 text-[12px] font-semibold text-gray-600"
-                >
-                  {g.key}
-                  <span className="ml-2 font-normal text-gray-400">{g.rows.length}</span>
-                </td>
-              </tr>
-            ) : null}
-            {renderTableBody(g.rows)}
-          </FragmentGroup>
-        ))}
-      </tbody>
-    </table>
+        </tbody>
+      </table>
+    </div>
   )
 
   const listLayout = (
@@ -933,14 +1201,14 @@ export function NotionDatabaseTableView({
   return (
     <div
       className={cn(
-        'tt-notion-db nodrag nokey',
-        'w-full min-w-[420px] max-w-full overflow-auto rounded-md border border-gray-200 bg-white',
+        // No perimeter box — dividers live on rows/cols inside the table
+        'tt-notion-db nodrag nokey w-full min-w-[420px] max-w-full overflow-auto bg-transparent',
         className
       )}
       onPointerDown={(e) => e.stopPropagation()}
     >
       {settings.layoutOptions.showDataSourceTitle ? (
-        <div className="px-2 pt-2 text-[12px] font-medium text-gray-500 truncate">
+        <div className="px-1 pb-1 text-[12px] font-medium text-gray-500 truncate">
           {data.title || fallbackTitle}
         </div>
       ) : null}

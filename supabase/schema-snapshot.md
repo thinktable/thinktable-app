@@ -1,13 +1,21 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-09T22:00:49Z`
+- Snapped at: `2026-08-10T00:00:40Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
-- Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
-- CLI: `supabase` `2.90.0` (remote `projects list` needs login token — marker migration used)
+- Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
+- CLI: `supabase` `2.90.0` (remote `migration list --linked` needs `SUPABASE_DB_PASSWORD` — marker migration used)
 
 ## This save
+
+- No DDL. Marker `20260810000100_notion_views_api_linked_filters.sql`.
+- **Notion Views API** (`lib/notion/views.ts`, Notion-Version `2026-03-11`): list/retrieve views; row set from `POST /v1/views/{id}/queries` (server-side filter/sorts/`quick_filters` — linked views often have `filter: null`); hydrate + order from data_source.
+- Linked embeds (`empty data_sources`): resolve `data_source_id` from the view; never dump the unfiltered source “All” view.
+- Table chrome polish: no outer perimeter; row/block add hairlines; ⋮⋮ grip placement.
+- Persisted via existing `messages` HTML attrs — schema unchanged.
+
+## Prior: Notion DB edit and view settings
 
 - No DDL. Marker `20260809220049_notion_db_edit_and_view_settings.sql`.
 - **Notion API `2025-09-03`**: databases → data_sources for schema/query; search normalizes `data_source` → `database`.
