@@ -6999,6 +6999,54 @@ function BoardFlowInner({
     }
   }, [embedded])
 
+  // Pinch / ctrl+wheel over connection points, indicators, resize dots, or thread knobs can
+  // miss RF's ZoomPane (nopan Handles + chrome outside the pane hit path) and zoom the browser.
+  // Capture on the board root: always zoom the page around the cursor instead.
+  useEffect(() => {
+    const root = boardRootRef.current
+    if (!root || !reactFlowInstance) return
+
+    const HANDLE_ZOOM_SEL =
+      '.react-flow__handle, [data-tt-connection-indicator], .react-flow__resize-control, .react-flow__edgeupdater, circle.nopan'
+
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return // Only pinch / browser-zoom gestures
+      const target = e.target as Element | null
+      if (!target?.closest?.('.react-flow')) return // Outside the page map
+      if (!target.closest(HANDLE_ZOOM_SEL)) return // Pane/body: let RF ZoomPane handle it
+
+      e.preventDefault() // Never let the browser zoom
+      e.stopPropagation() // Own this gesture (avoid double-zoom with RF)
+
+      const flowEl = target.closest('.react-flow') as HTMLElement
+      const rect = flowEl.getBoundingClientRect()
+      const viewport = reactFlowInstance.getViewport()
+      const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform)
+      const factor = e.ctrlKey && isMac ? 10 : 1 // Match RF wheelDelta pinch feel
+      const pinchDelta =
+        -e.deltaY * (e.deltaMode === 1 ? 0.05 : e.deltaMode ? 1 : 0.002) * factor
+      const minZ = embedded ? 0.15 : 0.1
+      const maxZ = embedded ? 2.5 : 2
+      const nextZoom = Math.min(
+        maxZ,
+        Math.max(minZ, viewport.zoom * Math.pow(2, pinchDelta))
+      )
+      if (nextZoom === viewport.zoom) return
+
+      // Keep the flow point under the cursor fixed while zooming
+      const flowX = (e.clientX - rect.left - viewport.x) / viewport.zoom
+      const flowY = (e.clientY - rect.top - viewport.y) / viewport.zoom
+      reactFlowInstance.setViewport({
+        zoom: nextZoom,
+        x: e.clientX - rect.left - flowX * nextZoom,
+        y: e.clientY - rect.top - flowY * nextZoom,
+      })
+    }
+
+    root.addEventListener('wheel', onWheel, { passive: false, capture: true })
+    return () => root.removeEventListener('wheel', onWheel, { capture: true })
+  }, [reactFlowInstance, embedded])
+
   return (
     <div
       ref={boardRootRef}
