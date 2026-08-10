@@ -15,7 +15,7 @@ export const AI_AGENTS: AiAgent[] = [ // Seed agents
     id: 'thinktable-copilot', // Default product agent
     name: 'Thinktable Copilot', // Brand
     defaultMode: 'ask', // Sidebar Ask
-    skillIds: ['summarize-page'], // Light default
+    skillIds: ['summarize'], // Light default
     description: 'General assistant for this page — answers in the sidebar.', // Copy
     enabled: true,
   },
@@ -23,7 +23,7 @@ export const AI_AGENTS: AiAgent[] = [ // Seed agents
     id: 'notion-research', // Future Notion-connected researcher
     name: 'Notion research', // UI
     defaultMode: 'ask', // Still Ask for now
-    skillIds: ['summarize-page'], // Overlaps until connectors ship tools
+    skillIds: ['summarize'], // Overlaps until connector tools land
     description: 'Uses connected Notion context when available.', // Copy
     enabled: false, // Stub until connector tools land
   },

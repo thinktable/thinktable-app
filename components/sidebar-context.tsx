@@ -15,6 +15,24 @@ import { getStoredLogoDrawing, TT_LOGO_DRAWING_STORAGE_KEY } from './personalize
 /** Width of the right chat sidebar when open (keeps top bar / map shrunk left). Notion-like panel width. */
 export const CHAT_SIDEBAR_WIDTH = 360
 
+/** localStorage key — reopen chat column after reload when it was open. */
+export const TT_CHAT_SIDEBAR_OPEN_KEY = 'thinktable-chat-sidebar-open'
+
+/** localStorage key — restore the same AI thread after reload. */
+export const TT_CHAT_THREAD_ID_KEY = 'thinktable-chat-thread-id'
+
+/** Read whether chat was open last session (SSR-safe → false). */
+function getStoredChatSidebarOpen(): boolean {
+  if (typeof window === 'undefined') return false // SSR: stay closed until client
+  return localStorage.getItem(TT_CHAT_SIDEBAR_OPEN_KEY) === 'true' // Persist open across reload
+}
+
+/** Persist chat open/closed so reload restores the column. */
+function persistChatSidebarOpen(open: boolean) {
+  if (typeof window === 'undefined') return // No storage on server
+  localStorage.setItem(TT_CHAT_SIDEBAR_OPEN_KEY, open ? 'true' : 'false') // Write flag
+}
+
 interface SidebarContextType {
   isMobileMode: boolean // True when window is too small (minimap auto-hides)
   setIsMobileMode: (value: boolean) => void
@@ -38,7 +56,7 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
   const [isMobileMode, setIsMobileMode] = useState(false) // Compact layout flag from board flows
   const [isSidebarOpen, setIsSidebarOpen] = useState(false) // Left nav popup visibility
   const [isSidebarPinned, setIsSidebarPinned] = useState(false) // Click-pinned: stay open across leave/nav
-  const [isChatSidebarOpen, setIsChatSidebarOpen] = useState(false) // Right chat sidebar — hidden by default
+  const [isChatSidebarOpen, setIsChatSidebarOpen] = useState(false) // Closed until client hydrates localStorage
   const [logoDrawing, setLogoDrawingState] = useState<string | null>(null) // Shared custom logo drawing
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Delayed-close handle for left nav
   const isSidebarPinnedRef = useRef(false) // Latest pin for scheduleClose without stale closure
@@ -48,9 +66,10 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
     isSidebarPinnedRef.current = isSidebarPinned
   }, [isSidebarPinned])
 
-  // Hydrate custom logo drawing from localStorage after mount
+  // Hydrate chat open + logo after mount (SSR useState init stays false — must re-read here)
   useEffect(() => {
-    setLogoDrawingState(getStoredLogoDrawing())
+    setIsChatSidebarOpen(getStoredChatSidebarOpen()) // Reopen if it was open before reload
+    setLogoDrawingState(getStoredLogoDrawing()) // Custom logo PNG
   }, [])
 
   const setLogoDrawing = useCallback((url: string | null) => {
@@ -101,13 +120,17 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
   }, [cancelCloseSidebar])
 
   const toggleChatSidebar = useCallback(() => {
-    setIsChatSidebarOpen((prev) => !prev) // Logo by minimap toggles chat column
+    setIsChatSidebarOpen((prev) => {
+      const next = !prev // Logo by minimap toggles chat column
+      persistChatSidebarOpen(next) // Remember for reload
+      return next
+    })
   }, [])
 
   const setChatSidebarOpen = useCallback((open: boolean) => {
+    persistChatSidebarOpen(open) // Remember for reload
     setIsChatSidebarOpen(open)
   }, [])
-
   return (
     <SidebarContext.Provider
       value={{

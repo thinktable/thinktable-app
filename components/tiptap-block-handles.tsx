@@ -39,6 +39,8 @@ import {
   wrapJsonForInsert,
   type EditorBlockRef,
 } from '@/lib/tiptap/block-selection'
+import { setAiBlockSelection } from '@/lib/ai/selection-bridge' // Live block pills in AI composer (⋮⋮ only)
+import { htmlToPlain } from '@/lib/ai/context-pack' // Block hover preview from HTML
 import {
   createChildPageForBlock,
   insertPageTitleBlock,
@@ -236,7 +238,10 @@ export function TipTapBlockHandles({
   useEffect(() => {
     if (!editor || !hostNodeId || editor.isDestroyed) return
     registerHostEditor(hostNodeId, editor)
-    return () => unregisterHostEditor(hostNodeId, editor)
+    return () => {
+      unregisterHostEditor(hostNodeId, editor)
+      setAiBlockSelection(null) // Drop AI block pill if this frame unmounts
+    }
   }, [editor, hostNodeId])
 
   // Keep ⋮⋮ grips visible + rainbow-styled for blocks with pending AI edits
@@ -259,7 +264,8 @@ export function TipTapBlockHandles({
     setSelection([])
     anchorRef.current = null
     setMenu(null)
-  }, [editor])
+    if (hostNodeId) setAiBlockSelection(null) // Drop AI block pill when disarmed
+  }, [editor, hostNodeId])
 
   // Close the actions menu only — keep the block selection so a follow-up ⋮⋮ drag can move it
   const closeMenu = useCallback(() => {
@@ -273,12 +279,32 @@ export function TipTapBlockHandles({
   }, [isPanelSelected, clearBlockSelection])
 
   // Apply a multi-block selection: update state + paint the multi-range wash.
+  // Only ⋮⋮ handle selection publishes a block pill — I-bar/caret alone stays "Selected frame".
+  // Same-frame multi-block still publishes ONE AI context pill (not one per block).
   const applySelection = useCallback(
     (blocks: EditorBlockRef[]) => {
       setSelection(blocks)
       if (editor) setEditorBlockHighlightRanges(editor, blocks.map((b) => ({ from: b.from, to: b.to })))
+      if (!hostNodeId) return
+      if (blocks.length === 0) {
+        setAiBlockSelection(null)
+        return
+      }
+      // Join armed block plain text for the context-pill hover preview
+      const preview = blocks
+        .map((b) => {
+          if (!editor) return ''
+          return htmlToPlain(htmlForEditorRange(editor, b.from, b.to))
+        })
+        .filter(Boolean)
+        .join('\n')
+      setAiBlockSelection({
+        frameId: hostNodeId,
+        count: blocks.length,
+        preview,
+      })
     },
-    [editor]
+    [editor, hostNodeId]
   )
 
   // All handle-blocks whose range lies between two clicked blocks (Shift range-select, same frame).

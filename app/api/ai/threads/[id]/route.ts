@@ -1,7 +1,31 @@
-// PATCH rename/mode / DELETE a single AI thread
+// GET one thread / PATCH rename/mode / DELETE a single AI thread
 import { createClient } from '@/lib/supabase/server' // Auth client
 import { isAiModeId } from '@/lib/ai/modes' // Mode guard
 import { NextRequest, NextResponse } from 'next/server' // Types
+
+/** Load one owned thread (used to restore the active chat after reload). */
+export async function GET(
+  _request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params // Thread id
+  const supabase = await createClient() // Client
+  const {
+    data: { user },
+  } = await supabase.auth.getUser() // Auth
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) // 401
+
+  const { data, error } = await supabase // Fetch owned thread
+    .from('ai_threads') // Table
+    .select('*') // Full row for picker/composer
+    .eq('id', id) // Match
+    .eq('user_id', user.id) // Own
+    .maybeSingle() // One or none
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 }) // Fail
+  if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 }) // Missing
+  return NextResponse.json({ thread: data }) // OK
+}
 
 export async function PATCH(
   request: NextRequest,

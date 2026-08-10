@@ -65,7 +65,8 @@ import { ArrowDown, GripVertical, MousePointer2, Hand } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
-import { setAiSelectedFrameIds, setAiViewportCenter } from '@/lib/ai/selection-bridge' // Bridge RF selection + viewport → AI context
+import { setAiSelectedFrames, setAiViewportCenter } from '@/lib/ai/selection-bridge' // Bridge RF selection + viewport → AI context
+import { htmlToPlain } from '@/lib/ai/context-pack' // Frame hover previews from content
 import { AI_CHAT_BLOCK_MIME, type AiChatBlockDragPayload } from '@/lib/ai/types' // Drag chat turn onto page
 import { markHtmlWithAiOrigin } from '@/lib/ai/wrap-ai-html' // Persist AI provenance on chat-drop
 import { AiEditReviewBar } from '@/components/ai/ai-edit-review-bar' // Pending edit review chrome
@@ -3841,11 +3842,27 @@ function BoardFlowInner({
     } else {
       selectedNodeIdRef.current = null
     }
-    // Publish selected chatPanel message ids for AI Ask/Edit context pack
-    const frameIds = nodes
+    // Publish selected frames (+ content preview for pill hover) for AI composer
+    const frames = nodes
       .filter((n) => n.selected && n.type === 'chatPanel' && n.data?.promptMessage?.id)
-      .map((n) => String(n.data.promptMessage.id))
-    setAiSelectedFrameIds(frameIds)
+      .map((n) => {
+        const msg = n.data.promptMessage as {
+          id: string
+          content?: string
+          metadata?: Record<string, unknown>
+        }
+        const meta = (msg.metadata || {}) as Record<string, unknown>
+        const titled =
+          typeof meta.blockTitle === 'string' && meta.blockTitle.trim()
+            ? meta.blockTitle.trim()
+            : ''
+        const plain = htmlToPlain(msg.content || '')
+        return {
+          id: String(msg.id),
+          preview: titled ? `${titled}\n${plain}`.trim() : plain,
+        }
+      })
+    setAiSelectedFrames(frames)
     // Keep viewport center fresh for Edit create placement (even without pan)
     if (reactFlowInstance) {
       const pane = document.querySelector('.react-flow')

@@ -18,6 +18,7 @@ import { createPanelExtensions } from '@/lib/tiptap/extensions' // StarterKit + 
 import { TipTapBlockHandles } from '@/components/tiptap-block-handles' // Per-content-block ⋮⋮ (Notion)
 import { findEditorBlockAtClientY } from '@/lib/tiptap/block-selection' // Click in frame padding → block at Y
 import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Strip blank lines on frame deselect
+import { setAiTextSelection } from '@/lib/ai/selection-bridge' // Live highlighted-text pills in AI composer
 import type { PageInTarget } from '@/components/block-actions-menu'
 import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
 import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, ScanText, WrapText } from 'lucide-react' // Rotate + fit-to-text / wrap
@@ -583,9 +584,10 @@ function TipTapContent({
     }
   }, [editor, comments]) // Only depend on editor and comments, not content (content sync handles it)
 
-  // Detect when editor is active (focused or has selection) and notify parent to auto-select panel
+  // Detect when editor is active (focused or has selection) and notify parent to auto-select panel.
+  // Also publishes highlighted text as an AI composer context pill.
   useEffect(() => {
-    if (!editor || !onEditorActiveChange) return
+    if (!editor) return
 
     const checkEditorActive = () => {
       try {
@@ -594,7 +596,26 @@ function TipTapContent({
         // keep/re-select the host frame after a board (pane) click deselects it.
         const hasTextRange = sel instanceof TextSelection && !sel.empty
         const isFocused = editor.view.dom === document.activeElement || editor.view.dom.contains(document.activeElement)
-        onEditorActiveChange(hasTextRange || isFocused)
+        onEditorActiveChange?.(hasTextRange || isFocused)
+
+        // Publish highlighted text as an AI context pill (cleared when caret / empty).
+        // I-bar alone is not a text selection — frame pill stays "Current Frame".
+        if (hostNodeId) {
+          if (hasTextRange) {
+            const text = editor.state.doc.textBetween(sel.from, sel.to, ' ')
+            const trimmed = text.replace(/\s+/g, ' ').trim()
+            if (trimmed) {
+              setAiTextSelection({
+                frameId: hostNodeId,
+                text: trimmed,
+              })
+            } else {
+              setAiTextSelection(null)
+            }
+          } else {
+            setAiTextSelection(null)
+          }
+        }
       } catch (error) {
         // Ignore errors
       }
@@ -615,8 +636,9 @@ function TipTapContent({
       editor.off('blur', checkEditorActive)
       editor.off('selectionUpdate', checkEditorActive)
       editor.off('update', checkEditorActive)
+      if (hostNodeId) setAiTextSelection(null) // Clear pill if this editor unmounts
     }
-  }, [editor, onEditorActiveChange])
+  }, [editor, onEditorActiveChange, hostNodeId])
 
   // Detect when cursor is inside commented text and show/select comment
   // Only works when comments are already visible (showComments is true)

@@ -1,12 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-10T14:36:04Z`
+- Snapped at: `2026-08-10T16:58:53Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - Remote applied still tops out at `20260810020000_ai_copilot_foundation` (no new DDL this save)
 
 ## This save
+
+- No DDL. Marker `20260810165853_chat_reload_persist_live_context.sql`.
+- **Chat reload persistence**: open/closed + active thread id in `localStorage`; hydrate after mount; `GET /api/ai/threads/[id]` restores the same chat.
+- **Live context pills**: page / frame / block / text / multi-selection chips with hover previews; skills attach as pills (not pasted prompts).
+- Schema unchanged.
+
+## Prior: AI composer + Quiz me
 
 - No DDL. Marker `20260810143604_ai_composer_plus_quiz_me.sql`.
 - **AI composer chrome**: Ask↔Edit click-toggle in the input row (Scroll↔Zoom pattern); **+** menu (search, skills, File, Connection) portaled above the overflow shell; skills include Summarize / Tasks / Search page / **Quiz me** (Ask removed from + menu).

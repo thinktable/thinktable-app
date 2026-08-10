@@ -58,6 +58,10 @@ export async function POST(request: NextRequest) {
   const snapshotIds = Array.isArray(body.snapshotIds)
     ? body.snapshotIds.filter((id: unknown) => typeof id === 'string')
     : []
+  // Per-turn skill pills from the composer (merged with thread metadata below)
+  const requestSkillIds = Array.isArray(body.skillIds)
+    ? body.skillIds.filter((id: unknown) => typeof id === 'string')
+    : []
   const skipUserInsert = body.skipUserInsert === true
   const viewportCenter =
     body.viewportCenter &&
@@ -113,9 +117,23 @@ export async function POST(request: NextRequest) {
     .eq('id', threadId)
     .single()
   const meta = (threadRow?.metadata || {}) as Record<string, unknown>
-  const skillIds = Array.isArray(meta.skillIds)
+  const threadSkillIds = Array.isArray(meta.skillIds)
     ? (meta.skillIds as unknown[]).filter((x): x is string => typeof x === 'string')
     : []
+  // Composer pills win for this turn; fall back to thread defaults
+  const skillIds = [...new Set([...requestSkillIds, ...threadSkillIds])]
+
+  // Persist attached skills onto the thread so follow-ups keep the same skill set
+  if (requestSkillIds.length) {
+    await supabase
+      .from('ai_threads')
+      .update({
+        metadata: { ...meta, skillIds },
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', threadId)
+      .eq('user_id', user.id)
+  }
 
   let userMessage: Record<string, unknown> | null = null
   if (!skipUserInsert) {
@@ -128,7 +146,7 @@ export async function POST(request: NextRequest) {
         content: message,
         parts: [{ type: 'text', text: message }],
         status: 'complete',
-        metadata: { mode },
+        metadata: { mode, skillIds },
       })
       .select()
       .single()

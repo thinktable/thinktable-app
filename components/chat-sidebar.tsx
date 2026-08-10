@@ -2,7 +2,11 @@
 
 // Full-height right chat column — Thinktable AI copilot (Ask in sidebar; drag blocks onto page)
 import { useCallback, useEffect, useState } from 'react' // Hooks
-import { useSidebarContext, CHAT_SIDEBAR_WIDTH } from './sidebar-context' // Open state + logo
+import {
+  useSidebarContext,
+  CHAT_SIDEBAR_WIDTH,
+  TT_CHAT_THREAD_ID_KEY,
+} from './sidebar-context' // Open state + logo + thread persist key
 import { ThinktableBrandMark, PersonalizeAiModal } from './personalize-ai-modal' // Brand
 import { AiThreadPicker, type AiThreadFilter } from './ai/ai-thread-picker' // History
 import { AiTranscript } from './ai/ai-transcript' // Turns
@@ -27,6 +31,13 @@ interface ChatSidebarProps {
   projectId?: string // Kept for call-site compat
 }
 
+/** Write / clear the active thread id so reload restores the same chat. */
+function persistActiveThreadId(threadId: string | null) {
+  if (typeof window === 'undefined') return // No storage on server
+  if (threadId) localStorage.setItem(TT_CHAT_THREAD_ID_KEY, threadId) // Remember thread
+  else localStorage.removeItem(TT_CHAT_THREAD_ID_KEY) // New chat / cleared
+}
+
 export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   const { isChatSidebarOpen, setChatSidebarOpen, logoDrawing, setLogoDrawing } = useSidebarContext()
   const { addPendingEdits } = useAiEditSession()
@@ -41,6 +52,48 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   const [attachedSnapshots, setAttachedSnapshots] = useState<AiContextSnapshot[]>([]) // Chips
   const [refreshKey, setRefreshKey] = useState(0) // Thread list refresh
   const [savedSnapshots, setSavedSnapshots] = useState<AiContextSnapshot[]>([]) // Library
+
+  const [threadHydrated, setThreadHydrated] = useState(false) // Block persist-until-restore (Strict Mode safe)
+
+  // Restore the last active thread once on mount (same chat after reload)
+  useEffect(() => {
+    if (typeof window === 'undefined') { // SSR guard
+      setThreadHydrated(true) // Nothing to restore on server
+      return
+    }
+    const storedId = localStorage.getItem(TT_CHAT_THREAD_ID_KEY) // Last thread id
+    if (!storedId) {
+      setThreadHydrated(true) // No saved chat — allow later persists
+      return
+    }
+    let cancelled = false // Unmount / Strict Mode remount guard
+    const restore = async () => {
+      try {
+        const res = await fetch(`/api/ai/threads/${storedId}`) // Load owned thread
+        if (!res.ok) {
+          if (!cancelled) persistActiveThreadId(null) // Stale / deleted — drop key
+          return
+        }
+        const data = await res.json() // Parse
+        const t = data.thread as AiThread | undefined // Thread row
+        if (cancelled || !t) return // Bail if gone
+        setThread(t) // Reopen same chat
+        setMode(isSelectableAiMode(t.mode) ? t.mode : 'ask') // Match saved mode
+      } finally {
+        if (!cancelled) setThreadHydrated(true) // Unlock persist after restore attempt
+      }
+    }
+    void restore() // Fire
+    return () => {
+      cancelled = true // Cancel late apply / skip hydrated on aborted mount
+    }
+  }, [])
+
+  // Persist thread only after restore — mount-null must not wipe the stored id
+  useEffect(() => {
+    if (!threadHydrated) return // Wait until restore finished (or found nothing)
+    persistActiveThreadId(thread?.id ?? null) // Persist select / clear on new
+  }, [thread?.id, threadHydrated])
 
   useEffect(() => {
     if (!thread?.id) {
@@ -59,7 +112,6 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
       cancelled = true
     }
   }, [thread?.id])
-
   useEffect(() => {
     if (!isChatSidebarOpen) return
     let cancelled = false

@@ -16,9 +16,12 @@ import {
   ListTodo,
   Search,
   MessageSquare,
+  FileText,
+  Box,
+  TextCursorInput,
 } from 'lucide-react'
 import type { AiModeId } from '@/lib/ai/modes'
-import { AI_SKILLS } from '@/lib/ai/skills'
+import { AI_SKILLS, type AiSkill } from '@/lib/ai/skills'
 import { AI_CONNECTORS } from '@/lib/ai/connectors'
 import type {
   AiChatBlockDragPayload,
@@ -28,47 +31,47 @@ import type {
 } from '@/lib/ai/types'
 import { AI_CHAT_BLOCK_MIME } from '@/lib/ai/types'
 import { consumeAiSse } from '@/lib/ai/stream'
-import { getAiSelectedFrameIds, getAiViewportCenter } from '@/lib/ai/selection-bridge'
+import {
+  getAiLiveContextPills,
+  getAiSelectedFrameIds,
+  getAiViewportCenter,
+  setAiPageContext,
+  subscribeAiSelection,
+  type AiLiveContextPill,
+} from '@/lib/ai/selection-bridge'
+import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 
-/** Menu skill rows — registry skills + a few Thinktable quick actions. */
+/** + menu skill rows — driven by the skill registry (user-attached, not LLM tools). */
 const MENU_SKILLS: Array<{
   id: string
   name: string
   description: string
   icon: typeof Sparkles
-  prompt?: string
-  skillId?: string
 }> = [
   {
-    id: 'summarize-page',
-    name: 'Summarize page',
+    id: 'summarize',
+    name: 'Summarize',
     description: 'Concise summary of frames on this page',
     icon: Sparkles,
-    prompt: 'Summarize this page.',
-    skillId: 'summarize-page',
   },
   {
-    id: 'tasks-from-notes',
-    name: 'Tasks from notes',
-    description: 'Turn page notes into a checklist in chat',
+    id: 'tasks',
+    name: 'Tasks',
+    description: 'Track changes with a sidebar smart list',
     icon: ListTodo,
-    prompt: 'Turn the notes on this page into a task list.',
-    skillId: 'tasks-from-notes',
   },
   {
     id: 'search-page',
     name: 'Search page',
     description: 'What stands out across frames here',
     icon: Search,
-    prompt: 'What stands out across the frames on this page?',
   },
   {
-    id: 'quiz-me',
-    name: 'Quiz me',
-    description: 'Ask questions from the frames on this page',
+    id: 'learn',
+    name: 'Learn',
+    description: 'Quiz yourself and explore answers',
     icon: MessageSquare,
-    prompt: 'Quiz me on the content of this page. Ask one question at a time and wait for my answer before continuing.',
   },
 ]
 
@@ -101,6 +104,124 @@ interface AiComposerProps {
   ) => void | Promise<void>
 }
 
+/** Icon for a live context pill kind. */
+function LivePillIcon({ kind }: { kind: AiLiveContextPill['kind'] }) {
+  if (kind === 'page') return <FileText className="h-3 w-3 flex-shrink-0 opacity-70" />
+  if (kind === 'frame' || kind === 'selection')
+    return <Box className="h-3 w-3 flex-shrink-0 opacity-70" />
+  if (kind === 'block') return <Box className="h-3 w-3 flex-shrink-0 opacity-70" />
+  return <TextCursorInput className="h-3 w-3 flex-shrink-0 opacity-70" />
+}
+
+/** One live context chip — hover reveals the referenced content (portaled so overflow can't clip it). */
+function LiveContextPill({
+  pill,
+  onDismiss,
+}: {
+  pill: AiLiveContextPill
+  onDismiss: (id: string) => void
+}) {
+  const [hover, setHover] = useState(false)
+  // Fixed coords for the portaled tip (bottom = distance from viewport bottom when above)
+  const [tipPos, setTipPos] = useState<{
+    left: number
+    bottom?: number
+    top?: number
+  } | null>(null)
+  const chipRef = useRef<HTMLSpanElement>(null)
+  const preview = pill.preview?.trim()
+
+  const placeTip = () => {
+    const el = chipRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - 248))
+    // Prefer above the chip; flip below if too close to the top of the viewport
+    if (r.top < 56) {
+      setTipPos({ left, top: r.bottom + 8 })
+    } else {
+      setTipPos({ left, bottom: window.innerHeight - r.top + 8 })
+    }
+  }
+
+  useEffect(() => {
+    if (!hover || !preview) {
+      setTipPos(null)
+      return
+    }
+    placeTip()
+    const onReposition = () => placeTip()
+    window.addEventListener('resize', onReposition)
+    window.addEventListener('scroll', onReposition, true)
+    return () => {
+      window.removeEventListener('resize', onReposition)
+      window.removeEventListener('scroll', onReposition, true)
+    }
+  }, [hover, preview])
+
+  return (
+    <span
+      ref={chipRef}
+      className="relative inline-flex"
+      onMouseEnter={() => {
+        setHover(true)
+        placeTip()
+      }}
+      onMouseLeave={() => setHover(false)}
+    >
+      <span
+        className={cn(
+          'inline-flex items-center gap-1 max-w-full h-6 pl-1.5 pr-1 rounded-md text-[11px]',
+          pill.kind === 'page'
+            ? 'bg-black/[0.06] dark:bg-white/[0.08] text-gray-700 dark:text-gray-200'
+            : pill.kind === 'text'
+              ? 'bg-amber-500/15 text-amber-800 dark:text-amber-200'
+              : pill.kind === 'selection'
+                ? 'bg-black/[0.06] dark:bg-white/[0.08] text-gray-700 dark:text-gray-200'
+                : 'bg-[#2383e2]/12 text-[#1a6fc9] dark:bg-[#2383e2]/20 dark:text-[#7db7f0]'
+        )}
+      >
+        <LivePillIcon kind={pill.kind} />
+        <span className="truncate max-w-[140px]">{pill.label}</span>
+        <button
+          type="button"
+          className="w-4 h-4 rounded flex items-center justify-center hover:bg-black/10 dark:hover:bg-white/10 flex-shrink-0"
+          onClick={() => onDismiss(pill.id)}
+          aria-label={`Remove ${pill.label}`}
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </span>
+      {hover &&
+        preview &&
+        tipPos &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <span
+            role="tooltip"
+            style={{
+              position: 'fixed',
+              left: tipPos.left,
+              ...(tipPos.bottom != null
+                ? { bottom: tipPos.bottom }
+                : { top: tipPos.top }),
+              zIndex: 90,
+            }}
+            className={cn(
+              'w-max max-w-[240px] max-h-[160px] overflow-y-auto',
+              'rounded-md px-2.5 py-2 text-[11px] leading-snug whitespace-pre-wrap break-words',
+              'bg-gray-900 text-gray-50 shadow-lg dark:bg-gray-100 dark:text-gray-900',
+              'pointer-events-none'
+            )}
+          >
+            {preview}
+          </span>,
+          document.body
+        )}
+    </span>
+  )
+}
+
 export function AiComposer({
   pageId,
   thread,
@@ -123,6 +244,11 @@ export function AiComposer({
   const [plusOpen, setPlusOpen] = useState(false)
   const [menuQuery, setMenuQuery] = useState('')
   const [menuPos, setMenuPos] = useState<{ left: number; bottom: number } | null>(null)
+  const [attachedSkills, setAttachedSkills] = useState<AiSkill[]>([])
+  // Live page/frame/block/text pills from the selection bridge (page on open + selection)
+  const [livePills, setLivePills] = useState<AiLiveContextPill[]>(() => getAiLiveContextPills())
+  // User-dismissed live pill ids (cleared when that pill leaves / returns with a new id)
+  const [dismissedLiveIds, setDismissedLiveIds] = useState<Set<string>>(() => new Set())
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const plusBtnRef = useRef<HTMLButtonElement>(null)
@@ -140,6 +266,54 @@ export function AiComposer({
     })
   }
 
+  // Subscribe to BoardFlow / TipTap selection → refresh live context pills
+  useEffect(() => {
+    const sync = () => setLivePills(getAiLiveContextPills())
+    sync()
+    return subscribeAiSelection(sync)
+  }, [])
+
+  // Drop dismiss flags for pills that are no longer present
+  useEffect(() => {
+    setDismissedLiveIds((prev) => {
+      if (prev.size === 0) return prev
+      const ids = new Set(livePills.map((p) => p.id))
+      let changed = false
+      const next = new Set<string>()
+      prev.forEach((id) => {
+        if (ids.has(id)) next.add(id)
+        else changed = true
+      })
+      return changed ? next : prev
+    })
+  }, [livePills])
+
+  // Current page → default context pill on chat open / page switch
+  useEffect(() => {
+    if (!pageId) {
+      setAiPageContext(null)
+      return
+    }
+    let cancelled = false
+    const load = async () => {
+      // Optimistic label while title loads
+      setAiPageContext({ id: pageId, title: 'Page' })
+      const supabase = createClient()
+      const { data } = await supabase
+        .from('conversations')
+        .select('id, title')
+        .eq('id', pageId)
+        .maybeSingle()
+      if (cancelled) return
+      const title = ((data?.title as string | undefined)?.trim() || 'Untitled')
+      setAiPageContext({ id: pageId, title })
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [pageId])
+
   useEffect(() => {
     if (seedPrompt) {
       setInput(seedPrompt)
@@ -147,6 +321,11 @@ export function AiComposer({
       textareaRef.current?.focus()
     }
   }, [seedPrompt, onSeedConsumed])
+
+  // New / switched thread → drop skill pills (snapshots are parent-owned)
+  useEffect(() => {
+    setAttachedSkills([])
+  }, [thread?.id])
 
   // Close + menu on outside click / Escape
   useEffect(() => {
@@ -187,10 +366,15 @@ export function AiComposer({
     return MENU_SKILLS.filter(
       (s) =>
         s.name.toLowerCase().includes(q) ||
-        s.description.toLowerCase().includes(q) ||
-        (s.skillId && AI_SKILLS.some((r) => r.id === s.skillId && r.name.toLowerCase().includes(q)))
+        s.description.toLowerCase().includes(q)
     )
   }, [menuQuery])
+
+  // Visible live pills (page + selection), minus user-dismissed
+  const visibleLivePills = useMemo(
+    () => livePills.filter((p) => !dismissedLiveIds.has(p.id)),
+    [livePills, dismissedLiveIds]
+  )
 
   const isAiChatDrag = (event: React.DragEvent) => {
     const types = Array.from(event.dataTransfer.types || [])
@@ -249,6 +433,7 @@ export function AiComposer({
           selectedFrameIds: getAiSelectedFrameIds(),
           viewportCenter: getAiViewportCenter(),
           snapshotIds: attachedSnapshots.map((s) => s.id),
+          skillIds: attachedSkills.map((s) => s.id),
           skipUserInsert: opts?.skipUserInsert === true,
         }),
       })
@@ -327,8 +512,18 @@ export function AiComposer({
 
   const pickSkill = (skill: (typeof MENU_SKILLS)[number]) => {
     setPlusOpen(false)
-    if (skill.prompt) setInput(skill.prompt)
+    const reg = AI_SKILLS.find((s) => s.id === skill.id)
+    if (!reg) return
+    setAttachedSkills((prev) => (prev.some((s) => s.id === reg.id) ? prev : [...prev, reg]))
     textareaRef.current?.focus()
+  }
+
+  const removeSkill = (id: string) => {
+    setAttachedSkills((prev) => prev.filter((s) => s.id !== id))
+  }
+
+  const dismissLivePill = (id: string) => {
+    setDismissedLiveIds((prev) => new Set(prev).add(id))
   }
 
   const onFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -370,19 +565,44 @@ export function AiComposer({
   }
 
   const selectableMode = mode === 'edit' ? 'edit' : 'ask'
+  const hasPills =
+    visibleLivePills.length > 0 ||
+    attachedSkills.length > 0 ||
+    attachedSnapshots.length > 0
 
   return (
     <div
       className={cn(
-        'flex flex-col gap-2 rounded-lg transition-colors',
+        'flex flex-col rounded-lg transition-colors',
         dropActive && 'ring-2 ring-[#2383e2]/40 bg-blue-50/50 dark:bg-blue-950/20'
       )}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={(e) => void handleDrop(e)}
     >
-      {attachedSnapshots.length > 0 && (
-        <div className="flex flex-wrap gap-1 px-1">
+      {/* Context pills sit at the top of the input box (page + selection + skills/snapshots) */}
+      {hasPills && (
+        <div className="flex flex-wrap gap-1 px-2 pt-2 pb-0.5">
+          {visibleLivePills.map((p) => (
+            <LiveContextPill key={p.id} pill={p} onDismiss={dismissLivePill} />
+          ))}
+          {attachedSkills.map((s) => (
+            <span
+              key={`skill-${s.id}`}
+              className="inline-flex items-center gap-1 h-6 pl-2 pr-1 rounded-md text-[11px] bg-[#2383e2]/12 text-[#1a6fc9] dark:bg-[#2383e2]/20 dark:text-[#7db7f0]"
+              title={s.description}
+            >
+              {s.name}
+              <button
+                type="button"
+                className="w-4 h-4 rounded flex items-center justify-center hover:bg-black/10 dark:hover:bg-white/10"
+                onClick={() => removeSkill(s.id)}
+                aria-label={`Remove ${s.name}`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
           {attachedSnapshots.map((s) => (
             <span
               key={s.id}
@@ -403,9 +623,10 @@ export function AiComposer({
       )}
 
       <form onSubmit={onSubmit} className="relative w-full">
-        <div className="flex items-end gap-1 pl-1 pr-1 pb-1 pt-0.5">
+        {/* items-center keeps + / text / Ask / send on one vertical midline */}
+        <div className="flex items-center gap-1 pl-1 pr-1 py-1">
           {/* + skills / context / connection menu (portaled — escapes overflow-hidden shell) */}
-          <div className="relative flex-shrink-0 self-center">
+          <div className="relative flex-shrink-0">
             <button
               ref={plusBtnRef}
               type="button"
@@ -542,6 +763,7 @@ export function AiComposer({
             }}
             onDragOver={handleDragOver}
             onDrop={(e) => void handleDrop(e)}
+            rows={1}
             placeholder={
               dropActive || attaching
                 ? attaching
@@ -553,9 +775,12 @@ export function AiComposer({
             }
             disabled={false}
             className={cn(
-              'min-h-[40px] max-h-[200px] resize-none border-0 bg-transparent shadow-none text-sm flex-1',
+              // block (not flex) + matched line-height so placeholder sits on the control midline
+              'block min-h-[32px] max-h-[200px] resize-none border-0 bg-transparent shadow-none',
+              'text-sm leading-5 flex-1 self-center',
               'placeholder:text-gray-400 dark:placeholder:text-gray-500',
-              'focus-visible:ring-0 focus-visible:ring-offset-0 px-1 py-2'
+              'focus-visible:ring-0 focus-visible:ring-offset-0',
+              'px-1 py-[6px]'
             )}
           />
 
@@ -563,7 +788,7 @@ export function AiComposer({
           <button
             type="button"
             className={cn(
-              'h-8 px-2 rounded-lg text-xs font-medium flex-shrink-0 self-center',
+              'h-8 px-2 rounded-lg text-xs font-medium flex-shrink-0',
               'text-gray-800 dark:text-gray-100',
               'hover:bg-black/[0.06] dark:hover:bg-white/[0.08]',
               'focus-visible:outline-none'
@@ -586,7 +811,7 @@ export function AiComposer({
             disabled={isLoading || !input.trim()}
             size="icon"
             className={cn(
-              'h-8 w-8 rounded-md flex-shrink-0 self-center',
+              'h-8 w-8 rounded-md flex-shrink-0',
               input.trim()
                 ? 'bg-[#2383e2] hover:bg-[#1a6fc9] text-white'
                 : 'bg-[#cbd5e1] dark:bg-gray-700 text-gray-600'
