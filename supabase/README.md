@@ -21,9 +21,10 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
-- `20260810141615_ai_edit_create_frames_checklist` — AI Edit create frames/threads, checklists, capabilityGap
+- `20260810143604_ai_composer_plus_quiz_me` — AI composer + menu / Quiz me skill
 
 Earlier markers:
+- `20260810141615_ai_edit_create_frames_checklist` — AI Edit create frames/threads, checklists, capabilityGap
 - `20260810132851_ai_edit_review_session` — AI Edit review UX (pending session / Save-Remove)
 
 Earlier foundation:

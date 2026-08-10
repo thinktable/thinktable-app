@@ -1,7 +1,7 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-10T14:16:20Z
+# snapped_at=2026-08-10T14:36:04Z
 # postgres=17.6.1.052 gotrue=v2.195.0 rest=v13.0.5 storage=v1.68.1
 # Remote applied (via Supabase MCP / Management API on thinkable):
 # 20251124231547 create_saas_schema
@@ -72,3 +72,4 @@
 20260810020000_ai_copilot_foundation.sql
 20260810132851_ai_edit_review_session.sql
 20260810141615_ai_edit_create_frames_checklist.sql
+20260810143604_ai_composer_plus_quiz_me.sql

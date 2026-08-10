@@ -122,6 +122,16 @@ export function NotionConnectButton() {
     }
   }
 
+  // AI composer Connection menu → open Notion connect / import
+  useEffect(() => {
+    const onOpen = () => {
+      if (status?.connected) setPickerOpen(true)
+      else startConnect()
+    }
+    window.addEventListener('thinktable-open-notion-connect', onOpen)
+    return () => window.removeEventListener('thinktable-open-notion-connect', onOpen)
+  }, [status?.connected, status?.configured, pathname])
+
   return (
     <>
       {status?.connected ? (
@@ -130,6 +140,7 @@ export function NotionConnectButton() {
             <Button
               variant="ghost"
               size="sm"
+              data-notion-connect
               className={cn(
                 'h-7 w-7 p-0 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0'
               )}
@@ -154,6 +165,7 @@ export function NotionConnectButton() {
         <Button
           variant="ghost"
           size="sm"
+          data-notion-connect
           className="h-7 w-7 p-0 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0"
           title={status?.configured === false ? 'Notion OAuth credentials missing — click for setup steps' : 'Connect Notion'}
           onClick={startConnect}

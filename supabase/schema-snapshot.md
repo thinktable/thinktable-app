@@ -1,12 +1,18 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-10T14:16:20Z`
+- Snapped at: `2026-08-10T14:36:04Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - Remote applied still tops out at `20260810020000_ai_copilot_foundation` (no new DDL this save)
 
 ## This save
+
+- No DDL. Marker `20260810143604_ai_composer_plus_quiz_me.sql`.
+- **AI composer chrome**: Ask↔Edit click-toggle in the input row (Scroll↔Zoom pattern); **+** menu (search, skills, File, Connection) portaled above the overflow shell; skills include Summarize / Tasks / Search page / **Quiz me** (Ask removed from + menu).
+- Schema unchanged.
+
+## Prior: AI Edit create frames checklist
 
 - No DDL. Marker `20260810141615_ai_edit_create_frames_checklist.sql`.
 - **AI Edit create frames + threads**: Edit mode can insert frames and `panel_edges` near viewport center (pending rainbow marks); Save keeps / Remove deletes.
@@ -29,10 +35,3 @@
   - `ai_context_snapshots` — reusable context packs
   - `ai_action_log` — future Edit/Plan undo via edit-past-chat
 - App: sidebar Ask streaming (`/api/ai/*`), drag chat blocks onto page, edit-to-rewind, snapshots, `lib/ai/*` mode/skill/agent stubs
-
-## Prior: fix DB frame drag clip
-
-- No DDL. Marker `20260810001539_fix_db_frame_drag_clip.sql`.
-- **Frame drag + databaseBlock clip fix**: z-order bump once at drag start; hug/intrinsic measure pauses while `dragging`; TipTap `extensions`/`editorProps` memoized + `suspendContentSync` so NodeViews don’t remount mid-drag.
-- Reject stub ~52×40 measures until `.tt-notion-db` exists; heal/relock corrupt `resizeDimensions` on load (unlocked clip hid the table).
-- Persisted via existing `messages.metadata` — schema unchanged.
