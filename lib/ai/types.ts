@@ -57,8 +57,15 @@ export interface AiChatBlockDragPayload { // Serialized drag data
 }
 
 /** SSE event shapes for /api/ai/chat streaming. */
+export type AiProposedEditKind = 'update_frame' | 'create_frame' | 'create_thread'
+
 export type AiProposedEdit = {
-  frameId: string
+  kind?: AiProposedEditKind // Default update_frame for legacy
+  frameId?: string // messages.id for update/create_frame
+  edgeId?: string // panel_edges.id for create_thread
+  tempId?: string // Model temp id for creates (debug / linking)
+  sourceFrameId?: string // create_thread source message id
+  targetFrameId?: string // create_thread target message id
   contentHtml?: string
   summary: string
   actionLogId?: string

@@ -65,7 +65,7 @@ import { ArrowDown, GripVertical, MousePointer2, Hand } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
-import { setAiSelectedFrameIds } from '@/lib/ai/selection-bridge' // Bridge RF selection → AI Ask context
+import { setAiSelectedFrameIds, setAiViewportCenter } from '@/lib/ai/selection-bridge' // Bridge RF selection + viewport → AI context
 import { AI_CHAT_BLOCK_MIME, type AiChatBlockDragPayload } from '@/lib/ai/types' // Drag chat turn onto page
 import { markHtmlWithAiOrigin } from '@/lib/ai/wrap-ai-html' // Persist AI provenance on chat-drop
 import { AiEditReviewBar } from '@/components/ai/ai-edit-review-bar' // Pending edit review chrome
@@ -1888,6 +1888,8 @@ function BoardFlowInner({
         queryClient.setQueriesData({ queryKey: ['messages-for-panels', conversationId, 'embed'] }, patch)
       }
       void refetchMessages()
+      // create_thread inserts / create_frame discard cascades edges
+      void queryClient.invalidateQueries({ queryKey: ['panel-edges', conversationId] })
     }
     window.addEventListener('ai-edits-mutated', onMutated)
     return () => window.removeEventListener('ai-edits-mutated', onMutated)
@@ -3839,13 +3841,25 @@ function BoardFlowInner({
     } else {
       selectedNodeIdRef.current = null
     }
-    // Publish selected chatPanel message ids for AI Ask context pack
+    // Publish selected chatPanel message ids for AI Ask/Edit context pack
     const frameIds = nodes
       .filter((n) => n.selected && n.type === 'chatPanel' && n.data?.promptMessage?.id)
       .map((n) => String(n.data.promptMessage.id))
     setAiSelectedFrameIds(frameIds)
+    // Keep viewport center fresh for Edit create placement (even without pan)
+    if (reactFlowInstance) {
+      const pane = document.querySelector('.react-flow')
+      if (pane) {
+        const r = pane.getBoundingClientRect()
+        const c = reactFlowInstance.screenToFlowPosition({
+          x: r.left + r.width / 2,
+          y: r.top + r.height / 2,
+        })
+        setAiViewportCenter(c)
+      }
+    }
     // Don't trigger any viewport changes here - selection should not move the viewport in linear mode
-  }, [nodes])
+  }, [nodes, reactFlowInstance])
 
   // Restore nav mode and selected tag from URL param when board loads and focus first flashcard
   useEffect(() => {
@@ -7529,6 +7543,16 @@ function BoardFlowInner({
         // skips delete while typing (isInputDOMNode misses <p>/<br> without contenteditable).
         deleteKeyCode={DELETE_KEYS}
         onMove={(event, viewport) => {
+          // Publish flow-space center of the visible pane for AI Edit frame placement
+          const pane = document.querySelector('.react-flow')
+          if (pane && reactFlowInstance) {
+            const r = pane.getBoundingClientRect()
+            const c = reactFlowInstance.screenToFlowPosition({
+              x: r.left + r.width / 2,
+              y: r.top + r.height / 2,
+            })
+            setAiViewportCenter(c)
+          }
           // Update viewport key to trigger re-render for button visibility check (throttled)
           // Only update every 100ms to prevent excessive re-renders
           if (viewportUpdateTimeoutRef.current) {

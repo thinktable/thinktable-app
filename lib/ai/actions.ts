@@ -14,9 +14,9 @@ export interface AiAction { // Serializable intent stored in ai_action_log
   inverse: Record<string, unknown> // Undo args
 }
 
-/** Apply is a no-op in Ask mode — Edit/Plan will implement real mutations later. */
+/** Apply is a no-op stub — Edit mode applies via edit-session (pending review). */
 export async function applyAiAction(_action: AiAction): Promise<{ ok: boolean; error?: string }> {
-  return { ok: true } // Stub success so call sites can wire early
+  return { ok: true } // Call sites that need real apply use edit-session instead
 }
 
 /** Inverse apply — used when editing a past chat rewinds page mutations. */

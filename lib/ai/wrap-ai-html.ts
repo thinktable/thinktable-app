@@ -1,6 +1,8 @@
-// Wrap TipTap HTML with AI pending / origin inline marks (block tags stay outside)
-const BLOCK_RE =
-  /(<(?:p|h[1-4]|li|blockquote|div)(?:\s[^>]*)?>)([\s\S]*?)(<\/(?:p|h[1-4]|li|blockquote|div)>)/gi
+// Wrap TipTap HTML with AI pending / origin inline marks (only inside p/h text)
+
+/** Match only paragraph/heading text — never li/div (breaks TipTap taskItem contentDOM). */
+const TEXT_BLOCK_RE =
+  /(<(?:p|h[1-4])(?:\s[^>]*)?>)([\s\S]*?)(<\/(?:p|h[1-4])>)/gi
 
 /** True when HTML already has any AI-origin provenance spans. */
 export function htmlHasAiOrigin(html: string | null | undefined): boolean {
@@ -12,28 +14,33 @@ export function htmlHasAiPending(html: string | null | undefined): boolean {
   return !!html && /data-ai-pending=["']true["']/.test(html)
 }
 
-/** Wrap block inners with ai-pending rainbow spans (skips already marked). */
-export function markHtmlWithAiPending(html: string): string {
-  if (!html?.trim()) return html
-  if (htmlHasAiPending(html)) return html // Idempotent
-  return html.replace(BLOCK_RE, (_m, open, inner, close) => {
-    if (/data-ai-pending=/.test(inner)) return `${open}${inner}${close}`
+function wrapTextBlocks(
+  html: string,
+  attr: 'data-ai-pending' | 'data-ai-origin',
+  className: string
+): string {
+  return html.replace(TEXT_BLOCK_RE, (_m, open, inner, close) => {
+    if (new RegExp(`${attr}=`).test(inner)) return `${open}${inner}${close}`
     const stripped = String(inner).replace(/^\s+|\s+$/g, '')
     if (!stripped || stripped === '<br>' || stripped === '<br/>') return `${open}${inner}${close}`
-    return `${open}<span data-ai-pending="true" class="tt-ai-pending">${inner}</span>${close}`
+    // Don't wrap if inner is itself a block wrapper
+    if (/^<(?:ul|ol|li|div|table|blockquote)\b/i.test(stripped)) return `${open}${inner}${close}`
+    return `${open}<span ${attr}="true" class="${className}">${inner}</span>${close}`
   })
 }
 
-/** Wrap block inners with ai-origin reddish provenance (skips empty / already marked). */
+/** Wrap paragraph/heading text with ai-pending rainbow spans (skips already marked). */
+export function markHtmlWithAiPending(html: string): string {
+  if (!html?.trim()) return html
+  if (htmlHasAiPending(html)) return html // Idempotent
+  return wrapTextBlocks(html, 'data-ai-pending', 'tt-ai-pending')
+}
+
+/** Wrap paragraph/heading text with ai-origin reddish provenance. */
 export function markHtmlWithAiOrigin(html: string): string {
   if (!html?.trim()) return html
   if (htmlHasAiOrigin(html)) return html
-  return html.replace(BLOCK_RE, (_m, open, inner, close) => {
-    if (/data-ai-origin=/.test(inner)) return `${open}${inner}${close}`
-    const stripped = String(inner).replace(/^\s+|\s+$/g, '')
-    if (!stripped || stripped === '<br>' || stripped === '<br/>') return `${open}${inner}${close}`
-    return `${open}<span data-ai-origin="true" class="tt-ai-origin">${inner}</span>${close}`
-  })
+  return wrapTextBlocks(html, 'data-ai-origin', 'tt-ai-origin')
 }
 
 /** Promote pending marks to origin (save) and drop pending class. */

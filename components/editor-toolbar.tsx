@@ -73,6 +73,7 @@ import { ShapeGridItem } from './shapes/ShapeGridItem'
 import { useTheme } from './theme-provider'
 import { NotionConnectButton } from './notion-connect-button'
 import { useAiEditSession } from '@/lib/ai/edit-session' // Top-bar AI content mask toggle
+import { htmlHasAiOrigin } from '@/lib/ai/wrap-ai-html' // Detect AI-origin spans in frame HTML
 import { newBlockMetadata } from '@/lib/blocks' // Canonical isBlock + isInlineBlock metadata
 
 interface EditorToolbarProps {
@@ -83,6 +84,50 @@ interface EditorToolbarProps {
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const { reactFlowInstance, isLocked, setIsLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, drawShape: contextDrawShape, setDrawShape: setContextDrawShape, mapUndo, mapRedo, canMapUndo, canMapRedo, snapEnabled, setSnapEnabled } = useReactFlowContext()
   const { showAiOrigin, setShowAiOrigin } = useAiEditSession() // Reddish AI content overlay toggle
+  const queryClientForAi = useQueryClient() // Scan page frames for AI-origin content
+  const [hasAiContent, setHasAiContent] = useState(false)
+  useEffect(() => {
+    if (!conversationId) {
+      setHasAiContent(false)
+      return
+    }
+    const scan = () => {
+      const msgs =
+        (queryClientForAi.getQueryData([
+          'messages-for-panels',
+          conversationId,
+          'full',
+        ]) as Array<{ content?: string; metadata?: Record<string, unknown> }> | undefined) ||
+        (queryClientForAi.getQueryData([
+          'messages-for-panels',
+          conversationId,
+        ]) as Array<{ content?: string; metadata?: Record<string, unknown> }> | undefined) ||
+        []
+      setHasAiContent(
+        msgs.some((m) => {
+          const meta = (m.metadata || {}) as Record<string, unknown>
+          if (meta.hasAiOrigin === true) return true
+          return htmlHasAiOrigin(m.content)
+        })
+      )
+    }
+    scan()
+    const unsub = queryClientForAi.getQueryCache().subscribe((event) => {
+      const key = event?.query?.queryKey
+      if (Array.isArray(key) && key[0] === 'messages-for-panels' && key[1] === conversationId) {
+        scan()
+      }
+    })
+    window.addEventListener('ai-edits-mutated', scan)
+    return () => {
+      unsub()
+      window.removeEventListener('ai-edits-mutated', scan)
+    }
+  }, [conversationId, queryClientForAi])
+  // Turn off the mask when the last AI-origin content is gone
+  useEffect(() => {
+    if (!hasAiContent && showAiOrigin) setShowAiOrigin(false)
+  }, [hasAiContent, showAiOrigin, setShowAiOrigin])
   const previewFocus = usePreviewFocus() // When a nested preview chrome is selected, View styles target that page
   // Route Board Style controls to the focused preview page (else the host map)
   const boardRule = previewFocus?.focusedPageId ? previewFocus.boardRule : hostBoardRule
@@ -2977,24 +3022,26 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           </div>
         )}
 
-        {/* Show AI-written content (reddish mask) — left of Notion */}
-        <div className="flex items-center px-1 flex-shrink-0">
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn(
-              'h-7 w-7 p-0 flex-shrink-0',
-              showAiOrigin
-                ? 'text-red-600 bg-red-50 hover:bg-red-100 hover:text-red-700'
-                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-            )}
-            title={showAiOrigin ? 'Hide AI content highlight' : 'Show AI-written content'}
-            aria-pressed={showAiOrigin}
-            onClick={() => setShowAiOrigin(!showAiOrigin)}
-          >
-            <Sparkles className="h-4 w-4" />
-          </Button>
-        </div>
+        {/* Show AI-written content (reddish mask) — only when page has AI-origin spans */}
+        {hasAiContent && (
+          <div className="flex items-center px-1 flex-shrink-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                'h-7 w-7 p-0 flex-shrink-0',
+                showAiOrigin
+                  ? 'text-red-600 bg-red-50 hover:bg-red-100 hover:text-red-700'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+              )}
+              title={showAiOrigin ? 'Hide AI content highlight' : 'Show AI-written content'}
+              aria-pressed={showAiOrigin}
+              onClick={() => setShowAiOrigin(!showAiOrigin)}
+            >
+              <Sparkles className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
 
         {/* Notion connect — Mindmap.so-style OAuth (workspace → permissions → select pages) */}
         <div className="flex items-center px-1 flex-shrink-0">

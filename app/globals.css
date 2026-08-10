@@ -1610,18 +1610,51 @@ span[data-added="true"] {
   .ProseMirror .tt-columns-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .ProseMirror .tt-columns-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .ProseMirror .tt-columns-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-  .ProseMirror ul[data-type="taskList"] {
-    list-style: none;
-    padding-left: 0;
+  .ProseMirror ul[data-type="taskList"],
+  .prose ul[data-type="taskList"] {
+    list-style: none !important;
+    padding-left: 0 !important;
+    margin: 0.25em 0;
   }
-  .ProseMirror ul[data-type="taskList"] li {
+  .ProseMirror ul[data-type="taskList"] > li,
+  .prose ul[data-type="taskList"] > li {
     display: flex;
+    flex-direction: row;
     align-items: flex-start;
     gap: 0.5rem;
+    margin: 0.1em 0;
+    padding-left: 0 !important;
   }
-  .ProseMirror ul[data-type="taskList"] li > label {
-    flex-shrink: 0;
-    margin-top: 0.2em;
+  .ProseMirror ul[data-type="taskList"] > li > label,
+  .prose ul[data-type="taskList"] > li > label {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 1.7em; /* Match frame line-height so checkbox centers on first text line */
+    margin: 0;
+    padding: 0;
+    user-select: none;
+  }
+  .ProseMirror ul[data-type="taskList"] > li > label input[type="checkbox"],
+  .prose ul[data-type="taskList"] > li > label input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+  }
+  .ProseMirror ul[data-type="taskList"] > li > div,
+  .prose ul[data-type="taskList"] > li > div {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .ProseMirror ul[data-type="taskList"] > li > div > p,
+  .prose ul[data-type="taskList"] > li > div > p {
+    margin: 0 !important;
+  }
+  /* Nested checklists stay flush under the parent item text */
+  .ProseMirror ul[data-type="taskList"] ul[data-type="taskList"],
+  .prose ul[data-type="taskList"] ul[data-type="taskList"] {
+    margin: 0.15em 0 0.15em 0;
+    padding-left: 0 !important;
   }
 }
 

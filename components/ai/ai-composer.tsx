@@ -14,7 +14,7 @@ import type {
 } from '@/lib/ai/types' // Types
 import { AI_CHAT_BLOCK_MIME } from '@/lib/ai/types' // Drag MIME
 import { consumeAiSse } from '@/lib/ai/stream' // SSE
-import { getAiSelectedFrameIds } from '@/lib/ai/selection-bridge' // Selection
+import { getAiSelectedFrameIds, getAiViewportCenter } from '@/lib/ai/selection-bridge' // Selection + placement
 import { cn } from '@/lib/utils' // cn
 
 interface AiComposerProps {
@@ -34,7 +34,11 @@ interface AiComposerProps {
   /** When Edit mode returns proposed page mutations. */
   onEdits?: (
     edits: Array<{
-      frameId: string
+      kind?: 'update_frame' | 'create_frame' | 'create_thread'
+      frameId?: string
+      edgeId?: string
+      sourceFrameId?: string
+      targetFrameId?: string
       contentHtml?: string
       summary: string
       actionLogId?: string
@@ -130,6 +134,7 @@ export function AiComposer({
           pageId: pageId || null,
           mode,
           selectedFrameIds: getAiSelectedFrameIds(),
+          viewportCenter: getAiViewportCenter(),
           snapshotIds: attachedSnapshots.map((s) => s.id),
           skipUserInsert: opts?.skipUserInsert === true,
         }),

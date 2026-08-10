@@ -9,6 +9,10 @@ import {
 } from '@/lib/ai/context-pack'
 import { skillHintsForIds } from '@/lib/ai/skills'
 import { isSelectableAiMode } from '@/lib/ai/modes'
+import { newBlockMetadata } from '@/lib/blocks'
+import { markHtmlWithAiPending } from '@/lib/ai/wrap-ai-html'
+import { frameContentFromAi, markdownToTipTapHtml } from '@/lib/ai/markdown-to-tiptap'
+import type { AiProposedEdit } from '@/lib/ai/types'
 import { NextRequest } from 'next/server'
 import OpenAI from 'openai'
 
@@ -16,8 +20,17 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 })
 
+const CREATE_FRAME_GAP = 320 // Horizontal spacing between newly created frames
+
 function sse(data: unknown): string {
   return `data: ${JSON.stringify(data)}\n\n`
+}
+
+/** Normalize model contentHtml — convert markdown-ish to TipTap when needed. */
+function normalizeEditHtml(contentHtml: string): string {
+  const raw = (contentHtml || '').trim()
+  if (!raw) return ''
+  return markdownToTipTapHtml(raw)
 }
 
 export async function POST(request: NextRequest) {
@@ -46,6 +59,12 @@ export async function POST(request: NextRequest) {
     ? body.snapshotIds.filter((id: unknown) => typeof id === 'string')
     : []
   const skipUserInsert = body.skipUserInsert === true
+  const viewportCenter =
+    body.viewportCenter &&
+    typeof body.viewportCenter.x === 'number' &&
+    typeof body.viewportCenter.y === 'number'
+      ? { x: body.viewportCenter.x as number, y: body.viewportCenter.y as number }
+      : { x: 0, y: 0 }
 
   if (!message) return new Response('Missing message', { status: 400 })
 
@@ -203,9 +222,11 @@ export async function POST(request: NextRequest) {
                 schema: {
                   type: 'object',
                   additionalProperties: false,
-                  required: ['reply', 'edits'],
+                  required: ['reply', 'capabilityGap', 'edits', 'creates', 'threads'],
                   properties: {
                     reply: { type: 'string' },
+                    // Non-empty = unsupported request; leave mutations empty and wait for user confirm
+                    capabilityGap: { type: 'string' },
                     edits: {
                       type: 'array',
                       items: {
@@ -215,7 +236,6 @@ export async function POST(request: NextRequest) {
                         properties: {
                           frameId: { type: 'string' },
                           summary: { type: 'string' },
-                          // Prefer surgical replacements; leave empty when using contentHtml full rewrite
                           replacements: {
                             type: 'array',
                             items: {
@@ -228,8 +248,34 @@ export async function POST(request: NextRequest) {
                               },
                             },
                           },
-                          // Full-frame HTML only when a full rewrite is required; otherwise ""
                           contentHtml: { type: 'string' },
+                        },
+                      },
+                    },
+                    creates: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        required: ['tempId', 'title', 'contentMarkdown', 'summary'],
+                        properties: {
+                          tempId: { type: 'string' },
+                          title: { type: 'string' },
+                          contentMarkdown: { type: 'string' },
+                          summary: { type: 'string' },
+                        },
+                      },
+                    },
+                    threads: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        required: ['sourceTempId', 'targetTempId', 'summary'],
+                        properties: {
+                          sourceTempId: { type: 'string' },
+                          targetTempId: { type: 'string' },
+                          summary: { type: 'string' },
                         },
                       },
                     },
@@ -239,73 +285,262 @@ export async function POST(request: NextRequest) {
             },
           })
 
-          const raw = completion.choices[0]?.message?.content || '{"reply":"","edits":[]}'
+          const raw =
+            completion.choices[0]?.message?.content ||
+            '{"reply":"","capabilityGap":"","edits":[],"creates":[],"threads":[]}'
           let parsed: {
             reply?: string
+            capabilityGap?: string
             edits?: Array<{
               frameId: string
               contentHtml?: string
               summary: string
               replacements?: Array<{ oldText: string; newText: string }>
             }>
+            creates?: Array<{
+              tempId: string
+              title: string
+              contentMarkdown: string
+              summary: string
+            }>
+            threads?: Array<{
+              sourceTempId: string
+              targetTempId: string
+              summary: string
+            }>
           }
           try {
             parsed = JSON.parse(raw)
           } catch {
-            parsed = { reply: raw, edits: [] }
+            parsed = { reply: raw, capabilityGap: '', edits: [], creates: [], threads: [] }
           }
           full = parsed.reply || ''
-          if (full) send({ type: 'text', text: full })
+          const capabilityGap = (parsed.capabilityGap || '').trim()
+          const enriched: AiProposedEdit[] = []
 
-          const frameIds = new Set(pack.frames.map((f) => f.id))
-          const validEdits = (parsed.edits || []).filter((e) => frameIds.has(e.frameId))
+          // Gap: explain + wait for confirm — do not mutate the page yet
+          if (capabilityGap) {
+            if (!full.includes(capabilityGap)) {
+              full = full ? `${full}\n\n${capabilityGap}` : capabilityGap
+            }
+            if (full) send({ type: 'text', text: full })
+          } else {
+            const frameIds = new Set(pack.frames.map((f) => f.id))
+            const validEdits = (parsed.edits || []).filter((e) => frameIds.has(e.frameId))
 
-          const enriched: Array<{
-            frameId: string
-            contentHtml?: string
-            summary: string
-            actionLogId?: string
-            originalContent?: string
-            replacements?: Array<{ oldText: string; newText: string }>
-          }> = []
-
-          for (const e of validEdits) {
-            const { data: msg } = await supabase
-              .from('messages')
-              .select('id, content')
-              .eq('id', e.frameId)
-              .maybeSingle()
-            if (!msg) continue
-            const replacements = (e.replacements || []).filter((r) => (r.oldText || '').trim())
-            const { data: action } = await supabase
-              .from('ai_action_log')
-              .insert({
-                user_id: user.id,
-                thread_id: threadId,
-                message_id: assistantRow.id,
+            for (const e of validEdits) {
+              const { data: msg } = await supabase
+                .from('messages')
+                .select('id, content')
+                .eq('id', e.frameId)
+                .maybeSingle()
+              if (!msg) continue
+              const replacements = (e.replacements || []).filter((r) => (r.oldText || '').trim())
+              const contentHtml = normalizeEditHtml(e.contentHtml || '')
+              const { data: action } = await supabase
+                .from('ai_action_log')
+                .insert({
+                  user_id: user.id,
+                  thread_id: threadId,
+                  message_id: assistantRow.id,
+                  kind: 'update_frame',
+                  payload: {
+                    frameId: e.frameId,
+                    contentHtml,
+                    replacements,
+                    summary: e.summary,
+                  },
+                  inverse: { frameId: e.frameId, contentHtml: msg.content },
+                  status: 'pending',
+                })
+                .select('id')
+                .single()
+              enriched.push({
                 kind: 'update_frame',
-                payload: {
-                  frameId: e.frameId,
-                  contentHtml: e.contentHtml || '',
-                  replacements,
-                  summary: e.summary,
-                },
-                inverse: { frameId: e.frameId, contentHtml: msg.content },
-                status: 'pending',
+                frameId: e.frameId,
+                contentHtml,
+                summary: e.summary || 'Update frame',
+                actionLogId: action?.id,
+                originalContent: msg.content as string,
+                replacements,
               })
-              .select('id')
-              .single()
-            enriched.push({
-              frameId: e.frameId,
-              contentHtml: e.contentHtml || '',
-              summary: e.summary || 'Update frame',
-              actionLogId: action?.id,
-              originalContent: msg.content as string,
-              replacements,
-            })
-          }
+            }
 
-          if (enriched.length) send({ type: 'edits', edits: enriched })
+            const creates = parsed.creates || []
+            const threads = parsed.threads || []
+            const tempToMessageId = new Map<string, string>()
+            const existingFrameIds = new Set(pack.frames.map((f) => f.id))
+
+            /** Resolve thread endpoint: create tempId or existing frame UUID. */
+            const resolveEndpoint = (id: string): string | null => {
+              const key = (id || '').trim()
+              if (!key) return null
+              if (tempToMessageId.has(key)) return tempToMessageId.get(key)!
+              if (existingFrameIds.has(key)) return key
+              return null
+            }
+
+            if (creates.length > 0 && !pageId) {
+              full =
+                (full ? full + '\n\n' : '') +
+                'I need an open page to place frames — open a page and try again in Edit mode.'
+            } else if (creates.length > 0 && pageId) {
+              const n = creates.length
+              const startX = viewportCenter.x - ((n - 1) * CREATE_FRAME_GAP) / 2
+
+              for (let i = 0; i < creates.length; i++) {
+                const c = creates[i]
+                const tempId = (c.tempId || `c${i}`).trim()
+                if (!tempId || tempToMessageId.has(tempId)) continue
+
+                const rawHtml = frameContentFromAi(c.title || '', c.contentMarkdown || '')
+                const markedHtml = markHtmlWithAiPending(rawHtml)
+                const position = {
+                  x: startX + i * CREATE_FRAME_GAP,
+                  y: viewportCenter.y,
+                }
+
+                const { data: msg, error: msgErr } = await supabase
+                  .from('messages')
+                  .insert({
+                    conversation_id: pageId,
+                    user_id: user.id,
+                    role: 'user',
+                    content: markedHtml,
+                    metadata: newBlockMetadata({
+                      position,
+                      fadeIn: true,
+                      aiPendingEdit: true,
+                      fromAiEdit: true,
+                      hasAiOrigin: false,
+                    }),
+                  })
+                  .select('id, content')
+                  .single()
+
+                if (msgErr || !msg) {
+                  console.error('AI create_frame insert failed:', msgErr)
+                  continue
+                }
+
+                tempToMessageId.set(tempId, msg.id)
+
+                const { data: action } = await supabase
+                  .from('ai_action_log')
+                  .insert({
+                    user_id: user.id,
+                    thread_id: threadId,
+                    message_id: assistantRow.id,
+                    kind: 'create_frame',
+                    payload: {
+                      frameId: msg.id,
+                      tempId,
+                      summary: c.summary,
+                    },
+                    inverse: { frameId: msg.id },
+                    status: 'pending',
+                  })
+                  .select('id')
+                  .single()
+
+                enriched.push({
+                  kind: 'create_frame',
+                  frameId: msg.id,
+                  tempId,
+                  contentHtml: markedHtml,
+                  summary: c.summary || 'Create frame',
+                  actionLogId: action?.id,
+                  originalContent: '',
+                })
+              }
+            }
+
+            // Threads may run with creates and/or existing frame ids (needs pageId)
+            if (threads.length > 0 && pageId) {
+              for (const t of threads) {
+                const sourceId = resolveEndpoint(t.sourceTempId)
+                const targetId = resolveEndpoint(t.targetTempId)
+                if (!sourceId || !targetId || sourceId === targetId) continue
+
+                const { data: existingEdges } = await supabase
+                  .from('panel_edges')
+                  .select('id')
+                  .eq('conversation_id', pageId)
+                  .or(
+                    `and(source_message_id.eq.${sourceId},target_message_id.eq.${targetId}),and(source_message_id.eq.${targetId},target_message_id.eq.${sourceId})`
+                  )
+                if (existingEdges && existingEdges.length > 0) continue
+
+                const { data: edge, error: edgeErr } = await supabase
+                  .from('panel_edges')
+                  .insert({
+                    conversation_id: pageId,
+                    user_id: user.id,
+                    source_message_id: sourceId,
+                    target_message_id: targetId,
+                    metadata: {},
+                  })
+                  .select('id')
+                  .single()
+
+                let edgeId = edge?.id as string | undefined
+                if (edgeErr || !edgeId) {
+                  if (String(edgeErr?.message || '').includes('metadata')) {
+                    const retry = await supabase
+                      .from('panel_edges')
+                      .insert({
+                        conversation_id: pageId,
+                        user_id: user.id,
+                        source_message_id: sourceId,
+                        target_message_id: targetId,
+                      })
+                      .select('id')
+                      .single()
+                    if (retry.error || !retry.data) {
+                      console.error('AI create_thread insert failed:', retry.error || edgeErr)
+                      continue
+                    }
+                    edgeId = retry.data.id
+                  } else {
+                    console.error('AI create_thread insert failed:', edgeErr)
+                    continue
+                  }
+                }
+
+                const { data: action } = await supabase
+                  .from('ai_action_log')
+                  .insert({
+                    user_id: user.id,
+                    thread_id: threadId,
+                    message_id: assistantRow.id,
+                    kind: 'create_thread',
+                    payload: {
+                      edgeId,
+                      sourceFrameId: sourceId,
+                      targetFrameId: targetId,
+                      summary: t.summary,
+                    },
+                    inverse: { edgeId },
+                    status: 'pending',
+                  })
+                  .select('id')
+                  .single()
+
+                enriched.push({
+                  kind: 'create_thread',
+                  edgeId,
+                  frameId: sourceId,
+                  sourceFrameId: sourceId,
+                  targetFrameId: targetId,
+                  summary: t.summary || 'Link frames',
+                  actionLogId: action?.id,
+                })
+              }
+            }
+
+            if (full) send({ type: 'text', text: full })
+            if (enriched.length) send({ type: 'edits', edits: enriched })
+          }
         } else {
           const completion = await openai.chat.completions.create({
             model: 'gpt-4o-mini',

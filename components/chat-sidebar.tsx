@@ -9,7 +9,7 @@ import { AiTranscript } from './ai/ai-transcript' // Turns
 import { AiComposer, regenerateAfterEdit } from './ai/ai-composer' // Composer
 import type { AiContextSnapshot, AiMessage, AiThread } from '@/lib/ai/types' // Types
 import { isSelectableAiMode } from '@/lib/ai/modes'
-import { useAiEditSession, buildFramePendingEdit } from '@/lib/ai/edit-session'
+import { useAiEditSession, buildFramePendingEdit, buildCreateFramePendingEdit, buildCreateThreadPendingEdit } from '@/lib/ai/edit-session'
 import { htmlToPlain } from '@/lib/ai/context-pack' // Plain excerpts for snapshots
 import { createClient } from '@/lib/supabase/client' // Snapshot frame load
 import { cn } from '@/lib/utils' // cn
@@ -375,9 +375,27 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                 seedPrompt={seedPrompt}
                 onSeedConsumed={() => setSeedPrompt(undefined)}
                 onEdits={async (edits) => {
-                  await addPendingEdits(
-                    edits.map((e) =>
-                      buildFramePendingEdit({
+                  const mapped = edits
+                    .map((e) => {
+                      if (e.kind === 'create_frame' && e.frameId) {
+                        return buildCreateFramePendingEdit({
+                          messageId: e.frameId,
+                          contentHtml: e.contentHtml || '',
+                          summary: e.summary,
+                          actionLogId: e.actionLogId,
+                        })
+                      }
+                      if (e.kind === 'create_thread' && e.edgeId) {
+                        return buildCreateThreadPendingEdit({
+                          edgeId: e.edgeId,
+                          summary: e.summary,
+                          actionLogId: e.actionLogId,
+                          sourceFrameId: e.sourceFrameId,
+                          targetFrameId: e.targetFrameId,
+                        })
+                      }
+                      if (!e.frameId) return null
+                      return buildFramePendingEdit({
                         messageId: e.frameId,
                         originalContent: e.originalContent,
                         contentHtml: e.contentHtml,
@@ -385,8 +403,9 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                         summary: e.summary,
                         actionLogId: e.actionLogId,
                       })
-                    )
-                  )
+                    })
+                    .filter((e): e is NonNullable<typeof e> => e !== null)
+                  if (mapped.length) await addPendingEdits(mapped)
                 }}
               />
             </div>

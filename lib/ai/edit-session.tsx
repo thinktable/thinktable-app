@@ -23,6 +23,9 @@ export type AiPendingEditInput = {
   kind: AiPendingEditKind
   messageId?: string
   edgeId?: string
+  /** create_thread endpoints (for discard cleanup when a create_frame is removed). */
+  sourceFrameId?: string
+  targetFrameId?: string
   summary: string
   /** Hint only — live DB content wins for update_frame. */
   originalContent?: string
@@ -33,13 +36,15 @@ export type AiPendingEditInput = {
   actionLogId?: string
 }
 
-export type AiPendingEditKind = 'update_frame' | 'create_frame' | 'update_thread'
+export type AiPendingEditKind = 'update_frame' | 'create_frame' | 'create_thread' | 'update_thread'
 
 export interface AiPendingEdit {
   id: string
   kind: AiPendingEditKind
   messageId?: string
   edgeId?: string
+  sourceFrameId?: string
+  targetFrameId?: string
   summary: string
   /** Exact page content before the proposal (never written over until discard/save resolves). */
   originalContent: string
@@ -80,6 +85,12 @@ function bumpMessages(detail?: {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('ai-edits-mutated', { detail }))
   }
+}
+
+async function markActionStatus(actionLogId: string | undefined, status: 'applied' | 'undone') {
+  if (!actionLogId) return
+  const supabase = createClient()
+  await supabase.from('ai_action_log').update({ status }).eq('id', actionLogId)
 }
 
 export function AiEditSessionProvider({
@@ -141,13 +152,55 @@ export function AiEditSessionProvider({
     []
   )
 
-  /** Queue proposals in memory only — DB keeps original until Save. */
+  const deleteFrame = useCallback(async (messageId: string) => {
+    const supabase = createClient()
+    // panel_edges cascade on message delete
+    const { error } = await supabase.from('messages').delete().eq('id', messageId)
+    if (error) throw error
+  }, [])
+
+  const deleteEdge = useCallback(async (edgeId: string) => {
+    const supabase = createClient()
+    // Ignore missing row (cascade already removed it with a create_frame discard)
+    await supabase.from('panel_edges').delete().eq('id', edgeId)
+  }, [])
+
+  /** Queue proposals in memory only — DB keeps original until Save (creates already inserted). */
   const addPendingEdits = useCallback(
     async (edits: AiPendingEditInput[]) => {
       const supabase = createClient()
       const withIds: AiPendingEdit[] = []
 
       for (const e of edits) {
+        if (e.kind === 'create_thread') {
+          withIds.push({
+            id: generateUUID(),
+            kind: 'create_thread',
+            edgeId: e.edgeId,
+            sourceFrameId: e.sourceFrameId,
+            targetFrameId: e.targetFrameId,
+            summary: e.summary,
+            originalContent: '',
+            proposedContent: '',
+            actionLogId: e.actionLogId,
+          })
+          continue
+        }
+
+        if (e.kind === 'create_frame') {
+          const proposed = e.proposedContent || e.contentHtml || ''
+          withIds.push({
+            id: generateUUID(),
+            kind: 'create_frame',
+            messageId: e.messageId,
+            summary: e.summary,
+            originalContent: '',
+            proposedContent: proposed,
+            actionLogId: e.actionLogId,
+          })
+          continue
+        }
+
         let original = e.originalContent || ''
         // Always re-read live DB content as source of truth for original (ignore stale SSE)
         if (e.kind === 'update_frame' && e.messageId) {
@@ -183,7 +236,12 @@ export function AiEditSessionProvider({
       setPendingEdits((prev) => {
         // Replace any existing pending for the same frame (latest proposal wins)
         const withoutDupes = prev.filter(
-          (p) => !withIds.some((n) => n.messageId && n.messageId === p.messageId)
+          (p) =>
+            !withIds.some(
+              (n) =>
+                (n.messageId && n.messageId === p.messageId) ||
+                (n.edgeId && n.edgeId === p.edgeId)
+            )
         )
         return [...withoutDupes, ...withIds]
       })
@@ -194,10 +252,8 @@ export function AiEditSessionProvider({
     [persistFrameMeta, onMessagesMutated]
   )
 
-  const saveEdit = useCallback(
-    async (id: string) => {
-      const edit = pendingEdits.find((e) => e.id === id)
-      if (!edit) return
+  const applySaveOne = useCallback(
+    async (edit: AiPendingEdit): Promise<{ messageId?: string; content?: string }> => {
       if (edit.kind === 'update_frame' && edit.messageId) {
         const finalHtml = promotePendingToOrigin(edit.proposedContent)
         await persistFrameContent(edit.messageId, finalHtml)
@@ -205,90 +261,123 @@ export function AiEditSessionProvider({
           aiPendingEdit: false,
           hasAiOrigin: true,
         })
-        if (edit.actionLogId) {
-          const supabase = createClient()
-          await supabase
-            .from('ai_action_log')
-            .update({ status: 'applied' })
-            .eq('id', edit.actionLogId)
-        }
-        setJustRestoredByMessage((prev) => ({
-          ...prev,
-          [edit.messageId!]: finalHtml,
-        }))
+        await markActionStatus(edit.actionLogId, 'applied')
+        return { messageId: edit.messageId, content: finalHtml }
       }
+      if (edit.kind === 'create_frame' && edit.messageId) {
+        const finalHtml = promotePendingToOrigin(edit.proposedContent)
+        await persistFrameContent(edit.messageId, finalHtml)
+        await persistFrameMeta(edit.messageId, {
+          aiPendingEdit: false,
+          hasAiOrigin: true,
+        })
+        await markActionStatus(edit.actionLogId, 'applied')
+        return { messageId: edit.messageId, content: finalHtml }
+      }
+      if (edit.kind === 'create_thread' && edit.edgeId) {
+        await markActionStatus(edit.actionLogId, 'applied')
+      }
+      return {}
+    },
+    [persistFrameContent, persistFrameMeta]
+  )
+
+  const applyDiscardOne = useCallback(
+    async (edit: AiPendingEdit): Promise<{ messageId?: string; content?: string; deleted?: boolean }> => {
+      if (edit.kind === 'update_frame' && edit.messageId) {
+        await persistFrameMeta(edit.messageId, { aiPendingEdit: false })
+        await persistFrameContent(edit.messageId, edit.originalContent)
+        await markActionStatus(edit.actionLogId, 'undone')
+        return { messageId: edit.messageId, content: edit.originalContent }
+      }
+      if (edit.kind === 'create_frame' && edit.messageId) {
+        await deleteFrame(edit.messageId)
+        await markActionStatus(edit.actionLogId, 'undone')
+        return { messageId: edit.messageId, deleted: true }
+      }
+      if (edit.kind === 'create_thread' && edit.edgeId) {
+        await deleteEdge(edit.edgeId)
+        await markActionStatus(edit.actionLogId, 'undone')
+      }
+      return {}
+    },
+    [persistFrameContent, persistFrameMeta, deleteFrame, deleteEdge]
+  )
+
+  const saveEdit = useCallback(
+    async (id: string) => {
+      const edit = pendingEdits.find((e) => e.id === id)
+      if (!edit) return
+      const result = await applySaveOne(edit)
       setPendingEdits((prev) => prev.filter((e) => e.id !== id))
       if (focusedEditId === id) setFocusedEditId(null)
+      if (result.messageId && result.content) {
+        setJustRestoredByMessage((prev) => ({
+          ...prev,
+          [result.messageId!]: result.content!,
+        }))
+      }
       onMessagesMutated?.()
       bumpMessages(
-        edit.messageId
+        result.messageId && result.content
           ? {
-              contentUpdates: [
-                {
-                  messageId: edit.messageId,
-                  content: promotePendingToOrigin(edit.proposedContent),
-                },
-              ],
+              contentUpdates: [{ messageId: result.messageId, content: result.content }],
             }
           : undefined
       )
     },
-    [pendingEdits, persistFrameContent, persistFrameMeta, focusedEditId, onMessagesMutated]
+    [pendingEdits, applySaveOne, focusedEditId, onMessagesMutated]
   )
 
   const discardEdit = useCallback(
     async (id: string) => {
       const edit = pendingEdits.find((e) => e.id === id)
       if (!edit) return
-      // DB was never overwritten with the proposal — just clear the flag + session entry
-      if (edit.kind === 'update_frame' && edit.messageId) {
-        await persistFrameMeta(edit.messageId, { aiPendingEdit: false })
-        // Ensure DB still has original (no-op if untouched; heals if something else wrote)
-        await persistFrameContent(edit.messageId, edit.originalContent)
-        if (edit.actionLogId) {
-          const supabase = createClient()
-          await supabase
-            .from('ai_action_log')
-            .update({ status: 'undone' })
-            .eq('id', edit.actionLogId)
+      const result = await applyDiscardOne(edit)
+
+      // Frame delete cascades panel_edges — clear thread pendings attached to this frame
+      const orphanThreadIds: string[] = []
+      if (edit.kind === 'create_frame' && edit.messageId) {
+        for (const t of pendingEdits) {
+          if (t.kind !== 'create_thread' || t.id === id) continue
+          const touches =
+            t.sourceFrameId === edit.messageId || t.targetFrameId === edit.messageId
+          if (!touches) continue
+          if (t.edgeId) await deleteEdge(t.edgeId)
+          await markActionStatus(t.actionLogId, 'undone')
+          orphanThreadIds.push(t.id)
         }
-        setJustRestoredByMessage((prev) => ({
-          ...prev,
-          [edit.messageId!]: edit.originalContent,
-        }))
       }
-      setPendingEdits((prev) => prev.filter((e) => e.id !== id))
+
+      setPendingEdits((prev) =>
+        prev.filter((e) => e.id !== id && !orphanThreadIds.includes(e.id))
+      )
+
       if (focusedEditId === id) setFocusedEditId(null)
       setPreviewOriginal(false)
+      if (result.messageId && result.content && !result.deleted) {
+        setJustRestoredByMessage((prev) => ({
+          ...prev,
+          [result.messageId!]: result.content!,
+        }))
+      }
       onMessagesMutated?.()
       bumpMessages(
-        edit.messageId
-          ? { contentUpdates: [{ messageId: edit.messageId, content: edit.originalContent }] }
+        result.messageId && result.content && !result.deleted
+          ? { contentUpdates: [{ messageId: result.messageId, content: result.content }] }
           : undefined
       )
     },
-    [pendingEdits, persistFrameContent, persistFrameMeta, focusedEditId, onMessagesMutated]
+    [pendingEdits, applyDiscardOne, deleteEdge, focusedEditId, onMessagesMutated]
   )
 
   const saveAll = useCallback(async () => {
     const snapshot = [...pendingEdits]
     const restored: Record<string, string> = {}
     for (const edit of snapshot) {
-      if (edit.kind === 'update_frame' && edit.messageId) {
-        const finalHtml = promotePendingToOrigin(edit.proposedContent)
-        await persistFrameContent(edit.messageId, finalHtml)
-        await persistFrameMeta(edit.messageId, {
-          aiPendingEdit: false,
-          hasAiOrigin: true,
-        })
-        if (edit.actionLogId) {
-          const supabase = createClient()
-          await supabase
-            .from('ai_action_log')
-            .update({ status: 'applied' })
-            .eq('id', edit.actionLogId)
-        }
-        restored[edit.messageId] = finalHtml
+      const result = await applySaveOne(edit)
+      if (result.messageId && result.content) {
+        restored[result.messageId] = result.content
       }
     }
     setJustRestoredByMessage((prev) => ({ ...prev, ...restored }))
@@ -302,23 +391,21 @@ export function AiEditSessionProvider({
         content,
       })),
     })
-  }, [pendingEdits, persistFrameContent, persistFrameMeta, onMessagesMutated])
+  }, [pendingEdits, applySaveOne, onMessagesMutated])
 
   const discardAll = useCallback(async () => {
     const snapshot = [...pendingEdits]
     const restored: Record<string, string> = {}
-    for (const edit of snapshot) {
-      if (edit.kind === 'update_frame' && edit.messageId) {
-        await persistFrameMeta(edit.messageId, { aiPendingEdit: false })
-        await persistFrameContent(edit.messageId, edit.originalContent)
-        if (edit.actionLogId) {
-          const supabase = createClient()
-          await supabase
-            .from('ai_action_log')
-            .update({ status: 'undone' })
-            .eq('id', edit.actionLogId)
-        }
-        restored[edit.messageId] = edit.originalContent
+    // Discard creates first (frames cascade threads), then updates
+    const ordered = [
+      ...snapshot.filter((e) => e.kind === 'create_thread'),
+      ...snapshot.filter((e) => e.kind === 'create_frame'),
+      ...snapshot.filter((e) => e.kind === 'update_frame' || e.kind === 'update_thread'),
+    ]
+    for (const edit of ordered) {
+      const result = await applyDiscardOne(edit)
+      if (result.messageId && result.content && !result.deleted) {
+        restored[result.messageId] = result.content
       }
     }
     setJustRestoredByMessage((prev) => ({ ...prev, ...restored }))
@@ -332,14 +419,17 @@ export function AiEditSessionProvider({
         content,
       })),
     })
-  }, [pendingEdits, persistFrameContent, persistFrameMeta, onMessagesMutated])
+  }, [pendingEdits, applyDiscardOne, onMessagesMutated])
 
   const displayContentFor = useCallback(
     (messageId: string, liveContent: string) => {
       const edit = pendingEdits.find((e) => e.messageId === messageId)
       if (!edit) return liveContent
-      // Eye on → original; eye off → proposed (DB live content stays original until save)
-      return previewOriginal ? edit.originalContent : edit.proposedContent
+      // Eye on → original (empty for creates); eye off → proposed
+      if (previewOriginal) {
+        return edit.kind === 'create_frame' ? '<p></p>' : edit.originalContent
+      }
+      return edit.proposedContent || liveContent
     },
     [pendingEdits, previewOriginal]
   )
@@ -449,6 +539,40 @@ export function buildFramePendingEdit(opts: {
     proposedContent: opts.proposedHtml,
     contentHtml: opts.contentHtml,
     replacements: opts.replacements,
+    actionLogId: opts.actionLogId,
+  }
+}
+
+export function buildCreateFramePendingEdit(opts: {
+  messageId: string
+  contentHtml: string
+  summary: string
+  actionLogId?: string
+}): AiPendingEditInput {
+  return {
+    kind: 'create_frame',
+    messageId: opts.messageId,
+    summary: opts.summary,
+    originalContent: '',
+    proposedContent: opts.contentHtml,
+    contentHtml: opts.contentHtml,
+    actionLogId: opts.actionLogId,
+  }
+}
+
+export function buildCreateThreadPendingEdit(opts: {
+  edgeId: string
+  summary: string
+  actionLogId?: string
+  sourceFrameId?: string
+  targetFrameId?: string
+}): AiPendingEditInput {
+  return {
+    kind: 'create_thread',
+    edgeId: opts.edgeId,
+    sourceFrameId: opts.sourceFrameId,
+    targetFrameId: opts.targetFrameId,
+    summary: opts.summary,
     actionLogId: opts.actionLogId,
   }
 }
