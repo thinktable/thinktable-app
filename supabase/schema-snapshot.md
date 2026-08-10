@@ -1,13 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-10T00:00:40Z`
+- Snapped at: `2026-08-10T00:15:39Z`
 - Source: local `supabase/migrations/` + `.temp` service versions (linked project)
 - CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (remote `migration list --linked` needs `SUPABASE_DB_PASSWORD` — marker migration used)
 
 ## This save
+
+- No DDL. Marker `20260810001539_fix_db_frame_drag_clip.sql`.
+- **Frame drag + databaseBlock clip fix**: z-order bump once at drag start; hug/intrinsic measure pauses while `dragging`; TipTap `extensions`/`editorProps` memoized + `suspendContentSync` so NodeViews don’t remount mid-drag.
+- Reject stub ~52×40 measures until `.tt-notion-db` exists; heal/relock corrupt `resizeDimensions` on load (unlocked clip hid the table).
+- Persisted via existing `messages.metadata` — schema unchanged.
+
+## Prior: Notion Views API linked filters
 
 - No DDL. Marker `20260810000100_notion_views_api_linked_filters.sql`.
 - **Notion Views API** (`lib/notion/views.ts`, Notion-Version `2026-03-11`): list/retrieve views; row set from `POST /v1/views/{id}/queries` (server-side filter/sorts/`quick_filters` — linked views often have `filter: null`); hydrate + order from data_source.

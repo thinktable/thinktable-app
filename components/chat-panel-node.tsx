@@ -36,6 +36,19 @@ const PAGE_LINK_ICON_W = 22 // Title emoji / page icon column
 const PAGE_OPEN_MENU_W = 52 // Open-menu pill ≈ preview + open (Notion adds a bit more)
 const BLOCK_THREE_CHARS_W = 28 // ~3ch of body text for plain frames
 const BLOCK_MIN_FRAME_H = 40 // Keep a usable box when shrinking
+const DATABASE_BLOCK_HTML_RE = /data-type=["']databaseBlock["']/i // TipTap Notion DB atom in frame HTML
+const MIN_DATABASE_FRAME_W = 240 // Below this a DB frame is a collapsed stub (grip + title only)
+const MIN_DATABASE_FRAME_H = 120 // Title row alone is ~40; table needs more height than that
+
+/** True when this frame's TipTap HTML embeds a Notion databaseBlock. */
+function hasDatabaseBlockHtml(html: string): boolean {
+  return DATABASE_BLOCK_HTML_RE.test(html || '')
+}
+
+/** Post-drag hug sometimes measures a remounting DB NodeView as ~52×40 and persists it — reject those. */
+function isCollapsedDatabaseFrameSize(width: number, height: number): boolean {
+  return width < MIN_DATABASE_FRAME_W || height < MIN_DATABASE_FRAME_H
+}
 
 /** Min frame width: pageLink → grip+icon+menu; plain text → grip+3 letters. */
 function blockMinFrameWidth(html: string): number {
@@ -95,6 +108,22 @@ function measureNaturalContentWidth(contentFit: HTMLElement): number {
       const iconW = icon ? (icon as HTMLElement).offsetWidth : 0 // Local layout px (transform-agnostic)
       const labelW = label ? rangeWidth(label) : 0
       maxLine = Math.max(maxLine, iconW + gap + labelW)
+      continue
+    }
+    // databaseBlock: Range over the live Notion table is transform-fragile during RF frame
+    // drag (gBCR can collapse → hug shrinks the frame and the table appears to vanish).
+    const dbBlock =
+      (child.classList.contains('tt-database-block') && child) ||
+      (child.querySelector('.tt-database-block') as HTMLElement | null)
+    if (dbBlock) {
+      const table = dbBlock.querySelector('.tt-notion-db') as HTMLElement | null
+      const w = Math.max(
+        dbBlock.scrollWidth || 0,
+        dbBlock.offsetWidth || 0,
+        table?.scrollWidth || 0,
+        table?.offsetWidth || 0
+      )
+      maxLine = Math.max(maxLine, w)
       continue
     }
     maxLine = Math.max(maxLine, rangeWidth(child)) // Longest real text line
@@ -310,6 +339,7 @@ function TipTapContent({
   conversationId,
   pageInTargets,
   onPageTurnInto,
+  suspendContentSync = false, // True while RF frame-dragging — skip setContent remounts
 }: {
   content: string
   className?: string
@@ -336,15 +366,29 @@ function TipTapContent({
               conversationId?: string // Page id — ⋮⋮ extract a block onto the page
   pageInTargets?: PageInTarget[]
   onPageTurnInto?: (blockType: 'page' | 'pageIn', pageInParentId?: string | null) => void
+  suspendContentSync?: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { setActiveEditor } = useEditorContext()
   // Live frame-selected flag for TipTap DOM handlers (useEditor config is not recreated each render)
   const isPanelSelectedRef = useRef(!!isPanelSelected)
   isPanelSelectedRef.current = !!isPanelSelected
+  // Keep latest callbacks in refs so editorProps / onUpdate stay referentially stable across
+  // RF drag re-renders (unstable options → useEditor setOptions every frame → databaseBlock NodeView remounts → table vanishes).
+  const originalContentRef = useRef(originalContent)
+  originalContentRef.current = originalContent
+  const onContentChangeRef = useRef(onContentChange)
+  onContentChangeRef.current = onContentChange
+  const onHasChangesChangeRef = useRef(onHasChangesChange)
+  onHasChangesChangeRef.current = onHasChangesChange
+  const onBlurRef = useRef(onBlur)
+  onBlurRef.current = onBlur
+  const onEditorActiveChangeRef = useRef(onEditorActiveChange)
+  onEditorActiveChangeRef.current = onEditorActiveChange
+  const setActiveEditorRef = useRef(setActiveEditor)
+  setActiveEditorRef.current = setActiveEditor
 
-  // Shared stack: headings 1–4, lists, tasks, callout/toggle/equation/synced/columns
-  const extensions = createPanelExtensions(
+  const resolvedPlaceholder =
     placeholder !== undefined && placeholder !== ''
       ? placeholder
       : placeholder === undefined
@@ -352,14 +396,15 @@ function TipTapContent({
           ? 'What are you trying to remember?'
           : 'Explain it clearly or let AI help'
         : ''
+
+  // Stable across drag ticks — createPanelExtensions() allocates new StarterKit instances each call
+  const extensions = useMemo(
+    () => createPanelExtensions(resolvedPlaceholder),
+    [resolvedPlaceholder]
   )
 
-  const editor = useEditor({
-    extensions,
-    content,
-    editable: true, // Fully editable
-    immediatelyRender: false, // Prevent SSR hydration mismatches
-    editorProps: {
+  const editorProps = useMemo(
+    () => ({
       attributes: {
         class: cn(
           'prose max-w-none focus:outline-none min-h-[20px] cursor-text nokey', // nokey: RF must not treat Backspace as frame delete while typing
@@ -368,17 +413,20 @@ function TipTapContent({
         ...(singleLineUntilEnter ? { 'data-single-line': 'true' } : {}), // CSS nowrap until Enter
       },
       handleDOMEvents: {
-        mousedown: (view, event) => {
+        mousedown: (view: any, event: Event) => {
+          const mouseEvent = event as MouseEvent
           // Unselected frame: do not place caret / select text — let RF select + drag the frame
           if (!isPanelSelectedRef.current) {
             return true // Prevent ProseMirror default; do not stopPropagation
           }
           // Selected frame: keep pointer inside the editor so RF does not start a frame drag
-          event.stopPropagation()
+          mouseEvent.stopPropagation()
 
           // Temporary reveal: click a hazed span to clear blur until click-away / blur
-          const hazeTarget = (event.target as HTMLElement | null)?.closest?.('[data-haze="true"]') as HTMLElement | null
-          view.dom.querySelectorAll('.tt-haze-revealed').forEach((el) => {
+          const hazeTarget = (mouseEvent.target as HTMLElement | null)?.closest?.(
+            '[data-haze="true"]'
+          ) as HTMLElement | null
+          view.dom.querySelectorAll('.tt-haze-revealed').forEach((el: Element) => {
             if (el !== hazeTarget) el.classList.remove('tt-haze-revealed') // Hide previously revealed spans
           })
           if (hazeTarget) {
@@ -388,14 +436,14 @@ function TipTapContent({
           // Don’t override selection here — PM places the I-bar; container click confirms via posAtCoords
           return false
         },
-        blur: (view) => {
+        blur: (view: any) => {
           // Re-haze any temporarily revealed spans when the editor loses focus
-          view.dom.querySelectorAll('.tt-haze-revealed').forEach((el) => {
+          view.dom.querySelectorAll('.tt-haze-revealed').forEach((el: Element) => {
             el.classList.remove('tt-haze-revealed')
           })
           return false
         },
-        paste: (view, event) => {
+        paste: (view: any, event: Event) => {
           // Single-line frames: paste as one visual line (Enter still creates blocks)
           if (view.dom.getAttribute('data-single-line') !== 'true') return false // Wrap mode keeps normal multi-line paste
           const clipboardData = (event as ClipboardEvent).clipboardData
@@ -419,42 +467,40 @@ function TipTapContent({
           return false
         },
       },
+    }),
+    [isFlashcard, singleLineUntilEnter]
+  )
+
+  const editor = useEditor({
+    extensions,
+    content,
+    editable: true, // Fully editable
+    immediatelyRender: false, // Prevent SSR hydration mismatches
+    shouldRerenderOnTransaction: false, // Avoid parent re-render storms; NodeViews update themselves
+    editorProps,
+    onUpdate: ({ editor: ed }) => {
+      const newContent = ed.getHTML()
+      const hasChanged = newContent !== originalContentRef.current
+      onHasChangesChangeRef.current?.(hasChanged)
+      onContentChangeRef.current?.(newContent)
     },
-    onUpdate: ({ editor }) => {
-      const newContent = editor.getHTML()
-      const hasChanged = newContent !== originalContent
-      if (onHasChangesChange) {
-        onHasChangesChange(hasChanged)
-      }
-      if (onContentChange) {
-        onContentChange(newContent)
-      }
-    },
-    onFocus: () => {
+    onFocus: ({ editor: ed }) => {
       // Register this editor as active when focused
-      if (editor) {
-        setActiveEditor(editor)
-      }
+      setActiveEditorRef.current(ed)
       // Notify parent that editor is active (focused or has selection)
-      if (onEditorActiveChange) {
-        onEditorActiveChange(true)
-      }
+      onEditorActiveChangeRef.current?.(true)
     },
-    onBlur: () => {
-      // Clear active editor when blurred (optional - keep it active for toolbar)
-      // setActiveEditor(null)
+    onBlur: ({ editor: ed }) => {
       // Call custom onBlur callback if provided
-      if (onBlur) {
-        onBlur()
-      }
+      onBlurRef.current?.()
       // Keep frame selected only for a real TEXT range (format popup). pageLink atoms use
       // NodeSelection (from≠to) — counting that re-selected the frame on every pane click.
-      if (editor && onEditorActiveChange) {
-        const sel = editor.state.selection
+      if (ed && onEditorActiveChangeRef.current) {
+        const sel = ed.state.selection
         const hasTextRange = sel instanceof TextSelection && !sel.empty
-        onEditorActiveChange(hasTextRange)
-      } else if (onEditorActiveChange) {
-        onEditorActiveChange(false)
+        onEditorActiveChangeRef.current(hasTextRange)
+      } else {
+        onEditorActiveChangeRef.current?.(false)
       }
     },
   })
@@ -647,6 +693,7 @@ function TipTapContent({
   useEffect(() => {
     if (editor) {
       if (editor.isFocused) return // Caret owns the doc while typing; parent catches up on blur/save
+      if (suspendContentSync) return // Frame drag: never setContent (remounts databaseBlock NodeView → table vanishes)
       // Compare DOCUMENTS, not HTML strings. The pageLink NodeView adds a class and TipTap emits
       // attributes in its own order, so editor.getHTML() never byte-equals the stored HTML once a
       // pageLink exists — a raw string compare re-ran setContent every sync (infinite loop / page
@@ -694,7 +741,7 @@ function TipTapContent({
         }
       }
     }
-  }, [editor, content, comments])
+  }, [editor, content, comments, suspendContentSync])
 
   // Reposition extension UI elements (like Grammarly) when panel moves
   useEffect(() => {
@@ -1382,6 +1429,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const [frameScale, setFrameScale] = useState(1) // Uniform content scale while frame is locked
   const [unlockedFrameSize, setUnlockedFrameSize] = useState<{ width: number; height: number } | null>(null) // Last free-resize shape (metadata continuity; unlock does NOT snap to this)
   const [unlockedFrameScale, setUnlockedFrameScale] = useState<number | null>(null) // Scale paired with unlockedFrameSize (bookkeeping only)
+  const needsCollapsedDbFrameHealRef = useRef(false) // Load skipped corrupt DB clip — persist clear once persistFrameMeta exists
 
   const [intrinsicSize, setIntrinsicSize] = useState({ width: BLOCK_MIN_FRAME_W, height: 48 }) // Unscaled content box (max-content)
   const [intrinsicMeasured, setIntrinsicMeasured] = useState(false) // True after first contentFit measure (avoid hug flash)
@@ -1622,10 +1670,48 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         if (isBlockPanel && typeof metadata.frameScale === 'number' && metadata.frameScale > 0) {
           setFrameScale(metadata.frameScale) // Locked proportional scale
         }
-        // Load explicit box size for items + other panels (corner resize baseline)
+        // Load explicit box size for items + other panels (corner resize baseline).
+        // Skip collapsed databaseBlock boxes left by post-drag hug while the table NodeView remounted
+        // (heal-to-relock runs in a later effect once persistFrameMeta exists).
         if (metadata.resizeDimensions && typeof metadata.resizeDimensions === 'object') {
           const dims = metadata.resizeDimensions as { width?: number; height?: number }
-          if (dims.width && dims.height && dims.width > 0 && dims.height > 0) {
+          const contentHtml =
+            typeof promptMessage?.content === 'string' ? promptMessage.content : ''
+          const corruptDbClip =
+            hasDatabaseBlockHtml(contentHtml) &&
+            typeof dims.width === 'number' &&
+            typeof dims.height === 'number' &&
+            isCollapsedDatabaseFrameSize(dims.width, dims.height)
+          if (corruptDbClip) {
+            setFrameUnlocked(false) // Relock so next hug expands to the live table
+            setResizeDimensions(null)
+            setIsUserResized(false)
+            setUnlockedFrameSize(null)
+            needsCollapsedDbFrameHealRef.current = true // Also covered by heal effect below
+            // Persist clear here — heal effect may not re-run if dims were never applied
+            void (async () => {
+              if (isProjectBoard || !promptMessage) return
+              const { data: message } = await supabase
+                .from('messages')
+                .select('metadata')
+                .eq('id', promptMessage.id)
+                .single()
+              const existingMetadata = (message?.metadata as Record<string, any>) || {}
+              await supabase
+                .from('messages')
+                .update({
+                  metadata: {
+                    ...existingMetadata,
+                    frameUnlocked: false,
+                    frameScale: 1,
+                    resizeDimensions: null,
+                    unlockedFrameSize: null,
+                    unlockedFrameScale: null,
+                  },
+                })
+                .eq('id', promptMessage.id)
+            })()
+          } else if (dims.width && dims.height && dims.width > 0 && dims.height > 0) {
             setResizeDimensions({ width: dims.width, height: dims.height })
             setIsUserResized(true) // Persisted resize → wrap in fixed box; skip line-grow
             
@@ -2103,16 +2189,28 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
 
   // Natural content box (not the stretched w-full width when unlocked+resized) — lock hug needs this.
   // Debounced: RO can fire in bursts; avoid setState storms into BoardFlow.
+  // Skip while the frame is being dragged — RF transforms make Range/gBCR measurements collapse
+  // (esp. for databaseBlock tables) and hug would shrink the frame so the table “disappears”.
   useEffect(() => {
-    if (!isBlock) return
+    if (!isBlock || dragging) return
     const el = contentFitRef.current
     if (!el) return
     let raf = 0
     const measure = () => {
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {
+        // databaseBlock: wait until the Notion table NodeView is mounted. Measuring the title
+        // stub (~52×40) after a remount would hug-shrink the frame and clip the table away.
+        const dbHost = el.querySelector('.tt-database-block') as HTMLElement | null
+        if (dbHost && !dbHost.querySelector('.tt-notion-db')) return
         const width = Math.max(1, Math.round(measureNaturalContentWidth(el)))
         const height = Math.max(1, Math.round(measureNaturalContentHeight(el)))
+        if (
+          (dbHost || hasDatabaseBlockHtml(promptContent)) &&
+          isCollapsedDatabaseFrameSize(width, height)
+        ) {
+          return // Reject collapsed stub measures
+        }
         setIntrinsicMeasured(true)
         setIntrinsicSize((prev) =>
           Math.abs(prev.width - width) <= 1 && Math.abs(prev.height - height) <= 1
@@ -2128,7 +2226,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       cancelAnimationFrame(raf)
       ro.disconnect()
     }
-  }, [isBlock, promptContent, frameUnlocked, frameTextWrap, frameScale])
+  }, [isBlock, dragging, promptContent, frameUnlocked, frameTextWrap, frameScale])
   // Note: do NOT depend on resizeDimensions — hug writes that and would loop
   
   // Regular chat panels are those that are not flashcards and not notes
@@ -2266,6 +2364,32 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       .eq('id', promptMessage.id)
     if (updateError) console.error('Error saving frame metadata:', updateError)
   }, [isProjectBoard, promptMessage, supabase])
+
+  // Heal: post-drag hug can persist ~52×40 on a databaseBlock frame (NodeView remount stub).
+  // Clear the clip box + relock so the table can hug open again.
+  const healedCollapsedDbFrameRef = useRef(false)
+  useEffect(() => {
+    if (!isBlock || healedCollapsedDbFrameRef.current) return
+    const fromLoadFlag = needsCollapsedDbFrameHealRef.current
+    const fromLiveDims =
+      !!resizeDimensions &&
+      hasDatabaseBlockHtml(promptContent) &&
+      isCollapsedDatabaseFrameSize(resizeDimensions.width, resizeDimensions.height)
+    if (!fromLoadFlag && !fromLiveDims) return
+    healedCollapsedDbFrameRef.current = true
+    needsCollapsedDbFrameHealRef.current = false
+    setFrameUnlocked(false)
+    setResizeDimensions(null)
+    setIsUserResized(false)
+    setUnlockedFrameSize(null)
+    void persistFrameMeta({
+      frameUnlocked: false,
+      frameScale: 1,
+      resizeDimensions: null,
+      unlockedFrameSize: null,
+      unlockedFrameScale: null,
+    })
+  }, [isBlock, promptContent, resizeDimensions, persistFrameMeta])
 
   // Corner pointer down — only then treat size changes as a user resize (ignore spurious RF callbacks)
   const handleResizeStart = useCallback(() => {
@@ -2544,10 +2668,17 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // Locked + resized: hug WIDTH and HEIGHT to natural text (locked = hug to content) —
   // shrink/grow both dimensions on lock/type instead of keeping the taller resize box.
   useEffect(() => {
-    if (!isBlock || frameUnlocked || !isUserResized || pagePreviewOpen) return
+    if (!isBlock || frameUnlocked || !isUserResized || pagePreviewOpen || dragging) return
     if (!intrinsicMeasured || isResizingRef.current) return
     const minW = blockMinFrameWidth(promptContent)
     const natural = scaledFrameSize(intrinsicSize, frameScale, minW)
+    // Never hug a databaseBlock frame down to the remount stub — that persists as a permanent clip.
+    if (
+      hasDatabaseBlockHtml(promptContent) &&
+      isCollapsedDatabaseFrameSize(natural.width, natural.height)
+    ) {
+      return
+    }
     let next = natural
     let changed = true
     setResizeDimensions((prev) => {
@@ -2556,6 +2687,15 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       // Hug height to content too (was: keep the taller box until a manual resize)
       const height = natural.height
       next = { width, height }
+      if (
+        prev &&
+        hasDatabaseBlockHtml(promptContent) &&
+        isCollapsedDatabaseFrameSize(width, height) &&
+        !isCollapsedDatabaseFrameSize(prev.width, prev.height)
+      ) {
+        changed = false
+        return prev // Keep the larger box; don't clip the table away
+      }
       if (
         prev &&
         Math.abs(prev.width - width) <= 1 &&
@@ -2583,6 +2723,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     frameUnlocked,
     isUserResized,
     pagePreviewOpen,
+    dragging,
     intrinsicMeasured,
     intrinsicSize,
     frameScale,
@@ -3606,7 +3747,18 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       prevPromptMessageIdRef.current = promptMessage?.id
       hasAutoFocusedRef.current = false
     }
-  }, [isProjectBoard, isProjectBoard ? data.boardTitle : promptMessage?.content, responseMessage?.content, promptContent, promptHasChanges, data, promptMessage?.id, remoteBlockType])
+  }, [
+    isProjectBoard,
+    isProjectBoard ? data.boardTitle : promptMessage?.content,
+    responseMessage?.content,
+    promptContent,
+    promptHasChanges,
+    promptMessage?.id,
+    promptMessage?.metadata?.linkedPageId,
+    promptMessage?.metadata?.notionObject,
+    promptMessage?.metadata?.blockTitle,
+    remoteBlockType,
+  ])
 
   // Keep responseContent mirror for width-measurement helpers that still read it
   useEffect(() => {
@@ -4719,6 +4871,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               placeholder=""
               isFlashcard={isFlashcard}
               isPanelSelected={!!selected && !dragging} // Mid-drag: treat as unselected so ⋮⋮ / caret stay off
+              suspendContentSync={!!dragging} // Keep databaseBlock NodeView mounted while the frame moves
               isLoading={false}
               onBlur={handleEditorBlur}
               onEditorActiveChange={handleEditorActiveChange}

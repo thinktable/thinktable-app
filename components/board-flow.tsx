@@ -3582,6 +3582,7 @@ function BoardFlowInner({
     // Also track when drag ends to recalculate edge handles
     const draggedNodeIds = new Set<string>()
     const dragEndedNodeIds = new Set<string>()
+    const dragStartedNodeIds: string[] = [] // Z-order bump only once per drag (not every move tick)
     changesToProcess.forEach((change) => {
       if (change.type === 'position' && change.dragging === true) {
         draggedNodeIds.add(change.id)
@@ -3589,6 +3590,7 @@ function BoardFlowInner({
         if (!dragSnapshotTakenRef.current.has(change.id)) {
           takeSnapshot() // Record state before drag for undo
           dragSnapshotTakenRef.current.add(change.id)
+          dragStartedNodeIds.push(change.id)
         }
       } else if (change.type === 'position' && change.dragging === false) {
         // Drag just ended for this node - clear the snapshot flag
@@ -3597,23 +3599,17 @@ function BoardFlowInner({
       }
     })
 
-    // If any nodes are being dragged, reorder nodes array to move dragged nodes to the end (front layer)
-    if (draggedNodeIds.size > 0 && nodes && Array.isArray(nodes)) {
-      const draggedNodes: Node[] = []
-      const otherNodes: Node[] = []
-
-      nodes.forEach((node) => {
-        if (draggedNodeIds.has(node.id)) {
-          draggedNodes.push(node)
-        } else {
-          otherNodes.push(node)
-        }
+    // Bring dragged frames to front ONCE at drag start — reordering every move tick used a stale
+    // `nodes` snapshot and remounted TipTap (databaseBlock table NodeViews vanished mid-drag).
+    if (dragStartedNodeIds.length > 0) {
+      const started = new Set(dragStartedNodeIds)
+      setNodes((nds) => {
+        const dragged = nds.filter((n) => started.has(n.id))
+        if (dragged.length === 0) return nds
+        const others = nds.filter((n) => !started.has(n.id))
+        const alreadyFront = nds.slice(-dragged.length).every((n, i) => n.id === dragged[i]?.id)
+        return alreadyFront ? nds : [...others, ...dragged]
       })
-
-      // Move dragged nodes to the end of the array (front layer)
-      if (draggedNodes.length > 0) {
-        setNodes([...otherNodes, ...draggedNodes])
-      }
     }
 
     // Recalculate edge handles live during drag AND when drag ends
