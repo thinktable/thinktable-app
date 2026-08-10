@@ -15,14 +15,19 @@ The database includes the following tables:
 
 ## Migrations
 
-Current migrations:
+See `migration-list.txt` + `schema-snapshot.md` for the full local/remote snapshot.
+
+Latest DDL on thinkable:
+- `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
+
+Earlier foundation:
 - `20251124231547_create_saas_schema` - Initial schema creation
 - `20251124231600_fix_function_security` - Security fixes for functions
 
 ## Project Information
 
 - **Project ID**: `yhsyhtnnklpkfcpydbst`
-- **Project Name**: thinktable
+- **Project Name**: thinkable
 - **Region**: us-east-2
 - **Database Version**: PostgreSQL 17.6.1
 

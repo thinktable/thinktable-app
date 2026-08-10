@@ -1,13 +1,21 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-10T00:15:39Z`
-- Source: local `supabase/migrations/` + `.temp` service versions (linked project)
-- CLI note: `supabase db dump --linked` / `projects list` need login token or `SUPABASE_DB_PASSWORD`; migration files remain source of truth.
-- Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
-- CLI: `supabase` `2.90.0` (remote `migration list --linked` needs `SUPABASE_DB_PASSWORD` — marker migration used)
+- Snapped at: `2026-08-10T02:38:15Z`
+- Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
+- Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
+- Remote applied includes `20260810020000_ai_copilot_foundation` (AI tables live on thinkable)
 
 ## This save
+
+- **DDL** `20260810020000_ai_copilot_foundation.sql` applied on thinkable:
+  - `ai_threads` — universal per-user sidebar chats (`page_id` filter association)
+  - `ai_messages` — Ask/Plan/Edit turns (never page frames)
+  - `ai_context_snapshots` — reusable context packs
+  - `ai_action_log` — future Edit/Plan undo via edit-past-chat
+- App: sidebar Ask streaming (`/api/ai/*`), drag chat blocks onto page, edit-to-rewind, snapshots, `lib/ai/*` mode/skill/agent stubs
+
+## Prior: fix DB frame drag clip
 
 - No DDL. Marker `20260810001539_fix_db_frame_drag_clip.sql`.
 - **Frame drag + databaseBlock clip fix**: z-order bump once at drag start; hug/intrinsic measure pauses while `dragging`; TipTap `extensions`/`editorProps` memoized + `suspendContentSync` so NodeViews don’t remount mid-drag.

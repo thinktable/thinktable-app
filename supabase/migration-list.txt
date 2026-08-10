@@ -1,10 +1,22 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-10T00:15:39Z
-# postgres=17.6.1.052 gotrue=v2.195.0 rest=v13.0.5 storage=v1.68.1
-# Note: supabase db dump --linked / projects list need login or SUPABASE_DB_PASSWORD;
-# snapshot via local migrations + supabase/.temp service versions.
+# snapped_at=2026-08-10T02:38:15Z
+# postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
+# Remote applied (via Supabase MCP / Management API on thinkable):
+# 20251124231547 create_saas_schema
+# 20251124231600 fix_function_security
+# 20251204170108 create_panel_edges
+# 20251206164325 add_profiles_metadata_column
+# 20251206194902 create_projects_table
+# 20251227154240 add_homepage_public_read_policies
+# 20251227154558 remove_homepage_public_policies
+# 20251227174000 mark_existing_notes
+# 20251228200000 create_canvas_nodes_table
+# 20251229143239 create_canvas_nodes_table
+# 20251230233555 create_user_preferences_table
+# 20260808160000 panel_edges_thread_metadata
+# 20260810020000 ai_copilot_foundation
 #
 # Local migration files:
 20251203111351_schema_documentation.md
@@ -57,3 +69,4 @@
 20260809220049_notion_db_edit_and_view_settings.sql
 20260810000100_notion_views_api_linked_filters.sql
 20260810001539_fix_db_frame_drag_clip.sql
+20260810020000_ai_copilot_foundation.sql
