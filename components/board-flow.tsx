@@ -65,6 +65,8 @@ import { ArrowDown, GripVertical, MousePointer2, Hand } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
+import { setAiSelectedFrameIds } from '@/lib/ai/selection-bridge' // Bridge RF selection → AI Ask context
+import { AI_CHAT_BLOCK_MIME, type AiChatBlockDragPayload } from '@/lib/ai/types' // Drag chat turn onto page
 import {
   BLOCK_GROUP_PADDING,
   blockGroupNodeId,
@@ -3809,6 +3811,11 @@ function BoardFlowInner({
     } else {
       selectedNodeIdRef.current = null
     }
+    // Publish selected chatPanel message ids for AI Ask context pack
+    const frameIds = nodes
+      .filter((n) => n.selected && n.type === 'chatPanel' && n.data?.promptMessage?.id)
+      .map((n) => String(n.data.promptMessage.id))
+    setAiSelectedFrameIds(frameIds)
     // Don't trigger any viewport changes here - selection should not move the viewport in linear mode
   }, [nodes])
 
@@ -6892,35 +6899,76 @@ function BoardFlowInner({
   }, [reactFlowInstance])
   
   // Handle drag and drop for shapes from dropdown - matches shapes-pro-example
+  // Also accepts AI sidebar chat blocks → create a page frame (user-initiated placement only)
   const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-    console.log('Drag over event');
-  }, []);
+    event.preventDefault() // Allow drop
+    const types = Array.from(event.dataTransfer.types || []) // DOMStringList → array
+    const isAiBlock = types.includes(AI_CHAT_BLOCK_MIME) // AI chat turn?
+    event.dataTransfer.dropEffect = isAiBlock ? 'copy' : 'move' // Copy chat → page; move shapes
+  }, [])
 
-  const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const shapeType = event.dataTransfer.getData('application/reactflow');
-    console.log('Drop event received, shape type:', shapeType);
-    
-    // Only handle shape types, not other drag operations
-    if (!shapeType || !['rectangle', 'round-rectangle', 'circle', 'hexagon', 'diamond', 'arrow-rectangle', 'cylinder', 'triangle', 'parallelogram', 'plus'].includes(shapeType)) {
-      console.log('Invalid shape type or not a shape:', shapeType);
-      return;
-    }
-
-    if (!reactFlowInstance) return;
+  const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!reactFlowInstance) return
 
     const position = reactFlowInstance.screenToFlowPosition({
       x: event.clientX,
       y: event.clientY,
-    });
+    })
+
+    // AI chat block → new frame with that content (never auto-place; user dropped it)
+    const aiRaw = event.dataTransfer.getData(AI_CHAT_BLOCK_MIME)
+    if (aiRaw) {
+      let payload: AiChatBlockDragPayload | null = null
+      try {
+        payload = JSON.parse(aiRaw) as AiChatBlockDragPayload
+      } catch {
+        payload = null
+      }
+      if (payload?.source === 'ai-chat-block' && (payload.html || payload.plain)) {
+        try {
+          const supabase = createClient()
+          const { data: { user } } = await supabase.auth.getUser()
+          if (!user || !conversationId) return
+          takeSnapshot()
+          const content = payload.html || `<p>${payload.plain}</p>`
+          const { error } = await supabase
+            .from('messages')
+            .insert({
+              conversation_id: conversationId,
+              user_id: user.id,
+              role: 'user',
+              content,
+              metadata: newBlockMetadata({
+                position,
+                fadeIn: true,
+                fromAiChat: true,
+                aiMessageId: payload.messageId,
+              }),
+            })
+          if (error) {
+            console.error('Failed to place AI chat block as frame:', error)
+            return
+          }
+          refetchMessages()
+        } catch (err) {
+          console.error('AI chat block drop failed:', err)
+        }
+        return
+      }
+    }
+
+    const shapeType = event.dataTransfer.getData('application/reactflow')
+    // Only handle shape types, not other drag operations
+    if (!shapeType || !['rectangle', 'round-rectangle', 'circle', 'hexagon', 'diamond', 'arrow-rectangle', 'cylinder', 'triangle', 'parallelogram', 'plus'].includes(shapeType)) {
+      return
+    }
 
     // Take snapshot before creating shape for undo support
-    takeSnapshot();
+    takeSnapshot()
 
-    const newNodeId = `shape-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const newNodeId = `shape-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     
     const newNode = {
       id: newNodeId,
@@ -6935,13 +6983,13 @@ function BoardFlowInner({
         borderWeight: borderWeight || 2,
       },
       selected: true,
-    };
+    }
 
     setNodes((nds) => {
-      const updatedNodes = nds.map((n) => ({ ...n, selected: false }));
-      return [...updatedNodes, newNode];
-    });
-  }, [reactFlowInstance, fillColor, borderColor, borderWeight, setNodes, takeSnapshot]);
+      const updatedNodes = nds.map((n) => ({ ...n, selected: false }))
+      return [...updatedNodes, newNode]
+    })
+  }, [reactFlowInstance, fillColor, borderColor, borderWeight, setNodes, takeSnapshot, conversationId, refetchMessages])
 
   // Embedded page previews stay chrome-light (no minimap / nav chrome fighting the tiny viewport)
   useEffect(() => {
