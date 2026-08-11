@@ -2961,11 +2961,32 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
 
   // Toggle frame lock: lock hugs scaled text; unlock keeps the CURRENT visual box + scale
   // (blocks stay the size they were adjusted to while locked — no snap-back to a pre-lock shape).
-  const handleToggleFrameLock = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation()
-    e.preventDefault()
-    const nextUnlocked = !frameUnlocked
+  const toggleFrameLock = useCallback((forceUnlocked?: boolean) => {
+    const nextUnlocked = typeof forceUnlocked === 'boolean' ? forceUnlocked : !frameUnlocked
+    if (nextUnlocked === frameUnlocked) return // Already in desired state
     setFrameUnlocked(nextUnlocked)
+    // Keep RF node metadata in sync so top-bar frame lock reads correctly
+    const setNodes = getSetNodes()
+    if (setNodes) {
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.id !== id) return n
+          const pm = n.data?.promptMessage
+          if (!pm) return n
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              promptMessage: {
+                ...pm,
+                metadata: { ...(pm.metadata || {}), frameUnlocked: nextUnlocked },
+              },
+            },
+          }
+        })
+      )
+    }
+    window.dispatchEvent(new Event('tt-frame-lock-changed')) // Refresh top-bar frame lock icon
     if (nextUnlocked) {
       // Keep locked visual size: same box + same frameScale (proportional resize stays).
       const el = panelRef.current
@@ -3041,7 +3062,24 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       unlockedFrameSize: unlockedShape,
       unlockedFrameScale: frameScale,
     })
-  }, [frameUnlocked, frameScale, resizeDimensions, intrinsicSize, frameTextWrap, persistFrameMeta, promptContent])
+  }, [frameUnlocked, frameScale, resizeDimensions, intrinsicSize, frameTextWrap, persistFrameMeta, promptContent, getSetNodes, id])
+
+  const handleToggleFrameLock = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    toggleFrameLock() // Flip from under-frame chrome
+  }, [toggleFrameLock])
+
+  // Top-bar frame lock → same fit/free toggle as under-frame chrome
+  useEffect(() => {
+    const onTopBar = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ nodeIds?: string[]; unlocked?: boolean }>).detail
+      if (!detail?.nodeIds?.includes(id)) return // Not this frame
+      toggleFrameLock(detail.unlocked) // Apply requested unlocked state
+    }
+    window.addEventListener('tt-toggle-frame-lock', onTopBar)
+    return () => window.removeEventListener('tt-toggle-frame-lock', onTopBar)
+  }, [id, toggleFrameLock])
 
   // Unlocked: wrap lines inside the frame width (vs clip overflow)
   const handleToggleFrameTextWrap = useCallback((e: React.MouseEvent) => {

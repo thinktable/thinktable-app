@@ -1639,26 +1639,31 @@ function BoardFlowInner({
     }
 
     // Determine target draggable state based on lock
-    // Locked = nodes cannot be dragged or connected
-    // Unlocked = nodes can be dragged in both canvas and linear modes (same map, just different navigation)
-    const targetDraggable = !isLocked
-    const targetConnectable = isLocked ? false : true // Connectable in both modes
-
-    // Check if nodes already have the correct state to avoid unnecessary updates
-    // This prevents infinite loops and unnecessary re-renders
-    const needsUpdate = nodes.some(
-      (node) => node.draggable !== targetDraggable || node.connectable !== targetConnectable
-    )
+    // Global isLocked freezes everything; else honor per-frame boardLocked pin
+    const needsUpdate = nodes.some((node) => {
+      if (node.type === 'blockGroup') return false // Groups stay ring-only
+      const meta = (node.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+      const pinned = meta.boardLocked === true
+      const wantDrag = isLocked ? false : !pinned
+      const wantConnect = isLocked ? false : true
+      return node.draggable !== wantDrag || node.connectable !== wantConnect
+    })
 
     // Only update if nodes need to change (prevents unnecessary re-renders and potential loops)
     if (needsUpdate) {
-      // Update all nodes with new draggable/connectable state (same as React Flow Controls lock button)
       setNodes(
-        nodes.map((node) => ({
-          ...node,
-          draggable: targetDraggable,
-          connectable: targetConnectable,
-        }))
+        nodes.map((node) => {
+          if (node.type === 'blockGroup') {
+            return { ...node, draggable: false, connectable: false }
+          }
+          const meta = (node.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+          const pinned = meta.boardLocked === true
+          return {
+            ...node,
+            draggable: isLocked ? false : !pinned,
+            connectable: isLocked ? false : true,
+          }
+        })
       )
     }
 
@@ -4351,7 +4356,7 @@ function BoardFlowInner({
                 borderWeight: messageMetadata.borderWeight === null ? undefined : (messageMetadata.borderWeight || undefined),
                 frameShape: parseFrameShape(messageMetadata.frameShape) ?? undefined,
               },
-              draggable: !isLocked, // Draggable in both canvas and linear modes (unless locked)
+              draggable: !isLocked && messageMetadata.boardLocked !== true, // Global freeze or per-frame board pin
               // Collapsed stack mates stay hidden until edge-line reveal
               hidden: isStackCollapsedMeta(messageMetadata as Record<string, unknown>),
               zIndex: stackIndex == null ? undefined : Math.max(0, 10 - stackIndex),
@@ -4396,7 +4401,7 @@ function BoardFlowInner({
               borderWeight: messageMetadata.borderWeight === null ? undefined : (messageMetadata.borderWeight || undefined),
               frameShape: parseFrameShape(messageMetadata.frameShape) ?? undefined,
             },
-            draggable: !isLocked, // Draggable in both canvas and linear modes (unless locked)
+            draggable: !isLocked && messageMetadata.boardLocked !== true, // Global freeze or per-frame board pin
             // Collapsed stack mates stay hidden until edge-line reveal
             hidden: isStackCollapsedMeta(messageMetadata as Record<string, unknown>),
             zIndex: stackIndex == null ? undefined : Math.max(0, 10 - stackIndex),
@@ -5435,7 +5440,11 @@ function BoardFlowInner({
           }
           return {
             ...node,
-            draggable: !isLocked, // Draggable in both modes (unless locked)
+            // Global freeze or per-frame board pin
+            draggable:
+              !isLocked &&
+              (node.data?.promptMessage?.metadata as Record<string, unknown> | undefined)
+                ?.boardLocked !== true,
           }
         })
 
@@ -7329,6 +7338,9 @@ function BoardFlowInner({
         edgesUpdatable={!isLocked} // Drag either end to detach / reconnect
         edgeUpdaterRadius={20} // Hit area for grabbing a thread endpoint
         onEdgeUpdate={handleThreadReconnect}
+        onSelectionChange={() => {
+          window.dispatchEvent(new Event('tt-selection-changed')) // Top-bar frame lock reads selection
+        }}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
         onConnect={async (params) => {

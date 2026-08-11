@@ -507,6 +507,22 @@ export function useFrameNestStackDrag({
       const live = getNodes()
       const liveNode = live.find((n) => n.id === node.id) || node
       const meta = nodeMeta(liveNode)
+      // Top-bar “lock frames to each other” — shared frameLockGroupId moves as one
+      const frameLockId =
+        typeof meta.frameLockGroupId === 'string' ? meta.frameLockGroupId : null
+      if (frameLockId) {
+        const origins = new Map<string, { x: number; y: number }>()
+        for (const n of live) {
+          if (n.type !== 'chatPanel') continue
+          const m = nodeMeta(n)
+          if (m.frameLockGroupId !== frameLockId) continue
+          origins.set(n.id, { x: n.position.x, y: n.position.y })
+        }
+        if (origins.size > 1) {
+          lockDragRef.current = { primaryId: node.id, lockId: frameLockId, origins }
+          return
+        }
+      }
       if (!isSnapLockedMeta(meta)) return
       // Rigid-move union of every tree this frame is in, plus nested side-tree satellites
       const myGroups = new Set(groupIdsOf(meta))
@@ -692,8 +708,8 @@ export function useFrameNestStackDrag({
       const dragNode = { ...liveNode, position: node.position }
       const meta = nodeMeta(liveNode)
 
-      // Locked: move every frame sharing any tree with the primary (origins captured at start)
-      if (isSnapLockedMeta(meta) && lockDragRef.current?.primaryId === node.id) {
+      // Locked: move every frame sharing any tree / frameLockGroupId with the primary
+      if (lockDragRef.current?.primaryId === node.id) {
         const { origins } = lockDragRef.current
         const origin = origins.get(node.id)
         if (origin) {
@@ -708,7 +724,7 @@ export function useFrameNestStackDrag({
             })
           )
         }
-        // Locked stacks don't edge-snap mid-drag (would break the rigid group)
+        // Locked groups don't edge-snap mid-drag (would break the rigid group)
         if (dropUiRef.current) clearUi()
         return
       }

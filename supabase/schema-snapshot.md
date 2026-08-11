@@ -1,12 +1,18 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-11T23:14:05Z`
+- Snapped at: `2026-08-11T23:36:58Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260811233658_board_frame_lock_toolbar.sql`.
+- Top-bar **board / frame** locks (distinct Lock + FileText / Square sub-icons): pin selected frames to the board (`boardLocked`); lock ≥2 frames to each other (`frameLockGroupId` rigid drag). Fit-to-content stays on under-frame ScanText.
+- Schema unchanged.
+
+## Prior: conversations INSERT RETURNING RLS
 
 - **DDL (thinkable, applied via MCP):**
   - Local `20260811225322_conversations_owner_select_for_insert_returning.sql` ↔ remote `20260811225342_conversations_owner_select_for_insert_returning`
