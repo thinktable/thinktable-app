@@ -1,6 +1,6 @@
 'use client'
 
-// Mindmap.so-style Notion page picker — tree with Add frame (pageLink on map) / Generate mindmap
+// Mindmap.so-style Notion page picker — tree with Add frame (boardLink on map) / Generate mindmap
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, CornerDownLeft, FileText, Search, Table2, X } from 'lucide-react'

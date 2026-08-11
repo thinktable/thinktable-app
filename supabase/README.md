@@ -18,8 +18,9 @@ The database includes the following tables:
 See `migration-list.txt` + `schema-snapshot.md` for the full local/remote snapshot.
 
 Latest on thinkable (DDL):
-- `20260811103152_page_share_links_and_people` (+ local `20260811063000_…`) — `page_share_links`, `page_share_people`
-- `20260811104322_secure_page_share_access` / `20260811104342_secure_page_share_rls_policies` (+ local `20260811070000_…`) — hashed tokens + RLS
+- `rename_page_to_board_share_and_ai` (+ local `20260811220510_…`) — `board_share_*`, `user_board_*` RPCs, `ai_threads.board_id`
+- `20260811103152_page_share_links_and_people` (+ local `20260811063000_…`) — original share tables (renamed above)
+- `20260811104322_secure_page_share_access` / `20260811104342_secure_page_share_rls_policies` (+ local `20260811070000_…`) — hashed tokens + RLS (updated by rename)
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):

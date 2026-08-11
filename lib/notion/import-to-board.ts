@@ -1,9 +1,13 @@
-// Import selected Notion pages onto a Thinktable page as pageLink frames (body on nested pages)
+// Import selected Notion pages onto a Thinktable page as boardLink frames (body on nested pages)
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { newBlockMetadata } from '@/lib/blocks'
-import { fetchNotionPageBlockTree } from './blocks'
-import { notionPageBodyToHtml } from './blocks-to-html'
+import { fetchNotionPageBlockTree, type NotionBlock } from './blocks'
+import {
+  collectChildPageRefs,
+  notionPageBodyToHtml,
+  type ChildPageLinkMap,
+} from './blocks-to-html'
 import {
   collectMindmapSubtreeViaBlocks,
   filterTopLevelSharedPages,
@@ -39,15 +43,15 @@ function databaseBlockHtml(page: NotionSearchPage): string {
 }
 
 
-/** Title-variant pageLink HTML — same chrome as local page blocks (icon + title + open menu). */
-function pageLinkHtml(opts: {
-  pageId: string // Thinktable child page id
+/** Title-variant boardLink HTML — same chrome as local page blocks (icon + title + open menu). */
+function boardLinkHtml(opts: {
+  boardId: string // Thinktable child board id
   title: string // Display label
   icon?: string | null // Emoji when Notion had one
 }): string {
   const title = escapeHtml(opts.title || 'Untitled') // Attr-safe title
   const iconAttr = opts.icon ? ` data-icon="${escapeHtml(opts.icon)}"` : '' // Optional emoji
-  return `<div data-type="pageLink" data-page-id="${escapeHtml(opts.pageId)}" data-title="${title}" data-variant="title"${iconAttr}></div>`
+  return `<div data-type="boardLink" data-board-id="${escapeHtml(opts.boardId)}" data-title="${title}" data-variant="title"${iconAttr}></div>`
 }
 
 /** Emoji string from a Notion icon payload, else null (default page icon in the NodeView). */
@@ -314,38 +318,59 @@ export async function importNotionPagesToBoard(opts: {
   const positions = layoutPositions(framePages, mode) // Canvas coordinates
   const pagesById = new Map(allPages.map((p) => [normalizeNotionId(p.id), p])) // Enrich DB blocks
 
-  // Fetch each Notion page body once — all TipTap blocks land in that page’s single frame
-  const bodyByNotionId = new Map<string, string>() // notion id → TipTap HTML
-  await Promise.all(
-    framePages.map(async (page) => {
-      if (page.object !== 'page') {
-        // Database → sole databaseBlock; NodeView fetches schema+rows as a structured table
-        bodyByNotionId.set(normalizeNotionId(page.id), databaseBlockHtml(page))
-        return
+  // Fetch Notion trees for map frames + discover nested child_pages (their own boards, not inlined)
+  const treesByNotionId = new Map<string, NotionBlock[]>() // notion id → block tree
+  const bodyPagesNeeded = new Map<string, NotionSearchPage>() // every page/DB that gets a Thinktable board
+  for (const page of framePages) {
+    bodyPagesNeeded.set(normalizeNotionId(page.id), page)
+  }
+
+  /** Recursively fetch a page tree and queue its child_pages for their own boards. */
+  const fetchTreeAndDiscover = async (page: NotionSearchPage): Promise<void> => {
+    const id = normalizeNotionId(page.id)
+    if (page.object !== 'page') return // Databases have no child_page body tree here
+    if (treesByNotionId.has(id)) return // Already fetched
+    try {
+      const tree = await fetchNotionPageBlockTree(opts.accessToken, page.id)
+      treesByNotionId.set(id, tree)
+      for (const ref of collectChildPageRefs(tree)) {
+        const cid = normalizeNotionId(ref.id)
+        if (bodyPagesNeeded.has(cid)) continue // Already queued (map frame or earlier discovery)
+        const fromSearch = pagesById.get(cid)
+        const childPage: NotionSearchPage = fromSearch
+          ? {
+              ...fromSearch,
+              parent: { type: 'page_id', page_id: page.id }, // Nest under this Notion page
+            }
+          : {
+              id: ref.id,
+              object: 'page',
+              title: ref.title,
+              parent: { type: 'page_id', page_id: page.id },
+              icon: null,
+            }
+        bodyPagesNeeded.set(cid, childPage)
+        await fetchTreeAndDiscover(childPage) // Recurse into nested sub-pages
       }
-      try {
-        const tree = await fetchNotionPageBlockTree(opts.accessToken, page.id) // Nested block tree
-        const html = enrichDatabaseBlocksInHtml(notionPageBodyToHtml(tree), pagesById) // child_database → databaseBlock + url/icon
-        bodyByNotionId.set(normalizeNotionId(page.id), html) // One HTML doc
-      } catch (err) {
-        console.error('Failed to fetch Notion page body:', page.id, err)
-        // Fall back to title so the nested page-body is still usable
-        bodyByNotionId.set(normalizeNotionId(page.id), `<p>${escapeHtml(page.title || 'Untitled')}</p>`)
-      }
-    })
-  )
+    } catch (err) {
+      console.error('Failed to fetch Notion page body:', page.id, err)
+      treesByNotionId.set(id, []) // Empty tree → title fallback later
+    }
+  }
+
+  await Promise.all(framePages.map((page) => fetchTreeAndDiscover(page)))
 
   // Map frames:
-  // - Notion **pages** → temp title, then title-variant pageLink (menu page + open chrome)
-  // - Notion **databases** → databaseBlock + row blocks visible in the frame (not pageLink-only)
+  // - Notion **pages** → temp title, then title-variant boardLink (menu page + open chrome)
+  // - Notion **databases** → databaseBlock visible in the frame
   const rows = framePages.map((page) => {
     const position = positions.get(page.id) || { x: START_X, y: START_Y } // Fallback origin
     const isDatabase = page.object === 'database'
     const content = isDatabase
-      ? bodyByNotionId.get(normalizeNotionId(page.id)) || databaseBlockHtml(page) // Show DB in-frame
-      : `<p>${escapeHtml(page.title || 'Untitled')}</p>` // Temp until pageLink patch
+      ? databaseBlockHtml(page) // Show DB in-frame
+      : `<p>${escapeHtml(page.title || 'Untitled')}</p>` // Temp until boardLink patch
     return {
-      conversation_id: conversationId, // Target page
+      conversation_id: conversationId, // Target board
       user_id: opts.userId, // Owner
       role: 'user', // Frames are user-role messages in this app
       content,
@@ -356,21 +381,21 @@ export async function importNotionPagesToBoard(opts: {
         notionObject: page.object, // page vs database
         notionUrl: page.url ?? null, // Deep link for Open in Notion
         notionIcon: page.icon ?? null, // Optional icon payload
-        // Pages are page-blocks; DB frames show content in-place but still link a menu page
-        isPage: true,
-        blockType: isDatabase ? 'text' : 'page',
+        // Pages are board-links; DB frames show content in-place but still link a menu board
+        isBoard: true,
+        blockType: isDatabase ? 'text' : 'board',
       }),
     }
   })
 
-  // notion id → inserted message id (for linking nested Thinktable pages)
+  // notion id → inserted message id (for linking nested Thinktable boards)
   const notionIdToMessageId = new Map<string, string>()
 
   if (rows.length > 0) {
     const { data: inserted, error: insertError } = await admin
       .from('messages')
       .insert(rows)
-      .select('id, metadata') // Need ids to link child pages
+      .select('id, metadata') // Need ids to link child boards
     if (insertError) {
       throw new Error(insertError.message || 'Failed to import Notion pages as frames')
     }
@@ -391,7 +416,7 @@ export async function importNotionPagesToBoard(opts: {
     }
 
     const allMapFrames = pagesForMapFrames(pages, allPages, mode, opts.pageIds) // Full tree set
-    const frameIdSet = new Set(allMapFrames.map((p) => normalizeNotionId(p.id))) // Fast parent check
+    const mapFrameIds = new Set(allMapFrames.map((p) => normalizeNotionId(p.id))) // Fast parent check
     const seenPairs = new Set<string>() // Dedupe batch rows
     const edgeRows: Array<{
       conversation_id: string
@@ -405,14 +430,14 @@ export async function importNotionPagesToBoard(opts: {
       const childMsgId = notionIdToMessageId.get(normalizeNotionId(page.id)) // Child frame
       if (!childMsgId) continue
       const parentNotionId = notionParentKey(page) // Notion hierarchy parent
-      if (!parentNotionId || !frameIdSet.has(parentNotionId)) continue // Parent not a map frame
+      if (!parentNotionId || !mapFrameIds.has(parentNotionId)) continue // Parent not a map frame
       const parentMsgId = notionIdToMessageId.get(parentNotionId) // Parent frame
       if (!parentMsgId || parentMsgId === childMsgId) continue
       const pairKey = `${parentMsgId}->${childMsgId}`
       if (seenPairs.has(pairKey)) continue
       seenPairs.add(pairKey)
       edgeRows.push({
-        conversation_id: conversationId, // Same page as the map frames
+        conversation_id: conversationId, // Same board as the map frames
         user_id: opts.userId,
         source_message_id: parentMsgId, // Thread starts at parent
         target_message_id: childMsgId, // Ends at child sub-page frame
@@ -445,85 +470,91 @@ export async function importNotionPagesToBoard(opts: {
     }
   }
 
-  // Also create nested Thinktable pages in the nav under the current page (with Notion icons)
+  // Create nested Thinktable boards (map frames + discovered child_pages) under the current board
   const { data: existingConvs } = await admin
     .from('conversations')
     .select('id, metadata')
     .eq('user_id', opts.userId)
 
-  const alreadyMenuLinked = new Set<string>() // notionPageIds already represented as child pages
+  const notionIdToConvId = new Map<string, string>() // Notion id → Thinktable board id
+  // Reuse existing boards already linked to these Notion pages
   for (const conv of existingConvs || []) {
     const meta = (conv.metadata as { notionPageId?: string } | null) || {}
-    if (meta.notionPageId) alreadyMenuLinked.add(normalizeNotionId(meta.notionPageId))
+    if (!meta.notionPageId) continue
+    const nid = normalizeNotionId(meta.notionPageId)
+    if (bodyPagesNeeded.has(nid) && !notionIdToConvId.has(nid)) {
+      notionIdToConvId.set(nid, conv.id as string)
+    }
   }
 
-  const pagesForMenu = framePages.filter((p) => !alreadyMenuLinked.has(normalizeNotionId(p.id))) // New menu pages only (same set as map frames — no DB-row sprawl)
-  const notionIdToConvId = new Map<string, string>() // Notion id → new Thinktable page id (for mindmap nesting)
-
-  // Create parents before children so mindmap nesting can resolve
-  const orderedForMenu =
-    mode === 'mindmap'
-      ? pagesForMenu // Already DFS-ish from collectPageAndDescendants when single root
-      : pagesForMenu
+  // Parent-before-child order so Boards menu nesting resolves
+  const orderedForMenu: NotionSearchPage[] = []
+  const queued = new Set<string>()
+  const enqueue = (page: NotionSearchPage) => {
+    const id = normalizeNotionId(page.id)
+    if (queued.has(id)) return
+    queued.add(id)
+    const parentKey = notionParentKey(page)
+    if (parentKey && bodyPagesNeeded.has(parentKey) && !queued.has(parentKey)) {
+      enqueue(bodyPagesNeeded.get(parentKey)!) // Parent first
+    }
+    orderedForMenu.push(page)
+  }
+  for (const page of bodyPagesNeeded.values()) enqueue(page)
 
   for (const page of orderedForMenu) {
-    // Resolve Thinktable parent: current page, or the child page created for this Notion page's parent
-    let parentId = conversationId
-    if (mode === 'mindmap' && page.parent) {
-      let notionParentKey: string | null = null
-      if (page.parent.type === 'page_id') notionParentKey = normalizeNotionId(String(page.parent.page_id || ''))
-      if (page.parent.type === 'database_id') notionParentKey = normalizeNotionId(String(page.parent.database_id || ''))
-      if (notionParentKey && notionIdToConvId.has(notionParentKey)) {
-        parentId = notionIdToConvId.get(notionParentKey)! // Nest under sibling Thinktable page
+    const nid = normalizeNotionId(page.id)
+    const sourceBlockMessageId = notionIdToMessageId.get(nid) || null // Map-frame message when present
+
+    // Create a board only when we don't already have one for this Notion page
+    if (!notionIdToConvId.has(nid)) {
+      // Resolve Thinktable parent: import board, or the board created for this Notion page's parent
+      let parentId = conversationId
+      const notionParent = notionParentKey(page)
+      if (notionParent && notionIdToConvId.has(notionParent)) {
+        parentId = notionIdToConvId.get(notionParent)! // Nest under parent’s Thinktable board
       }
+
+      const iconMeta = page.icon
+        ? page.icon.type === 'emoji' && page.icon.emoji
+          ? { type: 'emoji' as const, emoji: page.icon.emoji }
+          : page.icon.type === 'external' && page.icon.external?.url
+            ? { type: 'external' as const, url: page.icon.external.url }
+            : page.icon.type === 'file' && page.icon.file?.url
+              ? { type: 'file' as const, url: page.icon.file.url }
+              : null
+        : null
+
+      const { data: createdChild, error: childError } = await admin
+        .from('conversations')
+        .insert({
+          user_id: opts.userId,
+          title: page.title || 'Untitled',
+          metadata: {
+            parent_id: parentId,
+            notionPageId: page.id,
+            notionObject: page.object,
+            notionUrl: page.url ?? null,
+            icon: iconMeta,
+            source: 'notion',
+            hasContent: false, // Flipped true after body seed
+            ...(sourceBlockMessageId ? { sourceBlockMessageId } : {}),
+          },
+        })
+        .select('id')
+        .single()
+
+      if (childError || !createdChild) {
+        console.error('Failed to create nested board for Notion import:', childError)
+        continue
+      }
+      notionIdToConvId.set(nid, createdChild.id)
     }
 
-    const iconMeta = page.icon
-      ? page.icon.type === 'emoji' && page.icon.emoji
-        ? { type: 'emoji' as const, emoji: page.icon.emoji }
-        : page.icon.type === 'external' && page.icon.external?.url
-          ? { type: 'external' as const, url: page.icon.external.url }
-          : page.icon.type === 'file' && page.icon.file?.url
-            ? { type: 'file' as const, url: page.icon.file.url }
-            : null
-      : null
+    const linkedBoardId = notionIdToConvId.get(nid)
+    if (!linkedBoardId) continue
 
-    const sourceBlockMessageId = notionIdToMessageId.get(normalizeNotionId(page.id)) || null // Frame on parent page
-    const body =
-      bodyByNotionId.get(normalizeNotionId(page.id)) ||
-      (page.object === 'database'
-        ? databaseBlockHtml(page)
-        : `<p>${escapeHtml(page.title || 'Untitled')}</p>`) // Same body as the map frame
-    const hasBody = body.replace(/<[^>]*>/g, '').trim().length > 0 || body.includes('data-type="databaseBlock"') // Visible text or a database block
-
-
-    const { data: createdChild, error: childError } = await admin
-      .from('conversations')
-      .insert({
-        user_id: opts.userId,
-        title: page.title || 'Untitled',
-        metadata: {
-          parent_id: parentId, // Nest under the Thinktable page where import ran
-          notionPageId: page.id, // Link back to Notion
-          notionObject: page.object,
-          notionUrl: page.url ?? null,
-          icon: iconMeta, // Show Notion emoji/file icon in the Pages menu
-          source: 'notion',
-          hasContent: hasBody, // True when Notion body (or title fallback) has text
-          ...(sourceBlockMessageId ? { sourceBlockMessageId } : {}), // Dual-link with map frame
-        },
-      })
-      .select('id')
-      .single()
-
-    if (childError || !createdChild) {
-      console.error('Failed to create nested page for Notion import:', childError)
-      continue
-    }
-    notionIdToConvId.set(normalizeNotionId(page.id), createdChild.id)
-
-    // Wire the map frame ↔ nested Thinktable page (Pages menu tree).
-    // Pages: title-variant pageLink (Notion page title block). Databases: keep DB+rows in the frame.
+    // Wire map frame ↔ nested board: pages → sole boardLink; databases keep DB atom in-frame
     if (sourceBlockMessageId) {
       const { data: frameRow } = await admin
         .from('messages')
@@ -535,29 +566,25 @@ export async function importNotionPagesToBoard(opts: {
       const isDatabase = page.object === 'database'
 
       if (isDatabase) {
-        // Keep databaseBlock + row blocks visible on the map; only attach linkedPageId for open/menu
         await admin
           .from('messages')
           .update({
-            content:
-              (frameRow?.content as string) ||
-              body ||
-              databaseBlockHtml(page), // Ensure DB HTML stayed on the frame
+            content: (frameRow?.content as string) || databaseBlockHtml(page),
             metadata: {
               ...existingMeta,
-              linkedPageId: createdChild.id, // Open / Pages menu still work
+              linkedBoardId,
               blockTitle: notionTitle,
               notionUrl: page.url ?? null,
-              isPage: true,
-              blockType: 'text', // Content frame (not a sole pageLink title)
+              isBoard: true,
+              blockType: 'text',
             },
           })
           .eq('id', sourceBlockMessageId)
       } else {
-        // Notion page → title-variant pageLink (same chrome as local page blocks)
-        const linkContent = pageLinkHtml({
-          pageId: createdChild.id,
-          title: notionTitle, // Notion page title
+        // Notion page map frame → title-variant boardLink only (body on the child board)
+        const linkContent = boardLinkHtml({
+          boardId: linkedBoardId,
+          title: notionTitle,
           icon: emojiFromNotionIcon(page.icon),
         })
         await admin
@@ -566,45 +593,106 @@ export async function importNotionPagesToBoard(opts: {
             content: linkContent,
             metadata: {
               ...existingMeta,
-              linkedPageId: createdChild.id,
+              linkedBoardId,
               blockTitle: notionTitle,
               notionUrl: page.url ?? null,
-              isPage: true,
-              blockType: 'page',
+              isBoard: true,
+              blockType: 'board',
             },
           })
           .eq('id', sourceBlockMessageId)
       }
     }
+  }
 
-    // Nested page body: full Notion content (page blocks, or DB header + row blocks)
-    if (hasBody) {
-      const { error: bodyError } = await admin.from('messages').insert({
-        conversation_id: createdChild.id, // Child page’s map
-        user_id: opts.userId,
-        role: 'user',
-        content: body,
-        metadata: newBlockMetadata({
-          isPageBody: true, // This frame IS the page’s body
-          blockTitle: page.title || 'Untitled',
-          position: { x: START_X, y: START_Y },
-          notionPageId: page.id,
-          notionObject: page.object,
-          notionUrl: page.url ?? null,
-          notionIcon: page.icon ?? null,
-        }),
-      })
-      if (bodyError) {
-        console.error('Failed to create page-body frame for Notion import:', bodyError)
+  // Build child_page → boardLink map once all boards exist
+  const childPageLinks: ChildPageLinkMap = new Map()
+  for (const [nid, boardId] of notionIdToConvId) {
+    const page = bodyPagesNeeded.get(nid)
+    childPageLinks.set(nid, {
+      boardId,
+      title: page?.title || 'Untitled',
+      icon: emojiFromNotionIcon(page?.icon ?? null),
+    })
+  }
+
+  // Seed each board body with THAT page’s content only (child_pages → boardLinks, not inlined)
+  for (const page of orderedForMenu) {
+    const nid = normalizeNotionId(page.id)
+    const boardId = notionIdToConvId.get(nid)
+    if (!boardId) continue
+
+    let body: string
+    if (page.object === 'database') {
+      body = databaseBlockHtml(page)
+    } else {
+      const tree = treesByNotionId.get(nid)
+      if (tree) {
+        body = enrichDatabaseBlocksInHtml(
+          notionPageBodyToHtml(tree, { childPageLinks }),
+          pagesById
+        )
+      } else {
+        body = `<p>${escapeHtml(page.title || 'Untitled')}</p>`
       }
     }
+
+    const hasBody =
+      body.replace(/<[^>]*>/g, '').trim().length > 0 ||
+      body.includes('data-type="databaseBlock"') ||
+      body.includes('data-type="boardLink"')
+
+    if (!hasBody) continue
+
+    // Skip if this board already has a body frame (reused existing board)
+    const { data: existingBodies } = await admin
+      .from('messages')
+      .select('id, metadata')
+      .eq('conversation_id', boardId)
+    const hasBodyFrame = (existingBodies || []).some((m) => {
+      const meta = (m.metadata as Record<string, unknown>) || {}
+      return meta.isBoardBody === true || meta.isPageBody === true
+    })
+    if (hasBodyFrame) continue
+
+    const { error: bodyError } = await admin.from('messages').insert({
+      conversation_id: boardId,
+      user_id: opts.userId,
+      role: 'user',
+      content: body,
+      metadata: newBlockMetadata({
+        isBoardBody: true,
+        blockTitle: page.title || 'Untitled',
+        position: { x: START_X, y: START_Y },
+        notionPageId: page.id,
+        notionObject: page.object,
+        notionUrl: page.url ?? null,
+        notionIcon: page.icon ?? null,
+      }),
+    })
+    if (bodyError) {
+      console.error('Failed to create board-body frame for Notion import:', bodyError)
+      continue
+    }
+
+    // Mark board contentful
+    const { data: convRow } = await admin
+      .from('conversations')
+      .select('metadata')
+      .eq('id', boardId)
+      .maybeSingle()
+    const convMeta = (convRow?.metadata as Record<string, unknown>) || {}
+    await admin
+      .from('conversations')
+      .update({ metadata: { ...convMeta, hasContent: true } })
+      .eq('id', boardId)
   }
 
   return {
-    conversationId, // Page to open after redirect
+    conversationId, // Board to open after redirect
     importedCount: rows.length, // How many new frames
     skippedCount: pages.length - framePages.length, // Already present or collapsed into database blocks
     pages, // Pages considered
-    nestedPageCount: notionIdToConvId.size, // Child pages added to the Pages menu
+    nestedPageCount: notionIdToConvId.size, // Child boards added to the Boards menu
   }
 }

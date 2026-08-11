@@ -42,8 +42,8 @@ export async function PATCH(
   const patch: Record<string, unknown> = {} // Accumulator
   if (typeof body.title === 'string' && body.title.trim()) patch.title = body.title.trim() // Rename
   if (isAiModeId(body.mode)) patch.mode = body.mode // Mode switch
-  if (body.pageId === null) patch.page_id = null // Clear association
-  else if (typeof body.pageId === 'string') patch.page_id = body.pageId // Set association
+  if (body.boardId === null) patch.board_id = null // Clear association
+  else if (typeof body.boardId === 'string') patch.board_id = body.boardId // Set association
   if (body.metadata && typeof body.metadata === 'object') patch.metadata = body.metadata // Metadata
 
   if (!Object.keys(patch).length) { // Nothing to update

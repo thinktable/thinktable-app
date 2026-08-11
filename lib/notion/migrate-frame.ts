@@ -1,4 +1,4 @@
-// Normalize Notion map frames to title pageLink (same chrome as local page blocks).
+// Normalize Notion map frames to title boardLink (same chrome as local page blocks).
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { newBlockMetadata } from '@/lib/blocks'
@@ -8,20 +8,20 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-/** Title-variant pageLink HTML — matches local page blocks. */
-export function buildPageLinkHtml(opts: {
-  pageId: string
+/** Title-variant boardLink HTML — matches local page blocks. */
+export function buildBoardLinkHtml(opts: {
+  boardId: string
   title: string
   icon?: string | null
 }): string {
   const title = escapeHtml(opts.title || 'Untitled')
   const iconAttr = opts.icon ? ` data-icon="${escapeHtml(opts.icon)}"` : ''
-  return `<div data-type="pageLink" data-page-id="${escapeHtml(opts.pageId)}" data-title="${title}" data-variant="title"${iconAttr}></div>`
+  return `<div data-type="boardLink" data-board-id="${escapeHtml(opts.boardId)}" data-title="${title}" data-variant="title"${iconAttr}></div>`
 }
 
 /** True when the frame body is only a databaseBlock (optional empty trailing paragraphs). */
 export function isSoleDatabaseBlockContent(content: string): boolean {
-  if (!content || /data-type="pageLink"/.test(content)) return false
+  if (!content || /data-type="(?:boardLink|pageLink)"/.test(content)) return false
   if (!/data-type="databaseBlock"/i.test(content)) return false
   // Remove the DB atom + empty paragraphs; anything left means mixed content
   const stripped = content
@@ -46,25 +46,25 @@ export function parseDatabaseBlockAttrs(content: string): {
 }
 
 /**
- * If `content` is a sole databaseBlock, return title-variant pageLink HTML.
+ * If `content` is a sole databaseBlock, return title-variant boardLink HTML.
  * Otherwise null.
  */
-export function migrateSoleDatabaseBlockToPageLink(
+export function migrateSoleDatabaseBlockToBoardLink(
   content: string,
-  opts: { pageId: string; title?: string | null; icon?: string | null }
+  opts: { boardId: string; title?: string | null; icon?: string | null }
 ): string | null {
-  if (!opts.pageId || !isSoleDatabaseBlockContent(content)) return null
+  if (!opts.boardId || !isSoleDatabaseBlockContent(content)) return null
   const parsed = parseDatabaseBlockAttrs(content)
   const title = (opts.title || parsed.title || 'Untitled').trim() || 'Untitled'
   const icon = opts.icon || parsed.icon || null
-  return buildPageLinkHtml({ pageId: opts.pageId, title, icon })
+  return buildBoardLinkHtml({ boardId: opts.boardId, title, icon })
 }
 
 /**
- * Ensure a Notion map frame that is still a sole databaseBlock becomes a pageLink frame:
- * resolve/create linkedPageId, rewrite content, persist. Returns the new HTML or null.
+ * Ensure a Notion map frame that is still a sole databaseBlock becomes a boardLink frame:
+ * resolve/create linkedBoardId, rewrite content, persist. Returns the new HTML or null.
  */
-export async function ensureNotionMapFrameIsPageLink(
+export async function ensureNotionMapFrameIsBoardLink(
   supabase: SupabaseClient,
   opts: {
     messageId: string
@@ -73,12 +73,12 @@ export async function ensureNotionMapFrameIsPageLink(
     content: string
     metadata: Record<string, unknown>
   }
-): Promise<{ content: string; linkedPageId: string; metadata: Record<string, unknown> } | null> {
+): Promise<{ content: string; linkedBoardId: string; metadata: Record<string, unknown> } | null> {
   const { messageId, userId, parentConversationId, content, metadata } = opts
-  // Intentional database map frames render a structured table — do not convert to pageLink
+  // Intentional database map frames render a structured table — do not convert to boardLink
   if (metadata.notionObject === 'database') return null
   if (!isSoleDatabaseBlockContent(content)) return null // Already a page block / mixed body
-  if (/data-type="pageLink"/.test(content)) return null
+  if (/data-type="boardLink"/.test(content)) return null
 
   const parsed = parseDatabaseBlockAttrs(content)
   const title =
@@ -95,11 +95,11 @@ export async function ensureNotionMapFrameIsPageLink(
     parsed.notionDatabaseId ||
     null
 
-  let linkedPageId =
-    typeof metadata.linkedPageId === 'string' ? metadata.linkedPageId : null
+  let linkedBoardId =
+    typeof metadata.linkedBoardId === 'string' ? metadata.linkedBoardId : null
 
-  // Resolve existing nested page by Notion id when the frame never got linkedPageId
-  if (!linkedPageId && notionPageId) {
+  // Resolve existing nested page by Notion id when the frame never got linkedBoardId
+  if (!linkedBoardId && notionPageId) {
     const { data: convs } = await supabase
       .from('conversations')
       .select('id, metadata')
@@ -108,11 +108,11 @@ export async function ensureNotionMapFrameIsPageLink(
       const m = (c.metadata as { notionPageId?: string } | null) || {}
       return m.notionPageId && m.notionPageId.replace(/-/g, '') === notionPageId.replace(/-/g, '')
     })
-    if (match) linkedPageId = match.id as string
+    if (match) linkedBoardId = match.id as string
   }
 
   // Create a nested Thinktable page when none exists yet
-  if (!linkedPageId) {
+  if (!linkedBoardId) {
     const { data: created, error } = await supabase
       .from('conversations')
       .insert({
@@ -134,15 +134,15 @@ export async function ensureNotionMapFrameIsPageLink(
       console.error('Failed to create page for Notion DB frame:', error)
       return null
     }
-    linkedPageId = created.id as string
+    linkedBoardId = created.id as string
     // Seed page-body with the databaseBlock so opening the page still shows the DB atom
     await supabase.from('messages').insert({
-      conversation_id: linkedPageId,
+      conversation_id: linkedBoardId,
       user_id: userId,
       role: 'user',
       content, // Keep the databaseBlock on the child page
       metadata: newBlockMetadata({
-        isPageBody: true,
+        isBoardBody: true,
         blockTitle: title,
         position: { x: 80, y: 80 },
         ...(notionPageId ? { notionPageId } : {}),
@@ -151,13 +151,13 @@ export async function ensureNotionMapFrameIsPageLink(
     })
   }
 
-  const nextContent = buildPageLinkHtml({ pageId: linkedPageId, title, icon: emoji })
+  const nextContent = buildBoardLinkHtml({ boardId: linkedBoardId, title, icon: emoji })
   const nextMeta: Record<string, unknown> = {
     ...metadata,
-    linkedPageId,
+    linkedBoardId,
     blockTitle: title,
-    isPage: true,
-    blockType: 'page',
+    isBoard: true,
+    blockType: 'board',
     ...(notionUrl ? { notionUrl } : {}),
     ...(notionPageId ? { notionPageId } : {}),
   }
@@ -167,9 +167,9 @@ export async function ensureNotionMapFrameIsPageLink(
     .update({ content: nextContent, metadata: nextMeta })
     .eq('id', messageId)
   if (updateError) {
-    console.error('Failed to rewrite Notion DB frame as pageLink:', updateError)
+    console.error('Failed to rewrite Notion DB frame as boardLink:', updateError)
     return null
   }
 
-  return { content: nextContent, linkedPageId, metadata: nextMeta }
+  return { content: nextContent, linkedBoardId, metadata: nextMeta }
 }

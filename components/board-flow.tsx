@@ -83,9 +83,9 @@ import {
   BLOCK_GROUP_PADDING,
   blockGroupNodeId,
   createBlockGroup,
-  deleteLinkedPageForBlock,
+  deleteLinkedBoardForBlock,
   duplicateBlockMetadata,
-  ensurePageBodyBlock,
+  ensureBoardBodyBlock,
   isBlockGroupMeta,
   migrateMessagesToBlockFlag,
   newBlockMetadata,
@@ -108,7 +108,7 @@ import {
   usePreviewFocus,
 } from '@/lib/preview-focus-context' // Style sync + ready/resize handshake for iframe previews
 import { BoardEmbedProvider } from '@/lib/board-embed-context' // Hide nested preview controls inside embed
-import { usePageAccess } from '@/lib/share/page-access-context' // Shared view/comment → read-only map
+import { useBoardAccess } from '@/lib/share/board-access-context' // Shared view/comment → read-only map
 import { ThinktableBrandMark } from './personalize-ai-modal'
 import { NavZoomControl } from './nav-zoom-control' // Zoom % lives in bottom nav (not top bar)
 import { LeftVerticalMenu } from './left-vertical-menu'
@@ -202,8 +202,8 @@ async function fetchMessagesForPanels(
 
   // Page-body materialization belongs to full open/promote — not every preview boot
   if (!isEmbed) {
-    const { created } = await ensurePageBodyBlock(supabase, {
-      pageId: conversationId,
+    const { created } = await ensureBoardBodyBlock(supabase, {
+      boardId: conversationId,
       userId: user.id,
     })
     if (created) {
@@ -461,7 +461,7 @@ function BoardFlowInner({
   searchParams: ReturnType<typeof useSearchParams> | null
   embedded?: boolean // True when rendered as page-within-page preview
 }) {
-  const { canEdit } = usePageAccess() // RLS is authority; UI mirrors for viewers
+  const { canEdit } = useBoardAccess() // RLS is authority; UI mirrors for viewers
   const { resolvedTheme } = useTheme()
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesState] = useEdgesState([])
@@ -3464,9 +3464,9 @@ function BoardFlowInner({
       // Delete linked pages for titled blocks before removing messages
       for (const node of chatPanelNodes) {
         const meta = node.data?.promptMessage?.metadata as Record<string, unknown> | undefined
-        if (meta?.linkedPageId) {
+        if (meta?.linkedBoardId) {
           try {
-            await deleteLinkedPageForBlock(supabase, meta)
+            await deleteLinkedBoardForBlock(supabase, meta)
           } catch (err) {
             console.error('Error deleting linked page for block:', err)
           }
@@ -5825,7 +5825,7 @@ function BoardFlowInner({
 
   // Turn into — transform HTML + metadata (and promote Page / Page in)
   const handleTurnInto = useCallback(
-    async (blockType: BlockTypeId, pageInParentId?: string | null) => {
+    async (blockType: BlockTypeId, boardInParentId?: string | null) => {
       const messageId = rightClickedNode?.data?.promptMessage?.id
       const nodeId = rightClickedNode?.id // Live editor registry key
       const frameContent = (rightClickedNode?.data?.promptMessage?.content as string) || '' // Title seed
@@ -5838,28 +5838,28 @@ function BoardFlowInner({
         } = await supabase.auth.getUser()
         if (!user) return
         const { applyTurnInto, htmlToPlainText } = await import('@/lib/blocks/turn-into')
-        // Frame → page prepends a title-variant pageLink to the content server-side (race-free)
-        const { linkedPageId } = await applyTurnInto(supabase, {
+        // Frame → page prepends a title-variant boardLink to the content server-side (race-free)
+        const { linkedBoardId } = await applyTurnInto(supabase, {
           messageId,
           conversationId,
           userId: user.id,
           blockType,
-          pageInParentId: pageInParentId || null,
+          boardInParentId: boardInParentId || null,
         })
         // Also insert client-side (idempotent) so the title block appears even if the editor was
-        // focused (which skips the content re-sync). No duplicate — insertPageTitleBlock updates in place.
-        if ((blockType === 'page' || blockType === 'pageIn') && linkedPageId && nodeId) {
+        // focused (which skips the content re-sync). No duplicate — insertBoardTitleBlock updates in place.
+        if ((blockType === 'board' || blockType === 'boardIn') && linkedBoardId && nodeId) {
           const { editorForHostNode } = await import('@/lib/tiptap/block-selection')
-          const { insertPageTitleBlock } = await import('@/lib/tiptap/page-blocks')
+          const { insertBoardTitleBlock } = await import('@/lib/tiptap/board-blocks')
           const ed = editorForHostNode(nodeId)
           if (ed) {
             const title = htmlToPlainText(frameContent).split('\n')[0]?.trim() || 'Untitled'
-            insertPageTitleBlock(ed, { pageId: linkedPageId, title, icon: null, variant: 'title' })
+            insertBoardTitleBlock(ed, { boardId: linkedBoardId, title, icon: null, variant: 'title' })
           }
         }
         await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
         await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
-        if (blockType === 'page' || blockType === 'pageIn') {
+        if (blockType === 'board' || blockType === 'boardIn') {
           await queryClient.invalidateQueries({ queryKey: ['conversations'] })
           await queryClient.refetchQueries({ queryKey: ['conversations'] })
         }
@@ -5872,8 +5872,8 @@ function BoardFlowInner({
 
   // Multi-selection → new page: snapshot selected frames + threads + drawings/shapes exactly as
   // they are onto a fresh child page, and drop a title link frame on this page (Phase C).
-  const handleSelectionToPage = useCallback(
-    async (blockType: BlockTypeId, pageInParentId?: string | null) => {
+  const handleSelectionToBoard = useCallback(
+    async (blockType: BlockTypeId, boardInParentId?: string | null) => {
       if (!conversationId) return
       const frameNodes = nodes.filter(
         (n) => n.selected && n.type === 'chatPanel' && n.data?.promptMessage?.id
@@ -5932,10 +5932,10 @@ function BoardFlowInner({
             : { x: canvas[0]?.position_x ?? 0, y: (canvas[0]?.position_y ?? 0) - 60 }
 
         const parentId =
-          blockType === 'pageIn' && pageInParentId ? pageInParentId : conversationId
+          blockType === 'boardIn' && boardInParentId ? boardInParentId : conversationId
 
-        const { snapshotSelectionToPage } = await import('@/lib/blocks/snapshot')
-        await snapshotSelectionToPage(supabase, {
+        const { snapshotSelectionToBoard } = await import('@/lib/blocks/snapshot')
+        await snapshotSelectionToBoard(supabase, {
           userId: user.id,
           sourceConversationId: conversationId,
           parentId,
@@ -6060,12 +6060,12 @@ function BoardFlowInner({
               (n) => n.selected && (n.type === 'chatPanel' || n.type === 'freehand' || n.type === 'shape')
             )
             if (
-              (payload.blockType === 'page' || payload.blockType === 'pageIn') &&
+              (payload.blockType === 'board' || payload.blockType === 'boardIn') &&
               relevantSelected.length >= 2
             ) {
-              void handleSelectionToPage(payload.blockType, payload.pageInParentId)
+              void handleSelectionToBoard(payload.blockType, payload.boardInParentId)
             } else {
-              void handleTurnInto(payload.blockType, payload.pageInParentId)
+              void handleTurnInto(payload.blockType, payload.boardInParentId)
             }
           }
           break
@@ -6095,7 +6095,7 @@ function BoardFlowInner({
       handleGroupBlocks,
       handleUngroupBlocks,
       handleTurnInto,
-      handleSelectionToPage,
+      handleSelectionToBoard,
       handleSetFrameShape,
       nodes,
       rightClickedNode,
@@ -7575,7 +7575,7 @@ function BoardFlowInner({
             setIBarPosition(null)
           }
           // Clicking a host block (outside nested preview chrome) clears preview style-focus
-          if (!embedded && previewFocus?.focusedPageId) {
+          if (!embedded && previewFocus?.focusedBoardId) {
             const target = event.target as Element | null
             if (!target?.closest?.('[data-page-preview]')) {
               previewFocus.clearPreviewFocus()
@@ -7597,16 +7597,16 @@ function BoardFlowInner({
         onPaneContextMenu={handlePaneContextMenu}
         onPaneClick={(event) => {
           // Empty host pane click drops nested preview style-focus
-          if (!embedded && previewFocus?.focusedPageId) {
+          if (!embedded && previewFocus?.focusedBoardId) {
             previewFocus.clearPreviewFocus()
           }
 
           // Left click on empty map only
           if (!reactFlowInstance || event.button !== 0) return
 
-          // Blur pageLink title / TipTap focus BEFORE deselection settles. Otherwise
+          // Blur boardLink title / TipTap focus BEFORE deselection settles. Otherwise
           // onEditorActiveChange still sees focus inside the frame and re-selects it
-          // (pageLink contentEditable lives inside the ProseMirror DOM).
+          // (boardLink contentEditable lives inside the ProseMirror DOM).
           const ae = document.activeElement as HTMLElement | null
           if (ae && ae !== document.body && typeof ae.blur === 'function') {
             const inFrame = ae.closest?.('.react-flow__node')
@@ -8269,7 +8269,7 @@ function BoardFlowInner({
             FRAME_SHAPE_NONE
           }
           showFrameShape={rightClickedNode.type === 'chatPanel'}
-          pageInTargets={(() => {
+          boardInTargets={(() => {
             // Pages the new page can nest under (from sidebar cache)
             const convs =
               (queryClient.getQueryData(['conversations']) as
@@ -8281,7 +8281,7 @@ function BoardFlowInner({
               .map((c) => ({ id: c.id, title: c.title?.trim() || 'Untitled' }))
             // Always offer current map first
             return [
-              { id: conversationId || '', title: 'Current page' },
+              { id: conversationId || '', title: 'Current board' },
               ...targets.filter((t) => t.id),
             ]
           })()}

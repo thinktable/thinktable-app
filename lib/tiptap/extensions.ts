@@ -18,7 +18,7 @@ import {
   ToggleHeading,
   ToggleList,
 } from '@/lib/tiptap/block-nodes'
-import { PageLink } from '@/lib/tiptap/page-link' // Linked-page block (inline + title + preview)
+import { BoardLink } from '@/lib/tiptap/board-link' // Linked-page block (inline + title + preview)
 import { DatabaseBlock } from '@/lib/tiptap/database-block' // Notion database as a compact TipTap block
 import { EmptyBlockBackspace } from '@/lib/tiptap/empty-block-backspace' // Backspace empty block → previous line
 import { Extension } from '@tiptap/core'
@@ -38,7 +38,7 @@ export function createPanelExtensions(placeholder?: string): any[] {
     StarterKit.configure({
       heading: { levels: [1, 2, 3, 4] }, // Notion H1–H4
       // TaskList replaces default list behavior where needed; keep bullet/ordered
-      // TrailingNode re-inserts an empty <p> after pageLink/atoms, so empty-block
+      // TrailingNode re-inserts an empty <p> after boardLink/atoms, so empty-block
       // Backspace looked like it deleted the block but left the blank line space.
       trailingNode: false,
     }),
@@ -57,7 +57,7 @@ export function createPanelExtensions(placeholder?: string): any[] {
     BlockEquation,
     SyncedBlock,
     Columns,
-    PageLink, // Block that links to a child page (Notion child-page block)
+    BoardLink, // Block that links to a child page (Notion child-page block)
     DatabaseBlock, // Notion database stays one block (no map-frame sprawl of rows)
     EmptyBlockBackspace, // Empty block: Backspace → previous; Enter → no new blank line
     BlockHighlight, // Per-content-block menu highlight (not the map card)

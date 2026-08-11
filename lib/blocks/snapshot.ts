@@ -1,6 +1,6 @@
 // Snapshot a page selection (frames + threads + drawings/shapes) into a new page — see DEFINITIONS.md.
 // Copies the selected items exactly as they are (positions, thread connections, canvas nodes) onto a
-// fresh child page, then drops a title-variant pageLink frame on the source page linking to it.
+// fresh child page, then drops a title-variant boardLink frame on the source page linking to it.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { newBlockMetadata } from '@/lib/blocks' // Canonical frame metadata
@@ -39,7 +39,7 @@ export type SnapshotOpts = {
   userId: string
   sourceConversationId: string // Page the selection came from
   parentId: string // Page to nest the new snapshot page under (current or chosen)
-  title: string // New page title
+  title: string // New board title
   frames: SnapshotFrame[]
   edges: SnapshotEdge[]
   canvas: SnapshotCanvasNode[]
@@ -50,7 +50,7 @@ export type SnapshotOpts = {
  * Create a new page containing a snapshot of the selection; link to it from the source page.
  * Returns the new page id + the source-page link message id (or null on failure).
  */
-export async function snapshotSelectionToPage(
+export async function snapshotSelectionToBoard(
   supabase: SupabaseClient,
   opts: SnapshotOpts
 ): Promise<{ pageId: string; linkMessageId: string } | null> {
@@ -136,8 +136,8 @@ export async function snapshotSelectionToPage(
     if (error) console.error('Snapshot: failed to copy canvas nodes:', error)
   }
 
-  // 5) Drop a title-variant pageLink frame on the SOURCE page linking to the snapshot
-  const titleDiv = `<div data-type="pageLink" data-page-id="${pageId}" data-title="${escapeHtml(
+  // 5) Drop a title-variant boardLink frame on the SOURCE page linking to the snapshot
+  const titleDiv = `<div data-type="boardLink" data-board-id="${pageId}" data-title="${escapeHtml(
     title || 'Untitled'
   )}" data-variant="title"></div>`
   const { data: link, error: linkError } = await supabase
@@ -149,10 +149,10 @@ export async function snapshotSelectionToPage(
       content: titleDiv,
       metadata: newBlockMetadata({
         position: linkPosition, // Where the popup was
-        linkedPageId: pageId,
+        linkedBoardId: pageId,
         blockTitle: title || 'Untitled',
-        isPage: true,
-        blockType: 'page',
+        isBoard: true,
+        blockType: 'board',
         fadeIn: true,
       }),
     })

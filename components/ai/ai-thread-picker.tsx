@@ -1,6 +1,6 @@
 'use client'
 
-// Thread title dropdown + page filter (All / This page) for universal AI history
+// Thread title dropdown + page filter (All / This board) for universal AI history
 import { useEffect, useState } from 'react' // State
 import type { AiThread } from '@/lib/ai/types' // Thread type
 import { cn } from '@/lib/utils' // className merge
@@ -13,10 +13,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu' // Menu chrome
 
-export type AiThreadFilter = 'all' | 'page' // Filter modes
+export type AiThreadFilter = 'all' | 'board' // Filter modes
 
 interface AiThreadPickerProps {
-  pageId?: string // Current page for filter
+  boardId?: string // Current board for filter
   thread: AiThread | null // Active thread
   filter: AiThreadFilter // Current filter
   onFilterChange: (f: AiThreadFilter) => void // Filter setter
@@ -26,7 +26,7 @@ interface AiThreadPickerProps {
 }
 
 export function AiThreadPicker({
-  pageId,
+  boardId,
   thread,
   filter,
   onFilterChange,
@@ -44,7 +44,7 @@ export function AiThreadPicker({
       try {
         const params = new URLSearchParams() // Query
         params.set('filter', filter) // all | page
-        if (filter === 'page' && pageId) params.set('pageId', pageId) // Scope
+        if (filter === 'board' && boardId) params.set('boardId', boardId) // Scope
         const res = await fetch(`/api/ai/threads?${params.toString()}`) // List
         if (!res.ok) return // Soft fail
         const data = await res.json() // Parse
@@ -57,7 +57,7 @@ export function AiThreadPicker({
     return () => {
       cancelled = true // Cancel
     }
-  }, [filter, pageId, refreshKey]) // Refetch deps
+  }, [filter, boardId, refreshKey]) // Refetch deps
 
   return (
     <div className="flex items-center gap-1 min-w-0">
@@ -98,7 +98,7 @@ export function AiThreadPicker({
           <button
             type="button"
             className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
-            title={filter === 'page' ? 'Showing this page' : 'Showing all chats'}
+            title={filter === 'board' ? 'Showing this board' : 'Showing all chats'}
             aria-label="Filter chats by page"
           >
             <Filter className="h-3.5 w-3.5" />
@@ -112,11 +112,11 @@ export function AiThreadPicker({
             All chats
           </DropdownMenuItem>
           <DropdownMenuItem
-            onClick={() => onFilterChange('page')}
-            disabled={!pageId}
-            className={cn(filter === 'page' && 'bg-black/[0.04] dark:bg-white/[0.06]')}
+            onClick={() => onFilterChange('board')}
+            disabled={!boardId}
+            className={cn(filter === 'board' && 'bg-black/[0.04] dark:bg-white/[0.06]')}
           >
-            This page
+            This board
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

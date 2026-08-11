@@ -27,7 +27,7 @@ import {
 } from 'lucide-react' // Icons
 
 interface ChatSidebarProps {
-  conversationId?: string // Current page id
+  conversationId?: string // Current board id
   projectId?: string // Kept for call-site compat
 }
 
@@ -155,7 +155,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
       await regenerateAfterEdit({
         message: content,
         threadId,
-        pageId: conversationId,
+        boardId: conversationId,
         snapshotIds: attachedSnapshots.map((s) => s.id),
         onMessagesDelta: setMessages,
         onStreamingId: setStreamingId,
@@ -190,7 +190,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
           threadId: message.thread_id,
           messageId: message.id,
           payload: {
-            pageId: conversationId || null,
+            boardId: conversationId || null,
             anchorMessageId: message.id,
             anchorRole: message.role,
             anchorContent: message.content.slice(0, 2000),
@@ -255,7 +255,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
       >
         <header className="flex-shrink-0 flex items-center justify-between gap-2 px-3 h-11">
           <AiThreadPicker
-            pageId={conversationId}
+            boardId={conversationId}
             thread={thread}
             filter={filter}
             onFilterChange={setFilter}
@@ -337,16 +337,16 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
 
               <ul className="w-full flex flex-col gap-0.5">
                 {[
-                  { icon: Sparkles, label: 'Summarize this page', prompt: 'Summarize this page.' },
+                  { icon: Sparkles, label: 'Summarize this board', prompt: 'Summarize this board.' },
                   {
                     icon: ListTodo,
                     label: 'Turn notes into tasks',
-                    prompt: 'Turn the notes on this page into a task list.',
+                    prompt: 'Turn the notes on this board into a task list.',
                   },
                   {
                     icon: Search,
                     label: 'Search connected pages',
-                    prompt: 'What stands out across the frames on this page?',
+                    prompt: 'What stands out across the frames on this board?',
                   },
                 ].map(({ icon: Icon, label, prompt }) => (
                   <li key={label}>
@@ -409,7 +409,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
           <div className="rounded-xl overflow-hidden bg-white dark:bg-[#202020] border border-black/10 dark:border-white/10 shadow-sm">
             <div className="px-1 pt-1">
               <AiComposer
-                pageId={conversationId}
+                boardId={conversationId}
                 thread={thread}
                 mode={mode}
                 onModeChange={setMode}

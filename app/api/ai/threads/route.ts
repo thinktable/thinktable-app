@@ -10,8 +10,8 @@ export async function GET(request: NextRequest) {
   } = await supabase.auth.getUser() // Require auth
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) // 401
 
-  const pageId = request.nextUrl.searchParams.get('pageId') // Optional filter
-  const filter = request.nextUrl.searchParams.get('filter') || 'all' // all | page
+  const boardId = request.nextUrl.searchParams.get('boardId') // Optional filter
+  const filter = request.nextUrl.searchParams.get('filter') || 'all' // all | board
 
   let query = supabase // Base query
     .from('ai_threads') // Threads table
@@ -19,8 +19,8 @@ export async function GET(request: NextRequest) {
     .eq('user_id', user.id) // Own only
     .order('updated_at', { ascending: false }) // Recent first
 
-  if (filter === 'page' && pageId) { // This-page filter
-    query = query.eq('page_id', pageId) // Associated with current page
+  if (filter === 'board' && boardId) { // This-board filter
+    query = query.eq('board_id', boardId) // Associated with current board
   }
 
   const { data, error } = await query // Execute
@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({})) // Body
   const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'New AI chat' // Title
   const mode = isAiModeId(body.mode) ? body.mode : 'ask' // Default Ask
-  const pageId = typeof body.pageId === 'string' ? body.pageId : null // Optional association
+  const boardId = typeof body.boardId === 'string' ? body.boardId : null // Optional association
   const metadata = body.metadata && typeof body.metadata === 'object' ? body.metadata : {} // Extra
 
   const { data, error } = await supabase // Insert
@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
       user_id: user.id, // Owner
       title, // Title
       mode, // Mode
-      page_id: pageId, // Page association
+      board_id: boardId, // Board association
       metadata, // Metadata
     })
     .select() // Return row

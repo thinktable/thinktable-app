@@ -68,7 +68,7 @@ export function isHandleBlockType(name: string): boolean {
     name === 'blockEquation' ||
     name === 'syncedBlock' ||
     name === 'columns' ||
-    name === 'pageLink' || // Linked-page block (inline/title) gets the ⋮⋮ grip too
+    name === 'boardLink' || // Linked-page block (inline/title) gets the ⋮⋮ grip too
     name === 'databaseBlock' // Notion database block gets the ⋮⋮ grip too
   )
 }
@@ -429,8 +429,8 @@ export function turnEditorBlockInto(
         } as JSONContent)
         .run()
     }
-    case 'page':
-    case 'pageIn':
+    case 'board':
+    case 'boardIn':
       // Handled by board-flow promote (map-card level) — leave editor content
       return false
     default:

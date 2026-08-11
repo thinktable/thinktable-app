@@ -1,44 +1,44 @@
-// Helpers to turn TipTap **blocks** / frames into linked **pages** (pageLink nodes). See DEFINITIONS.md.
+// Helpers to turn TipTap **blocks** / frames into linked **boards** (boardLink nodes). See DEFINITIONS.md.
 
 import type { Editor } from '@tiptap/react' // Editor mutations
-import type { SupabaseClient } from '@supabase/supabase-js' // Persist child page + body
+import type { SupabaseClient } from '@supabase/supabase-js' // Persist child board + body
 import { newBlockMetadata, isBlockContentEmpty } from '@/lib/blocks' // Frame metadata + empty check
 import { htmlForEditorRange, type EditorBlockRef } from '@/lib/tiptap/block-selection'
 import { htmlToPlainText } from '@/lib/blocks/turn-into' // Strip tags → plain-text title seed
 
-/** Attributes carried by a pageLink node. */
-export type PageLinkAttrs = {
-  pageId: string
-  title: string
-  icon?: string | null
-  variant?: 'inline' | 'title'
+/** Attributes carried by a boardLink node. */
+export type BoardLinkAttrs = {
+  boardId: string // Linked child conversation id
+  title: string // Display title
+  icon?: string | null // Optional emoji
+  variant?: 'inline' | 'title' // Chrome layout
 }
 
 /**
- * Create a child page (conversation) nested under `parentId`, seeding its body with `bodyHtml`
- * when non-empty. Returns the new page id (or null on failure).
+ * Create a child board (conversation) nested under `parentId`, seeding its body with `bodyHtml`
+ * when non-empty. Returns the new board id (or null on failure).
  */
-export async function createChildPageForBlock(
+export async function createChildBoardForBlock(
   supabase: SupabaseClient,
   opts: {
     userId: string // Owner
-    parentId: string // Conversation to nest under (Pages menu)
+    parentId: string // Conversation to nest under (Boards menu)
     sourceMessageId: string // Frame message that hosts the link (reverse sync)
-    title: string // Page title
-    bodyHtml?: string // Optional page-body content
+    title: string // Board title
+    bodyHtml?: string // Optional board-body content
   }
 ): Promise<string | null> {
   const { userId, parentId, sourceMessageId, title, bodyHtml } = opts
   const hasBody = !!bodyHtml && !isBlockContentEmpty(bodyHtml) // Only mark contentful when real content
 
-  // Create the nested page
+  // Create the nested board
   const { data: child, error } = await supabase
     .from('conversations')
     .insert({
       user_id: userId,
       title: title || 'Untitled',
       metadata: {
-        parent_id: parentId, // Nest under current page
+        parent_id: parentId, // Nest under current board
         sourceBlockMessageId: sourceMessageId, // Reverse link to the hosting frame
         hasContent: hasBody, // Filled icon when it has a body
       },
@@ -46,11 +46,11 @@ export async function createChildPageForBlock(
     .select('id')
     .single()
   if (error || !child) {
-    console.error('Failed to create child page for block:', error)
+    console.error('Failed to create child board for block:', error)
     return null
   }
 
-  // Seed the page body as its own block on the child page's map
+  // Seed the board body as its own frame on the child board's map
   if (hasBody) {
     const { error: bodyError } = await supabase.from('messages').insert({
       conversation_id: child.id,
@@ -58,23 +58,23 @@ export async function createChildPageForBlock(
       role: 'user',
       content: bodyHtml,
       metadata: newBlockMetadata({
-        isPageBody: true, // This block IS the page's body
+        isBoardBody: true, // This frame IS the board's body
         blockTitle: title || 'Untitled',
         position: { x: 80, y: 80 },
         fadeIn: true,
       }),
     })
-    if (bodyError) console.error('Failed to seed child page body:', bodyError)
+    if (bodyError) console.error('Failed to seed child board body:', bodyError)
   }
 
   return child.id as string
 }
 
-/** Replace a block range with an inline pageLink node (icon LEFT of the link text). */
-export function replaceBlockWithPageLink(
+/** Replace a block range with an inline boardLink node (icon LEFT of the link text). */
+export function replaceBlockWithBoardLink(
   editor: Editor,
   block: EditorBlockRef,
-  attrs: PageLinkAttrs
+  attrs: BoardLinkAttrs
 ): boolean {
   if (!editor || editor.isDestroyed) return false
   return editor
@@ -82,23 +82,23 @@ export function replaceBlockWithPageLink(
     .focus()
     .deleteRange({ from: block.from, to: block.to }) // Remove the source line
     .insertContentAt(block.from, {
-      type: 'pageLink',
+      type: 'boardLink',
       attrs: { ...attrs, variant: attrs.variant || 'inline' },
     })
     .run()
 }
 
 /**
- * Insert (or update) a title-variant pageLink at the TOP of the frame — icon on top, left-aligned.
- * Idempotent: if the first node is already a pageLink for this page, just refresh its attrs.
+ * Insert (or update) a title-variant boardLink at the TOP of the frame — icon on top, left-aligned.
+ * Idempotent: if the first node is already a boardLink for this board, just refresh its attrs.
  */
-export function insertPageTitleBlock(
+export function insertBoardTitleBlock(
   editor: Editor,
-  attrs: PageLinkAttrs
+  attrs: BoardLinkAttrs
 ): boolean {
   if (!editor || editor.isDestroyed) return false
   const first = editor.state.doc.firstChild // Existing top node
-  if (first && first.type.name === 'pageLink') {
+  if (first && first.type.name === 'boardLink') {
     // Already a title block — update its attrs in place (pos 0)
     return editor
       .chain()
@@ -112,12 +112,12 @@ export function insertPageTitleBlock(
   return editor
     .chain()
     .focus()
-    .insertContentAt(0, { type: 'pageLink', attrs: { ...attrs, variant: 'title' } })
+    .insertContentAt(0, { type: 'boardLink', attrs: { ...attrs, variant: 'title' } })
     .run()
 }
 
 /** Plain-text label for a block range (title seed). */
 export function titleForBlock(editor: Editor, block: EditorBlockRef): string {
-  const html = htmlForEditorRange(editor, block.from, block.to)
-  return htmlToPlainText(html).split('\n')[0]?.trim() || 'Untitled'
+  const html = htmlForEditorRange(editor, block.from, block.to) // Serialize the block range to HTML
+  return htmlToPlainText(html).split('\n')[0]?.trim() || 'Untitled' // First line becomes the board title
 }

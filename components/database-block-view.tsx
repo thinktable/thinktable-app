@@ -1,24 +1,24 @@
 'use client'
 
 // React NodeView for databaseBlock: Notion-like structured table (columns + typed cells).
-// Header keeps icon + title + PageOpenMenu (preview / open / Notion). Nested page-body DBs
+// Header keeps icon + title + BoardOpenMenu (preview / open / Notion). Nested page-body DBs
 // and map DB frames both render the live table from /api/notion/database/[id].
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react'
 import { Table2 } from 'lucide-react'
-import { PageOpenMenu } from '@/components/page-open-menu' // Same chrome as pageLink blocks
+import { BoardOpenMenu } from '@/components/board-open-menu' // Same chrome as boardLink blocks
 import { NotionMarkIcon } from '@/components/notion-mark-icon' // Monochrome Notion mark
 import { NotionDatabaseTableView } from '@/components/notion-database-table' // Structured table
-import { usePageLinkActions } from '@/lib/page-link-context'
+import { useBoardLinkActions } from '@/lib/board-link-context'
 import { cn } from '@/lib/utils'
 
 export function DatabaseBlockView({ node, updateAttributes }: NodeViewProps) {
   const notionDatabaseId = (node.attrs.notionDatabaseId as string | null) || null // Linked Notion DB
   const icon = (node.attrs.icon as string | null) || null // Emoji, else table icon
   const url = (node.attrs.url as string | null) || null // Open-in-Notion when set
-  const actions = usePageLinkActions() // Host may supply linkedPageId + notionUrl
-  const hostPageId = actions.hostLinkedPageId || null // Map-frame DB → full open menu
+  const actions = useBoardLinkActions() // Host may supply linkedBoardId + notionUrl
+  const hostPageId = actions.hostLinkedBoardId || null // Map-frame DB → full open menu
   const notionUrl = url || actions.notionUrl || null // Prefer block url, else frame metadata
 
   const [title, setTitle] = useState<string>((node.attrs.title as string) || 'Untitled database') // Local label
@@ -95,17 +95,17 @@ export function DatabaseBlockView({ node, updateAttributes }: NodeViewProps) {
         </span>
         {/* Map-frame: full preview / open / Notion menu; nested: Notion-only when no Thinktable page */}
         {hostPageId ? (
-          <PageOpenMenu
-            pageId={hostPageId}
+          <BoardOpenMenu
+            boardId={hostPageId}
             notionUrl={notionUrl}
             forceVisible
             className="!relative !left-auto !right-auto !top-auto !translate-y-0 !ml-1"
           />
         ) : notionUrl ? (
-          <span className="tt-page-link-preview !relative !left-auto !right-auto !top-auto !translate-y-0 !ml-1 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto">
+          <span className="tt-board-link-preview !relative !left-auto !right-auto !top-auto !translate-y-0 !ml-1 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto">
             <button
               type="button"
-              className="tt-page-link-preview-btn"
+              className="tt-board-link-preview-btn"
               title="Open in Notion"
               aria-label="Open in Notion"
               onPointerDown={(e) => e.stopPropagation()}

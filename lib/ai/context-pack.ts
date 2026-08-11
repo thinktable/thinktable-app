@@ -8,7 +8,7 @@ export interface FrameSummary { // Compact frame for the model
 }
 
 export interface AiContextPack { // Sent as a system/user context block
-  pageId: string | null // Current page
+  boardId: string | null // Current board
   pageTitle: string | null // conversations.title
   frames: FrameSummary[] // Page frame summaries
   selectedFrameIds: string[] // Client selection
@@ -50,20 +50,20 @@ export async function buildContextPack(
   supabase: SupabaseClient, // Authed client
   opts: {
     userId: string // Owner
-    pageId?: string | null // Current page
+    boardId?: string | null // Current board
     selectedFrameIds?: string[] // Selection
     snapshotIds?: string[] // Attached snapshot ids
   }
 ): Promise<AiContextPack> {
-  const pageId = opts.pageId || null // Normalize
+  const boardId = opts.boardId || null // Normalize
   let pageTitle: string | null = null // Default
   const frames: FrameSummary[] = [] // Accumulators
 
-  if (pageId) { // Only load page content when associated
+  if (boardId) { // Only load page content when associated
     const { data: conv } = await supabase // Page row
       .from('conversations') // Pages table
       .select('id, title, user_id') // Fields
-      .eq('id', pageId) // Match
+      .eq('id', boardId) // Match
       .eq('user_id', opts.userId) // Ownership
       .maybeSingle() // One or none
     pageTitle = conv?.title ?? null // Title if owned
@@ -72,7 +72,7 @@ export async function buildContextPack(
       const { data: messages } = await supabase // Frame-bearing messages
         .from('messages') // Page frames live here
         .select('id, content, metadata, role') // Needed fields
-        .eq('conversation_id', pageId) // This page
+        .eq('conversation_id', boardId) // This board
         .order('created_at', { ascending: true }) // Stable order
         .limit(MAX_FRAMES) // Cap
 
@@ -106,7 +106,7 @@ export async function buildContextPack(
   }
 
   return {
-    pageId, // Current page
+    boardId, // Current board
     pageTitle, // Title
     frames, // Summaries
     selectedFrameIds: opts.selectedFrameIds || [], // Selection
@@ -117,9 +117,9 @@ export async function buildContextPack(
 /** Render the pack as a system-side context string for OpenAI. */
 export function formatContextPack(pack: AiContextPack): string {
   const lines: string[] = [] // Accumulators
-  lines.push('## Current page context') // Header
-  lines.push(`Page id: ${pack.pageId ?? '(none)'}`) // Id
-  lines.push(`Page title: ${pack.pageTitle ?? '(untitled)'}`) // Title
+  lines.push('## Current board context') // Header
+  lines.push(`Board id: ${pack.boardId ?? '(none)'}`) // Id
+  lines.push(`Board title: ${pack.pageTitle ?? '(untitled)'}`) // Title
   if (pack.selectedFrameIds.length) { // Selection section
     lines.push(`Selected frame ids: ${pack.selectedFrameIds.join(', ')}`) // Ids
   }
@@ -131,7 +131,7 @@ export function formatContextPack(pack: AiContextPack): string {
       lines.push(`- Frame ${f.id}${title}${mark}: ${f.text || '(empty)'}`) // Line
     }
   } else {
-    lines.push('(No frames on this page, or page not provided.)') // Empty
+    lines.push('(No frames on this board, or page not provided.)') // Empty
   }
   if (pack.snapshots.length) { // Snapshots
     lines.push('### Attached context snapshots') // Subhead
@@ -142,16 +142,16 @@ export function formatContextPack(pack: AiContextPack): string {
   return lines.join('\n') // Join
 }
 
-/** Ask-mode system prompt — answers in chat; never claims to have placed on the page. */
+/** Ask-mode system prompt — answers in chat; never claims to have placed on the board. */
 export function askSystemPrompt(extraSkillHints: string[] = []): string {
   const base = [
     'You are Thinktable Copilot in Ask mode.',
-    'Thinktable is a spatial mind-map: pages hold frames; frames hold blocks; threads connect frames.',
+    'Thinktable is a spatial mind-map: boards hold frames; frames hold blocks; threads connect frames.',
     'Respond helpfully in the chat sidebar using clear markdown.',
-    'You cannot place, create, edit, or link anything on the page in Ask mode.',
+    'You cannot place, create, edit, or link anything on the board in Ask mode.',
     'Never claim you created frames, linked threads, or edited page content.',
-    'If the user asks you to create/link/edit on the page, tell them to switch the mode toggle to Edit.',
-    'The user can also place chat text by dragging a chat turn onto the page.',
+    'If the user asks you to create/link/edit on the board, tell them to switch the mode toggle to Edit.',
+    'The user can also place chat text by dragging a chat turn onto the board.',
     'Be concise unless the user asks for depth.',
   ]
   if (extraSkillHints.length) {
@@ -165,12 +165,12 @@ export function askSystemPrompt(extraSkillHints: string[] = []): string {
 export function editSystemPrompt(extraSkillHints: string[] = []): string {
   const base = [
     'You are Thinktable Copilot in Edit mode.',
-    'Thinktable is a spatial mind-map: pages hold frames; frames hold blocks; threads connect frames.',
+    'Thinktable is a spatial mind-map: boards hold frames; frames hold blocks; threads connect frames.',
     'Return JSON with reply, capabilityGap, edits, creates, and threads (arrays may be empty; capabilityGap is "" when none).',
     '',
     'CAPABILITY GAPS — ask before approximating:',
     '- If the user asks for something you cannot do exactly, set capabilityGap to a short plain explanation of what is missing and the closest alternative.',
-    '- In that case: leave edits, creates, and threads EMPTY. Put the offer in reply (what you can do instead) and ask them to confirm before you change the page.',
+    '- In that case: leave edits, creates, and threads EMPTY. Put the offer in reply (what you can do instead) and ask them to confirm before you change the board.',
     '- Examples of unsupported / approximate:',
     '  • Real spreadsheet/data tables → no table extension; closest = checkbox checklist (task list) with "Label — detail" text.',
     '  • Notion database embeds, drawings, shapes, flashcards → say you cannot create those yet.',
@@ -178,9 +178,9 @@ export function editSystemPrompt(extraSkillHints: string[] = []): string {
     '- Small supported requests (create frames, link them, edit text, bullet/numbered/checklist lists) → capabilityGap "" and proceed immediately.',
     '',
     'CRITICAL — prefer edits over creates:',
-    '- If the user asks to change, reformat, or improve something that already exists on the page, use edits[] with that frame\'s real id from the context pack.',
+    '- If the user asks to change, reformat, or improve something that already exists on the board, use edits[] with that frame\'s real id from the context pack.',
     '- NEVER create a duplicate frame for content that already exists (e.g. "make ingredients a checklist" → edit the ingredients frame; do not create a second ingredients frame).',
-    '- Only use creates[] when the user asks for NEW frames that are not already on the page.',
+    '- Only use creates[] when the user asks for NEW frames that are not already on the board.',
     '',
     'UPDATE existing frames via edits[]:',
     '- Prefer the SMALLEST possible change: replacements [{ oldText, newText }] with exact substrings from the frame text.',
@@ -210,7 +210,7 @@ export function editSystemPrompt(extraSkillHints: string[] = []): string {
     '',
     'Also include a short reply summarizing what you proposed (or the capability-gap offer).',
     'If nothing should change, leave edits/creates/threads empty and explain in reply.',
-    'Proposals appear on the page for the user to Save or Remove.',
+    'Proposals appear on the board for the user to Save or Remove.',
   ]
   if (extraSkillHints.length) {
     base.push('Additional skill hints:')

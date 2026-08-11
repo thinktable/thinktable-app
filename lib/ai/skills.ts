@@ -12,7 +12,7 @@ export const AI_SKILLS: AiSkill[] = [
   {
     id: 'summarize',
     name: 'Summarize',
-    description: 'Concise summary of frames on this page',
+    description: 'Concise summary of frames on this board',
     systemHint:
       'The Summarize skill is attached. Prefer a concise summary of the current page frames; lead with the main points.',
     enabled: true,
@@ -22,15 +22,15 @@ export const AI_SKILLS: AiSkill[] = [
     name: 'Tasks',
     description: 'Track changes with a sidebar smart list',
     systemHint:
-      'The Tasks skill is attached. Extract and maintain a clear task checklist from the page and conversation; keep items actionable. Do not claim to have placed tasks on the page unless Edit mode creates frames.',
+      'The Tasks skill is attached. Extract and maintain a clear task checklist from the board and conversation; keep items actionable. Do not claim to have placed tasks on the board unless Edit mode creates frames.',
     enabled: true,
   },
   {
-    id: 'search-page',
-    name: 'Search page',
+    id: 'search-board',
+    name: 'Search board',
     description: 'What stands out across frames here',
     systemHint:
-      'The Search page skill is attached. Highlight what stands out across frames on this page; call out themes, gaps, and connections.',
+      'The Search board skill is attached. Highlight what stands out across frames on this board; call out themes, gaps, and connections.',
     enabled: true,
   },
   {

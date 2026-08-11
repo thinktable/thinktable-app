@@ -5,9 +5,9 @@ import type { SupabaseClient, User } from '@supabase/supabase-js' // Typed clien
 import { getSiteUrl } from '@/lib/notion/config' // Public app origin
 import { createAdminClient } from '@/lib/supabase/admin' // Service-role for token lookup
 import {
-  isPageAccessRole,
+  isBoardAccessRole,
   maxShareRole,
-  type PageAccessRole,
+  type BoardAccessRole,
   type ShareRole,
 } from '@/lib/share/roles' // Role helpers
 
@@ -16,33 +16,33 @@ const REDEEM_MAX_PER_USER = 30 // Max redeem attempts per user per window
 const REDEEM_MAX_PER_IP = 60 // Max redeem attempts per IP hash per window
 
 /** Ensure the signed-in user owns this Thinktable page (conversation). */
-export async function assertOwnsPage(
+export async function assertOwnsBoard(
   supabase: SupabaseClient, // User-scoped client (RLS)
-  pageId: string, // conversations.id
+  boardId: string, // conversations.id
   userId: string // auth.users.id
 ): Promise<boolean> {
   const { data, error } = await supabase
     .from('conversations') // Pages table
     .select('id') // Existence only
-    .eq('id', pageId) // Target page
+    .eq('id', boardId) // Target page
     .eq('user_id', userId) // Must be owner
     .maybeSingle() // Zero or one
   return Boolean(!error && data?.id) // Owned when row present
 }
 
 /** Resolve access role via SECURITY DEFINER RPC (owner | edit | comment | view | null). */
-export async function resolvePageAccessRole(
+export async function resolveBoardAccessRole(
   supabase: SupabaseClient, // User-scoped client
-  pageId: string // conversations.id
-): Promise<PageAccessRole | null> {
-  const { data, error } = await supabase.rpc('user_page_access_role', {
-    p_page_id: pageId, // Matches SQL arg name
+  boardId: string // conversations.id
+): Promise<BoardAccessRole | null> {
+  const { data, error } = await supabase.rpc('user_board_access_role', {
+    p_board_id: boardId, // Matches SQL arg name
   })
   if (error) {
-    console.error('user_page_access_role failed:', error) // Do not leak details to client
+    console.error('user_board_access_role failed:', error) // Do not leak details to client
     return null
   }
-  return isPageAccessRole(data) ? data : null // Narrow unknown RPC payload
+  return isBoardAccessRole(data) ? data : null // Narrow unknown RPC payload
 }
 
 /** Mint an opaque URL-safe share token (192-bit). */
@@ -61,9 +61,9 @@ export function isPlausibleShareToken(token: string): boolean {
 }
 
 /** Build the public share URL; role is bound server-side via token_hash → role. */
-export function buildShareUrl(pageId: string, token: string): string {
+export function buildShareUrl(boardId: string, token: string): string {
   const base = getSiteUrl().replace(/\/$/, '') // Strip trailing slash
-  return `${base}/board/${pageId}?s=${encodeURIComponent(token)}` // Opaque ?s=
+  return `${base}/board/${boardId}?s=${encodeURIComponent(token)}` // Opaque ?s=
 }
 
 /** Hash client IP for rate-limit keys (never store raw IP). */
@@ -88,7 +88,7 @@ type RedeemResult =
 
 /** Redeem a share link token into a bound people grant for the signed-in user. */
 export async function redeemShareToken(opts: {
-  pageId: string // Must match link.page_id
+  boardId: string // Must match link.board_id
   token: string // Raw ?s= value
   user: User // Authenticated redeemer
   request?: Request // Optional — for IP from route handlers
@@ -102,14 +102,14 @@ export async function redeemShareToken(opts: {
 
   // Rate limit by user
   const { count: userCount } = await admin
-    .from('page_share_redeem_attempts')
+    .from('board_share_redeem_attempts')
     .select('id', { count: 'exact', head: true })
     .eq('user_id', opts.user.id)
     .gte('created_at', since)
 
   if ((userCount ?? 0) >= REDEEM_MAX_PER_USER) {
-    await admin.from('page_share_redeem_attempts').insert({
-      page_id: opts.pageId,
+    await admin.from('board_share_redeem_attempts').insert({
+      board_id: opts.boardId,
       user_id: opts.user.id,
       ip_hash: ipHash,
       ok: false,
@@ -120,13 +120,13 @@ export async function redeemShareToken(opts: {
   // Rate limit by IP hash when present
   if (ipHash) {
     const { count: ipCount } = await admin
-      .from('page_share_redeem_attempts')
+      .from('board_share_redeem_attempts')
       .select('id', { count: 'exact', head: true })
       .eq('ip_hash', ipHash)
       .gte('created_at', since)
     if ((ipCount ?? 0) >= REDEEM_MAX_PER_IP) {
-      await admin.from('page_share_redeem_attempts').insert({
-        page_id: opts.pageId,
+      await admin.from('board_share_redeem_attempts').insert({
+        board_id: opts.boardId,
         user_id: opts.user.id,
         ip_hash: ipHash,
         ok: false,
@@ -137,8 +137,8 @@ export async function redeemShareToken(opts: {
 
   // Uniform invalid path for malformed tokens (no DB distinction)
   if (!isPlausibleShareToken(opts.token)) {
-    await admin.from('page_share_redeem_attempts').insert({
-      page_id: opts.pageId,
+    await admin.from('board_share_redeem_attempts').insert({
+      board_id: opts.boardId,
       user_id: opts.user.id,
       ip_hash: ipHash,
       ok: false,
@@ -148,14 +148,14 @@ export async function redeemShareToken(opts: {
 
   const tokenHash = hashShareToken(opts.token) // Lookup key
   const { data: link } = await admin
-    .from('page_share_links')
-    .select('id, page_id, role, token_hash, revoked_at')
+    .from('board_share_links')
+    .select('id, board_id, role, token_hash, revoked_at')
     .eq('token_hash', tokenHash)
     .is('revoked_at', null)
     .maybeSingle()
 
   // Constant-ish reject: require page match + valid hash compare
-  const pageMatches = Boolean(link && link.page_id === opts.pageId)
+  const pageMatches = Boolean(link && link.board_id === opts.boardId)
   const hashMatches =
     Boolean(link?.token_hash) &&
     timingSafeEqual(
@@ -164,8 +164,8 @@ export async function redeemShareToken(opts: {
     )
 
   if (!link || !pageMatches || !hashMatches) {
-    await admin.from('page_share_redeem_attempts').insert({
-      page_id: opts.pageId,
+    await admin.from('board_share_redeem_attempts').insert({
+      board_id: opts.boardId,
       user_id: opts.user.id,
       ip_hash: ipHash,
       ok: false,
@@ -180,22 +180,22 @@ export async function redeemShareToken(opts: {
   const { data: pageRow } = await admin
     .from('conversations')
     .select('user_id')
-    .eq('id', opts.pageId)
+    .eq('id', opts.boardId)
     .maybeSingle()
   const ownerId = pageRow?.user_id || opts.user.id // Fallback shouldn't happen for valid links
 
   // Upsert bound grant for this user (upgrade role if stronger)
   const { data: existing } = await admin
-    .from('page_share_people')
+    .from('board_share_people')
     .select('id, role')
-    .eq('page_id', opts.pageId)
+    .eq('board_id', opts.boardId)
     .eq('grantee_user_id', opts.user.id)
     .maybeSingle()
 
   if (existing?.id) {
     const nextRole = maxShareRole(existing.role as ShareRole, role) || role // Never downgrade
     await admin
-      .from('page_share_people')
+      .from('board_share_people')
       .update({
         role: nextRole,
         email: email || undefined, // Refresh email if known
@@ -204,24 +204,24 @@ export async function redeemShareToken(opts: {
   } else if (email) {
     // Merge with email-only invite if owner already added this address
     const { data: byEmail } = await admin
-      .from('page_share_people')
+      .from('board_share_people')
       .select('id, role')
-      .eq('page_id', opts.pageId)
+      .eq('board_id', opts.boardId)
       .ilike('email', email)
       .maybeSingle()
 
     if (byEmail?.id) {
       const nextRole = maxShareRole(byEmail.role as ShareRole, role) || role
       await admin
-        .from('page_share_people')
+        .from('board_share_people')
         .update({
           role: nextRole,
           grantee_user_id: opts.user.id, // Bind account
         })
         .eq('id', byEmail.id)
     } else {
-      await admin.from('page_share_people').insert({
-        page_id: opts.pageId,
+      await admin.from('board_share_people').insert({
+        board_id: opts.boardId,
         created_by: ownerId, // Page owner
         role,
         email,
@@ -230,8 +230,8 @@ export async function redeemShareToken(opts: {
       })
     }
   } else {
-    await admin.from('page_share_people').insert({
-      page_id: opts.pageId,
+    await admin.from('board_share_people').insert({
+      board_id: opts.boardId,
       created_by: ownerId,
       role,
       grantee_user_id: opts.user.id,
@@ -239,8 +239,8 @@ export async function redeemShareToken(opts: {
     })
   }
 
-  await admin.from('page_share_redeem_attempts').insert({
-    page_id: opts.pageId,
+  await admin.from('board_share_redeem_attempts').insert({
+    board_id: opts.boardId,
     user_id: opts.user.id,
     ip_hash: ipHash,
     ok: true,

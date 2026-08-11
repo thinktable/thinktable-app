@@ -1,6 +1,6 @@
 'use client'
 
-// Page preview via iframe. Nested RF inside a host node cannot pan/zoom (host `nopan`).
+// Board preview via iframe. Nested RF inside a host node cannot pan/zoom (host `nopan`).
 // Iframes inside a CSS-transformed RF node also get broken hit-testing — so the whole
 // preview shell (chrome + iframe) is portaled to document.body and screen-synced to
 // an in-item spacer. Keeping chrome+iframe in one fixed box stops the map from
@@ -79,7 +79,7 @@ export function NestedBoardPreview({
   const [loadedStyle, setLoadedStyle] = useState<'none' | 'dotted' | 'lined' | 'grid'>('dotted')
   const [navReady, setNavReady] = useState(false)
   const [mounted, setMounted] = useState(false)
-  const isFocused = previewFocus?.focusedPageId === conversationId
+  const isFocused = previewFocus?.focusedBoardId === conversationId
   const embedSrc = `/embed/${conversationId}`
 
   useEffect(() => {
@@ -218,7 +218,7 @@ export function NestedBoardPreview({
 
   useEffect(() => {
     return () => {
-      if (previewFocus?.focusedPageId === conversationId) {
+      if (previewFocus?.focusedBoardId === conversationId) {
         previewFocus.clearPreviewFocus()
       }
     }
@@ -328,13 +328,13 @@ export function NestedBoardPreview({
           title="Drag to move item · click to edit page style"
         >
           <span className="text-xs font-medium text-gray-700 dark:text-gray-200 truncate">
-            {title || 'Page'}
+            {title || 'Board'}
           </span>
           <div className="flex items-center gap-0.5 shrink-0">
             <button
               type="button"
               className="h-6 w-6 flex items-center justify-center rounded text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#2a2a2a]"
-              title="Open page map"
+              title="Open full board"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation()
@@ -363,7 +363,7 @@ export function NestedBoardPreview({
           <iframe
             ref={iframeRef}
             data-page-preview-frame={conversationId}
-            title={title || 'Page preview'}
+            title={title || 'Board preview'}
             src={embedSrc}
             className="absolute inset-0 w-full h-full border-0 bg-gray-50 dark:bg-[#0f0f0f]"
             onLoad={() => {
@@ -414,7 +414,7 @@ export function NestedBoardPreview({
 }
 
 /** Prefetch lean embed document so the first open isn’t a cold Next navigation. */
-export function prefetchPageEmbed(conversationId: string) {
+export function prefetchBoardEmbed(conversationId: string) {
   if (typeof window === 'undefined' || !conversationId) return
   const href = `/embed/${conversationId}`
   if (document.querySelector(`link[data-tt-embed-prefetch="${conversationId}"]`)) return

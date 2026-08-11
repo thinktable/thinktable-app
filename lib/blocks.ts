@@ -91,14 +91,21 @@ export function newBlockMetadata(extra: Record<string, unknown> = {}): Record<st
 export function isBlockContentEmpty(content: string | undefined | null): boolean {
   if (!content) return true
   if (content === '<p></p>' || content === '<p><br></p>') return true
-  // pageLink / databaseBlock store the label in attributes — stripping tags looks "empty" but isn't
-  if (/data-type=["'](?:pageLink|databaseBlock)["']/i.test(content)) return false
+  // boardLink / legacy pageLink / databaseBlock store the label in attrs — stripping tags looks empty
+  if (/data-type=["'](?:boardLink|pageLink|databaseBlock)["']/i.test(content)) return false
   return content.replace(/<[^>]*>/g, '').trim().length === 0
 }
 
-/** True when this block is the page’s own body on its map (not a nested page card). */
-export function isPageBodyMeta(meta?: Record<string, unknown> | null): boolean {
-  return meta?.isPageBody === true
+/** Dual-read linked child board id from message metadata (linkedBoardId || linkedPageId). */
+export function getLinkedBoardId(meta?: Record<string, unknown> | null): string | null {
+  if (typeof meta?.linkedBoardId === 'string') return meta.linkedBoardId // Prefer new key
+  if (typeof meta?.linkedPageId === 'string') return meta.linkedPageId // Legacy key
+  return null
+}
+
+/** True when this frame is the board’s own body on its map (not a nested board card). Dual-reads isPageBody. */
+export function isBoardBodyMeta(meta?: Record<string, unknown> | null): boolean {
+  return meta?.isBoardBody === true || meta?.isPageBody === true // New or legacy body flag
 }
 
 /** True when message metadata marks a visual block group container. */
@@ -107,77 +114,63 @@ export function isBlockGroupMeta(meta?: Record<string, unknown> | null): boolean
 }
 
 /**
- * Ensure a page with content has its body as a block on its own map.
- * Skips empty pages. Idempotent when a page-body block already exists.
+ * Ensure a board has its body frame when the caller supplies content.
+ * Never copies the parent-map source frame — sibling blocks / boardLinks stay on the parent.
+ * Idempotent when a board-body frame already exists. Empty / missing bodyHtml → leave board empty.
  */
-export async function ensurePageBodyBlock(
+export async function ensureBoardBodyBlock(
   supabase: SupabaseClient,
   opts: {
-    pageId: string // Conversation / page whose map we are on
+    boardId: string // Conversation / board whose map we are on
     userId: string // Owner for insert
+    /** Explicit HTML to seed; required to create a body (no auto-copy from source frame). */
+    bodyHtml?: string
   }
 ): Promise<{ created: boolean; messageId: string | null }> {
-  const { pageId, userId } = opts
+  const { boardId, userId, bodyHtml } = opts
 
-  // Already has a page-body block on this map → nothing to do
-  const { data: existingBody } = await supabase
+  // Already has a board-body frame on this map → nothing to do
+  // Dual-read: new isBoardBody or legacy isPageBody already on this map
+  const { data: existingBodies } = await supabase
     .from('messages')
-    .select('id')
-    .eq('conversation_id', pageId)
-    .contains('metadata', { isPageBody: true })
-    .limit(1)
-    .maybeSingle()
+    .select('id, metadata')
+    .eq('conversation_id', boardId)
+  const existingBody = (existingBodies || []).find((m) => {
+    const meta = (m.metadata as Record<string, unknown>) || {}
+    return meta.isBoardBody === true || meta.isPageBody === true
+  })
   if (existingBody?.id) {
     return { created: false, messageId: existingBody.id }
   }
 
-  // Load page metadata for reverse link + title
+  // No explicit seed → leave empty (do not pull sibling content from the linking frame)
+  if (isBlockContentEmpty(bodyHtml)) {
+    return { created: false, messageId: null }
+  }
+
+  // Load board metadata for title + legacy key cleanup
   const { data: page } = await supabase
     .from('conversations')
     .select('id, title, metadata, user_id')
-    .eq('id', pageId)
+    .eq('id', boardId)
     .maybeSingle()
   if (!page || page.user_id !== userId) {
     return { created: false, messageId: null }
   }
 
   const pageMeta = (page.metadata as Record<string, unknown>) || {}
-  // Prefer new key; migrate old sourceItemMessageId once when reading
-  const sourceBlockMessageId =
-    typeof pageMeta.sourceBlockMessageId === 'string'
-      ? pageMeta.sourceBlockMessageId
-      : typeof pageMeta.sourceItemMessageId === 'string'
-        ? pageMeta.sourceItemMessageId
-        : null
-
-  // Content lives on the parent-map source block until materialized onto this page
-  let bodyContent = ''
-  if (sourceBlockMessageId) {
-    const { data: source } = await supabase
-      .from('messages')
-      .select('content')
-      .eq('id', sourceBlockMessageId)
-      .maybeSingle()
-    bodyContent = source?.content || ''
-  }
-
-  // No content yet → leave the page map empty (do not spawn a blank body block)
-  if (isBlockContentEmpty(bodyContent)) {
-    return { created: false, messageId: null }
-  }
-
   const pageTitle = (page.title || '').trim() || 'Untitled'
   const { data: created, error } = await supabase
     .from('messages')
     .insert({
-      conversation_id: pageId,
+      conversation_id: boardId,
       user_id: userId,
       role: 'user',
-      content: bodyContent, // Page content as a block on this page’s map
+      content: bodyHtml, // Only what the caller seeded
       metadata: newBlockMetadata({
-        isPageBody: true, // This block IS the page’s body (not a nested page link)
-        blockTitle: pageTitle, // Match page name in the title chip
-        position: { x: 80, y: 80 }, // Default spawn on the page map
+        isBoardBody: true, // This frame IS the board’s body (not a nested board link)
+        blockTitle: pageTitle, // Match board name in the title chip
+        position: { x: 80, y: 80 }, // Default spawn on the board map
         fadeIn: true,
       }),
     })
@@ -185,15 +178,15 @@ export async function ensurePageBodyBlock(
     .single()
 
   if (error || !created) {
-    console.error('Failed to create page-body block:', error)
+    console.error('Failed to create board-body frame:', error)
     return { created: false, messageId: null }
   }
 
-  // Mark page contentful + remember the body message for sync; drop legacy source key
+  // Mark board contentful + remember the body message for sync; drop legacy source key
   const nextPageMeta: Record<string, unknown> = {
     ...pageMeta,
     hasContent: true,
-    pageBodyMessageId: created.id,
+    boardBodyMessageId: created.id,
   }
   if (typeof pageMeta.sourceItemMessageId === 'string' && !pageMeta.sourceBlockMessageId) {
     nextPageMeta.sourceBlockMessageId = pageMeta.sourceItemMessageId
@@ -202,7 +195,7 @@ export async function ensurePageBodyBlock(
   await supabase
     .from('conversations')
     .update({ metadata: nextPageMeta })
-    .eq('id', pageId)
+    .eq('id', boardId)
 
   return { created: true, messageId: created.id }
 }
@@ -222,11 +215,11 @@ export async function migrateMessagesToBlockFlag(
 }
 
 /** Push a title to both the block message and its linked page (keeps them in sync). */
-export async function syncBlockAndPageTitle(
+export async function syncBlockAndBoardTitle(
   supabase: SupabaseClient,
   opts: {
     messageId: string // Block message on the parent map
-    linkedPageId: string // Child page conversation
+    linkedBoardId: string // Child board conversation
     title: string // Shared title
     titleEdgeT?: number // Optional edge position to persist with the title
   }
@@ -238,7 +231,7 @@ export async function syncBlockAndPageTitle(
   const { error: pageError } = await supabase
     .from('conversations')
     .update({ title })
-    .eq('id', opts.linkedPageId)
+    .eq('id', opts.linkedBoardId)
   if (pageError) throw pageError
 
   // Merge block metadata so we do not wipe other fields
@@ -252,8 +245,8 @@ export async function syncBlockAndPageTitle(
   const patch: Record<string, unknown> = {
     ...migrated,
     blockTitle: title, // Mirror of conversations.title
-    linkedPageId: opts.linkedPageId, // Keep link explicit
-    isPage: true, // Titled block = page card on parent map
+    linkedBoardId: opts.linkedBoardId, // Keep link explicit
+    isBoard: true, // Titled block = page card on parent map
     isBlock: true, // Canonical block flag
   }
   if (typeof opts.titleEdgeT === 'number') patch.titleEdgeT = opts.titleEdgeT
@@ -266,7 +259,7 @@ export async function syncBlockAndPageTitle(
 }
 
 /** After a page is renamed in the menu, mirror the title onto its source block card. */
-export async function syncPageRenameToBlock(
+export async function syncBoardRenameToBlock(
   supabase: SupabaseClient,
   pageId: string,
   title: string
@@ -302,8 +295,8 @@ export async function syncPageRenameToBlock(
           metadata: {
             ...migrated,
             blockTitle: trimmed,
-            linkedPageId: pageId,
-            isPage: true,
+            linkedBoardId: pageId,
+            isBoard: true,
             isBlock: true,
           },
         })
@@ -321,13 +314,22 @@ export async function syncPageRenameToBlock(
     }
   }
 
-  // Fallback: find block by linkedPageId (covers older rows without sourceBlockMessageId)
-  const { data: messages } = await supabase
-    .from('messages')
-    .select('id, metadata, conversation_id')
-    .contains('metadata', { linkedPageId: pageId })
-
-  const match = (messages || [])[0]
+  // Fallback: find block by linkedBoardId / legacy linkedPageId
+  let match: { id: string; metadata: unknown; conversation_id: string } | undefined
+  {
+    const { data: messages } = await supabase
+      .from('messages')
+      .select('id, metadata, conversation_id')
+      .contains('metadata', { linkedBoardId: pageId })
+    match = (messages || [])[0]
+  }
+  if (!match) {
+    const { data: messages } = await supabase
+      .from('messages')
+      .select('id, metadata, conversation_id')
+      .contains('metadata', { linkedPageId: pageId })
+    match = (messages || [])[0]
+  }
   if (!match) return null
 
   const { meta: migrated } = migrateLegacyBlockFlags((match.metadata as Record<string, unknown>) || {})
@@ -337,8 +339,8 @@ export async function syncPageRenameToBlock(
       metadata: {
         ...migrated,
         blockTitle: trimmed,
-        linkedPageId: pageId,
-        isPage: true,
+        linkedBoardId: pageId,
+        isBoard: true,
         isBlock: true,
       },
     })
@@ -347,7 +349,7 @@ export async function syncPageRenameToBlock(
 }
 
 /** When a page is deleted from the menu, demote its block card (keep body, clear page link). */
-export async function demoteBlockForDeletedPage(
+export async function demoteBlockForDeletedBoard(
   supabase: SupabaseClient,
   pageId: string
 ): Promise<string | null> {
@@ -373,7 +375,9 @@ export async function demoteBlockForDeletedPage(
     const existing = { ...((row?.metadata as Record<string, unknown>) || {}) }
     delete existing.blockTitle // No longer a titled page card
     delete existing.itemTitle
+    delete existing.linkedBoardId
     delete existing.linkedPageId
+    delete existing.isBoard
     delete existing.isPage
     await supabase.from('messages').update({ metadata: existing }).eq('id', messageId)
     return conversationId
@@ -388,25 +392,35 @@ export async function demoteBlockForDeletedPage(
     if (row) return clearMeta(row.id, row.conversation_id as string)
   }
 
-  const { data: messages } = await supabase
-    .from('messages')
-    .select('id, conversation_id')
-    .contains('metadata', { linkedPageId: pageId })
-  const match = (messages || [])[0]
-  if (!match) return null
-  return clearMeta(match.id, match.conversation_id as string)
+  {
+    const { data: messages } = await supabase
+      .from('messages')
+      .select('id, conversation_id')
+      .contains('metadata', { linkedBoardId: pageId })
+    const match = (messages || [])[0]
+    if (match) return clearMeta(match.id, match.conversation_id as string)
+  }
+  {
+    const { data: messages } = await supabase
+      .from('messages')
+      .select('id, conversation_id')
+      .contains('metadata', { linkedPageId: pageId })
+    const match = (messages || [])[0]
+    if (match) return clearMeta(match.id, match.conversation_id as string)
+  }
+  return null
 }
 
 /** When a block card is deleted, delete its linked page so nav stays in sync. */
-export async function deleteLinkedPageForBlock(
+export async function deleteLinkedBoardForBlock(
   supabase: SupabaseClient,
   meta?: Record<string, unknown> | null
 ): Promise<string | null> {
-  const linkedPageId = typeof meta?.linkedPageId === 'string' ? meta.linkedPageId : null
-  if (!linkedPageId) return null
-  const { error } = await supabase.from('conversations').delete().eq('id', linkedPageId)
+  const linkedBoardId = getLinkedBoardId(meta)
+  if (!linkedBoardId) return null
+  const { error } = await supabase.from('conversations').delete().eq('id', linkedBoardId)
   if (error) throw error
-  return linkedPageId
+  return linkedBoardId
 }
 
 /** Padding inside a visual block group frame (px). */
@@ -428,7 +442,9 @@ export function duplicateBlockMetadata(
     position,
     fadeIn: true,
   }
-  delete next.linkedPageId // Duplicate is not the same page card
+  delete next.linkedBoardId // Duplicate is not the same board card
+  delete next.linkedPageId
+  delete next.isBoard
   delete next.isPage
   delete next.blockTitle // Untitled until user retitles
   delete next.blockGroupId // Outside any group until grouped again

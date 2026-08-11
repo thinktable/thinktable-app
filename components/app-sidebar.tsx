@@ -35,7 +35,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useSidebarContext } from './sidebar-context'
-import { demoteBlockForDeletedPage, syncPageRenameToBlock } from '@/lib/blocks' // Keep block cards ↔ pages in sync
+import { demoteBlockForDeletedBoard, syncBoardRenameToBlock } from '@/lib/blocks' // Keep block cards ↔ pages in sync
 import {
   DndContext,
   closestCenter,
@@ -120,7 +120,7 @@ function PageIconButton({
       queryClient.invalidateQueries({ queryKey: ['path-board-menu'] })
       queryClient.invalidateQueries({ queryKey: ['edit-panel-title'] })
     } catch (err) {
-      console.error('Failed to update page icon:', err)
+      console.error('Failed to update board icon:', err)
     }
     setOpen(false)
   }
@@ -144,7 +144,7 @@ function PageIconButton({
           type="button"
           className="h-5 w-5 flex-shrink-0 flex items-center justify-center rounded hover:bg-gray-200/70 dark:hover:bg-gray-700/70"
           title="Change icon"
-          aria-label="Change page icon"
+          aria-label="Change board icon"
           onClick={(e) => {
             e.preventDefault()
             e.stopPropagation()
@@ -176,7 +176,7 @@ function PageIconButton({
             className="text-xs cursor-pointer"
             onClick={() => saveIcon(null)}
           >
-            Default page icon
+            Default board icon
           </DropdownMenuItem>
         </div>
       </DropdownMenuContent>
@@ -333,7 +333,7 @@ function SortableBoardItem({
               onToggleExpand?.(conversation.id)
             }}
             onPointerDown={(e) => e.stopPropagation()} // Don't start drag from chevron
-            aria-label={isExpanded ? 'Collapse sub-pages' : 'Expand sub-pages'}
+            aria-label={isExpanded ? 'Collapse sub-boards' : 'Expand sub-boards'}
           >
             <ChevronRightIcon className={cn('h-3.5 w-3.5 transition-transform', isExpanded && 'rotate-90')} />
           </button>
@@ -792,7 +792,7 @@ function BoardsSectionHeader({
       className="flex items-center gap-1 pl-1 py-2 text-xs font-medium text-gray-500 hover:text-gray-700 cursor-pointer group transition-colors rounded-lg min-h-[32px]"
       onClick={onToggleExpand}
     >
-      <span>Pages</span>
+      <span>Boards</span>
       <ChevronDown
         className={cn(
           'h-3 w-3 opacity-0 group-hover:opacity-100 transition-all duration-200',
@@ -1337,7 +1337,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
 
         if (error) {
           console.error('Error nesting board:', error)
-          alert('Failed to nest page. Please try again.')
+          alert('Failed to nest board. Please try again.')
         } else {
           queryClient.setQueryData(['conversations'], (oldData: Conversation[] | undefined) => {
             if (!oldData) return oldData
@@ -1353,7 +1353,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
         }
       } catch (error: any) {
         console.error('Error nesting board:', error)
-        alert('Failed to nest page. Please try again.')
+        alert('Failed to nest board. Please try again.')
       }
       return
     }
@@ -2035,7 +2035,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
 
     try {
       // Before delete: demote any parent-map item that linked to this page (keeps card body, clears title)
-      const parentMapId = await demoteBlockForDeletedPage(supabase, conversationToDelete.id)
+      const parentMapId = await demoteBlockForDeletedBoard(supabase, conversationToDelete.id)
       if (parentMapId) {
         await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', parentMapId] })
       }
@@ -2113,7 +2113,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
       }
 
       // Mirror rename onto the parent-map item card when this page was promoted from an item
-      const parentMapId = await syncPageRenameToBlock(supabase, conversationToRename.id, nextTitle)
+      const parentMapId = await syncBoardRenameToBlock(supabase, conversationToRename.id, nextTitle)
       if (parentMapId) {
         await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', parentMapId] })
       }
@@ -2301,7 +2301,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                     }}
                   >
                     <SquarePen className="h-4 w-4 mr-2" />
-                    New page
+                    New board
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onClick={() => {
@@ -2337,7 +2337,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                   }}
                 >
                   <SquarePen className="h-4 w-4 mr-2" />
-                  New page
+                  New board
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => {
@@ -2498,7 +2498,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                     </SortableContext>
                   ) : (
                     <div className="px-4 py-8 text-center text-sm text-gray-500">
-                      {searchQuery ? 'No pages found' : 'No pages yet. Start a chat!'}
+                      {searchQuery ? 'No boards found' : 'No boards yet. Start a chat!'}
                     </div>
                   )}
                 </BoardsListWrapper>
@@ -2873,7 +2873,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                 This will delete <span className="font-semibold text-gray-900">{projectToDelete?.name}</span>.
               </DialogDescription>
               <DialogDescription className="text-sm text-gray-500 pt-1">
-                The project will be permanently deleted. Pages in this project will not be deleted.
+                The project will be permanently deleted. Boards in this project will not be deleted.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter className="flex-row justify-end gap-2 pt-4">

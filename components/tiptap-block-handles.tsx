@@ -18,7 +18,7 @@ import {
   type BlockActionId,
   type BlockActionPayload,
   type BlockTypeId,
-  type PageInTarget,
+  type BoardInTarget,
 } from '@/components/block-actions-menu'
 import {
   deleteEditorBlockRange,
@@ -42,11 +42,11 @@ import {
 import { setAiBlockSelection } from '@/lib/ai/selection-bridge' // Live block pills in AI composer (⋮⋮ only)
 import { htmlToPlain } from '@/lib/ai/context-pack' // Block hover preview from HTML
 import {
-  createChildPageForBlock,
-  insertPageTitleBlock,
-  replaceBlockWithPageLink,
+  createChildBoardForBlock,
+  insertBoardTitleBlock,
+  replaceBlockWithBoardLink,
   titleForBlock,
-} from '@/lib/tiptap/page-blocks' // Block → linked page (inline pageLink node)
+} from '@/lib/tiptap/board-blocks' // Block → linked page (inline boardLink node)
 
 type HandleLayout = {
   top: number // CSS px relative to host gutter container
@@ -62,8 +62,8 @@ type TipTapBlockHandlesProps = {
   isPanelSelected?: boolean // Host frame must be selected before ⋮⋮ can drag a block
   hostNodeId?: string // Host **frame** RF id — Page promote / extract target
   conversationId?: string // Page id — extract a block onto the page as its own frame
-  pageInTargets?: PageInTarget[]
-  onPageTurnInto?: (blockType: 'page' | 'pageIn', pageInParentId?: string | null) => void
+  boardInTargets?: BoardInTarget[]
+  onPageTurnInto?: (blockType: 'board' | 'boardIn', boardInParentId?: string | null) => void
 }
 
 type DropLine = { top: number; left: number; width: number } // Viewport dashed insert marker
@@ -149,7 +149,7 @@ function layoutForBlock(
       ? ((el.querySelector?.('.tt-database-block-row') as HTMLElement | null) ||
           (el.querySelector?.('.tt-database-block-label') as HTMLElement | null))
       : null
-    const pageLabel = el?.querySelector?.('.tt-page-link-label') as HTMLElement | null
+    const pageLabel = el?.querySelector?.('.tt-board-link-label') as HTMLElement | null
     const textEl = dbHeader || pageLabel || el
 
     // Always pin to first-line mid via screen→local on the layout root (rotation-safe)
@@ -210,7 +210,7 @@ export function TipTapBlockHandles({
   isPanelSelected = false,
   hostNodeId,
   conversationId,
-  pageInTargets = [],
+  boardInTargets = [],
   onPageTurnInto,
 }: TipTapBlockHandlesProps) {
   const { screenToFlowPosition } = useReactFlow() // Drop-on-page → flow coords for a new frame
@@ -720,9 +720,9 @@ export function TipTapBlockHandles({
   ])
 
   // Single block → linked page: create a child page seeded with this block's content,
-  // then replace the block with an inline pageLink node (icon LEFT of the link text).
-  const turnBlockIntoPage = useCallback(
-    async (block: EditorBlockRef, blockType: 'page' | 'pageIn', pageInParentId?: string | null) => {
+  // then replace the block with an inline boardLink node (icon LEFT of the link text).
+  const turnBlockIntoBoard = useCallback(
+    async (block: EditorBlockRef, blockType: 'board' | 'boardIn', boardInParentId?: string | null) => {
       if (!editor || editor.isDestroyed || !conversationId) return
       try {
         const supabase = createClient()
@@ -733,16 +733,16 @@ export function TipTapBlockHandles({
         const bodyHtml = htmlForEditorRange(editor, block.from, block.to) // Seed page body
         const title = titleForBlock(editor, block) // First-line label
         const parentId =
-          blockType === 'pageIn' && pageInParentId ? pageInParentId : conversationId // Nest target
-        const pageId = await createChildPageForBlock(supabase, {
+          blockType === 'boardIn' && boardInParentId ? boardInParentId : conversationId // Nest target
+        const boardId = await createChildBoardForBlock(supabase, {
           userId: user.id,
           parentId,
           sourceMessageId: hostNodeId ?? '',
           title,
           bodyHtml,
         })
-        if (!pageId) return
-        replaceBlockWithPageLink(editor, block, { pageId, title, icon: null, variant: 'inline' })
+        if (!boardId) return
+        replaceBlockWithBoardLink(editor, block, { boardId, title, icon: null, variant: 'inline' })
         await queryClient.invalidateQueries({ queryKey: ['conversations'] })
         await queryClient.refetchQueries({ queryKey: ['conversations'] })
       } catch (err) {
@@ -752,9 +752,9 @@ export function TipTapBlockHandles({
     [editor, conversationId, hostNodeId, queryClient]
   )
 
-  // Multiple selected blocks → one linked page (snapshot: blocks stay, a title pageLink is added on top).
-  const turnSelectionIntoPage = useCallback(
-    async (blocks: EditorBlockRef[], blockType: 'page' | 'pageIn', pageInParentId?: string | null) => {
+  // Multiple selected blocks → one linked page (snapshot: blocks stay, a title boardLink is added on top).
+  const turnSelectionIntoBoard = useCallback(
+    async (blocks: EditorBlockRef[], blockType: 'board' | 'boardIn', boardInParentId?: string | null) => {
       if (!editor || editor.isDestroyed || !conversationId || blocks.length === 0) return
       try {
         const supabase = createClient()
@@ -765,16 +765,16 @@ export function TipTapBlockHandles({
         const ordered = [...blocks].sort((a, b) => a.from - b.from) // Document order
         const bodyHtml = ordered.map((b) => htmlForEditorRange(editor, b.from, b.to)).join('') // Combined body
         const title = titleForBlock(editor, ordered[0]) // Seed from first block
-        const parentId = blockType === 'pageIn' && pageInParentId ? pageInParentId : conversationId
-        const pageId = await createChildPageForBlock(supabase, {
+        const parentId = blockType === 'boardIn' && boardInParentId ? boardInParentId : conversationId
+        const boardId = await createChildBoardForBlock(supabase, {
           userId: user.id,
           parentId,
           sourceMessageId: hostNodeId ?? '',
           title,
           bodyHtml,
         })
-        if (!pageId) return
-        insertPageTitleBlock(editor, { pageId, title, icon: null, variant: 'title' }) // Title link on top of frame
+        if (!boardId) return
+        insertBoardTitleBlock(editor, { boardId, title, icon: null, variant: 'title' }) // Title link on top of frame
         await queryClient.invalidateQueries({ queryKey: ['conversations'] })
         await queryClient.refetchQueries({ queryKey: ['conversations'] })
       } catch (err) {
@@ -795,9 +795,9 @@ export function TipTapBlockHandles({
         : [menu.block]
 
       if (action === 'turnInto' && payload?.blockType) {
-        if (payload.blockType === 'page' || payload.blockType === 'pageIn') {
-          if (isMulti) void turnSelectionIntoPage(sel, payload.blockType, payload.pageInParentId)
-          else void turnBlockIntoPage(menu.block, payload.blockType, payload.pageInParentId)
+        if (payload.blockType === 'board' || payload.blockType === 'boardIn') {
+          if (isMulti) void turnSelectionIntoBoard(sel, payload.blockType, payload.boardInParentId)
+          else void turnBlockIntoBoard(menu.block, payload.blockType, payload.boardInParentId)
           clearBlockSelection()
           return
         }
@@ -826,7 +826,7 @@ export function TipTapBlockHandles({
       }
       clearBlockSelection()
     },
-    [editor, menu, clearBlockSelection, turnBlockIntoPage, turnSelectionIntoPage, hostNodeId]
+    [editor, menu, clearBlockSelection, turnBlockIntoBoard, turnSelectionIntoBoard, hostNodeId]
   )
 
   // Grip click: plain = arm block + actions menu; Shift/⌘ = multi-select.
@@ -1082,7 +1082,7 @@ export function TipTapBlockHandles({
             positionMode="fixed"
             openLeft={menu.openLeft}
             currentBlockType={menu.blockType}
-            pageInTargets={pageInTargets}
+            boardInTargets={boardInTargets}
             showAddChild={false}
             selectedCount={menuCount}
             canUngroup={false}

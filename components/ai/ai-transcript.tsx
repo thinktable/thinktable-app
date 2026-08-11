@@ -1,6 +1,6 @@
 'use client'
 
-// Transcript of AI turns — each turn drags onto the page as a frame (contents = TipTap blocks)
+// Transcript of AI turns — each turn drags onto the board as a frame (contents = TipTap blocks)
 import { useState } from 'react' // Local edit state
 import type { AiMessage, AiChatBlockDragPayload } from '@/lib/ai/types' // Types
 import { AI_CHAT_BLOCK_MIME } from '@/lib/ai/types' // MIME
@@ -82,7 +82,7 @@ export function AiTranscript({
                 draggable
                 onDragStart={(e) => onDragStart(e, m)}
                 className="mt-0.5 flex-shrink-0 w-5 h-5 flex items-center justify-center rounded text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 cursor-grab active:cursor-grabbing"
-                title="Drag onto page as a frame, or onto the input as context"
+                title="Drag onto board as a frame, or onto the input as context"
                 aria-label="Drag chat turn as frame"
               >
                 <GripVertical className="h-3.5 w-3.5" />

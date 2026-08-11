@@ -10,9 +10,9 @@ import { EditorProvider } from '@/components/editor-context'
 import { ReactFlowContextProvider } from '@/components/react-flow-context'
 import { PreviewFocusProvider } from '@/lib/preview-focus-context'
 import { AiEditSessionProvider } from '@/lib/ai/edit-session'
-import { PageAccessProvider } from '@/lib/share/page-access-context'
-import { redeemShareToken, resolvePageAccessRole } from '@/lib/share/server'
-import { canEditPage } from '@/lib/share/roles'
+import { BoardAccessProvider } from '@/lib/share/board-access-context'
+import { redeemShareToken, resolveBoardAccessRole } from '@/lib/share/server'
+import { canEditBoard } from '@/lib/share/roles'
 
 export default async function ConversationPage({
   params,
@@ -43,7 +43,7 @@ export default async function ConversationPage({
       hdrs.get('x-real-ip') ||
       null
     const result = await redeemShareToken({
-      pageId: conversationId,
+      boardId: conversationId,
       token: rawToken,
       user,
       ip,
@@ -55,7 +55,7 @@ export default async function ConversationPage({
     redirect('/board') // Uniform failure — do not reveal why
   }
 
-  const role = await resolvePageAccessRole(supabase, conversationId)
+  const role = await resolveBoardAccessRole(supabase, conversationId)
   if (!role) {
     redirect('/board') // No access
   }
@@ -71,24 +71,24 @@ export default async function ConversationPage({
     redirect('/board')
   }
 
-  const editable = canEditPage(role) // edit | owner
+  const editable = canEditBoard(role) // edit | owner
 
   return (
     <EditorProvider>
       <ReactFlowContextProvider conversationId={conversationId}>
         <PreviewFocusProvider>
           <AiEditSessionProvider>
-            <PageAccessProvider role={role} pageId={conversationId}>
+            <BoardAccessProvider role={role} boardId={conversationId}>
               <div className="h-full flex">
                 <div className="flex-1 relative min-w-0 h-full">
                   <BoardFlow conversationId={conversationId} />
-                  {/* Top bar stays for all roles; write tools gate via PageAccess */}
+                  {/* Top bar stays for all roles; write tools gate via BoardAccess */}
                   <InputAreaWithStickyPrompt conversationId={conversationId} />
                 </div>
                 {/* AI sidebar is an edit surface — hide for view/comment */}
                 {editable ? <ChatSidebar conversationId={conversationId} /> : null}
               </div>
-            </PageAccessProvider>
+            </BoardAccessProvider>
           </AiEditSessionProvider>
         </PreviewFocusProvider>
       </ReactFlowContextProvider>

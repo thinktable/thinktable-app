@@ -16,7 +16,7 @@ export const AI_AGENTS: AiAgent[] = [ // Seed agents
     name: 'Thinktable Copilot', // Brand
     defaultMode: 'ask', // Sidebar Ask
     skillIds: ['summarize'], // Light default
-    description: 'General assistant for this page — answers in the sidebar.', // Copy
+    description: 'General assistant for this board — answers in the sidebar.', // Copy
     enabled: true,
   },
   {

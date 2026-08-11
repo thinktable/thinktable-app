@@ -58,8 +58,8 @@ export type BlockTypeId =
   | 'heading2'
   | 'heading3'
   | 'heading4'
-  | 'page'
-  | 'pageIn'
+  | 'board'
+  | 'boardIn'
   | 'bulletedList'
   | 'numberedList'
   | 'todoList'
@@ -99,11 +99,11 @@ export type BlockActionId =
 
 export type BlockActionPayload = {
   blockType?: BlockTypeId // Present when action === 'turnInto'
-  pageInParentId?: string | null // Nest target for Page in
+  boardInParentId?: string | null // Nest target for Page in
   frameShape?: FrameShapeChoice // Present when action === 'setFrameShape'
 }
 
-export type PageInTarget = {
+export type BoardInTarget = {
   id: string // Conversation id to nest under
   title: string // Display label
 }
@@ -117,7 +117,7 @@ export type BlockActionsMenuProps = {
   canUngroup?: boolean // True when focus frame is inside the legacy dashed wrapper
   showAddChild?: boolean // Study-set may omit Add child
   currentBlockType?: BlockTypeId // Checkmark in Turn into
-  pageInTargets?: PageInTarget[] // Pages available for "Page in"
+  boardInTargets?: BoardInTarget[] // Boards available for "Board in"
   /** Current frame silhouette (frame menu only). */
   currentFrameShape?: FrameShapeChoice
   /** Show Shape submenu — frame-level menu only (not TipTap ⋮⋮ block menu). */
@@ -146,7 +146,7 @@ type RowDef =
       shortcut?: string
       icon: React.ReactNode
       danger?: boolean
-      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'pageIn' | 'frameShape'
+      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape'
       hidden?: boolean
       beta?: boolean
     }
@@ -160,8 +160,8 @@ export function blockTypeLabel(type: BlockTypeId): string {
     heading2: 'Heading 2',
     heading3: 'Heading 3',
     heading4: 'Heading 4',
-    page: 'Page',
-    pageIn: 'Page in',
+    board: 'Board',
+    boardIn: 'Board in',
     bulletedList: 'Bulleted list',
     numberedList: 'Numbered list',
     todoList: 'To-do list',
@@ -189,8 +189,8 @@ const TURN_INTO_OPTIONS: TurnIntoDef[] = [
   { id: 'heading2', label: 'Heading 2', icon: <Heading2 className="h-4 w-4" /> },
   { id: 'heading3', label: 'Heading 3', icon: <Heading3 className="h-4 w-4" /> },
   { id: 'heading4', label: 'Heading 4', icon: <Heading4 className="h-4 w-4" /> },
-  { id: 'page', label: 'Page', icon: <FileText className="h-4 w-4" /> },
-  { id: 'pageIn', label: 'Page in', icon: <FolderInput className="h-4 w-4" /> },
+  { id: 'board', label: 'Board', icon: <FileText className="h-4 w-4" /> },
+  { id: 'boardIn', label: 'Board in', icon: <FolderInput className="h-4 w-4" /> },
   { id: 'bulletedList', label: 'Bulleted list', icon: <List className="h-4 w-4" /> },
   { id: 'numberedList', label: 'Numbered list', icon: <ListOrdered className="h-4 w-4" /> },
   { id: 'todoList', label: 'To-do list', icon: <ListChecks className="h-4 w-4" /> },
@@ -219,7 +219,7 @@ export function BlockActionsMenu({
   canUngroup = false,
   showAddChild = true,
   currentBlockType = 'text',
-  pageInTargets = [],
+  boardInTargets = [],
   currentFrameShape = FRAME_SHAPE_NONE,
   showFrameShape = false,
   lastEditedLabel,
@@ -230,7 +230,7 @@ export function BlockActionsMenu({
   openLeft = false,
 }: BlockActionsMenuProps) {
   const [query, setQuery] = useState('') // Filter actions + turn-into
-  const [openSubmenu, setOpenSubmenu] = useState<'turnInto' | 'pageIn' | 'frameShape' | null>(null) // Flyout
+  const [openSubmenu, setOpenSubmenu] = useState<'turnInto' | 'boardIn' | 'frameShape' | null>(null) // Flyout
   const inputRef = useRef<HTMLInputElement>(null) // Autofocus search
   const rootRef = useRef<HTMLDivElement>(null) // Position flyout
 
@@ -542,11 +542,11 @@ export function BlockActionsMenu({
       </div>
 
       {/* Turn into flyout — full functional type list */}
-      {(openSubmenu === 'turnInto' || openSubmenu === 'pageIn') && (
+      {(openSubmenu === 'turnInto' || openSubmenu === 'boardIn') && (
         <div
           className="absolute left-full top-0 ml-1 z-[1001] min-w-[220px] max-h-[420px] overflow-y-auto bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
           onMouseEnter={() => {
-            if (openSubmenu !== 'pageIn') setOpenSubmenu('turnInto')
+            if (openSubmenu !== 'boardIn') setOpenSubmenu('turnInto')
           }}
         >
           {filteredTurnInto.map((t) => (
@@ -555,14 +555,14 @@ export function BlockActionsMenu({
               variant="ghost"
               size="sm"
               onMouseEnter={() => {
-                if (t.id === 'pageIn') setOpenSubmenu('pageIn')
-                else if (openSubmenu === 'pageIn') setOpenSubmenu('turnInto')
+                if (t.id === 'boardIn') setOpenSubmenu('boardIn')
+                else if (openSubmenu === 'boardIn') setOpenSubmenu('turnInto')
               }}
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
-                if (t.id === 'pageIn') {
-                  setOpenSubmenu('pageIn')
+                if (t.id === 'boardIn') {
+                  setOpenSubmenu('boardIn')
                   return
                 }
                 onAction('turnInto', { blockType: t.id })
@@ -571,13 +571,13 @@ export function BlockActionsMenu({
               className={cn(
                 'justify-start text-sm h-8 px-2 font-normal w-full',
                 currentBlockType === t.id && 'bg-blue-50 dark:bg-blue-950/40',
-                t.id === 'pageIn' && openSubmenu === 'pageIn' && 'bg-gray-100 dark:bg-[#2a2a2a]'
+                t.id === 'boardIn' && openSubmenu === 'boardIn' && 'bg-gray-100 dark:bg-[#2a2a2a]'
               )}
             >
               <span className="mr-2 text-gray-500 dark:text-gray-400">{t.icon}</span>
               <span className="flex-1 text-left">{t.label}</span>
-              {t.id === 'pageIn' && <ChevronRight className="h-3.5 w-3.5 text-gray-400" />}
-              {currentBlockType === t.id && t.id !== 'pageIn' && (
+              {t.id === 'boardIn' && <ChevronRight className="h-3.5 w-3.5 text-gray-400" />}
+              {currentBlockType === t.id && t.id !== 'boardIn' && (
                 <Check className="h-3.5 w-3.5 text-gray-500" />
               )}
             </Button>
@@ -586,13 +586,13 @@ export function BlockActionsMenu({
       )}
 
       {/* Page in — pick parent page to nest under */}
-      {openSubmenu === 'pageIn' && (
+      {openSubmenu === 'boardIn' && (
         <div
           className="absolute left-full top-8 ml-1 z-[1002] min-w-[200px] max-h-[280px] overflow-y-auto bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
-          onMouseEnter={() => setOpenSubmenu('pageIn')}
+          onMouseEnter={() => setOpenSubmenu('boardIn')}
         >
-          <div className="px-2 py-1.5 text-[11px] text-gray-400">Nest page under…</div>
-          {(pageInTargets.length > 0 ? pageInTargets : [{ id: '', title: 'Current page' }]).map(
+          <div className="px-2 py-1.5 text-[11px] text-gray-400">Nest board under…</div>
+          {(boardInTargets.length > 0 ? boardInTargets : [{ id: '', title: 'Current board' }]).map(
             (target) => (
               <Button
                 key={target.id || 'current'}
@@ -602,8 +602,8 @@ export function BlockActionsMenu({
                   e.preventDefault()
                   e.stopPropagation()
                   onAction('turnInto', {
-                    blockType: 'pageIn',
-                    pageInParentId: target.id || null, // null → current conversation in applyTurnInto
+                    blockType: 'boardIn',
+                    boardInParentId: target.id || null, // null → current conversation in applyTurnInto
                   })
                   onClose()
                 }}

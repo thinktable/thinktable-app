@@ -3,16 +3,16 @@
 import { NextResponse } from 'next/server' // JSON responses
 import { createClient } from '@/lib/supabase/server' // Session + RLS
 import { isShareRole, type ShareRole } from '@/lib/share/roles' // Role guard
-import { assertOwnsPage, findUserIdByEmail } from '@/lib/share/server' // Ownership + bind
+import { assertOwnsBoard, findUserIdByEmail } from '@/lib/share/server' // Ownership + bind
 
-type RouteContext = { params: Promise<{ pageId: string }> } // Next.js dynamic params
+type RouteContext = { params: Promise<{ boardId: string }> } // Next.js dynamic params
 
 const PERSON_SELECT =
   'id, role, email, notion_user_id, display_name, avatar_url, grantee_user_id, created_at' // Shared select list
 
 export async function GET(_request: Request, context: RouteContext) {
   try {
-    const { pageId } = await context.params // Target page
+    const { boardId } = await context.params // Target page
     const supabase = await createClient() // User session
     const {
       data: { user },
@@ -23,7 +23,7 @@ export async function GET(_request: Request, context: RouteContext) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const owns = await assertOwnsPage(supabase, pageId, user.id) // Owner-only share UI
+    const owns = await assertOwnsBoard(supabase, boardId, user.id) // Owner-only share UI
     if (!owns) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 }) // No leak
     }
@@ -31,14 +31,14 @@ export async function GET(_request: Request, context: RouteContext) {
     const [{ data: people, error: peopleError }, { data: links, error: linksError }] =
       await Promise.all([
         supabase
-          .from('page_share_people') // Invited people
+          .from('board_share_people') // Invited people
           .select(PERSON_SELECT)
-          .eq('page_id', pageId)
+          .eq('board_id', boardId)
           .order('created_at', { ascending: true }),
         supabase
-          .from('page_share_links') // Active role links (no secrets)
+          .from('board_share_links') // Active role links (no secrets)
           .select('id, role, created_at')
-          .eq('page_id', pageId)
+          .eq('board_id', boardId)
           .is('revoked_at', null)
           .order('created_at', { ascending: false }),
       ])
@@ -50,7 +50,7 @@ export async function GET(_request: Request, context: RouteContext) {
 
     return NextResponse.json({
       people: people || [], // Grants
-      links: (links || []).map((row) => ({
+      links: (links || []).map((row: { id: string; role: string; created_at: string }) => ({
         id: row.id, // Link row id
         role: row.role as ShareRole, // Attached permission
         createdAt: row.created_at, // Mint time — URLs never re-exposed
@@ -64,7 +64,7 @@ export async function GET(_request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    const { pageId } = await context.params // Target page
+    const { boardId } = await context.params // Target page
     const supabase = await createClient() // User session
     const {
       data: { user },
@@ -75,7 +75,7 @@ export async function POST(request: Request, context: RouteContext) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const owns = await assertOwnsPage(supabase, pageId, user.id) // Owner-only invites
+    const owns = await assertOwnsBoard(supabase, boardId, user.id) // Owner-only invites
     if (!owns) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
@@ -119,27 +119,27 @@ export async function POST(request: Request, context: RouteContext) {
     let existingId: string | null = null
     if (email) {
       const { data } = await supabase
-        .from('page_share_people')
+        .from('board_share_people')
         .select('id')
-        .eq('page_id', pageId)
+        .eq('board_id', boardId)
         .ilike('email', email)
         .maybeSingle()
       existingId = data?.id ?? null
     }
     if (!existingId && notionUserId) {
       const { data } = await supabase
-        .from('page_share_people')
+        .from('board_share_people')
         .select('id')
-        .eq('page_id', pageId)
+        .eq('board_id', boardId)
         .eq('notion_user_id', notionUserId)
         .maybeSingle()
       existingId = data?.id ?? null
     }
     if (!existingId && granteeUserId) {
       const { data } = await supabase
-        .from('page_share_people')
+        .from('board_share_people')
         .select('id')
-        .eq('page_id', pageId)
+        .eq('board_id', boardId)
         .eq('grantee_user_id', granteeUserId)
         .maybeSingle()
       existingId = data?.id ?? null
@@ -147,7 +147,7 @@ export async function POST(request: Request, context: RouteContext) {
 
     if (existingId) {
       const { data: updated, error: updErr } = await supabase
-        .from('page_share_people')
+        .from('board_share_people')
         .update({
           role: body.role,
           email,
@@ -167,9 +167,9 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const { data: inserted, error: insErr } = await supabase
-      .from('page_share_people')
+      .from('board_share_people')
       .insert({
-        page_id: pageId,
+        board_id: boardId,
         created_by: user.id,
         role: body.role,
         email,
@@ -195,7 +195,7 @@ export async function POST(request: Request, context: RouteContext) {
 
 export async function PATCH(request: Request, context: RouteContext) {
   try {
-    const { pageId } = await context.params
+    const { boardId } = await context.params
     const supabase = await createClient()
     const {
       data: { user },
@@ -206,7 +206,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const owns = await assertOwnsPage(supabase, pageId, user.id)
+    const owns = await assertOwnsBoard(supabase, boardId, user.id)
     if (!owns) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
@@ -217,10 +217,10 @@ export async function PATCH(request: Request, context: RouteContext) {
     }
 
     const { data, error } = await supabase
-      .from('page_share_people')
+      .from('board_share_people')
       .update({ role: body.role })
       .eq('id', body.personId)
-      .eq('page_id', pageId)
+      .eq('board_id', boardId)
       .select(PERSON_SELECT)
       .single()
 
@@ -238,7 +238,7 @@ export async function PATCH(request: Request, context: RouteContext) {
 
 export async function DELETE(request: Request, context: RouteContext) {
   try {
-    const { pageId } = await context.params
+    const { boardId } = await context.params
     const supabase = await createClient()
     const {
       data: { user },
@@ -249,7 +249,7 @@ export async function DELETE(request: Request, context: RouteContext) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const owns = await assertOwnsPage(supabase, pageId, user.id)
+    const owns = await assertOwnsBoard(supabase, boardId, user.id)
     if (!owns) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
@@ -260,9 +260,9 @@ export async function DELETE(request: Request, context: RouteContext) {
 
     if (revokeLinks) {
       const { error } = await supabase
-        .from('page_share_links')
+        .from('board_share_links')
         .update({ revoked_at: new Date().toISOString() })
-        .eq('page_id', pageId)
+        .eq('board_id', boardId)
         .is('revoked_at', null)
       if (error) {
         console.error('Share links revoke failed:', error)
@@ -276,10 +276,10 @@ export async function DELETE(request: Request, context: RouteContext) {
     }
 
     const { error } = await supabase
-      .from('page_share_people')
+      .from('board_share_people')
       .delete()
       .eq('id', personId)
-      .eq('page_id', pageId)
+      .eq('board_id', boardId)
 
     if (error) {
       console.error('Share people delete failed:', error)

@@ -35,7 +35,7 @@ import {
   getAiLiveContextPills,
   getAiSelectedFrameIds,
   getAiViewportCenter,
-  setAiPageContext,
+  setAiBoardContext,
   subscribeAiSelection,
   type AiLiveContextPill,
 } from '@/lib/ai/selection-bridge'
@@ -52,7 +52,7 @@ const MENU_SKILLS: Array<{
   {
     id: 'summarize',
     name: 'Summarize',
-    description: 'Concise summary of frames on this page',
+    description: 'Concise summary of frames on this board',
     icon: Sparkles,
   },
   {
@@ -62,8 +62,8 @@ const MENU_SKILLS: Array<{
     icon: ListTodo,
   },
   {
-    id: 'search-page',
-    name: 'Search page',
+    id: 'search-board',
+    name: 'Search board',
     description: 'What stands out across frames here',
     icon: Search,
   },
@@ -76,7 +76,7 @@ const MENU_SKILLS: Array<{
 ]
 
 interface AiComposerProps {
-  pageId?: string
+  boardId?: string
   thread: AiThread | null
   mode: AiModeId
   onModeChange: (mode: 'ask' | 'edit') => void
@@ -106,7 +106,7 @@ interface AiComposerProps {
 
 /** Icon for a live context pill kind. */
 function LivePillIcon({ kind }: { kind: AiLiveContextPill['kind'] }) {
-  if (kind === 'page') return <FileText className="h-3 w-3 flex-shrink-0 opacity-70" />
+  if (kind === 'board') return <FileText className="h-3 w-3 flex-shrink-0 opacity-70" />
   if (kind === 'frame' || kind === 'selection')
     return <Box className="h-3 w-3 flex-shrink-0 opacity-70" />
   if (kind === 'block') return <Box className="h-3 w-3 flex-shrink-0 opacity-70" />
@@ -172,7 +172,7 @@ function LiveContextPill({
       <span
         className={cn(
           'inline-flex items-center gap-1 max-w-full h-6 pl-1.5 pr-1 rounded-md text-[11px]',
-          pill.kind === 'page'
+          pill.kind === 'board'
             ? 'bg-black/[0.06] dark:bg-white/[0.08] text-gray-700 dark:text-gray-200'
             : pill.kind === 'text'
               ? 'bg-amber-500/15 text-amber-800 dark:text-amber-200'
@@ -223,7 +223,7 @@ function LiveContextPill({
 }
 
 export function AiComposer({
-  pageId,
+  boardId,
   thread,
   mode,
   onModeChange,
@@ -288,31 +288,31 @@ export function AiComposer({
     })
   }, [livePills])
 
-  // Current page → default context pill on chat open / page switch
+  // Current board → default context pill on chat open / page switch
   useEffect(() => {
-    if (!pageId) {
-      setAiPageContext(null)
+    if (!boardId) {
+      setAiBoardContext(null)
       return
     }
     let cancelled = false
     const load = async () => {
       // Optimistic label while title loads
-      setAiPageContext({ id: pageId, title: 'Page' })
+      setAiBoardContext({ id: boardId, title: 'Board' })
       const supabase = createClient()
       const { data } = await supabase
         .from('conversations')
         .select('id, title')
-        .eq('id', pageId)
+        .eq('id', boardId)
         .maybeSingle()
       if (cancelled) return
       const title = ((data?.title as string | undefined)?.trim() || 'Untitled')
-      setAiPageContext({ id: pageId, title })
+      setAiBoardContext({ id: boardId, title })
     }
     void load()
     return () => {
       cancelled = true
     }
-  }, [pageId])
+  }, [boardId])
 
   useEffect(() => {
     if (seedPrompt) {
@@ -428,7 +428,7 @@ export function AiComposer({
         body: JSON.stringify({
           message,
           threadId: opts?.threadId || thread?.id || null,
-          pageId: pageId || null,
+          boardId: boardId || null,
           mode,
           selectedFrameIds: getAiSelectedFrameIds(),
           viewportCenter: getAiViewportCenter(),
@@ -458,7 +458,7 @@ export function AiComposer({
               user_id: msg.user_id,
               title: message.slice(0, 60) || 'New AI chat',
               mode: 'ask',
-              page_id: pageId || null,
+              board_id: boardId || null,
               metadata: {},
               created_at: msg.created_at,
               updated_at: msg.updated_at,
@@ -770,7 +770,7 @@ export function AiComposer({
                   ? 'Attaching context…'
                   : 'Drop to attach as context'
                 : selectableMode === 'edit'
-                  ? 'Describe edits for this page…'
+                  ? 'Describe edits for this board…'
                   : 'Ask anything…'
             }
             disabled={false}
@@ -833,7 +833,7 @@ export function AiComposer({
 export async function regenerateAfterEdit(opts: {
   message: string
   threadId: string
-  pageId?: string
+  boardId?: string
   snapshotIds?: string[]
   onMessagesDelta: (updater: (prev: AiMessage[]) => AiMessage[]) => void
   onStreamingId: (id: string | null) => void
@@ -844,7 +844,7 @@ export async function regenerateAfterEdit(opts: {
     body: JSON.stringify({
       message: opts.message,
       threadId: opts.threadId,
-      pageId: opts.pageId || null,
+      boardId: opts.boardId || null,
       selectedFrameIds: getAiSelectedFrameIds(),
       snapshotIds: opts.snapshotIds || [],
       skipUserInsert: true,

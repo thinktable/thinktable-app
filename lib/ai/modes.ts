@@ -12,13 +12,13 @@ export const AI_MODES: AiMode[] = [
   {
     id: 'ask',
     label: 'Ask',
-    description: 'Answer in the sidebar. Drag blocks onto the page or onto the input as context.',
+    description: 'Answer in the sidebar. Drag blocks onto the board or onto the input as context.',
     enabled: true,
   },
   {
     id: 'edit',
     label: 'Edit',
-    description: 'Propose edits and create frames/threads on the page — review with rainbow highlights, then save or remove.',
+    description: 'Propose edits and create frames/threads on the board — review with rainbow highlights, then save or remove.',
     enabled: true,
   },
 ]

@@ -40,16 +40,16 @@ export type AiTextSelection = {
   text: string // Selected plain text (hover + API)
 } | null
 
-/** Current page shown as a default context pill when chat opens. */
-export type AiPageContext = {
+/** Current board shown as a default context pill when chat opens. */
+export type AiBoardContext = {
   id: string // conversations.id
-  title: string // Page title
+  title: string // Board title
 } | null
 
 /** Live context pill rendered inside the composer. */
 export type AiLiveContextPill = {
   id: string // Stable key for React + dismiss
-  kind: 'page' | 'frame' | 'block' | 'text' | 'selection' // What the pill represents
+  kind: 'board' | 'frame' | 'block' | 'text' | 'selection' // What the pill represents
   label: string // Visible chip text (fixed names, not content)
   frameId?: string // Related frame when kind ≠ page
   preview?: string // Hover reveals the referenced context
@@ -58,7 +58,7 @@ export type AiLiveContextPill = {
 let selectedFrames: AiFrameSelectionItem[] = [] // Frame selection (RF)
 let blockSelection: AiBlockSelection = null // Armed via ⋮⋮ only — not I-bar/caret
 let textSelection: AiTextSelection = null // Highlighted text range
-let pageContext: AiPageContext = null // Default page pill
+let pageContext: AiBoardContext = null // Default page pill
 
 /** Clamp plain text for hover previews. */
 export function clipAiPreview(text: string, max = PREVIEW_MAX): string {
@@ -69,7 +69,7 @@ export function clipAiPreview(text: string, max = PREVIEW_MAX): string {
 }
 
 /** Set / clear the current page pill (chat open + page load). */
-export function setAiPageContext(page: AiPageContext): void {
+export function setAiBoardContext(page: AiBoardContext): void {
   const same =
     (page === null && pageContext === null) ||
     (page !== null &&
@@ -82,7 +82,7 @@ export function setAiPageContext(page: AiPageContext): void {
 }
 
 /** Read current page context for pills. */
-export function getAiPageContext(): AiPageContext {
+export function getAiBoardContext(): AiBoardContext {
   return pageContext
 }
 
@@ -196,10 +196,10 @@ export function getAiLiveContextPills(): AiLiveContextPill[] {
   const pills: AiLiveContextPill[] = []
 
   if (pageContext) {
-    const title = pageContext.title.trim() || 'Page'
+    const title = pageContext.title.trim() || 'Board'
     pills.push({
       id: `page:${pageContext.id}`,
-      kind: 'page',
+      kind: 'board',
       label: title,
       preview: title,
     })

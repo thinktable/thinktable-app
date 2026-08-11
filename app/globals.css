@@ -1337,7 +1337,7 @@ span[data-added="true"] {
     box-sizing: border-box;
   }
   /* databaseBlock atoms span the row so the grip/I-bar band matches the frame.
-     pageLink stays shrink-wrapped (no width:100%) so the open menu can sit just right of the
+     boardLink stays shrink-wrapped (no width:100%) so the open menu can sit just right of the
      title when the frame is wider — not pinned to the frame’s right edge. */ 
   .ProseMirror[data-single-line="true"] .tt-database-block {
     width: 100%;
@@ -1359,31 +1359,33 @@ span[data-added="true"] {
      content inside has its own grips (pl-6 gutter). Hover outline on outer so it tracks CSS rotate;
      armed nest shows blue adjust + resize + rotate/fit/wrap. */
   /* TipTap wraps NodeViews in a block .react-renderer — keep that shrink-wrapped too */
+  .ProseMirror .react-renderer.node-boardLink,
   .ProseMirror .react-renderer.node-pageLink {
     width: max-content;
     max-width: 100%;
   }
+  .ProseMirror .tt-board-link-inline,
   .ProseMirror .tt-page-link-inline {
     display: inline-flex;
     align-items: flex-start; /* Pin icon to the first title line (not the tall wrapped block center) */
     gap: 0.35rem;
     max-width: 100%;
   }
-  .ProseMirror .tt-page-link-title {
+  .ProseMirror .tt-board-link-title {
     display: inline-flex;        /* Icon LEFT of the title (row), same axis as inline */
     align-items: flex-start; /* Same: first-line align — JS nudges icon to the glyph center */
     gap: 0.4rem;
     margin-bottom: 0.4rem;
     max-width: 100%;
   }
-  .ProseMirror .tt-page-link-icon {
+  .ProseMirror .tt-board-link-icon {
     display: inline-flex;
     align-items: center;
   }
-  .ProseMirror .tt-page-link-emoji { font-size: 1.05em; line-height: 1; }
-  .ProseMirror .tt-page-link-title .tt-page-link-emoji { font-size: 1.6em; }
-  .ProseMirror .tt-page-link-title .tt-page-link-fallback { width: 1.4rem; height: 1.4rem; }
-  .ProseMirror .tt-page-link-label {
+  .ProseMirror .tt-board-link-emoji { font-size: 1.05em; line-height: 1; }
+  .ProseMirror .tt-board-link-title .tt-board-link-emoji { font-size: 1.6em; }
+  .ProseMirror .tt-board-link-title .tt-board-link-fallback { width: 1.4rem; height: 1.4rem; }
+  .ProseMirror .tt-board-link-label {
     outline: none;
     text-decoration: underline;
     text-decoration-color: rgba(55, 53, 47, 0.28);
@@ -1393,11 +1395,11 @@ span[data-added="true"] {
     min-width: 1ch;
     white-space: pre-wrap;
   }
-  .ProseMirror .tt-page-link-title .tt-page-link-label {
+  .ProseMirror .tt-board-link-title .tt-board-link-label {
     font-size: 1.4em;
     font-weight: 600;            /* Keep the underline (inherited) — matches other page-link text */
   }
-  .ProseMirror .tt-page-link-label:empty::before {
+  .ProseMirror .tt-board-link-label:empty::before {
     content: attr(data-placeholder);
     color: #9ca3af;
   }

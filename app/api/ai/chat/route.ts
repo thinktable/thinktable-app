@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
   const message = typeof body.message === 'string' ? body.message.trim() : ''
   let threadId = typeof body.threadId === 'string' ? body.threadId : null
-  const pageId = typeof body.pageId === 'string' ? body.pageId : null
+  const boardId = typeof body.boardId === 'string' ? body.boardId : null
   const mode = isSelectableAiMode(body.mode) ? body.mode : 'ask'
   const selectedFrameIds = Array.isArray(body.selectedFrameIds)
     ? body.selectedFrameIds.filter((id: unknown) => typeof id === 'string')
@@ -78,7 +78,7 @@ export async function POST(request: NextRequest) {
         user_id: user.id,
         title: message.slice(0, 60) || 'New AI chat',
         mode,
-        page_id: pageId,
+        board_id: boardId,
         metadata: {},
       })
       .select()
@@ -93,7 +93,7 @@ export async function POST(request: NextRequest) {
   } else {
     const { data: thread } = await supabase
       .from('ai_threads')
-      .select('id, metadata, page_id')
+      .select('id, metadata, board_id')
       .eq('id', threadId)
       .eq('user_id', user.id)
       .maybeSingle()
@@ -105,7 +105,7 @@ export async function POST(request: NextRequest) {
     .update({
       updated_at: new Date().toISOString(),
       mode,
-      ...(pageId ? { page_id: pageId } : {}),
+      ...(boardId ? { board_id: boardId } : {}),
     })
     .eq('id', threadId)
     .eq('user_id', user.id)
@@ -169,7 +169,7 @@ export async function POST(request: NextRequest) {
 
   const pack = await buildContextPack(supabase, {
     userId: user.id,
-    pageId,
+    boardId,
     selectedFrameIds,
     snapshotIds,
   })
@@ -335,7 +335,7 @@ export async function POST(request: NextRequest) {
           const capabilityGap = (parsed.capabilityGap || '').trim()
           const enriched: AiProposedEdit[] = []
 
-          // Gap: explain + wait for confirm — do not mutate the page yet
+          // Gap: explain + wait for confirm — do not mutate the board yet
           if (capabilityGap) {
             if (!full.includes(capabilityGap)) {
               full = full ? `${full}\n\n${capabilityGap}` : capabilityGap
@@ -397,11 +397,11 @@ export async function POST(request: NextRequest) {
               return null
             }
 
-            if (creates.length > 0 && !pageId) {
+            if (creates.length > 0 && !boardId) {
               full =
                 (full ? full + '\n\n' : '') +
                 'I need an open page to place frames — open a page and try again in Edit mode.'
-            } else if (creates.length > 0 && pageId) {
+            } else if (creates.length > 0 && boardId) {
               const n = creates.length
               const startX = viewportCenter.x - ((n - 1) * CREATE_FRAME_GAP) / 2
 
@@ -420,7 +420,7 @@ export async function POST(request: NextRequest) {
                 const { data: msg, error: msgErr } = await supabase
                   .from('messages')
                   .insert({
-                    conversation_id: pageId,
+                    conversation_id: boardId,
                     user_id: user.id,
                     role: 'user',
                     content: markedHtml,
@@ -472,8 +472,8 @@ export async function POST(request: NextRequest) {
               }
             }
 
-            // Threads may run with creates and/or existing frame ids (needs pageId)
-            if (threads.length > 0 && pageId) {
+            // Threads may run with creates and/or existing frame ids (needs boardId)
+            if (threads.length > 0 && boardId) {
               for (const t of threads) {
                 const sourceId = resolveEndpoint(t.sourceTempId)
                 const targetId = resolveEndpoint(t.targetTempId)
@@ -482,7 +482,7 @@ export async function POST(request: NextRequest) {
                 const { data: existingEdges } = await supabase
                   .from('panel_edges')
                   .select('id')
-                  .eq('conversation_id', pageId)
+                  .eq('conversation_id', boardId)
                   .or(
                     `and(source_message_id.eq.${sourceId},target_message_id.eq.${targetId}),and(source_message_id.eq.${targetId},target_message_id.eq.${sourceId})`
                   )
@@ -491,7 +491,7 @@ export async function POST(request: NextRequest) {
                 const { data: edge, error: edgeErr } = await supabase
                   .from('panel_edges')
                   .insert({
-                    conversation_id: pageId,
+                    conversation_id: boardId,
                     user_id: user.id,
                     source_message_id: sourceId,
                     target_message_id: targetId,
@@ -506,7 +506,7 @@ export async function POST(request: NextRequest) {
                     const retry = await supabase
                       .from('panel_edges')
                       .insert({
-                        conversation_id: pageId,
+                        conversation_id: boardId,
                         user_id: user.id,
                         source_message_id: sourceId,
                         target_message_id: targetId,

@@ -6,7 +6,7 @@ export interface AiThread { // Row shape for ai_threads
   user_id: string // Owner
   title: string // Display title
   mode: AiModeId // ask | plan | edit
-  page_id: string | null // Optional page association
+  board_id: string | null // Optional board association
   metadata: Record<string, unknown> // agentId, skillIds, ...
   created_at: string // ISO
   updated_at: string // ISO

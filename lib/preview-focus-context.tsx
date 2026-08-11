@@ -22,7 +22,7 @@ type BoardRule = 'wide' | 'college' | 'narrow'
 type BoardStyle = 'none' | 'dotted' | 'lined' | 'grid'
 
 type PreviewFocusContextValue = {
-  focusedPageId: string | null // Linked page whose preview is style-selected
+  focusedBoardId: string | null // Linked page whose preview is style-selected
   focusedTitle: string | null
   boardRule: BoardRule // Styles shown/edited in the parent View toolbar while focused
   boardStyle: BoardStyle
@@ -39,7 +39,7 @@ type PreviewFocusContextValue = {
 
 const PreviewFocusContext = createContext<PreviewFocusContextValue | null>(null)
 
-async function persistPageStyle(
+async function persistBoardStyle(
   pageId: string,
   patch: { boardRule?: BoardRule; boardStyle?: BoardStyle }
 ) {
@@ -70,7 +70,7 @@ async function persistPageStyle(
 }
 
 export function PreviewFocusProvider({ children }: { children: ReactNode }) {
-  const [focusedPageId, setFocusedPageId] = useState<string | null>(null)
+  const [focusedBoardId, setFocusedPageId] = useState<string | null>(null)
   const [focusedTitle, setFocusedTitle] = useState<string | null>(null)
   const [boardRule, setBoardRuleState] = useState<BoardRule>('college')
   const [boardStyle, setBoardStyleState] = useState<BoardStyle>('dotted')
@@ -102,22 +102,22 @@ export function PreviewFocusProvider({ children }: { children: ReactNode }) {
   const setBoardRule = useCallback(
     (rule: BoardRule) => {
       setBoardRuleState(rule)
-      if (focusedPageId) void persistPageStyle(focusedPageId, { boardRule: rule })
+      if (focusedBoardId) void persistBoardStyle(focusedBoardId, { boardRule: rule })
     },
-    [focusedPageId]
+    [focusedBoardId]
   )
 
   const setBoardStyle = useCallback(
     (style: BoardStyle) => {
       setBoardStyleState(style)
-      if (focusedPageId) void persistPageStyle(focusedPageId, { boardStyle: style })
+      if (focusedBoardId) void persistBoardStyle(focusedBoardId, { boardStyle: style })
     },
-    [focusedPageId]
+    [focusedBoardId]
   )
 
   const value = useMemo(
     () => ({
-      focusedPageId,
+      focusedBoardId,
       focusedTitle,
       boardRule,
       boardStyle,
@@ -127,7 +127,7 @@ export function PreviewFocusProvider({ children }: { children: ReactNode }) {
       setBoardStyle,
     }),
     [
-      focusedPageId,
+      focusedBoardId,
       focusedTitle,
       boardRule,
       boardStyle,

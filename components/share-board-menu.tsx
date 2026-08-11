@@ -35,8 +35,8 @@ type ShareLink = {
   createdAt?: string // Mint time
 }
 
-type SharePageMenuProps = {
-  pageId: string // conversations.id for this board
+type ShareBoardMenuProps = {
+  boardId: string // conversations.id for this board
 }
 
 function RoleSelect({
@@ -93,7 +93,7 @@ function PersonAvatar({
   )
 }
 
-export function SharePageMenu({ pageId }: SharePageMenuProps) {
+export function ShareBoardMenu({ boardId }: ShareBoardMenuProps) {
   const [open, setOpen] = useState(false) // Dropdown open state
   const [query, setQuery] = useState('') // Search / email input
   const [inviteRole, setInviteRole] = useState<ShareRole>('edit') // Role for new invites
@@ -113,7 +113,7 @@ export function SharePageMenu({ pageId }: SharePageMenuProps) {
     setLoading(true) // Spinner on
     setError(null) // Clear prior error
     try {
-      const res = await fetch(`/api/share/${pageId}`) // Load grants + links
+      const res = await fetch(`/api/share/${boardId}`) // Load grants + links
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to load share')
       setPeople((data.people || []) as SharePerson[]) // Seed invited list
@@ -128,7 +128,7 @@ export function SharePageMenu({ pageId }: SharePageMenuProps) {
     } finally {
       setLoading(false) // Spinner off
     }
-  }, [pageId])
+  }, [boardId])
 
   const searchNotion = useCallback(
     async (q: string) => {
@@ -180,7 +180,7 @@ export function SharePageMenu({ pageId }: SharePageMenuProps) {
     setInviting(true) // Lock UI
     setError(null)
     try {
-      const res = await fetch(`/api/share/${pageId}`, {
+      const res = await fetch(`/api/share/${boardId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -209,7 +209,7 @@ export function SharePageMenu({ pageId }: SharePageMenuProps) {
   const updatePersonRole = async (personId: string, role: ShareRole) => {
     setPeople((prev) => prev.map((p) => (p.id === personId ? { ...p, role } : p))) // Optimistic
     try {
-      const res = await fetch(`/api/share/${pageId}`, {
+      const res = await fetch(`/api/share/${boardId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ personId, role }),
@@ -227,7 +227,7 @@ export function SharePageMenu({ pageId }: SharePageMenuProps) {
   const removePerson = async (personId: string) => {
     setPeople((prev) => prev.filter((p) => p.id !== personId)) // Optimistic remove
     try {
-      const res = await fetch(`/api/share/${pageId}?personId=${encodeURIComponent(personId)}`, {
+      const res = await fetch(`/api/share/${boardId}?personId=${encodeURIComponent(personId)}`, {
         method: 'DELETE',
       })
       if (!res.ok) {
@@ -245,7 +245,7 @@ export function SharePageMenu({ pageId }: SharePageMenuProps) {
     setCopied(false)
     setError(null)
     try {
-      const res = await fetch(`/api/share/${pageId}/link`, {
+      const res = await fetch(`/api/share/${boardId}/link`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ role: linkRole }), // Permission attached to minted link
@@ -468,7 +468,7 @@ export function SharePageMenu({ pageId }: SharePageMenuProps) {
             onClick={() => {
               void (async () => {
                 setError(null)
-                const res = await fetch(`/api/share/${pageId}?revokeLinks=1`, { method: 'DELETE' })
+                const res = await fetch(`/api/share/${boardId}?revokeLinks=1`, { method: 'DELETE' })
                 if (!res.ok) {
                   const data = await res.json().catch(() => ({}))
                   setError(data.error || 'Failed to revoke links')

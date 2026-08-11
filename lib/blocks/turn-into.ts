@@ -2,7 +2,12 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js' // Persist transforms
 import type { BlockTypeId } from '@/components/block-actions-menu' // Shared type ids
-import { ensurePageBodyBlock, migrateLegacyBlockFlags, syncBlockAndPageTitle } from '@/lib/blocks'
+import {
+  ensureBoardBodyBlock,
+  isBlockContentEmpty,
+  migrateLegacyBlockFlags,
+  syncBlockAndBoardTitle,
+} from '@/lib/blocks'
 
 /** Strip tags → plain text (title / list item seed). */
 export function htmlToPlainText(html: string): string {
@@ -164,8 +169,8 @@ export function transformHtmlToBlockType(html: string, blockType: BlockTypeId): 
       const colHtml = cols.map((c) => c.join('') || '<p></p>').join('')
       return `<div data-type="columns" data-columns="${count}">${colHtml}</div>`
     }
-    case 'page':
-    case 'pageIn':
+    case 'board':
+    case 'boardIn':
       // Content stays; promote creates the linked page
       return body
     default:
@@ -179,7 +184,7 @@ export type ApplyTurnIntoOpts = {
   userId: string
   blockType: BlockTypeId
   /** For pageIn — nest the new page under this conversation (defaults to current map). */
-  pageInParentId?: string | null
+  boardInParentId?: string | null
 }
 
 /**
@@ -188,7 +193,7 @@ export type ApplyTurnIntoOpts = {
 export async function applyTurnInto(
   supabase: SupabaseClient,
   opts: ApplyTurnIntoOpts
-): Promise<{ linkedPageId?: string | null }> {
+): Promise<{ linkedBoardId?: string | null }> {
   const { messageId, conversationId, userId, blockType } = opts
 
   const { data: row, error: loadError } = await supabase
@@ -202,18 +207,28 @@ export async function applyTurnInto(
   const nextContent = transformHtmlToBlockType(row.content || '', blockType)
 
   // Page / Page in — promote untitled block to a linked page (Notion parity)
-  if (blockType === 'page' || blockType === 'pageIn') {
+  const bt = blockType as string // Dual-read legacy page/pageIn from older clients
+  if (bt === 'board' || bt === 'boardIn' || bt === 'page' || bt === 'pageIn') {
     const title =
       htmlToPlainText(row.content || '').split('\n')[0]?.trim() ||
       (typeof migrated.blockTitle === 'string' && migrated.blockTitle.trim()) ||
       'Untitled'
     const parentId =
-      blockType === 'pageIn' && opts.pageInParentId ? opts.pageInParentId : conversationId
+      ((bt === 'boardIn' || bt === 'pageIn') && opts.boardInParentId) ? opts.boardInParentId : conversationId
 
-    let linkedPageId =
-      typeof migrated.linkedPageId === 'string' ? migrated.linkedPageId : null
+    let linkedBoardId =
+      typeof migrated.linkedBoardId === 'string'
+        ? migrated.linkedBoardId
+        : typeof migrated.linkedPageId === 'string'
+          ? migrated.linkedPageId
+          : null // Dual-read legacy linkedPageId
 
-    if (!linkedPageId) {
+    if (!linkedBoardId) {
+      // Seed body with frame content; parent frame becomes boardLink-only (no sibling leak)
+      const bodySeed = (row.content || '')
+        .replace(/<div[^>]*data-type=["'](?:boardLink|pageLink)["'][^>]*>[\s\S]*?<\/div>/gi, '')
+        .trim()
+      const hasBody = !isBlockContentEmpty(bodySeed)
       const { data: child, error: childError } = await supabase
         .from('conversations')
         .insert({
@@ -222,23 +237,27 @@ export async function applyTurnInto(
           metadata: {
             parent_id: parentId,
             sourceBlockMessageId: messageId,
-            hasContent: false,
+            hasContent: hasBody,
           },
         })
         .select('id')
         .single()
-      if (childError || !child) throw childError || new Error('Failed to create page')
+      if (childError || !child) throw childError || new Error('Failed to create board')
       const newPageId = child.id as string
-      linkedPageId = newPageId
-      await syncBlockAndPageTitle(supabase, {
+      linkedBoardId = newPageId
+      await syncBlockAndBoardTitle(supabase, {
         messageId,
-        linkedPageId: newPageId,
+        linkedBoardId: newPageId,
         title,
       })
-      await ensurePageBodyBlock(supabase, { pageId: newPageId, userId })
-    } else if (linkedPageId && blockType === 'pageIn' && opts.pageInParentId) {
-      // Re-parent existing linked page
-      const existingPageId = linkedPageId
+      await ensureBoardBodyBlock(supabase, {
+        boardId: newPageId,
+        userId,
+        bodyHtml: hasBody ? bodySeed : undefined,
+      })
+    } else if (linkedBoardId && ((bt === 'boardIn' || bt === 'pageIn') && opts.boardInParentId)) {
+      // Re-parent existing linked board
+      const existingPageId = linkedBoardId
       const { data: page } = await supabase
         .from('conversations')
         .select('metadata')
@@ -247,11 +266,11 @@ export async function applyTurnInto(
       const pageMeta = (page?.metadata as Record<string, unknown>) || {}
       await supabase
         .from('conversations')
-        .update({ metadata: { ...pageMeta, parent_id: opts.pageInParentId } })
+        .update({ metadata: { ...pageMeta, parent_id: opts.boardInParentId } })
         .eq('id', existingPageId)
-      await syncBlockAndPageTitle(supabase, { messageId, linkedPageId: existingPageId, title })
-    } else if (linkedPageId) {
-      await syncBlockAndPageTitle(supabase, { messageId, linkedPageId, title })
+      await syncBlockAndBoardTitle(supabase, { messageId, linkedBoardId: existingPageId, title })
+    } else if (linkedBoardId) {
+      await syncBlockAndBoardTitle(supabase, { messageId, linkedBoardId, title })
     }
 
     const { data: refreshed } = await supabase
@@ -261,23 +280,25 @@ export async function applyTurnInto(
       .single()
     const meta = (refreshed?.metadata as Record<string, unknown>) || migrated
 
-    // Prepend a title-variant pageLink at the TOP of the frame (icon on top). Done server-side so
-    // the blockType-change force-sync reloads content that already contains the title block.
-    const titleDiv = `<div data-type="pageLink" data-page-id="${linkedPageId}" data-title="${escapeHtml(
+    // Parent frame = boardLink only; body content lives on the linked board
+    const titleDiv = `<div data-type="boardLink" data-board-id="${linkedBoardId}" data-title="${escapeHtml(
       title
     )}" data-variant="title"></div>`
-    const titledContent = /data-type="pageLink"/.test(nextContent) ? nextContent : titleDiv + nextContent
+    const linkOnlyContent =
+      /data-type="(?:boardLink|pageLink)"/.test(nextContent) ? nextContent : titleDiv // Dual-read legacy pageLink
+
+    const normalizedBoardType = bt === 'pageIn' || bt === 'boardIn' ? 'boardIn' : 'board' // Writers emit board*
 
     await supabase
       .from('messages')
       .update({
-        content: titledContent,
+        content: linkOnlyContent,
         metadata: {
           ...meta,
           isBlock: true,
-          blockType,
-          isPage: true,
-          linkedPageId,
+          blockType: normalizedBoardType, // Persist Board / Board in only
+          isBoard: true,
+          linkedBoardId,
           blockTitle: title,
           columnCount: null,
           isSyncedBlock: false,
@@ -285,11 +306,11 @@ export async function applyTurnInto(
       })
       .eq('id', messageId)
 
-    return { linkedPageId }
+    return { linkedBoardId }
   }
 
   // Non-page types — clear page-only flags only when leaving page type
-  const wasPage = migrated.blockType === 'page' || migrated.blockType === 'pageIn' || migrated.isPage === true
+  const wasPage = migrated.blockType === 'page' || migrated.blockType === 'pageIn' || migrated.blockType === 'board' || migrated.blockType === 'boardIn' || migrated.isBoard === true || migrated.isPage === true
   const metaPatch: Record<string, unknown> = {
     ...migrated,
     isBlock: true,
@@ -314,7 +335,7 @@ export async function applyTurnInto(
   // card stays linked if already a page card — only change display type when not demoting.
   // If user turns a page card into text, keep link but update blockType for rendering.
   if (!wasPage) {
-    // leave linkedPageId as-is when absent
+    // leave linkedBoardId as-is when absent
   }
 
   const { error: updateError } = await supabase
@@ -323,5 +344,5 @@ export async function applyTurnInto(
     .eq('id', messageId)
   if (updateError) throw updateError
 
-  return { linkedPageId: typeof migrated.linkedPageId === 'string' ? migrated.linkedPageId : null }
+  return { linkedBoardId: typeof migrated.linkedBoardId === 'string' ? migrated.linkedBoardId : typeof migrated.linkedPageId === 'string' ? migrated.linkedPageId : null }
 }

@@ -1,5 +1,5 @@
 // Empty TipTap block keys: Backspace removes the block; Enter does not spawn another empty block.
-// Fresh frames (sole empty block) keep Backspace as a no-op. pageLink / other atoms get title focus.
+// Fresh frames (sole empty block) keep Backspace as a no-op. boardLink / other atoms get title focus.
 // Frame deselect also prunes leftover empty top-level textblocks (blank Enter lines).
 
 import { Extension, type Editor } from '@tiptap/core' // Editor type for prune helper
@@ -13,7 +13,7 @@ export function isEmptyTextblock(node: { isTextblock: boolean; textContent: stri
 
 /**
  * Remove empty top-level textblocks from a frame editor (blank lines left after Enter).
- * Keeps pageLink/databaseBlock atoms. Never empties the doc — leaves one node so sole-empty
+ * Keeps boardLink/databaseBlock atoms. Never empties the doc — leaves one node so sole-empty
  * frame deletion (or a typing shell) can still run. Returns true when something was deleted.
  */
 export function pruneEmptyTextblocks(editor: Editor): boolean {
@@ -99,7 +99,7 @@ export const EmptyBlockBackspace = Extension.create({
             tr.setSelection(TextSelection.create(tr.doc, end))
           }
         } else {
-          // Atom / pageLink — select the node; DOM focus lands on the title below
+          // Atom / boardLink — select the node; DOM focus lands on the title below
           try {
             tr.setSelection(NodeSelection.create(tr.doc, mappedPrevStart))
           } catch {
@@ -108,18 +108,18 @@ export const EmptyBlockBackspace = Extension.create({
         }
         view.dispatch(tr.scrollIntoView())
 
-        // pageLink / databaseBlock: place the I-bar in the editable title (PM can’t caret inside an atom)
-        if (prevNode.type.name === 'pageLink' || prevNode.type.name === 'databaseBlock') {
+        // boardLink / databaseBlock: place the I-bar in the editable title (PM can’t caret inside an atom)
+        if (prevNode.type.name === 'boardLink' || prevNode.type.name === 'databaseBlock') {
           requestAnimationFrame(() => {
             if (editor.isDestroyed) return
             const mappedPos = editor.state.selection.from // NodeSelection at atom
             const dom = editor.view.nodeDOM(mappedPos) as HTMLElement | null
             const root =
-              dom?.closest?.('.tt-page-link') ||
+              dom?.closest?.('.tt-board-link') ||
               dom?.closest?.('.tt-database-block') ||
               dom
             const label = root?.querySelector?.(
-              prevNode.type.name === 'databaseBlock' ? '.tt-database-block-label' : '.tt-page-link-label'
+              prevNode.type.name === 'databaseBlock' ? '.tt-database-block-label' : '.tt-board-link-label'
             ) as HTMLElement | null
             if (!label) return
             label.focus()

@@ -1,5 +1,5 @@
 ---
-description: Official terms — page, frame, block, thread, connection point
+description: Official terms — board, frame, block, thread, connection point
 alwaysApply: true
 ---
 
@@ -9,7 +9,7 @@ Read `DEFINITIONS.md`. Do not invent synonyms.
 
 | Official | Meaning | Code today |
 |---|---|---|
-| **Page** | The canvas | `conversations`, `/board/{id}` |
+| **Board** | The canvas | `conversations`, `/board/{id}` |
 | **Frame** | Box holding text (one or more blocks) | RF `chatPanel`, `metadata.isBlock` |
 | **Block** | TipTap line + ⋮⋮ | `EditorBlockRef`, `.tt-block-highlight` |
 | **Thread** | Line between frames | RF `Edge`, `panel_edges` |
@@ -21,4 +21,4 @@ When the user says drag **this block** / the blue line / ⋮⋮, move that TipTa
 
 `metadata.isBlock` = this message is a **frame**, not a TipTap block.
 
-Do not call a frame a card/panel/block. Do not call a thread an edge. Do not call a connection point a handle, nodule, or node. Do not call the page a board/map/canvas in new copy.
+Do not call a frame a card/panel/block. Do not call a thread an edge. Do not call a connection point a handle, nodule, or node. Do not call the board a page/map/canvas in new copy. Notion API “pages” keep that name.

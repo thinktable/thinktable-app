@@ -13,7 +13,7 @@ import {
 import { cn, generateUUID } from '@/lib/utils'
 import { useEditor, EditorContent } from '@tiptap/react'
 import { DOMParser as PMDOMParser } from '@tiptap/pm/model' // Parse stored HTML → PM doc for exact (non-string) sync compare
-import { TextSelection } from '@tiptap/pm/state' // Only text ranges keep a frame "active" — not pageLink NodeSelection
+import { TextSelection } from '@tiptap/pm/state' // Only text ranges keep a frame "active" — not boardLink NodeSelection
 import { createPanelExtensions } from '@/lib/tiptap/extensions' // StarterKit + Turn into nodes
 import { TipTapBlockHandles } from '@/components/tiptap-block-handles' // Per-content-block ⋮⋮ (Notion)
 import { FrameStackRevealLine } from '@/components/frame-stack-reveal-line' // Stack edge dashed line → reveal
@@ -38,7 +38,7 @@ import {
 import { findEditorBlockAtClientY } from '@/lib/tiptap/block-selection' // Click in frame padding → block at Y
 import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Strip blank lines on frame deselect
 import { setAiTextSelection } from '@/lib/ai/selection-bridge' // Live highlighted-text pills in AI composer
-import type { PageInTarget } from '@/components/block-actions-menu'
+import type { BoardInTarget } from '@/components/block-actions-menu'
 import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
 import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, ScanText, WrapText } from 'lucide-react' // Rotate + fit-to-text / wrap
 import { useAiEditSession } from '@/lib/ai/edit-session' // Pending rainbow / review focus
@@ -53,8 +53,8 @@ const isContentEmpty = (content: string | undefined | null) => {
 }
 
 const BLOCK_HANDLE_GUTTER_W = 24 // TipTap ⋮⋮ gutter (pl-6)
-const PAGE_LINK_ICON_W = 22 // Title emoji / page icon column
-const PAGE_OPEN_MENU_W = 52 // Open-menu pill ≈ preview + open (Notion adds a bit more)
+const BOARD_LINK_ICON_W = 22 // Title emoji / page icon column
+const BOARD_OPEN_MENU_W = 52 // Open-menu pill ≈ preview + open (Notion adds a bit more)
 const BLOCK_THREE_CHARS_W = 28 // ~3ch of body text for plain frames
 const BLOCK_MIN_FRAME_H = 40 // Keep a usable box when shrinking
 const DATABASE_BLOCK_HTML_RE = /data-type=["']databaseBlock["']/i // TipTap Notion DB atom in frame HTML
@@ -71,15 +71,15 @@ function isCollapsedDatabaseFrameSize(width: number, height: number): boolean {
   return width < MIN_DATABASE_FRAME_W || height < MIN_DATABASE_FRAME_H
 }
 
-/** Min frame width: pageLink → grip+icon+menu; plain text → grip+3 letters. */
+/** Min frame width: boardLink → grip+icon+menu; plain text → grip+3 letters. */
 function blockMinFrameWidth(html: string): number {
-  if (/data-type="pageLink"/i.test(html || '')) {
-    return BLOCK_HANDLE_GUTTER_W + PAGE_LINK_ICON_W + PAGE_OPEN_MENU_W
+  if (/data-type="boardLink"/i.test(html || '')) {
+    return BLOCK_HANDLE_GUTTER_W + BOARD_LINK_ICON_W + BOARD_OPEN_MENU_W
   }
   return BLOCK_HANDLE_GUTTER_W + BLOCK_THREE_CHARS_W
 }
 
-const BLOCK_MIN_FRAME_W = BLOCK_HANDLE_GUTTER_W + PAGE_LINK_ICON_W + PAGE_OPEN_MENU_W // Default / pageLink floor
+const BLOCK_MIN_FRAME_W = BLOCK_HANDLE_GUTTER_W + BOARD_LINK_ICON_W + BOARD_OPEN_MENU_W // Default / boardLink floor
 const BLOCK_LOCKED_MIN_W = BLOCK_HANDLE_GUTTER_W + BLOCK_THREE_CHARS_W // Absolute floor when hugging
 const GRIP_ICON_INSET = 2 // ⋮⋮ glyph (16px) centered in its 20px hit button → (20-16)/2 from the gutter left
 
@@ -151,17 +151,25 @@ function measureNaturalContentWidth(contentFit: HTMLElement): number {
 
   let maxLine = 0
   for (const child of Array.from(pm.children) as HTMLElement[]) {
-    const pageLink =
+    const boardLink =
+      (child.classList.contains('tt-board-link') && child) ||
       (child.classList.contains('tt-page-link') && child) ||
-      (child.querySelector('.tt-page-link') as HTMLElement | null)
-    if (pageLink) {
+      (child.querySelector('.tt-board-link, .tt-page-link') as HTMLElement | null)
+    if (boardLink) {
       // icon LAYOUT box + gap + real title text — never getBoundingClientRect on the icon:
-      // pageLink chromeScale is a CSS transform, and gBCR would report the counter-scaled
+      // boardLink chromeScale is a CSS transform, and gBCR would report the counter-scaled
       // visual width → locked hug / RF node box thrash (nodes(ref) storm / max update depth).
-      const label = pageLink.querySelector('.tt-page-link-label') as HTMLElement | null
-      const iconWrap = pageLink.querySelector('.tt-page-link-icon-wrap') as HTMLElement | null
-      const icon = iconWrap || (pageLink.querySelector('.tt-page-link-icon') as HTMLElement | null)
-      const gap = parseFloat(getComputedStyle(pageLink).gap) || 6
+      const label =
+        (boardLink.querySelector('.tt-board-link-label') as HTMLElement | null) ||
+        (boardLink.querySelector('.tt-page-link-label') as HTMLElement | null)
+      const iconWrap =
+        (boardLink.querySelector('.tt-board-link-icon-wrap') as HTMLElement | null) ||
+        (boardLink.querySelector('.tt-page-link-icon-wrap') as HTMLElement | null)
+      const icon =
+        iconWrap ||
+        (boardLink.querySelector('.tt-board-link-icon') as HTMLElement | null) ||
+        (boardLink.querySelector('.tt-page-link-icon') as HTMLElement | null)
+      const gap = parseFloat(getComputedStyle(boardLink).gap) || 6
       const iconW = icon ? (icon as HTMLElement).offsetWidth : 0 // Local layout px (transform-agnostic)
       const labelW = label ? rangeWidth(label) : 0
       maxLine = Math.max(maxLine, iconW + gap + labelW)
@@ -246,17 +254,17 @@ import { createClient } from '@/lib/supabase/client'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { useEditorContext } from './editor-context'
-import { usePageAccess } from '@/lib/share/page-access-context' // Gate TipTap editable for shared viewers
+import { useBoardAccess } from '@/lib/share/board-access-context' // Gate TipTap editable for shared viewers
 import { useReactFlowContext } from './react-flow-context'
 import { useTheme } from './theme-provider'
 import { SelectionFormatPopupAnchor } from './selection-format-popup' // Notion-style selection menu (stable edge anchor)
-import { PageLinkProvider, type PageLinkActions } from '@/lib/page-link-context' // Bridge pageLink NodeViews → frame preview/open/rename
-import { PageOpenMenu } from '@/components/page-open-menu' // Preview/open chrome for page frames without a pageLink
-import { NestedBoardPreview, prefetchPageEmbed } from './nested-board-preview' // Page-within-page board preview
+import { BoardLinkProvider, type BoardLinkActions } from '@/lib/board-link-context' // Bridge boardLink NodeViews → frame preview/open/rename
+import { BoardOpenMenu } from '@/components/board-open-menu' // Preview/open chrome for page frames without a boardLink
+import { NestedBoardPreview, prefetchBoardEmbed } from './nested-board-preview' // Page-within-page board preview
 import { unwrapNestedFramesHtml } from '@/lib/tiptap/unwrap-nested-frames' // Flatten legacy nest wrappers
-import { deleteLinkedPageForBlock, isBlockContentEmpty, isBlockMeta, isPageBodyMeta } from '@/lib/blocks' // Block detection + empty check + delete sync
+import { deleteLinkedBoardForBlock, getLinkedBoardId, isBlockContentEmpty, isBlockMeta, isBoardBodyMeta } from '@/lib/blocks' // Block detection + empty check + delete sync
 import { applyTurnInto } from '@/lib/blocks/turn-into' // Page / Page in from content-block menu
-import { migrateSoleDatabaseBlockToPageLink, ensureNotionMapFrameIsPageLink, isSoleDatabaseBlockContent } from '@/lib/notion/migrate-frame' // Notion DB map frames → pageLink
+import { migrateSoleDatabaseBlockToBoardLink, ensureNotionMapFrameIsBoardLink, isSoleDatabaseBlockContent } from '@/lib/notion/migrate-frame' // Notion DB map frames → boardLink
 
 interface Message {
   id: string
@@ -397,7 +405,7 @@ function TipTapContent({
   singleLineUntilEnter = false, // Unresized blocks: one visual line per TipTap block
   hostNodeId,
   conversationId,
-  pageInTargets,
+  boardInTargets,
   onPageTurnInto,
   suspendContentSync = false, // True while RF frame-dragging — skip setContent remounts
   forceContentSyncKey = 0, // Bump to setContent even while editor is focused (AI eye / remove / save)
@@ -425,14 +433,14 @@ function TipTapContent({
   singleLineUntilEnter?: boolean // Unresized map blocks: grow width; Enter starts a new line
   hostNodeId?: string
               conversationId?: string // Page id — ⋮⋮ extract a block onto the page
-  pageInTargets?: PageInTarget[]
-  onPageTurnInto?: (blockType: 'page' | 'pageIn', pageInParentId?: string | null) => void
+  boardInTargets?: BoardInTarget[]
+  onPageTurnInto?: (blockType: 'board' | 'boardIn', boardInParentId?: string | null) => void
   suspendContentSync?: boolean
   forceContentSyncKey?: number
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { setActiveEditor } = useEditorContext()
-  const { canEdit } = usePageAccess() // view/comment → read-only editors (RLS still enforces)
+  const { canEdit } = useBoardAccess() // view/comment → read-only editors (RLS still enforces)
   // Live frame-selected flag for TipTap DOM handlers (useEditor config is not recreated each render)
   const isPanelSelectedRef = useRef(!!isPanelSelected)
   isPanelSelectedRef.current = !!isPanelSelected
@@ -561,7 +569,7 @@ function TipTapContent({
     onBlur: ({ editor: ed }) => {
       // Call custom onBlur callback if provided
       onBlurRef.current?.()
-      // Keep frame selected only for a real TEXT range (format popup). pageLink atoms use
+      // Keep frame selected only for a real TEXT range (format popup). boardLink atoms use
       // NodeSelection (from≠to) — counting that re-selected the frame on every pane click.
       if (ed && onEditorActiveChangeRef.current) {
         const sel = ed.state.selection
@@ -661,7 +669,7 @@ function TipTapContent({
     const checkEditorActive = () => {
       try {
         const sel = editor.state.selection
-        // Text range only — NodeSelection on pageLink/databaseBlock is from≠to and must NOT
+        // Text range only — NodeSelection on boardLink/databaseBlock is from≠to and must NOT
         // keep/re-select the host frame after a board (pane) click deselects it.
         const hasTextRange = sel instanceof TextSelection && !sel.empty
         const isFocused = editor.view.dom === document.activeElement || editor.view.dom.contains(document.activeElement)
@@ -793,9 +801,9 @@ function TipTapContent({
         lastAiForceSyncRef.current = forceContentSyncKey
       }
       if (suspendContentSync) return // Frame drag: never setContent (remounts databaseBlock NodeView → table vanishes)
-      // Compare DOCUMENTS, not HTML strings. The pageLink NodeView adds a class and TipTap emits
+      // Compare DOCUMENTS, not HTML strings. The boardLink NodeView adds a class and TipTap emits
       // attributes in its own order, so editor.getHTML() never byte-equals the stored HTML once a
-      // pageLink exists — a raw string compare re-ran setContent every sync (infinite loop / page
+      // boardLink exists — a raw string compare re-ran setContent every sync (infinite loop / page
       // unresponsive). doc.eq() ignores cosmetic class/attr-order/whitespace, so it's exact + stable.
       let differs = true
       try {
@@ -938,7 +946,7 @@ function TipTapContent({
           isPanelSelected={!!isPanelSelected} // Frame must be selected (and not mid-drag) before ⋮⋮ can arm a block
           hostNodeId={hostNodeId}
           conversationId={conversationId}
-          pageInTargets={pageInTargets}
+          boardInTargets={boardInTargets}
           onPageTurnInto={onPageTurnInto}
         />
         <EditorContent editor={editor} className="block w-full" />
@@ -1488,21 +1496,21 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const [promptHasChanges, setPromptHasChanges] = useState(false)
   const [responseHasChanges, setResponseHasChanges] = useState(false)
   // Single text body: plain-merge legacy prompt + response (no section split).
-  // Sync-migrate sole databaseBlock → pageLink when linkedPageId exists (legacy pages only — not DBs).
+  // Sync-migrate sole databaseBlock → boardLink when linkedBoardId exists (legacy pages only — not DBs).
   const [promptContent, setPromptContent] = useState(() => {
     if (isProjectBoard) return data.boardTitle || ''
     const responseRaw = data.responseMessage?.content
     const responseHtml = responseRaw ? formatResponseContent(responseRaw) : ''
     const merged = mergePanelHtml(data.promptMessage?.content, responseHtml)
     const meta = (data.promptMessage?.metadata || {}) as Record<string, unknown>
-    const linkedId = typeof meta.linkedPageId === 'string' ? meta.linkedPageId : null
+    const linkedId = getLinkedBoardId(meta)
     if (!linkedId) return merged
     if (meta.notionObject === 'database') return merged // Keep structured DB table in-frame
     const iconMeta = meta.notionIcon as { type?: string; emoji?: string } | null
     const emoji = iconMeta?.type === 'emoji' && iconMeta.emoji ? iconMeta.emoji : null
     return (
-      migrateSoleDatabaseBlockToPageLink(merged, {
-        pageId: linkedId,
+      migrateSoleDatabaseBlockToBoardLink(merged, {
+        boardId: linkedId,
         title: typeof meta.blockTitle === 'string' ? meta.blockTitle : null,
         icon: emoji,
       }) || merged
@@ -2190,11 +2198,11 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // In-place nested board for a titled item’s linked page
   const [pagePreviewOpen, setPagePreviewOpen] = useState(false)
   const [pagePreviewMounted, setPagePreviewMounted] = useState(false) // Keep iframe warm after first open/hover
-  const [previewTargetPageId, setPreviewTargetPageId] = useState<string | null>(null) // Which page the preview shows (pageLink or frame)
-  const linkedPageId = !isProjectBoard
-    ? (promptMessage?.metadata?.linkedPageId as string | undefined)
+  const [previewTargetBoardId, setPreviewTargetBoardId] = useState<string | null>(null) // Which page the preview shows (boardLink or frame)
+  const linkedBoardId = !isProjectBoard
+    ? (getLinkedBoardId(promptMessage?.metadata as Record<string, unknown> | null) || undefined)
     : undefined
-  const activePreviewPageId = previewTargetPageId || linkedPageId || null // Page the shell renders
+  const activePreviewBoardId = previewTargetBoardId || linkedBoardId || null // Page the shell renders
   const blockTitleLabel =
     (promptMessage?.metadata?.blockTitle as string | undefined) || ''
   // Notion deep link for Open in Notion in the shared page open menu
@@ -2202,32 +2210,34 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     !isProjectBoard && typeof promptMessage?.metadata?.notionUrl === 'string'
       ? (promptMessage.metadata.notionUrl as string)
       : null
-  const isPageBody = isPageBodyMeta(promptMessage?.metadata) // Body on its own page — no nested open menu
-  // Frame already has a pageLink for this page → that NodeView owns the open menu
-  const hasPageLinkForFrame = !!(
-    linkedPageId &&
-    (promptContent.includes(`data-page-id="${linkedPageId}"`) ||
-      promptContent.includes(`data-page-id='${linkedPageId}'`))
+  const isBoardBody = isBoardBodyMeta(promptMessage?.metadata) // Body on its own page — no nested open menu
+  // Frame already has a boardLink for this page → that NodeView owns the open menu
+  const hasBoardLinkForFrame = !!(
+    linkedBoardId &&
+    (promptContent.includes(`data-board-id="${linkedBoardId}"`) ||
+      promptContent.includes(`data-board-id='${linkedBoardId}'`) ||
+      promptContent.includes(`data-page-id="${linkedBoardId}"`) ||
+      promptContent.includes(`data-page-id='${linkedBoardId}'`))
   )
   // databaseBlock NodeView owns Preview/Open when this is a Notion DB frame
   const hasDatabaseBlockForFrame = /data-type=["']databaseBlock["']/i.test(promptContent)
   // Page frames whose content is still regular TipTap blocks (legacy title) need the menu too
-  const showFramePageOpenMenu =
-    !!linkedPageId &&
-    !isPageBody &&
+  const showFrameBoardOpenMenu =
+    !!linkedBoardId &&
+    !isBoardBody &&
     !pagePreviewOpen &&
-    !hasPageLinkForFrame &&
+    !hasBoardLinkForFrame &&
     !hasDatabaseBlockForFrame &&
     (isFrameHovering || selected)
 
-  // One-shot: legacy sole-databaseBlock map frames → pageLink (pages only).
+  // One-shot: legacy sole-databaseBlock map frames → boardLink (pages only).
   // Notion **databases** keep databaseBlock so the structured table NodeView can render.
   // Check server content too — useState may already have rewritten promptContent locally.
   const migratedDbFrameRef = useRef(false)
   useEffect(() => {
-    if (migratedDbFrameRef.current || isProjectBoard || isPageBody) return
+    if (migratedDbFrameRef.current || isProjectBoard || isBoardBody) return
     if (!promptMessage?.id || !conversationId) return
-    if (hasPageLinkForFrame) return
+    if (hasBoardLinkForFrame) return
     // Intentional DB map frames (mindmap / Add frame on a DB) must stay as databaseBlock
     if ((promptMessage.metadata as { notionObject?: string } | null)?.notionObject === 'database') {
       return
@@ -2249,12 +2259,12 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         }
         const sourceHtml = isSoleDatabaseBlockContent(serverContent) ? serverContent : promptContent
 
-        // Fast path: linkedPageId already known → rewrite HTML locally + persist
-        if (linkedPageId) {
+        // Fast path: linkedBoardId already known → rewrite HTML locally + persist
+        if (linkedBoardId) {
           const iconMeta = promptMessage.metadata?.notionIcon as { type?: string; emoji?: string } | null
           const emoji = iconMeta?.type === 'emoji' && iconMeta.emoji ? iconMeta.emoji : null
-          const next = migrateSoleDatabaseBlockToPageLink(sourceHtml, {
-            pageId: linkedPageId,
+          const next = migrateSoleDatabaseBlockToBoardLink(sourceHtml, {
+            boardId: linkedBoardId,
             title: blockTitleLabel || null,
             icon: emoji,
           })
@@ -2269,7 +2279,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             .from('messages')
             .update({
               content: next,
-              metadata: { ...existingMeta, isPage: true, blockType: 'page' },
+              metadata: { ...existingMeta, isBoard: true, blockType: 'board' },
             })
             .eq('id', promptMessage.id)
           setPromptHasChanges(false)
@@ -2277,8 +2287,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           return
         }
 
-        // Slow path: no linkedPageId yet — resolve/create nested page then rewrite
-        const result = await ensureNotionMapFrameIsPageLink(client, {
+        // Slow path: no linkedBoardId yet — resolve/create nested page then rewrite
+        const result = await ensureNotionMapFrameIsBoardLink(client, {
           messageId: promptMessage.id,
           userId,
           parentConversationId: conversationId,
@@ -2294,18 +2304,18 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         await queryClient.invalidateQueries({ queryKey: ['conversations'] })
         await queryClient.invalidateQueries({ queryKey: ['messages', conversationId] })
       } catch (err) {
-        console.error('Failed to migrate Notion DB frame to pageLink:', err)
+        console.error('Failed to migrate Notion DB frame to boardLink:', err)
         migratedDbFrameRef.current = false
       }
     })()
   }, [
     isProjectBoard,
-    isPageBody,
-    linkedPageId,
+    isBoardBody,
+    linkedBoardId,
     promptMessage?.id,
     promptMessage?.content,
     promptMessage?.metadata,
-    hasPageLinkForFrame,
+    hasBoardLinkForFrame,
     promptContent,
     blockTitleLabel,
     conversationId,
@@ -2314,25 +2324,25 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
 
   // Warm lean embed document (and mount hidden iframe) so first nav isn’t a cold boot
   const prefetchPagePreview = () => {
-    if (!linkedPageId) return
-    prefetchPageEmbed(linkedPageId)
-    router.prefetch(`/embed/${linkedPageId}`)
+    if (!linkedBoardId) return
+    prefetchBoardEmbed(linkedBoardId)
+    router.prefetch(`/embed/${linkedBoardId}`)
     setPagePreviewMounted(true)
   }
 
-  // Actions handed to pageLink NodeViews (open/close preview, open page, prefetch, rename, Notion)
-  const pageLinkActions = useMemo<PageLinkActions>(
+  // Actions handed to boardLink NodeViews (open/close preview, open page, prefetch, rename, Notion)
+  const boardLinkActions = useMemo<BoardLinkActions>(
     () => ({
-      previewPageId: pagePreviewOpen ? activePreviewPageId : null,
+      previewBoardId: pagePreviewOpen ? activePreviewBoardId : null,
       openPreview: (pid: string) => {
-        setPreviewTargetPageId(pid) // Point the shared shell at this child page
+        setPreviewTargetBoardId(pid) // Point the shared shell at this child page
         setPagePreviewMounted(true)
         setPagePreviewOpen(true)
       },
       closePreview: () => setPagePreviewOpen(false),
-      openPage: (pid: string) => router.push(`/board/${pid}`),
+      openBoard: (pid: string) => router.push(`/board/${pid}`),
       prefetch: (pid: string) => {
-        prefetchPageEmbed(pid)
+        prefetchBoardEmbed(pid)
         router.prefetch(`/embed/${pid}`)
         setPagePreviewMounted(true)
       },
@@ -2361,10 +2371,10 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         }
       },
       notionUrl, // Open in Notion button when this frame is Notion-linked
-      // DB / legacy titled frames (no pageLink NodeView) reuse this for PageOpenMenu
-      hostLinkedPageId: hasPageLinkForFrame ? null : linkedPageId || null,
+      // DB / legacy titled frames (no boardLink NodeView) reuse this for BoardOpenMenu
+      hostLinkedBoardId: hasBoardLinkForFrame ? null : linkedBoardId || null,
     }),
-    [pagePreviewOpen, activePreviewPageId, router, queryClient, notionUrl, hasPageLinkForFrame, linkedPageId]
+    [pagePreviewOpen, activePreviewBoardId, router, queryClient, notionUrl, hasBoardLinkForFrame, linkedBoardId]
   )
 
   // Update title-chip perimeter when the note/item box changes size
@@ -3038,7 +3048,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // Unlocked WRAP no longer auto-hugs height: like non-wrap clip, the frame keeps the user's box
   // and a frame shorter than the wrapped content clips the overflow + shows the expand chevron.
 
-  // Auto-select panel when editor is focused or has a text range (not pageLink NodeSelection)
+  // Auto-select panel when editor is focused or has a text range (not boardLink NodeSelection)
   const handleEditorActiveChange = useCallback((isActive: boolean) => {
     if (isActive && !selected) {
       // Editor is active (focused or has selection) but panel is not selected - auto-select it
@@ -3054,7 +3064,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   }, [id, selected, setNodes])
 
   // Pane click deselected this frame — drop editor/title focus + atom NodeSelection so the
-  // auto-select effect cannot immediately re-select (pageLink title is contentEditable inside PM).
+  // auto-select effect cannot immediately re-select (boardLink title is contentEditable inside PM).
   useEffect(() => {
     if (selected) return
     const ed = promptEditorRef.current
@@ -3066,7 +3076,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     }
     const sel = ed.state.selection
     if (sel instanceof TextSelection && sel.empty) return // Already a caret — nothing to clear
-    // near() lands a caret beside atoms (TextSelection.create at a pageLink pos throws)
+    // near() lands a caret beside atoms (TextSelection.create at a boardLink pos throws)
     try {
       const pos = Math.max(0, Math.min(sel.from, ed.state.doc.content.size))
       ed.view.dispatch(ed.state.tr.setSelection(TextSelection.near(ed.state.doc.resolve(pos))))
@@ -3620,12 +3630,12 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     if (ed && !ed.isDestroyed) pruneEmptyTextblocks(ed)
 
     // Sole-empty frame deletion — skip page-body / titled / linked pages
-    if (isPageBody) return
+    if (isBoardBody) return
     const meta = (promptMessage?.metadata || {}) as Record<string, unknown>
-    if (meta.linkedPageId) return
+    if (meta.linkedBoardId) return
     if (typeof meta.blockTitle === 'string' && meta.blockTitle.trim()) return
 
-    // Must be exactly one empty textblock after prune (not a pageLink-only frame)
+    // Must be exactly one empty textblock after prune (not a boardLink-only frame)
     let soleEmpty = false
     if (ed && !ed.isDestroyed) {
       const doc = ed.state.doc
@@ -3649,7 +3659,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     isBlock,
     isFlashcard,
     isProjectBoard,
-    isPageBody,
+    isBoardBody,
     promptContent,
     promptMessage?.metadata,
     id,
@@ -4025,15 +4035,15 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         ? formatResponseContent(responseMessage.content)
         : ''
       let merged = mergePanelHtml(promptMessage?.content, responseHtml)
-      // Legacy: sole databaseBlock → pageLink for pages only (DB frames keep the table NodeView)
+      // Legacy: sole databaseBlock → boardLink for pages only (DB frames keep the table NodeView)
       const meta = (promptMessage?.metadata || {}) as Record<string, unknown>
-      const linkedId = typeof meta.linkedPageId === 'string' ? meta.linkedPageId : null
+      const linkedId = getLinkedBoardId(meta)
       if (linkedId && meta.notionObject !== 'database' && isSoleDatabaseBlockContent(merged)) {
         const iconMeta = meta.notionIcon as { type?: string; emoji?: string } | null
         const emoji = iconMeta?.type === 'emoji' && iconMeta.emoji ? iconMeta.emoji : null
         merged =
-          migrateSoleDatabaseBlockToPageLink(merged, {
-            pageId: linkedId,
+          migrateSoleDatabaseBlockToBoardLink(merged, {
+            boardId: linkedId,
             title: typeof meta.blockTitle === 'string' ? meta.blockTitle : null,
             icon: emoji,
           }) || merged
@@ -4069,7 +4079,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     promptContent,
     promptHasChanges,
     promptMessage?.id,
-    promptMessage?.metadata?.linkedPageId,
+    promptMessage?.metadata?.linkedBoardId,
     promptMessage?.metadata?.notionObject,
     promptMessage?.metadata?.blockTitle,
     remoteBlockType,
@@ -4322,7 +4332,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
 
         // Keep Pages menu in sync: deleting a titled item removes its page map
         try {
-          await deleteLinkedPageForBlock(supabase, promptMessage.metadata as Record<string, unknown>)
+          await deleteLinkedBoardForBlock(supabase, promptMessage.metadata as Record<string, unknown>)
           await queryClient.invalidateQueries({ queryKey: ['conversations'] })
         } catch (linkErr) {
           console.error('Failed to delete linked page for item:', linkErr)
@@ -4828,7 +4838,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               position={position} // RF places the handle on that corner
               className="nodrag nopan" // Resize only — never start RF frame drag / pan
               style={itemCornerResizeStyle} // White circular handle styling
-              minWidth={frameMinW} // pageLink vs plain-text floor
+              minWidth={frameMinW} // boardLink vs plain-text floor
               minHeight={BLOCK_MIN_FRAME_H} // Keep a usable box; pairs with handleResize clamp
               keepAspectRatio={!frameUnlocked && hasBlockContent} // Locked + content: proportional only
               onResizeStart={handleResizeStart} // Arm user-resize mode (line-grow off)
@@ -4945,7 +4955,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           </div>
       )}
 
-      {/* Page titles/links now render inline as pageLink blocks inside the editor (no edge chip). */}
+      {/* Page titles/links now render inline as boardLink blocks inside the editor (no edge chip). */}
       
       {/* Left handle with flashcard navigation */}
       {isFlashcard && (hasMultipleFlashcards || hasFlashcardsInOtherBoards) && previousBoardWithFlashcards && isAtFirstFlashcardInBoard && selected ? (
@@ -5203,17 +5213,17 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             }}
           />
         )}
-        {/* Page frame with regular blocks (no pageLink) — pin open menu to the visible frame edge
+        {/* Page frame with regular blocks (no boardLink) — pin open menu to the visible frame edge
             (inside the overflow clip), not to the wider content box. */}
-        {showFramePageOpenMenu && linkedPageId && (
-          <PageLinkProvider value={pageLinkActions}>
-            <PageOpenMenu
-              pageId={linkedPageId}
+        {showFrameBoardOpenMenu && linkedBoardId && (
+          <BoardLinkProvider value={boardLinkActions}>
+            <BoardOpenMenu
+              boardId={linkedBoardId}
               notionUrl={notionUrl}
               forceVisible
               className="!right-1 !top-2 !translate-y-0"
             />
-          </PageLinkProvider>
+          </BoardLinkProvider>
         )}
         {/* Hide body while previewing — keeps page title (edge chip / preview chrome) from sitting under the map */}
         {!pagePreviewOpen && (
@@ -5293,7 +5303,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               ed.chain().focus().setTextSelection(caret).run()
             }}
           >
-            <PageLinkProvider value={pageLinkActions}>
+            <BoardLinkProvider value={boardLinkActions}>
             <TipTapContent
               content={promptContent || ''}
               className="text-gray-900 dark:text-gray-100"
@@ -5340,20 +5350,20 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               singleLineUntilEnter={isBlock && !isFlashcard && !wrapActive} // nowrap until Enter; wrap mode (locked/unlocked) soft-wraps
               hostNodeId={id}
               conversationId={conversationId}
-              pageInTargets={(() => {
+              boardInTargets={(() => {
                 const convs =
                   (queryClient.getQueryData(['conversations']) as
                     | Array<{ id: string; title?: string | null }>
                     | undefined) || []
                 return [
-                  { id: conversationId || '', title: 'Current page' },
+                  { id: conversationId || '', title: 'Current board' },
                   ...convs
                     .filter((c) => c.id !== conversationId)
                     .slice(0, 40)
                     .map((c) => ({ id: c.id, title: c.title?.trim() || 'Untitled' })),
                 ]
               })()}
-              onPageTurnInto={async (blockType, pageInParentId) => {
+              onPageTurnInto={async (blockType, boardInParentId) => {
                 if (!promptMessage?.id || !conversationId) return
                 try {
                   const {
@@ -5365,7 +5375,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                     conversationId,
                     userId: user.id,
                     blockType,
-                    pageInParentId: pageInParentId || null,
+                    boardInParentId: boardInParentId || null,
                   })
                   await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
                   await queryClient.invalidateQueries({ queryKey: ['conversations'] })
@@ -5374,22 +5384,22 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                 }
               }}
             />
-            </PageLinkProvider>
+            </BoardLinkProvider>
           </div>
           </div>
         )}
 
         {/* Keep iframe mounted after warm/open; fills card while visible. Targets the active page
-            (a pageLink's child page) — falls back to the frame's own linked page. */}
-        {pagePreviewMounted && activePreviewPageId && (
+            (a boardLink's child page) — falls back to the frame's own linked page. */}
+        {pagePreviewMounted && activePreviewBoardId && (
           <div
             className={cn(
               pagePreviewOpen ? 'flex-1 min-h-0 min-w-0 flex flex-col p-2 pt-2' : 'hidden'
             )}
           >
             <NestedBoardPreview
-              key={activePreviewPageId} // Remount when switching between different child pages
-              conversationId={activePreviewPageId}
+              key={activePreviewBoardId} // Remount when switching between different child pages
+              conversationId={activePreviewBoardId}
               title={blockTitleLabel}
               visible={pagePreviewOpen}
               fill={pagePreviewOpen}
