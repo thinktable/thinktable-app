@@ -94,6 +94,7 @@ import {
 } from '@/lib/blocks' // blocks, groups, page-body ensure
 import { absFlowPosition, nodeFlowSize, useBlockGroupDrag } from './use-block-group-drag' // Drag attach/detach between groups / page
 import { useFrameNestStackDrag, isStackCollapsedMeta } from './use-frame-nest-stack-drag' // Edge-snap → stack reveal
+import { minStackIndex } from '@/lib/frame-side-stacks' // Per-side stack z-order
 import { FrameNestStackOverlay } from './frame-nest-stack-overlay' // Snap preview line on host edge
 import {
   armMarqueeFrameSelect,
@@ -107,6 +108,7 @@ import {
   usePreviewFocus,
 } from '@/lib/preview-focus-context' // Style sync + ready/resize handshake for iframe previews
 import { BoardEmbedProvider } from '@/lib/board-embed-context' // Hide nested preview controls inside embed
+import { usePageAccess } from '@/lib/share/page-access-context' // Shared view/comment → read-only map
 import { ThinktableBrandMark } from './personalize-ai-modal'
 import { NavZoomControl } from './nav-zoom-control' // Zoom % lives in bottom nav (not top bar)
 import { LeftVerticalMenu } from './left-vertical-menu'
@@ -459,6 +461,7 @@ function BoardFlowInner({
   searchParams: ReturnType<typeof useSearchParams> | null
   embedded?: boolean // True when rendered as page-within-page preview
 }) {
+  const { canEdit } = usePageAccess() // RLS is authority; UI mirrors for viewers
   const { resolvedTheme } = useTheme()
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesState] = useEdgesState([])
@@ -4330,8 +4333,7 @@ function BoardFlowInner({
 
             // Load panel styling from message metadata (fillColor, borderColor, borderStyle, borderWeight)
             const messageMetadata = message.metadata || {}
-            const stackIndex =
-              typeof messageMetadata.stackIndex === 'number' ? messageMetadata.stackIndex : null
+            const stackIndex = minStackIndex(messageMetadata as Record<string, unknown>)
             const panelNode: Node<ChatPanelNodeData> = {
               id: nodeId,
               type: 'chatPanel',
@@ -4376,8 +4378,7 @@ function BoardFlowInner({
 
           // Load panel styling from message metadata (fillColor, borderColor, borderStyle, borderWeight)
           const messageMetadata = message.metadata || {}
-          const stackIndex =
-            typeof messageMetadata.stackIndex === 'number' ? messageMetadata.stackIndex : null
+          const stackIndex = minStackIndex(messageMetadata as Record<string, unknown>)
           const panelNode: Node<ChatPanelNodeData> = {
             id: baseNodeId,
             type: 'chatPanel',
@@ -7680,7 +7681,10 @@ function BoardFlowInner({
         }
         // Backspace/Delete remove selected frames/threads. TipTap editors use class `nokey` so RF
         // skips delete while typing (isInputDOMNode misses <p>/<br> without contenteditable).
-        deleteKeyCode={DELETE_KEYS}
+        deleteKeyCode={canEdit ? DELETE_KEYS : null}
+        nodesDraggable={canEdit}
+        nodesConnectable={canEdit}
+        edgesUpdatable={canEdit}
         onMove={(event, viewport) => {
           // Publish flow-space center of the visible pane for AI Edit frame placement
           const pane = document.querySelector('.react-flow')

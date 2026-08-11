@@ -41,6 +41,153 @@ export const FRAME_SHAPE_DEFAULT_SIZE = { width: 180, height: 140 } as const
 /** Minimum box while a silhouette is active (still free-resizeable). */
 export const FRAME_SHAPE_MIN_SIZE = { width: 72, height: 56 } as const
 
+/** Axis-aligned box of a w×h rectangle rotated by `deg` (around center). */
+export function rotatedRectAabbSize(
+  w: number,
+  h: number,
+  deg: number
+): { width: number; height: number } {
+  const rad = (deg * Math.PI) / 180
+  const c = Math.abs(Math.cos(rad))
+  const s = Math.abs(Math.sin(rad))
+  return { width: w * c + h * s, height: w * s + h * c }
+}
+
+/** Tight AABB of an ellipse filling w×h, rotated by `deg`. */
+function rotatedEllipseAabbSize(
+  w: number,
+  h: number,
+  deg: number
+): { width: number; height: number } {
+  const rad = (deg * Math.PI) / 180
+  const c = Math.cos(rad)
+  const s = Math.sin(rad)
+  const a = Math.max(1, w) / 2
+  const b = Math.max(1, h) / 2
+  // Extents of rotated ellipse: 2√(a²cos²θ + b²sin²θ), 2√(a²sin²θ + b²cos²θ)
+  return {
+    width: 2 * Math.sqrt(a * a * c * c + b * b * s * s),
+    height: 2 * Math.sqrt(a * a * s * s + b * b * c * c),
+  }
+}
+
+/** AABB of polygon vertices (centered at origin) after rotation. */
+function aabbOfRotatedPoints(
+  points: Array<{ x: number; y: number }>,
+  deg: number
+): { width: number; height: number } {
+  const rad = (deg * Math.PI) / 180
+  const c = Math.cos(rad)
+  const s = Math.sin(rad)
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+  for (const p of points) {
+    const x = p.x * c - p.y * s
+    const y = p.x * s + p.y * c
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (y < minY) minY = y
+    if (y > maxY) maxY = y
+  }
+  return { width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) }
+}
+
+/** Unit-box polygon for a silhouette (0..1), converted to centered px via w/h. */
+function shapeUnitPoints(type: FrameShapeType): Array<{ x: number; y: number }> | null {
+  // Coordinates in 0..1 box (top-left origin), matching frameShapeClipCss polygons
+  switch (type) {
+    case 'diamond':
+      return [
+        { x: 0.5, y: 0 },
+        { x: 1, y: 0.5 },
+        { x: 0.5, y: 1 },
+        { x: 0, y: 0.5 },
+      ]
+    case 'triangle':
+      return [
+        { x: 0.5, y: 0 },
+        { x: 1, y: 1 },
+        { x: 0, y: 1 },
+      ]
+    case 'hexagon':
+      return [
+        { x: 0.1, y: 0 },
+        { x: 0.9, y: 0 },
+        { x: 1, y: 0.5 },
+        { x: 0.9, y: 1 },
+        { x: 0.1, y: 1 },
+        { x: 0, y: 0.5 },
+      ]
+    case 'parallelogram':
+      return [
+        { x: 0.25, y: 0 },
+        { x: 1, y: 0 },
+        { x: 0.75, y: 1 },
+        { x: 0, y: 1 },
+      ]
+    case 'arrow-rectangle':
+      return [
+        { x: 0, y: 0 },
+        { x: 0.9, y: 0 },
+        { x: 1, y: 0.5 },
+        { x: 0.9, y: 1 },
+        { x: 0, y: 1 },
+      ]
+    case 'plus':
+      return [
+        { x: 0.33, y: 0 },
+        { x: 0.67, y: 0 },
+        { x: 0.67, y: 0.33 },
+        { x: 1, y: 0.33 },
+        { x: 1, y: 0.67 },
+        { x: 0.67, y: 0.67 },
+        { x: 0.67, y: 1 },
+        { x: 0.33, y: 1 },
+        { x: 0.33, y: 0.67 },
+        { x: 0, y: 0.67 },
+        { x: 0, y: 0.33 },
+        { x: 0.33, y: 0.33 },
+      ]
+    default:
+      return null
+  }
+}
+
+/**
+ * Upright AABB that tightly fits the visible silhouette after rotation.
+ * Ellipse / circle / polygon shapes are tighter than the content rectangle;
+ * default / round-rect fall back to the rectangle AABB.
+ */
+export function rotatedFrameAabbSize(
+  w: number,
+  h: number,
+  deg: number,
+  shape?: FrameShapeType | null
+): { width: number; height: number } {
+  if (!shape || Math.abs(deg) < 0.5) {
+    return rotatedRectAabbSize(w, h, deg)
+  }
+  if (shape === 'circle') {
+    return rotatedEllipseAabbSize(w, h, deg)
+  }
+  if (shape === 'cylinder') {
+    // Soft stadium-like clip — ellipse is a close upright bound
+    return rotatedEllipseAabbSize(w, h, deg)
+  }
+  const unit = shapeUnitPoints(shape)
+  if (unit) {
+    const pts = unit.map((p) => ({
+      x: (p.x - 0.5) * w,
+      y: (p.y - 0.5) * h,
+    }))
+    return aabbOfRotatedPoints(pts, deg)
+  }
+  // rectangle / round-rectangle / unknown — content box corners
+  return rotatedRectAabbSize(w, h, deg)
+}
+
 /**
  * CSS `clip-path` so TipTap content stays inside the silhouette.
  * Returns undefined when clipping isn’t needed (default / hard-to-express shapes).

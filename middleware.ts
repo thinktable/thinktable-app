@@ -37,7 +37,9 @@ export async function middleware(request: NextRequest) {
     if (!user) {
       const url = request.nextUrl.clone()
       url.pathname = '/login'
-      url.searchParams.set('redirectTo', request.nextUrl.pathname)
+      // Preserve ?s= share tokens through login (path + query only; no open redirect)
+      const resume = `${request.nextUrl.pathname}${request.nextUrl.search}`
+      url.searchParams.set('redirectTo', resume)
       return NextResponse.redirect(url)
     }
 
@@ -74,7 +76,13 @@ export async function middleware(request: NextRequest) {
       const url = request.nextUrl.clone()
       // Honor resume targets (e.g. Notion OAuth start) when safe/relative
       const resume = request.nextUrl.searchParams.get('next') || request.nextUrl.searchParams.get('redirectTo')
-      if (resume && resume.startsWith('/') && !resume.startsWith('//')) {
+      // Relative app paths only (allows /board/{id}?s=…); block protocol-relative / absolute URLs
+      if (
+        resume &&
+        resume.startsWith('/') &&
+        !resume.startsWith('//') &&
+        !resume.includes('://')
+      ) {
         return NextResponse.redirect(new URL(resume, request.url))
       }
       url.pathname = '/board'

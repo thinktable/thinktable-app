@@ -5,6 +5,8 @@ import { BoardFlow } from '@/components/board-flow'
 import { EditorProvider } from '@/components/editor-context'
 import { ReactFlowContextProvider } from '@/components/react-flow-context'
 import { SidebarContextProvider } from '@/components/sidebar-context'
+import { PageAccessProvider } from '@/lib/share/page-access-context'
+import { resolvePageAccessRole } from '@/lib/share/server'
 
 export default async function EmbedBoardPage({
   params,
@@ -22,13 +24,18 @@ export default async function EmbedBoardPage({
     redirect('/login')
   }
 
+  const role = await resolvePageAccessRole(supabase, conversationId)
+  if (!role) {
+    redirect('/board')
+  }
+
   const { data: conversation, error } = await supabase
     .from('conversations')
-    .select('id, user_id')
+    .select('id')
     .eq('id', conversationId)
-    .single()
+    .maybeSingle()
 
-  if (error || !conversation || conversation.user_id !== user.id) {
+  if (error || !conversation) {
     redirect('/board')
   }
 
@@ -36,7 +43,9 @@ export default async function EmbedBoardPage({
     <EditorProvider>
       <SidebarContextProvider>
         <ReactFlowContextProvider conversationId={conversationId}>
-          <BoardFlow conversationId={conversationId} embedded />
+          <PageAccessProvider role={role} pageId={conversationId}>
+            <BoardFlow conversationId={conversationId} embedded />
+          </PageAccessProvider>
         </ReactFlowContextProvider>
       </SidebarContextProvider>
     </EditorProvider>

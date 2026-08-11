@@ -1,8 +1,9 @@
 'use client'
 
-// Snap a **frame** flush to another frame’s edge (magnetic align). On release, link the pair
-// (stack line; both stay visible). Snap does **not** lock — first **Stack** sets `snapLockGroupId`.
-// Outer RF box stays upright (AABB); content may rotate inside. Snap uses upright edges.
+// Snap a **frame** flush to another frame’s upright adjust-box edge (magnetic align).
+// On release, link into that side’s stack tree (stack line; both stay visible).
+// Each side (top/right/bottom/left) has its own tree — a frame can belong to several.
+// Snap does **not** lock — first **Stack** sets lock for that group only.
 // See DEFINITIONS.md + CONTEXT.md.
 
 import { useCallback, useRef, useState } from 'react' // Drag UI state
@@ -10,9 +11,23 @@ import type { Node } from 'reactflow' // RF node shape
 import { createClient } from '@/lib/supabase/client' // Persist snap link meta
 import { absFlowPosition, nodeFlowSize } from '@/components/use-block-group-drag' // Absolute box helpers
 import { persistBlockPlacement } from '@/lib/blocks' // Save snapped position
+import {
+  findStackEntry,
+  groupIdsOf,
+  isGroupLocked,
+  isSnapLockedMeta,
+  readSideStacks,
+  setSideStackEntry,
+  sideStackGroupId,
+  stackIndexInGroup,
+  stripGroupFromMeta,
+  collectNestedSatelliteIds,
+  type FrameStackSide,
+  type SideStackEntry,
+} from '@/lib/frame-side-stacks'
 
-/** Side of the host frame used for stack reveal / expand / snap preview. */
-export type FrameStackSide = 'top' | 'right' | 'bottom' | 'left'
+export type { FrameStackSide }
+export { isSnapLockedMeta }
 
 /** Live snap chrome while dragging a frame near another’s edge. */
 export type FrameNestStackUi = {
@@ -34,6 +49,10 @@ const SNAP_MAGNET_PX = 18
 const SNAP_OVERLAP_MIN = 0.25
 
 type FlowBox = { x: number; y: number; width: number; height: number }
+
+function nodeMeta(n: Node): Record<string, unknown> {
+  return (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+}
 
 type SnapCandidate = {
   targetId: string
@@ -88,11 +107,17 @@ export function stackExpandLayout(
   return { x: front.x + (front.width - w) / 2, y: front.y + front.height + offset }
 }
 
-/** True when this chatPanel is a collapsed (hidden) stack mate. */
+/** True when this chatPanel is a collapsed (hidden) stack mate on every tree it belongs to. */
 export function isStackCollapsedMeta(meta?: Record<string, unknown> | null): boolean {
-  if (!meta || typeof meta.stackGroupId !== 'string') return false
-  if (meta.stackIndex === 0 || meta.stackAnchor === true) return false // Host stays visible
-  return meta.stackExpanded !== true // Expanded mates are visible
+  if (!meta) return false
+  // Nested under a collapsed parent tree (e.g. C on A’s bottom while A is under B)
+  if (typeof meta.parentStackHidden === 'string') return true
+  const entries = Object.values(readSideStacks(meta))
+  if (entries.length === 0) return false
+  // Anchor on any side stays visible
+  if (entries.some((e) => e.index === 0 || e.anchor === true)) return false
+  // Visible if expanded on any side tree
+  return entries.every((e) => e.expanded !== true)
 }
 
 /** Parallel-axis overlap length between two intervals. */
@@ -113,8 +138,7 @@ function groupExtentOnSide(
   const boxes: FlowBox[] = []
   for (const n of live) {
     if (n.type !== 'chatPanel' || n.hidden) continue
-    const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-    if (m.stackGroupId !== groupId) continue
+    if (!findStackEntry(nodeMeta(n), groupId)) continue
     const abs = absFlowPosition(n, live)
     const size = nodeFlowSize(n)
     boxes.push({ x: abs.x, y: abs.y, width: size.width, height: size.height })
@@ -135,19 +159,17 @@ function groupExtentOnSide(
 /**
  * Best edge-snap of `dragged` onto another chatPanel (host).
  * Prefers small edge gap + strong overlap along the shared edge.
- * If the target is already in a stack, parks past the outermost mate on that side
- * so previously snapped frames are not shoved.
+ * Parks past the outermost mate on that **side’s** tree only (other sides untouched).
  */
 export function findFrameEdgeSnap(
   dragged: Node,
   live: Node[],
   armPx = SNAP_ARM_PX,
-  excludeTargetIds?: Set<string> // Skip these hosts (e.g. just-unstacked mates)
+  excludeHostSides?: Set<string> // `${hostId}:${side}` — e.g. just-left edge after unstack
 ): SnapCandidate | null {
   if (dragged.type !== 'chatPanel') return null
-  const dragMeta = (dragged.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-  const dragGroup =
-    typeof dragMeta.stackGroupId === 'string' ? dragMeta.stackGroupId : null
+  const dragMeta = nodeMeta(dragged)
+  const dragGroups = new Set(groupIdsOf(dragMeta))
 
   const dAbs = absFlowPosition(dragged, live)
   const dSize = nodeFlowSize(dragged)
@@ -158,28 +180,30 @@ export function findFrameEdgeSnap(
 
   for (const host of live) {
     if (host.id === dragged.id || host.type !== 'chatPanel') continue
-    if (excludeTargetIds?.has(host.id)) continue
     if (!host.data?.promptMessage?.id) continue
     if (host.hidden) continue
-    const hMeta = (host.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-    // Don’t snap onto your own stack mates
-    if (dragGroup && hMeta.stackGroupId === dragGroup) continue
+    const hMeta = nodeMeta(host)
 
     const hAbs = absFlowPosition(host, live)
     const hSize = nodeFlowSize(host)
     const hBox: FlowBox = { x: hAbs.x, y: hAbs.y, width: hSize.width, height: hSize.height }
-    const hostGroup =
-      typeof hMeta.stackGroupId === 'string' ? hMeta.stackGroupId : null
+    const hostStacks = readSideStacks(hMeta)
 
     const sides: FrameStackSide[] = ['right', 'left', 'bottom', 'top']
     for (const side of sides) {
+      // Just delinked from this host edge — allow other sides / other frames same drag
+      if (excludeHostSides?.has(`${host.id}:${side}`)) continue
+      // Already in this side’s tree → skip (other sides of the same host still OK)
+      const sideGroup = hostStacks[side]?.groupId
+      if (sideGroup && dragGroups.has(sideGroup)) continue
+
       let gap = Infinity
       let overlap = 0
       let parallel = 1
 
-      // Park past the whole stack on this side when the target is already linked
-      const parkBox = hostGroup
-        ? groupExtentOnSide(hostGroup, side, live, hBox)
+      // Park past the whole stack on this side when the target already has that side tree
+      const parkBox = sideGroup
+        ? groupExtentOnSide(sideGroup, side, live, hBox)
         : hBox
 
       let snappedAbs = { x: dBox.x, y: dBox.y }
@@ -218,7 +242,7 @@ export function findFrameEdgeSnap(
       }
 
       // Gap is measured to the hovered frame (arm), but park uses stack extent
-      if (hostGroup && parkBox !== hBox) {
+      if (sideGroup && parkBox !== hBox) {
         if (side === 'right') gap = dBox.x - (parkBox.x + parkBox.width)
         else if (side === 'left') gap = parkBox.x - (dBox.x + dBox.width)
         else if (side === 'bottom') gap = dBox.y - (parkBox.y + parkBox.height)
@@ -257,31 +281,175 @@ function absToNodePosition(
   return { x: abs.x - pAbs.x, y: abs.y - pAbs.y }
 }
 
-/** True when stack line Lock is on for this frame (`snapLockGroupId` === `stackGroupId`). */
-export function isSnapLockedMeta(meta?: Record<string, unknown> | null): boolean {
-  if (!meta) return false
-  return (
-    typeof meta.snapLockGroupId === 'string' &&
-    typeof meta.stackGroupId === 'string' &&
-    meta.snapLockGroupId === meta.stackGroupId
-  )
+/**
+ * Repark snap/stack mates when a frame’s upright AABB changes (e.g. rotation).
+ * Walks every side-tree `frameId` belongs to, lays mates out from that tree’s
+ * anchor against the current (or overridden) host box, then parks nested
+ * side-packs of those mates. Returns abs flow positions to apply.
+ */
+export function computeSnapMateRelayout(
+  frameId: string,
+  live: Node[],
+  frameSizeOverride?: { width: number; height: number }
+): Map<string, { x: number; y: number }> {
+  const self = live.find((n) => n.id === frameId)
+  if (!self || self.type !== 'chatPanel') return new Map()
+
+  const sizeOf = (n: Node): { width: number; height: number } => {
+    if (n.id === frameId && frameSizeOverride) return frameSizeOverride
+    // Prefer explicit style (AABB push) over RF measured width — measure lags updateNodeInternals
+    const sw =
+      typeof n.style?.width === 'number' ? n.style.width : parseFloat(String(n.style?.width ?? ''))
+    const sh =
+      typeof n.style?.height === 'number' ? n.style.height : parseFloat(String(n.style?.height ?? ''))
+    if (Number.isFinite(sw) && Number.isFinite(sh) && sw > 0 && sh > 0) {
+      return { width: sw, height: sh }
+    }
+    return nodeFlowSize(n)
+  }
+
+  const absPosOf = (
+    n: Node,
+    pending: Map<string, { x: number; y: number }>
+  ): { x: number; y: number } => {
+    const pendingPos = pending.get(n.id)
+    if (pendingPos) {
+      // pending stores node.position — convert to abs if parented
+      if (!n.parentId) return pendingPos
+      const parent = live.find((p) => p.id === n.parentId)
+      if (!parent) return pendingPos
+      const pAbs = absFlowPosition(parent, live)
+      return { x: pAbs.x + pendingPos.x, y: pAbs.y + pendingPos.y }
+    }
+    return absFlowPosition(n, live)
+  }
+
+  const absById = new Map<string, { x: number; y: number }>() // Absolute flow positions
+  const nodePosById = new Map<string, { x: number; y: number }>() // RF node.position
+  const visitedGroups = new Set<string>()
+  const queue: string[] = [frameId] // BFS: frame → its trees → nested trees of mates
+
+  while (queue.length > 0) {
+    const seedId = queue.shift() as string
+    const seed = live.find((n) => n.id === seedId)
+    if (!seed || seed.type !== 'chatPanel') continue
+    const seedMeta = nodeMeta(seed)
+    for (const groupId of groupIdsOf(seedMeta)) {
+      if (visitedGroups.has(groupId)) continue
+      visitedGroups.add(groupId)
+      const side = findStackEntry(seedMeta, groupId)?.side
+      if (!side) continue
+
+      const members = live
+        .filter(
+          (n) => n.type === 'chatPanel' && !!findStackEntry(nodeMeta(n), groupId)
+        )
+        .sort(
+          (a, b) =>
+            stackIndexInGroup(nodeMeta(a), groupId) -
+            stackIndexInGroup(nodeMeta(b), groupId)
+        )
+      if (members.length < 2) continue
+
+      const anchor = members[0]
+      const aAbs = absPosOf(anchor, nodePosById)
+      const aSize = sizeOf(anchor)
+      const frontBox = {
+        x: aAbs.x,
+        y: aAbs.y,
+        width: aSize.width,
+        height: aSize.height,
+      }
+      // Keep anchor put — only repark higher-index mates (and record abs for nesting)
+      absById.set(anchor.id, aAbs)
+
+      const mates = members.slice(1)
+      const sizes = mates.map((m) => sizeOf(m))
+      mates.forEach((mate, order) => {
+        const abs = stackExpandLayout(
+          frontBox,
+          side,
+          sizes[order],
+          order,
+          sizes.slice(0, order)
+        )
+        absById.set(mate.id, abs)
+        nodePosById.set(mate.id, absToNodePosition(mate, abs, live))
+        queue.push(mate.id) // Their other-side packs ride along
+      })
+    }
+  }
+
+  // Don’t move the rotating/resized frame itself — only its mates / nested packs
+  nodePosById.delete(frameId)
+  return nodePosById
 }
 
-/** Strip stack / snap-lock fields from message metadata (frame leaves the stack). */
-function stripStackFields(meta: Record<string, unknown>): Record<string, unknown> {
-  const next = { ...meta }
-  delete next.stackGroupId
-  delete next.stackSide
-  delete next.stackIndex
-  delete next.stackExpanded
-  delete next.stackAnchor
-  delete next.snapLockGroupId
-  return next
+/** Apply `computeSnapMateRelayout` into an RF nodes array (same tick as AABB update). */
+export function applySnapMateRelayout(
+  nodes: Node[],
+  frameId: string,
+  frameSizeOverride?: { width: number; height: number }
+): Node[] {
+  const posById = computeSnapMateRelayout(frameId, nodes, frameSizeOverride)
+  if (posById.size === 0) return nodes
+  let changed = false
+  const next = nodes.map((n) => {
+    const pos = posById.get(n.id)
+    if (!pos) return n
+    if (Math.abs(n.position.x - pos.x) < 0.5 && Math.abs(n.position.y - pos.y) < 0.5) {
+      return n
+    }
+    changed = true
+    const meta = { ...nodeMeta(n), position: { x: pos.x, y: pos.y } }
+    // position in meta is page-absolute for persist helpers
+    const abs = absFlowPosition({ ...n, position: pos }, nodes)
+    meta.position = abs
+    return {
+      ...n,
+      position: pos,
+      data: {
+        ...n.data,
+        promptMessage: n.data?.promptMessage
+          ? { ...n.data.promptMessage, metadata: meta }
+          : n.data?.promptMessage,
+      },
+    }
+  })
+  return changed ? next : nodes
 }
 
-function nodeMeta(n: Node): Record<string, unknown> {
-  return (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+/** Persist abs positions for mates moved by rotation/AABB (fire-and-forget). */
+export async function persistSnapMateRelayout(
+  live: Node[],
+  frameId: string,
+  frameSizeOverride?: { width: number; height: number }
+): Promise<void> {
+  const posById = computeSnapMateRelayout(frameId, live, frameSizeOverride)
+  if (posById.size === 0) return
+  const supabase = createClient()
+  for (const [id, pos] of posById) {
+    const n = live.find((x) => x.id === id)
+    const msgId = n?.data?.promptMessage?.id as string | undefined
+    if (!msgId) continue
+    const abs = absFlowPosition({ ...n!, position: pos }, live)
+    try {
+      await persistBlockPlacement(supabase, { messageId: msgId, position: abs })
+    } catch (err) {
+      console.error('Failed to persist snap mate after rotate:', err)
+    }
+  }
 }
+
+/** True when stack line Lock is on for any tree this frame is in. */
+// isSnapLockedMeta re-exported from lib/frame-side-stacks
+
+/** Remove one side-tree membership (used when a multi-side frame only leaves one group). */
+function stripOneGroup(meta: Record<string, unknown>, groupId: string): Record<string, unknown> {
+  return stripGroupFromMeta(meta, groupId)
+}
+
+// nodeMeta defined above with FlowBox
 
 /** Min drag distance (flow px) before an unlocked stacked frame unstacks. */
 const UNSTACK_MOVE_PX = 6
@@ -319,8 +487,8 @@ export function useFrameNestStackDrag({
   } | null>(null)
   const unstackedThisDragRef = useRef(false) // Only unstack once per drag
   const dragStartPosRef = useRef<{ id: string; x: number; y: number } | null>(null)
-  // After unstack, don't magnet/re-link to these former mates for the rest of the drag
-  const excludeSnapIdsRef = useRef<Set<string>>(new Set())
+  // After unstack, block only the edges we left (`hostId:side`) — other sides/frames OK same drag
+  const excludeSnapSidesRef = useRef<Set<string>>(new Set())
 
   const clearUi = useCallback(() => {
     dropUiRef.current = null
@@ -333,19 +501,29 @@ export function useFrameNestStackDrag({
       if (node.type !== 'chatPanel') return
       unstackedThisDragRef.current = false
       lockDragRef.current = null
-      excludeSnapIdsRef.current = new Set()
+      excludeSnapSidesRef.current = new Set()
       dragStartPosRef.current = { id: node.id, x: node.position.x, y: node.position.y }
-      // Prefer live store meta (menu Unlock may have just cleared snapLockGroupId)
+      // Prefer live store meta (menu Unlock may have just cleared locks)
       const live = getNodes()
       const liveNode = live.find((n) => n.id === node.id) || node
       const meta = nodeMeta(liveNode)
       if (!isSnapLockedMeta(meta)) return
-      const lockId = meta.snapLockGroupId as string
-      const origins = new Map<string, { x: number; y: number }>()
+      // Rigid-move union of every tree this frame is in, plus nested side-tree satellites
+      const myGroups = new Set(groupIdsOf(meta))
+      const lockId = [...myGroups].find((g) => isGroupLocked(meta, g)) || [...myGroups][0]
+      if (!lockId) return
+      const seedIds: string[] = []
       for (const n of live) {
         if (n.type !== 'chatPanel') continue
-        const m = nodeMeta(n)
-        if (m.snapLockGroupId !== lockId) continue
+        const ids = groupIdsOf(nodeMeta(n))
+        if (!ids.some((g) => myGroups.has(g))) continue
+        seedIds.push(n.id)
+      }
+      const nested = collectNestedSatelliteIds(live, seedIds, [])
+      const moveIds = new Set([...seedIds, ...nested])
+      const origins = new Map<string, { x: number; y: number }>()
+      for (const n of live) {
+        if (!moveIds.has(n.id)) continue
         origins.set(n.id, { x: n.position.x, y: n.position.y })
       }
       lockDragRef.current = { primaryId: node.id, lockId, origins }
@@ -353,140 +531,152 @@ export function useFrameNestStackDrag({
     [getNodes]
   )
 
-  /** Persist cleared stack meta for one message. */
-  const persistStripStack = useCallback(async (msgId: string) => {
-    if (!msgId) return
-    const supabase = createClient()
-    const { data: row } = await supabase
-      .from('messages')
-      .select('metadata')
-      .eq('id', msgId)
-      .maybeSingle()
-    if (!row) return
-    await supabase
-      .from('messages')
-      .update({
-        metadata: stripStackFields((row.metadata as Record<string, unknown>) || {}),
-      })
-      .eq('id', msgId)
-  }, [])
-
   /**
-   * Remove `node` from its stack group (unlocked drag).
-   * If ≤1 frame would remain in the group, clear the whole group.
+   * Remove `node` from all unlocked side trees (unlocked drag-apart).
+   * If ≤1 frame would remain in a group, clear that whole group.
    */
   const unstackNode = useCallback(
     (node: Node) => {
       const live = getNodes()
       const liveNode = live.find((n) => n.id === node.id) || node
       const meta = nodeMeta(liveNode)
-      const groupId = meta.stackGroupId
-      if (typeof groupId !== 'string' || isSnapLockedMeta(meta)) return
+      const groups = groupIdsOf(meta)
+      if (groups.length === 0 || isSnapLockedMeta(meta)) return
       takeSnapshot?.()
-      const groupMembers = live.filter((n) => {
-        if (n.type !== 'chatPanel') return false
-        return nodeMeta(n).stackGroupId === groupId
-      })
-      // Don't re-snap to anyone we just delinked from
-      for (const n of groupMembers) {
-        if (n.id !== liveNode.id) excludeSnapIdsRef.current.add(n.id)
+
+      // Block only the edges we just left — other sides of the same frame (and other frames) stay armable
+      for (const groupId of groups) {
+        const found = findStackEntry(meta, groupId)
+        if (!found) continue
+        for (const n of live) {
+          if (n.id === liveNode.id || n.type !== 'chatPanel') continue
+          if (!findStackEntry(nodeMeta(n), groupId)) continue
+          excludeSnapSidesRef.current.add(`${n.id}:${found.side}`)
+        }
       }
       snapRef.current = null
       clearUi()
 
-      const remaining = groupMembers.filter((n) => n.id !== liveNode.id)
-      const clearIds = new Set<string>([liveNode.id])
-      if (remaining.length <= 1) {
-        remaining.forEach((n) => clearIds.add(n.id))
-      }
+      // Per group: strip this node; clear whole group if ≤1 left; promote anchor if needed
+      type Promote = { id: string; groupId: string; side: FrameStackSide }
+      const promoteList: Promote[] = []
+      const clearEntire = new Map<string, Set<string>>() // groupId → node ids to fully strip
+      const stripOnly = new Set<string>([liveNode.id]) // always strip dragged from all its groups
 
-      // Dragged host with 2+ mates left: promote another to anchor
-      let promoteId: string | null = null
-      if (
-        remaining.length > 1 &&
-        (meta.stackAnchor === true || meta.stackIndex === 0)
-      ) {
-        const promote = [...remaining].sort((a, b) => {
-          const ai = nodeMeta(a).stackIndex
-          const bi = nodeMeta(b).stackIndex
-          return (typeof ai === 'number' ? ai : 99) - (typeof bi === 'number' ? bi : 99)
-        })[0]
-        promoteId = promote?.id ?? null
+      for (const groupId of groups) {
+        const members = live.filter(
+          (n) => n.type === 'chatPanel' && findStackEntry(nodeMeta(n), groupId)
+        )
+        const remaining = members.filter((n) => n.id !== liveNode.id)
+        if (remaining.length <= 1) {
+          const ids = clearEntire.get(groupId) || new Set<string>()
+          remaining.forEach((n) => ids.add(n.id))
+          ids.add(liveNode.id)
+          clearEntire.set(groupId, ids)
+          continue
+        }
+        const found = findStackEntry(meta, groupId)
+        if (found && (found.entry.anchor === true || found.entry.index === 0)) {
+          const promote = [...remaining].sort(
+            (a, b) =>
+              stackIndexInGroup(nodeMeta(a), groupId) - stackIndexInGroup(nodeMeta(b), groupId)
+          )[0]
+          if (promote) {
+            const pSide =
+              findStackEntry(nodeMeta(promote), groupId)?.side || found.side
+            promoteList.push({ id: promote.id, groupId, side: pSide })
+          }
+        }
       }
 
       setNodes((nds) =>
         nds.map((n) => {
-          if (clearIds.has(n.id)) {
-            const nextMeta = stripStackFields(nodeMeta(n))
-            return {
-              ...n,
-              hidden: false,
-              data: {
-                ...n.data,
-                promptMessage: n.data?.promptMessage
-                  ? { ...n.data.promptMessage, metadata: nextMeta }
-                  : n.data?.promptMessage,
-              },
+          let nextMeta = { ...nodeMeta(n) }
+          let changed = false
+
+          for (const [groupId, ids] of clearEntire) {
+            if (!ids.has(n.id)) continue
+            nextMeta = stripOneGroup(nextMeta, groupId)
+            changed = true
+          }
+          if (stripOnly.has(n.id)) {
+            for (const groupId of groups) {
+              if (clearEntire.has(groupId) && clearEntire.get(groupId)!.has(n.id)) continue
+              if (findStackEntry(nextMeta, groupId)) {
+                nextMeta = stripOneGroup(nextMeta, groupId)
+                changed = true
+              }
             }
           }
-          if (promoteId && n.id === promoteId) {
-            const nextMeta = {
-              ...nodeMeta(n),
-              stackIndex: 0,
-              stackAnchor: true,
-              stackExpanded: true,
-            }
-            delete nextMeta.snapLockGroupId // Unlocked until re-snapped
-            return {
-              ...n,
-              hidden: false,
-              data: {
-                ...n.data,
-                promptMessage: n.data?.promptMessage
-                  ? { ...n.data.promptMessage, metadata: nextMeta }
-                  : n.data?.promptMessage,
-              },
-            }
+          for (const p of promoteList) {
+            if (n.id !== p.id) continue
+            nextMeta = setSideStackEntry(nextMeta, p.side, {
+              groupId: p.groupId,
+              index: 0,
+              anchor: true,
+              expanded: true,
+            })
+            changed = true
           }
-          return n
+          if (!changed) return n
+          return {
+            ...n,
+            hidden: false,
+            data: {
+              ...n.data,
+              promptMessage: n.data?.promptMessage
+                ? { ...n.data.promptMessage, metadata: nextMeta }
+                : n.data?.promptMessage,
+            },
+          }
         })
       )
 
       void (async () => {
         try {
-          for (const id of clearIds) {
+          const touched = new Set<string>()
+          for (const ids of clearEntire.values()) ids.forEach((id) => touched.add(id))
+          stripOnly.forEach((id) => touched.add(id))
+          promoteList.forEach((p) => touched.add(p.id))
+          for (const id of touched) {
             const n = live.find((x) => x.id === id)
             const msgId = n?.data?.promptMessage?.id as string | undefined
-            if (msgId) await persistStripStack(msgId)
-          }
-          if (promoteId) {
-            const promo = live.find((x) => x.id === promoteId)
-            const promoId = promo?.data?.promptMessage?.id as string | undefined
-            if (promoId) {
-              const supabase = createClient()
-              const { data: row } = await supabase
-                .from('messages')
-                .select('metadata')
-                .eq('id', promoId)
-                .maybeSingle()
-              if (row) {
-                const next = {
-                  ...((row.metadata as Record<string, unknown>) || {}),
-                  stackIndex: 0,
-                  stackAnchor: true,
-                  stackExpanded: true,
-                }
-                delete next.snapLockGroupId
-                await supabase.from('messages').update({ metadata: next }).eq('id', promoId)
+            if (!msgId) continue
+            // Re-read from the RF update path: persist by recomputing from live logic
+            const supabase = createClient()
+            const { data: row } = await supabase
+              .from('messages')
+              .select('metadata')
+              .eq('id', msgId)
+              .maybeSingle()
+            if (!row) continue
+            let nextMeta = (row.metadata as Record<string, unknown>) || {}
+            for (const [groupId, ids] of clearEntire) {
+              if (ids.has(id)) nextMeta = stripOneGroup(nextMeta, groupId)
+            }
+            if (stripOnly.has(id)) {
+              for (const groupId of groups) {
+                if (clearEntire.has(groupId) && clearEntire.get(groupId)!.has(id)) continue
+                if (findStackEntry(nextMeta, groupId)) nextMeta = stripOneGroup(nextMeta, groupId)
               }
             }
+            for (const p of promoteList) {
+              if (p.id !== id) continue
+              nextMeta = setSideStackEntry(nextMeta, p.side, {
+                groupId: p.groupId,
+                index: 0,
+                anchor: true,
+                expanded: true,
+              })
+            }
+            await supabase.from('messages').update({ metadata: nextMeta }).eq('id', msgId)
           }
         } catch (err) {
           console.error('Failed to persist unstack:', err)
         }
       })()
     },
-    [clearUi, getNodes, persistStripStack, setNodes, takeSnapshot]
+    [clearUi, getNodes, setNodes, takeSnapshot]
   )
 
   const onNodeDrag = useCallback(
@@ -502,9 +692,9 @@ export function useFrameNestStackDrag({
       const dragNode = { ...liveNode, position: node.position }
       const meta = nodeMeta(liveNode)
 
-      // Locked: move every frame sharing snapLockGroupId by the same delta
+      // Locked: move every frame sharing any tree with the primary (origins captured at start)
       if (isSnapLockedMeta(meta) && lockDragRef.current?.primaryId === node.id) {
-        const { lockId, origins } = lockDragRef.current
+        const { origins } = lockDragRef.current
         const origin = origins.get(node.id)
         if (origin) {
           const dx = node.position.x - origin.x
@@ -514,7 +704,6 @@ export function useFrameNestStackDrag({
               if (n.id === node.id) return n // Primary already at RF position
               const o = origins.get(n.id)
               if (!o) return n
-              if (nodeMeta(n).snapLockGroupId !== lockId) return n
               return { ...n, position: { x: o.x + dx, y: o.y + dy } }
             })
           )
@@ -524,9 +713,9 @@ export function useFrameNestStackDrag({
         return
       }
 
-      // Unlocked but stacked: drag apart → delink from stack
+      // Unlocked but stacked on any side: drag apart → delink from those trees
       if (
-        typeof meta.stackGroupId === 'string' &&
+        groupIdsOf(meta).length > 0 &&
         !isSnapLockedMeta(meta) &&
         !unstackedThisDragRef.current
       ) {
@@ -538,50 +727,43 @@ export function useFrameNestStackDrag({
         if (moved >= UNSTACK_MOVE_PX) {
           unstackedThisDragRef.current = true
           unstackNode(dragNode)
-          return // Skip snap this tick; former mates are excluded going forward
+          // Fall through: same gesture can arm a new side/frame snap on later ticks
+          return // Skip snap this tick while RF applies the delink
         }
       }
 
-      // After an unstack this drag, never re-magnet to the old partners
-      if (unstackedThisDragRef.current) {
-        const snap = findFrameEdgeSnap(
-          dragNode,
-          live,
-          SNAP_ARM_PX,
-          excludeSnapIdsRef.current
-        )
-        if (!snap) {
-          if (dropUiRef.current) clearUi()
-          return
-        }
-        snapRef.current = snap
-        const rect = frameScreenRect(snap.targetId)
-        setDropUi({
-          targetId: snap.targetId,
-          mode: 'snap',
-          stackSide: snap.side,
-          targetRect: rect
-            ? { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
-            : {
-                top: 0,
-                left: 0,
-                width: snap.hostAbs.width,
-                height: snap.hostAbs.height,
-              },
-        })
-        if (snap.gap <= SNAP_MAGNET_PX) {
-          const nextPos = absToNodePosition(dragNode, snap.snappedAbs, live)
-          const cur = dragNode.position
-          if (Math.abs(cur.x - nextPos.x) > 0.5 || Math.abs(cur.y - nextPos.y) > 0.5) {
-            setNodes((nds) =>
-              nds.map((n) => (n.id === dragNode.id ? { ...n, position: nextPos } : n))
-            )
-          }
-        }
-        return
-      }
-
-      const snap = findFrameEdgeSnap(dragNode, live)
+      // After unstack: arm any edge except the ones we just left (other side / other frame OK).
+      // Strip stale stack membership on the drag candidate until RF setNodes from unstack flushes —
+      // otherwise dragGroups.has(sideGroup) can still skip the host edge we are free to rejoin
+      // under a fresh group / other side.
+      const snapDrag =
+        unstackedThisDragRef.current
+          ? (() => {
+              const m = { ...nodeMeta(dragNode) }
+              delete m.sideStacks
+              delete m.stackGroupId
+              delete m.stackSide
+              delete m.stackIndex
+              delete m.stackAnchor
+              delete m.stackExpanded
+              delete m.parentStackHidden
+              return {
+                ...dragNode,
+                data: {
+                  ...dragNode.data,
+                  promptMessage: dragNode.data?.promptMessage
+                    ? { ...dragNode.data.promptMessage, metadata: m }
+                    : dragNode.data?.promptMessage,
+                },
+              }
+            })()
+          : dragNode
+      const snap = findFrameEdgeSnap(
+        snapDrag,
+        live,
+        SNAP_ARM_PX,
+        unstackedThisDragRef.current ? excludeSnapSidesRef.current : undefined
+      )
       if (!snap) {
         if (dropUiRef.current) clearUi()
         return
@@ -623,12 +805,12 @@ export function useFrameNestStackDrag({
       const snap = snapRef.current
       const lockSession = lockDragRef.current
       const didUnstack = unstackedThisDragRef.current
-      const excludeIds = excludeSnapIdsRef.current
+      const excludeSides = excludeSnapSidesRef.current
       clearUi()
       lockDragRef.current = null
       dragStartPosRef.current = null
       unstackedThisDragRef.current = false
-      excludeSnapIdsRef.current = new Set()
+      excludeSnapSidesRef.current = new Set()
 
       // Persist locked-group positions
       if (
@@ -642,7 +824,7 @@ export function useFrameNestStackDrag({
         try {
           for (const n of live) {
             if (n.type !== 'chatPanel') continue
-            if (nodeMeta(n).snapLockGroupId !== lockSession.lockId) continue
+            if (!lockSession.origins.has(n.id)) continue
             const msgId = n.data?.promptMessage?.id as string | undefined
             if (!msgId) continue
             const abs = absFlowPosition(n, live)
@@ -654,15 +836,14 @@ export function useFrameNestStackDrag({
         return
       }
 
-      // Unlocked drag-away already delinked — don't re-link to former mates on release
+      // Unlocked drag-away delinked — still link if they snapped a *different* side/frame
       if (didUnstack) {
-        if (!snap || excludeIds.has(snap.targetId)) return
-        // Allow linking to a *new* frame if they dragged onto a different one
+        if (!snap || excludeSides.has(`${snap.targetId}:${snap.side}`)) return
       }
 
       if (isLocked || !conversationId || node.type !== 'chatPanel' || !snap) return
       if (snap.targetId === node.id) return
-      if (excludeIds.has(snap.targetId)) return
+      if (excludeSides.has(`${snap.targetId}:${snap.side}`)) return
       if (snap.gap > SNAP_ARM_PX) return
 
       const sourceMsgId = node.data?.promptMessage?.id as string | undefined
@@ -672,33 +853,25 @@ export function useFrameNestStackDrag({
       if (!sourceMsgId || !targetMsgId || !front) return
 
       const dragMeta = nodeMeta(live.find((n) => n.id === node.id) || node)
-      const frontMeta = { ...nodeMeta(front) }
-      const existingGroup =
-        typeof frontMeta.stackGroupId === 'string' ? frontMeta.stackGroupId : null
-      if (
-        existingGroup &&
-        dragMeta.stackGroupId === existingGroup &&
-        frontMeta.stackSide === snap.side
-      ) {
+      const frontMeta = nodeMeta(front)
+      const frontStacks = readSideStacks(frontMeta)
+      // Join / create the tree on the snapped adjust-box side only
+      const existingGroup = frontStacks[snap.side]?.groupId ?? null
+      if (existingGroup && groupIdsOf(dragMeta).includes(existingGroup)) {
         return
       }
 
-      const stackGroupId = existingGroup || targetMsgId
-      const groupSide =
-        (existingGroup &&
-        (['top', 'right', 'bottom', 'left'] as const).includes(
-          frontMeta.stackSide as FrameStackSide
-        )
-          ? (frontMeta.stackSide as FrameStackSide)
-          : snap.side)
+      const groupSide = snap.side
+      const stackGroupId =
+        existingGroup || sideStackGroupId(targetMsgId, groupSide)
       const existingMates = live.filter((n) => {
         if (n.id === node.id) return false
-        return nodeMeta(n).stackGroupId === stackGroupId
+        return !!findStackEntry(nodeMeta(n), stackGroupId)
       })
       const nextIndex = existingGroup
         ? existingMates.reduce((max, n) => {
-            const i = nodeMeta(n).stackIndex
-            return typeof i === 'number' && i > max ? i : max
+            const i = stackIndexInGroup(nodeMeta(n), stackGroupId)
+            return i > max ? i : max
           }, 0) + 1
         : 1
 
@@ -708,21 +881,24 @@ export function useFrameNestStackDrag({
 
       takeSnapshot?.()
 
-      // Join existing group: only move the new frame; keep original host/anchor.
-      // New group: target becomes host. Snap does NOT lock — Lock happens on first Stack.
+      const mateEntry: SideStackEntry = {
+        groupId: stackGroupId,
+        index: nextIndex,
+        expanded: true,
+      }
+      const hostEntry: SideStackEntry = {
+        groupId: stackGroupId,
+        index: 0,
+        anchor: true,
+      }
+
+      // Join existing side tree: only move the new frame. New tree: target becomes side host.
+      // Snap does NOT lock — Lock happens on first Stack / Lock on that side’s line.
       setNodes((nds) =>
         nds.map((n) => {
           if (n.id === node.id) {
-            const nextMeta = {
-              ...nodeMeta(n),
-              stackGroupId,
-              stackSide: groupSide,
-              stackIndex: nextIndex,
-              stackExpanded: true,
-              position: parkAbs,
-            }
-            delete nextMeta.stackAnchor
-            delete nextMeta.snapLockGroupId
+            const nextMeta = setSideStackEntry(nodeMeta(n), groupSide, mateEntry)
+            nextMeta.position = parkAbs
             return {
               ...n,
               position: snappedNodePos,
@@ -736,34 +912,8 @@ export function useFrameNestStackDrag({
               },
             }
           }
-          if (existingGroup) {
-            // Existing members: side only — never rewrite position / steal anchor / auto-lock
-            if (nodeMeta(n).stackGroupId === stackGroupId) {
-              const nextMeta = {
-                ...nodeMeta(n),
-                stackSide: groupSide,
-              }
-              return {
-                ...n,
-                data: {
-                  ...n.data,
-                  promptMessage: n.data?.promptMessage
-                    ? { ...n.data.promptMessage, metadata: nextMeta }
-                    : n.data?.promptMessage,
-                },
-              }
-            }
-            return n
-          }
-          if (n.id === snap.targetId) {
-            const nextMeta = {
-              ...nodeMeta(n),
-              stackGroupId,
-              stackSide: groupSide,
-              stackIndex: 0,
-              stackAnchor: true,
-            }
-            delete nextMeta.snapLockGroupId
+          if (!existingGroup && n.id === snap.targetId) {
+            const nextMeta = setSideStackEntry(nodeMeta(n), groupSide, hostEntry)
             return {
               ...n,
               zIndex: 1,
@@ -787,16 +937,12 @@ export function useFrameNestStackDrag({
           .eq('id', sourceMsgId)
           .maybeSingle()
         if (mateRow) {
-          const mateMeta = {
-            ...((mateRow.metadata as Record<string, unknown>) || {}),
-            stackGroupId,
-            stackSide: groupSide,
-            stackIndex: nextIndex,
-            stackExpanded: true,
-            position: parkAbs,
-          }
-          delete mateMeta.stackAnchor
-          delete mateMeta.snapLockGroupId
+          const mateMeta = setSideStackEntry(
+            (mateRow.metadata as Record<string, unknown>) || {},
+            groupSide,
+            mateEntry
+          )
+          mateMeta.position = parkAbs
           await supabase.from('messages').update({ metadata: mateMeta }).eq('id', sourceMsgId)
         }
         if (!existingGroup) {
@@ -806,37 +952,12 @@ export function useFrameNestStackDrag({
             .eq('id', targetMsgId)
             .maybeSingle()
           if (hostRow) {
-            const hostMeta = {
-              ...((hostRow.metadata as Record<string, unknown>) || {}),
-              stackGroupId,
-              stackSide: groupSide,
-              stackIndex: 0,
-              stackAnchor: true,
-            }
-            delete hostMeta.snapLockGroupId
+            const hostMeta = setSideStackEntry(
+              (hostRow.metadata as Record<string, unknown>) || {},
+              groupSide,
+              hostEntry
+            )
             await supabase.from('messages').update({ metadata: hostMeta }).eq('id', targetMsgId)
-          }
-        } else {
-          for (const n of live) {
-            if (n.id === node.id) continue
-            if (nodeMeta(n).stackGroupId !== stackGroupId) continue
-            const msgId = n.data?.promptMessage?.id as string | undefined
-            if (!msgId) continue
-            const { data: row } = await supabase
-              .from('messages')
-              .select('metadata')
-              .eq('id', msgId)
-              .maybeSingle()
-            if (!row) continue
-            await supabase
-              .from('messages')
-              .update({
-                metadata: {
-                  ...((row.metadata as Record<string, unknown>) || {}),
-                  stackSide: groupSide,
-                },
-              })
-              .eq('id', msgId)
           }
         }
         await persistBlockPlacement(supabase, {

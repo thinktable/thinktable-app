@@ -1,12 +1,23 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-11T02:44:00Z`
+- Snapped at: `2026-08-11T11:06:30Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
-- Remote applied still tops out at `20260810020000_ai_copilot_foundation` (no new DDL this save)
+- Remote applied tops out at `20260811104342_secure_page_share_rls_policies` (page share DDL live)
 
 ## This save
+
+- **DDL (thinkable, applied via MCP; local filenames differ):**
+  - Local `20260811063000_page_share_links_and_people.sql` ↔ remote `20260811103152_page_share_links_and_people`
+  - Local `20260811070000_secure_page_share_access.sql` ↔ remote `20260811104322_secure_page_share_access` + `20260811104342_secure_page_share_rls_policies`
+  - Tables/helpers: `page_share_links`, `page_share_people`, hashed tokens, conversation-scoped RLS
+- Marker `20260811110630_frame_snap_rotate_mates_mid_drag_reshap.sql` (no extra DDL):
+  - Snap/stack mates repark live when host upright AABB changes (rotation)
+  - Per-side stack trees + nested packs; unlocked drag-away can re-snap to another side/frame same gesture
+  - Shape-aware AABB; share UI / APIs shipped with the above DDL
+
+## Prior: frame edge-snap / shapes / rotation
 
 - No DDL. Marker `20260811024400_frame_edge_snap_stack_shapes_rotation.sql`.
 - **Frame edge-snap / stack**: snap links frames (line per gap); first Stack locks (`snapLockGroupId`); Open stack + directional arrows + Lock on the line menu; unlock then drag-away delinks.

@@ -1,7 +1,7 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-11T02:44:00Z
+# snapped_at=2026-08-11T11:06:30Z
 # postgres=17.6.1.052 gotrue=v2.195.0 rest=v13.0.5 storage=v1.68.1
 # Remote applied (via Supabase MCP / Management API on thinkable):
 # 20251124231547 create_saas_schema
@@ -17,6 +17,9 @@
 # 20251230233555 create_user_preferences_table
 # 20260808160000 panel_edges_thread_metadata
 # 20260810020000 ai_copilot_foundation
+# 20260811103152 page_share_links_and_people
+# 20260811104322 secure_page_share_access
+# 20260811104342 secure_page_share_rls_policies
 #
 # Local migration files:
 20251203111351_schema_documentation.md
@@ -75,3 +78,6 @@
 20260810143604_ai_composer_plus_quiz_me.sql
 20260810165853_chat_reload_persist_live_context.sql
 20260811024400_frame_edge_snap_stack_shapes_rotation.sql
+20260811063000_page_share_links_and_people.sql
+20260811070000_secure_page_share_access.sql
+20260811110630_frame_snap_rotate_mates_mid_drag_reshap.sql

@@ -72,6 +72,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ShapeGridItem } from './shapes/ShapeGridItem'
 import { useTheme } from './theme-provider'
 import { NotionConnectButton } from './notion-connect-button'
+import { SharePageMenu } from './share-page-menu' // Share dropdown: Notion people + role links
+import { usePageAccess } from '@/lib/share/page-access-context' // Owner-only share menu
 import { useAiEditSession } from '@/lib/ai/edit-session' // Top-bar AI content mask toggle
 import { htmlHasAiOrigin } from '@/lib/ai/wrap-ai-html' // Detect AI-origin spans in frame HTML
 import { newBlockMetadata } from '@/lib/blocks' // Canonical isBlock + isInlineBlock metadata
@@ -82,6 +84,7 @@ interface EditorToolbarProps {
 }
 
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
+  const { canShare, canEdit, role } = usePageAccess() // Gate share + show view-only chrome
   const { reactFlowInstance, isLocked, setIsLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, drawShape: contextDrawShape, setDrawShape: setContextDrawShape, mapUndo, mapRedo, canMapUndo, canMapRedo, snapEnabled, setSnapEnabled } = useReactFlowContext()
   const { showAiOrigin, setShowAiOrigin } = useAiEditSession() // Reddish AI content overlay toggle
   const queryClientForAi = useQueryClient() // Scan page frames for AI-origin content
@@ -3048,16 +3051,27 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           <NotionConnectButton />
         </div>
 
-        {/* Share Button */}
-        <div className="flex items-center px-2 flex-shrink-0">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0 text-gray-600 hover:text-gray-900 hover:bg-gray-100 flex-shrink-0"
-            title="Share"
-          >
-            <Share2 className="h-4 w-4" />
-          </Button>
+        {/* Share — owner only; viewers see a read-only role chip */}
+        <div className="flex items-center px-2 flex-shrink-0 gap-1">
+          {!canEdit && (
+            <span className="hidden sm:inline text-[11px] text-gray-500 px-1.5 py-0.5 rounded bg-gray-100">
+              {role === 'comment' ? 'Can comment' : 'View only'}
+            </span>
+          )}
+          {canShare && conversationId ? (
+            <SharePageMenu pageId={conversationId} />
+          ) : canShare ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0 text-gray-400 flex-shrink-0"
+              title="Save the page to share"
+              type="button"
+              disabled
+            >
+              <Share2 className="h-4 w-4" />
+            </Button>
+          ) : null}
         </div>
       </div>
     </div>

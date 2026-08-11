@@ -1,8 +1,9 @@
 'use client'
 
-// Stack line between snap-linked frames (one line per gap).
+// Stack line between snap-linked frames on one adjust-box side (one line per gap).
+// Each side (top/right/bottom/left) has its own stack tree.
 // • Click → Open stack / directional Stack arrows / Lock
-// • First Stack sets snapLockGroupId (snap alone does not lock)
+// • First Stack sets lock for that group (snap alone does not lock)
 // • Hover when any mate is stacked → fast faded preview; click one to open just that frame
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -15,6 +16,19 @@ import {
   STACK_LINE_GAP,
   type FrameStackSide,
 } from '@/components/use-frame-nest-stack-drag'
+import {
+  collectNestedSatelliteIds,
+  findOwningMateId,
+  findStackEntry,
+  isGroupLocked,
+  patchGroupEntry,
+  readSideStacks,
+  rekeyGroupSide,
+  setGroupLocked,
+  setParentStackHidden,
+  stackIndexInGroup,
+  FRAME_STACK_SIDES,
+} from '@/lib/frame-side-stacks'
 import { absFlowPosition, nodeFlowSize } from '@/components/use-block-group-drag'
 import { persistBlockPlacement } from '@/lib/blocks'
 import { cn } from '@/lib/utils'
@@ -28,7 +42,7 @@ const LINE_THICKNESS = 2 // Stroke width in CSS px (pill radius matches)
 type FrameStackRevealLineProps = {
   nodeId: string // Frame this line sits on (inward side of the gap)
   stackGroupId: string
-  stackSide: FrameStackSide // Direction toward the next mate
+  stackSide: FrameStackSide // Direction toward the next mate (adjust-box side)
   frameUiScale?: number
 }
 
@@ -39,11 +53,29 @@ function oppositeSide(side: FrameStackSide): FrameStackSide {
   return 'top'
 }
 
-function stackIndexOf(n: { data?: { promptMessage?: { metadata?: unknown } } }): number {
-  const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-  if (typeof m.stackIndex === 'number') return m.stackIndex
-  if (m.stackAnchor === true) return 0
-  return 99
+function stackIndexOf(n: { data?: unknown }, groupId: string): number {
+  const data = n.data as { promptMessage?: { metadata?: unknown } } | undefined
+  return stackIndexInGroup(
+    (data?.promptMessage?.metadata || {}) as Record<string, unknown>,
+    groupId
+  )
+}
+
+function nodeStackMeta(n: { data?: unknown }): Record<string, unknown> {
+  const data = n.data as { promptMessage?: { metadata?: unknown } } | undefined
+  return (data?.promptMessage?.metadata || {}) as Record<string, unknown>
+}
+
+function nodeMessageId(n: { data?: unknown }): string | undefined {
+  const data = n.data as { promptMessage?: { id?: string } } | undefined
+  return typeof data?.promptMessage?.id === 'string' ? data.promptMessage.id : undefined
+}
+
+function entryExpanded(
+  meta: Record<string, unknown>,
+  groupId: string
+): boolean {
+  return findStackEntry(meta, groupId)?.entry.expanded === true
 }
 
 /** How many rounded marks to paint for this mate count (1 solid / N dashes / many dots). */
@@ -53,7 +85,7 @@ function stackMarkCount(mateCount: number): number {
   return mateCount // One rounded dash per mate
 }
 
-/** Mate nodes in this stack group (excludes host), sorted by stackIndex. */
+/** Mate nodes in this side’s stack group (excludes host), sorted by stackIndex. */
 function collectMates(
   getNodes: () => ReturnType<ReturnType<typeof useReactFlow>['getNodes']>,
   nodeId: string,
@@ -62,22 +94,82 @@ function collectMates(
   return getNodes()
     .filter((n) => {
       if (n.id === nodeId || n.type !== 'chatPanel') return false
-      const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-      return m.stackGroupId === stackGroupId
+      return !!findStackEntry(nodeStackMeta(n), stackGroupId)
     })
-    .sort((a, b) => {
-      const ai =
-        typeof (a.data?.promptMessage?.metadata as Record<string, unknown>)?.stackIndex ===
-        'number'
-          ? ((a.data?.promptMessage?.metadata as Record<string, unknown>).stackIndex as number)
-          : 99
-      const bi =
-        typeof (b.data?.promptMessage?.metadata as Record<string, unknown>)?.stackIndex ===
-        'number'
-          ? ((b.data?.promptMessage?.metadata as Record<string, unknown>).stackIndex as number)
-          : 99
-      return ai - bi
-    })
+    .sort((a, b) => stackIndexOf(a, stackGroupId) - stackIndexOf(b, stackGroupId))
+}
+
+/** All frames in this side’s group (including host). */
+function collectGroup(
+  getNodes: () => ReturnType<ReturnType<typeof useReactFlow>['getNodes']>,
+  stackGroupId: string
+) {
+  return getNodes().filter((n) => {
+    if (n.type !== 'chatPanel') return false
+    return !!findStackEntry(nodeStackMeta(n), stackGroupId)
+  })
+}
+
+/**
+ * Park nested side-tree satellites relative to already-placed mates.
+ * Skips the parent `excludeGroupId` so A’s bottom pack lays out from A, not from B.
+ */
+function layoutNestedFromMates(
+  live: ReturnType<ReturnType<typeof useReactFlow>['getNodes']>,
+  placedPos: Map<string, { x: number; y: number }>,
+  excludeGroupId: string
+): Map<string, { x: number; y: number }> {
+  const nestedPos = new Map<string, { x: number; y: number }>()
+  const sizeOf = (id: string) => {
+    const n = live.find((x) => x.id === id)
+    return n ? nodeFlowSize(n) : { width: 280, height: 120 }
+  }
+  const queue = [...placedPos.keys()]
+  const visitedGroups = new Set<string>([excludeGroupId])
+  while (queue.length > 0) {
+    const pid = queue.shift() as string
+    const pPos = placedPos.get(pid) || nestedPos.get(pid)
+    if (!pPos) continue
+    const pNode = live.find((n) => n.id === pid)
+    if (!pNode) continue
+    const pSize = sizeOf(pid)
+    const pBox = { x: pPos.x, y: pPos.y, width: pSize.width, height: pSize.height }
+    const stacks = readSideStacks(nodeStackMeta(pNode))
+    for (const side of FRAME_STACK_SIDES) {
+      const entry = stacks[side]
+      if (!entry || visitedGroups.has(entry.groupId)) continue
+      // Only hosts of this side tree fan mates outward
+      if (!(entry.index === 0 || entry.anchor === true)) continue
+      visitedGroups.add(entry.groupId)
+      const mates = live
+        .filter((n) => {
+          if (n.id === pid || n.type !== 'chatPanel') return false
+          return !!findStackEntry(nodeStackMeta(n), entry.groupId)
+        })
+        .sort(
+          (a, b) =>
+            stackIndexInGroup(nodeStackMeta(a), entry.groupId) -
+            stackIndexInGroup(nodeStackMeta(b), entry.groupId)
+        )
+      const sizes = mates.map((n) => sizeOf(n.id))
+      mates.forEach((mate, order) => {
+        const pos = stackExpandLayout(pBox, side, sizes[order], order, sizes.slice(0, order))
+        nestedPos.set(mate.id, pos)
+        placedPos.set(mate.id, pos) // Allow deeper nesting from this mate
+        queue.push(mate.id)
+      })
+    }
+  }
+  return nestedPos
+}
+
+function clearPreviewStyle(n: { style?: Record<string, unknown>; className?: string }) {
+  const { opacity: _o, ...restStyle } = (n.style || {}) as Record<string, unknown>
+  const className = (n.className || '')
+    .split(/\s+/)
+    .filter((c) => c && c !== 'tt-stack-preview')
+    .join(' ')
+  return { restStyle, className: className || undefined }
 }
 
 /** Edge line on the stack side of the host frame; stroke encodes mate count. */
@@ -93,13 +185,12 @@ export function FrameStackRevealLine({
     const parts: string[] = []
     s.nodeInternals.forEach((n) => {
       if (n.type !== 'chatPanel') return
-      const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-      if (n.id !== nodeId && m.stackGroupId !== stackGroupId) return
-      const lock =
-        typeof m.snapLockGroupId === 'string' && m.snapLockGroupId === stackGroupId ? 1 : 0
-      parts.push(
-        `${n.id}:${m.stackExpanded === true ? 1 : 0}:${n.hidden ? 1 : 0}:${lock}`
-      )
+      const m = nodeStackMeta(n)
+      if (n.id !== nodeId && !findStackEntry(m, stackGroupId)) return
+      if (n.id === nodeId && !findStackEntry(m, stackGroupId)) return
+      const lock = isGroupLocked(m, stackGroupId) ? 1 : 0
+      const expanded = entryExpanded(m, stackGroupId) ? 1 : 0
+      parts.push(`${n.id}:${expanded}:${n.hidden ? 1 : 0}:${lock}`)
     })
     return parts.join('|')
   })
@@ -140,7 +231,8 @@ export function FrameStackRevealLine({
   )
 
   /** Place mates at expand layout (visible). `expanded` = full open vs faded preview.
-   *  `onlyId` → that mate alone, always parked flush next to the host (order 0), not at its old deep index. */
+   *  Nested side-tree satellites (e.g. C on A’s bottom) park with their owning mate.
+   *  `onlyId` → that mate alone (+ its nested), always parked flush next to the host. */
   const showMatesOut = useCallback(
     (expanded: boolean, onlyId?: string | null) => {
       const live = getNodes()
@@ -164,8 +256,8 @@ export function FrameStackRevealLine({
         const openFirst: typeof sortedMates = []
         const rest: typeof sortedMates = []
         for (const n of sortedMates) {
-          const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-          if (!n.hidden && m.stackExpanded === true) openFirst.push(n)
+          const m = nodeStackMeta(n)
+          if (!n.hidden && entryExpanded(m, stackGroupId)) openFirst.push(n)
           else rest.push(n)
         }
         layoutMates = [...openFirst, ...rest]
@@ -178,6 +270,20 @@ export function FrameStackRevealLine({
           stackExpandLayout(frontBox, stackSide, sizes[order], order, sizes.slice(0, order))
         )
       })
+      // Nested satellites of the mates we’re showing (A’s bottom C, etc.)
+      const showMateIds = layoutMates.map((n) => n.id)
+      const nestedIds = collectNestedSatelliteIds(live, showMateIds, [stackGroupId])
+      const nestedPos = layoutNestedFromMates(live, new Map(posById), stackGroupId)
+      for (const [id, pos] of nestedPos) {
+        if (nestedIds.includes(id)) posById.set(id, pos)
+      }
+      // Hide other direct mates (+ their nested) when opening a single mate
+      const hideMateIds = onlyId
+        ? sortedMates.filter((n) => n.id !== onlyId).map((n) => n.id)
+        : []
+      const hideNestedIds = onlyId
+        ? collectNestedSatelliteIds(live, hideMateIds, [stackGroupId])
+        : []
       // Promote opened mate to front of stack (index 1); renumber the rest 2..n
       const indexById = new Map<string, number>()
       if (onlyId && expanded) {
@@ -188,25 +294,29 @@ export function FrameStackRevealLine({
           indexById.set(m.id, next++)
         }
       }
+      const showSet = new Set([...showMateIds, ...nestedIds])
+      const hideSet = new Set([...hideMateIds, ...hideNestedIds])
       setNodes((nds) =>
         nds.map((n) => {
-          // Opening a single frame: hide every other mate
-          if (onlyId && n.id !== onlyId) {
-            const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-            if (m.stackGroupId !== stackGroupId || n.id === nodeId) return n
-            const meta: Record<string, unknown> = { ...m, stackExpanded: false }
+          if (hideSet.has(n.id)) {
+            const m = nodeStackMeta(n)
+            let meta = findStackEntry(m, stackGroupId)
+              ? patchGroupEntry(m, stackGroupId, { expanded: false })
+              : m
             const idx = indexById.get(n.id)
-            if (typeof idx === 'number') meta.stackIndex = idx
-            const { opacity: _o, ...restStyle } = (n.style || {}) as Record<string, unknown>
-            const className = (n.className || '')
-              .split(/\s+/)
-              .filter((c) => c && c !== 'tt-stack-preview')
-              .join(' ')
+            if (typeof idx === 'number' && findStackEntry(meta, stackGroupId)) {
+              meta = patchGroupEntry(meta, stackGroupId, { index: idx })
+            }
+            // Nested under the still-collapsed parent group until a full open clears it
+            meta = setParentStackHidden(meta, stackGroupId)
+            const { restStyle, className } = clearPreviewStyle(
+              n as { style?: Record<string, unknown>; className?: string }
+            )
             return {
               ...n,
               hidden: true,
               style: restStyle,
-              className: className || undefined,
+              className,
               data: {
                 ...n.data,
                 promptMessage: n.data?.promptMessage
@@ -216,24 +326,27 @@ export function FrameStackRevealLine({
             }
           }
           const pos = posById.get(n.id)
-          if (!pos) return n
-          const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-          const meta: Record<string, unknown> = {
-            ...m,
-            stackExpanded: expanded,
-            position: pos,
-          }
+          if (!pos || !showSet.has(n.id)) return n
+          const m = nodeStackMeta(n)
+          let meta = findStackEntry(m, stackGroupId)
+            ? patchGroupEntry(m, stackGroupId, { expanded })
+            : m
+          // Clear nested-hide marker while preview/open shows this satellite
+          meta = setParentStackHidden(meta, null)
+          meta = { ...meta, position: pos }
           const idx = indexById.get(n.id)
-          if (typeof idx === 'number') meta.stackIndex = idx
+          if (typeof idx === 'number' && findStackEntry(meta, stackGroupId)) {
+            meta = patchGroupEntry(meta, stackGroupId, { index: idx })
+          }
           return {
             ...n,
             position: pos,
             hidden: false,
-            zIndex: expanded ? 3 : 2, // Above host chrome so preview is clickable
+            zIndex: expanded ? 3 : 2,
             style: {
               ...(n.style || {}),
-              opacity: expanded ? 1 : 0.72, // Preview is slightly faded
-              pointerEvents: 'all', // Ensure preview mates receive clicks
+              opacity: expanded ? 1 : 0.72,
+              pointerEvents: 'all',
             },
             className: cn(
               (n.className || '')
@@ -255,56 +368,92 @@ export function FrameStackRevealLine({
     [getNodes, nodeId, setNodes, stackGroupId, stackSide]
   )
 
-  /** Stack under `keeperId` — that frame stays visible; others hide. Locks the group. */
+  /** Stack under `keeperId` — that frame stays visible; others (+ nested side packs) hide. Locks this side’s group. */
   const actionStackUnder = useCallback(
     async (keeperId: string) => {
       setMenuOpen(false)
       setPreviewing(false)
       const live = getNodes()
-      const group = live.filter((n) => {
-        if (n.type !== 'chatPanel') return false
-        return (
-          n.id === keeperId ||
-          ((n.data?.promptMessage?.metadata || {}) as Record<string, unknown>).stackGroupId ===
-            stackGroupId
-        )
-      })
+      const group = collectGroup(getNodes, stackGroupId)
       if (group.length === 0) return
       // Side points from keeper toward where the hidden pack sits
       const newSide = keeperId === nodeId ? stackSide : oppositeSide(stackSide)
       // Renumber: keeper = 0; others keep relative order among themselves
       const others = group
         .filter((n) => n.id !== keeperId)
-        .sort((a, b) => stackIndexOf(a) - stackIndexOf(b))
+        .sort((a, b) => stackIndexOf(a, stackGroupId) - stackIndexOf(b, stackGroupId))
       const indexById = new Map<string, number>()
       indexById.set(keeperId, 0)
       others.forEach((n, i) => indexById.set(n.id, i + 1))
 
+      // Nested satellites of frames going under the keeper (hide with their owners)
+      const hideNestedIds = collectNestedSatelliteIds(
+        live,
+        others.map((n) => n.id),
+        [stackGroupId]
+      )
+      // Keeper’s own nested packs stay visible — clear any stale parentStackHidden
+      const keeperNestedIds = collectNestedSatelliteIds(live, [keeperId], [stackGroupId])
+      const hideSet = new Set([...others.map((n) => n.id), ...hideNestedIds])
+      const groupIdSet = new Set(group.map((n) => n.id))
+
       setNodes((nds) =>
         nds.map((n) => {
-          const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-          if (m.stackGroupId !== stackGroupId && n.id !== keeperId) return n
-          const isKeeper = n.id === keeperId
-          const meta: Record<string, unknown> = {
-            ...m,
-            stackGroupId,
-            stackSide: newSide,
-            stackIndex: indexById.get(n.id) ?? 99,
-            stackExpanded: isKeeper,
-            snapLockGroupId: stackGroupId, // Lock on first stack
+          const m = nodeStackMeta(n)
+          const inGroup = findStackEntry(m, stackGroupId) || n.id === keeperId
+          if (!inGroup && !hideSet.has(n.id) && !keeperNestedIds.includes(n.id)) return n
+
+          if (hideSet.has(n.id)) {
+            let meta = m
+            if (findStackEntry(m, stackGroupId)) {
+              const entry = {
+                groupId: stackGroupId,
+                index: indexById.get(n.id) ?? 99,
+                expanded: false,
+              }
+              meta = rekeyGroupSide(m, stackGroupId, newSide, entry)
+              meta = setGroupLocked(meta, stackGroupId, true)
+            }
+            meta = setParentStackHidden(meta, stackGroupId)
+            const { restStyle, className } = clearPreviewStyle(
+              n as { style?: Record<string, unknown>; className?: string }
+            )
+            return {
+              ...n,
+              hidden: true,
+              style: restStyle,
+              className,
+              data: {
+                ...n.data,
+                promptMessage: n.data?.promptMessage
+                  ? { ...n.data.promptMessage, metadata: meta }
+                  : n.data?.promptMessage,
+              },
+            }
           }
-          if (isKeeper) meta.stackAnchor = true
-          else delete meta.stackAnchor
-          const { opacity: _o, ...restStyle } = (n.style || {}) as Record<string, unknown>
-          const className = (n.className || '')
-            .split(/\s+/)
-            .filter((c) => c && c !== 'tt-stack-preview')
-            .join(' ')
+
+          // Keeper or keeper’s nested satellites — visible
+          let meta = m
+          if (groupIdSet.has(n.id) || n.id === keeperId) {
+            const isKeeper = n.id === keeperId
+            const entry = {
+              groupId: stackGroupId,
+              index: indexById.get(n.id) ?? 99,
+              expanded: isKeeper,
+              ...(isKeeper ? { anchor: true as const } : {}),
+            }
+            meta = rekeyGroupSide(m, stackGroupId, newSide, entry)
+            meta = setGroupLocked(meta, stackGroupId, true)
+          }
+          meta = setParentStackHidden(meta, null)
+          const { restStyle, className } = clearPreviewStyle(
+            n as { style?: Record<string, unknown>; className?: string }
+          )
           return {
             ...n,
-            hidden: !isKeeper,
+            hidden: false,
             style: restStyle,
-            className: className || undefined,
+            className,
             data: {
               ...n.data,
               promptMessage: n.data?.promptMessage
@@ -317,8 +466,15 @@ export function FrameStackRevealLine({
 
       try {
         const supabase = createClient()
-        for (const n of group) {
-          const msgId = n.data?.promptMessage?.id as string | undefined
+        const persistIds = new Set([
+          ...group.map((n) => n.id),
+          ...hideNestedIds,
+          ...keeperNestedIds,
+        ])
+        for (const id of persistIds) {
+          const n = live.find((x) => x.id === id)
+          if (!n) continue
+          const msgId = nodeMessageId(n)
           if (!msgId) continue
           const { data: row } = await supabase
             .from('messages')
@@ -326,17 +482,32 @@ export function FrameStackRevealLine({
             .eq('id', msgId)
             .maybeSingle()
           if (!row) continue
-          const isKeeper = n.id === keeperId
-          const meta: Record<string, unknown> = {
-            ...((row.metadata as Record<string, unknown>) || {}),
-            stackGroupId,
-            stackSide: newSide,
-            stackIndex: indexById.get(n.id) ?? 99,
-            stackExpanded: isKeeper,
-            snapLockGroupId: stackGroupId,
+          let meta = (row.metadata as Record<string, unknown>) || {}
+          if (hideSet.has(id)) {
+            if (findStackEntry(meta, stackGroupId)) {
+              const entry = {
+                groupId: stackGroupId,
+                index: indexById.get(id) ?? 99,
+                expanded: false,
+              }
+              meta = rekeyGroupSide(meta, stackGroupId, newSide, entry)
+              meta = setGroupLocked(meta, stackGroupId, true)
+            }
+            meta = setParentStackHidden(meta, stackGroupId)
+          } else {
+            if (groupIdSet.has(id) || id === keeperId) {
+              const isKeeper = id === keeperId
+              const entry = {
+                groupId: stackGroupId,
+                index: indexById.get(id) ?? 99,
+                expanded: isKeeper,
+                ...(isKeeper ? { anchor: true as const } : {}),
+              }
+              meta = rekeyGroupSide(meta, stackGroupId, newSide, entry)
+              meta = setGroupLocked(meta, stackGroupId, true)
+            }
+            meta = setParentStackHidden(meta, null)
           }
-          if (isKeeper) meta.stackAnchor = true
-          else delete meta.stackAnchor
           await supabase.from('messages').update({ metadata: meta }).eq('id', msgId)
         }
       } catch (err) {
@@ -346,23 +517,32 @@ export function FrameStackRevealLine({
     [getNodes, nodeId, setNodes, stackGroupId, stackSide]
   )
 
-  /** Hide all mates (preview cancel) — keep current host. */
+  /** Hide all mates (+ nested satellites) — keep current host. */
   const hideMates = useCallback(() => {
+    const live = getNodes()
+    const mates = collectMates(getNodes, nodeId, stackGroupId)
+    const nestedIds = collectNestedSatelliteIds(
+      live,
+      mates.map((n) => n.id),
+      [stackGroupId]
+    )
+    const hideSet = new Set([...mates.map((n) => n.id), ...nestedIds])
     setNodes((nds) =>
       nds.map((n) => {
-        const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-        if (m.stackGroupId !== stackGroupId || n.id === nodeId) return n
-        const meta = { ...m, stackExpanded: false }
-        const { opacity: _o, ...restStyle } = (n.style || {}) as Record<string, unknown>
-        const className = (n.className || '')
-          .split(/\s+/)
-          .filter((c) => c && c !== 'tt-stack-preview')
-          .join(' ')
+        if (!hideSet.has(n.id)) return n
+        const m = nodeStackMeta(n)
+        let meta = findStackEntry(m, stackGroupId)
+          ? patchGroupEntry(m, stackGroupId, { expanded: false })
+          : m
+        meta = setParentStackHidden(meta, stackGroupId)
+        const { restStyle, className } = clearPreviewStyle(
+          n as { style?: Record<string, unknown>; className?: string }
+        )
         return {
           ...n,
           hidden: true,
           style: restStyle,
-          className: className || undefined,
+          className,
           data: {
             ...n.data,
             promptMessage: n.data?.promptMessage
@@ -372,7 +552,7 @@ export function FrameStackRevealLine({
         }
       })
     )
-  }, [nodeId, setNodes, stackGroupId])
+  }, [getNodes, nodeId, setNodes, stackGroupId])
 
   /** End hover preview — restore pre-preview open/stacked layout (not always hide-all). */
   const endPreview = useCallback(() => {
@@ -388,18 +568,24 @@ export function FrameStackRevealLine({
       nds.map((n) => {
         const prev = byId.get(n.id)
         if (!prev) return n
-        const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-        const meta = { ...m, stackExpanded: prev.expanded }
-        const { opacity: _o, ...restStyle } = (n.style || {}) as Record<string, unknown>
-        const className = (n.className || '')
-          .split(/\s+/)
-          .filter((c) => c && c !== 'tt-stack-preview')
-          .join(' ')
+        const m = nodeStackMeta(n)
+        let meta = findStackEntry(m, stackGroupId)
+          ? patchGroupEntry(m, stackGroupId, { expanded: prev.expanded })
+          : m
+        // Nested satellites: restore hidden via parentStackHidden when they were stacked
+        if (prev.hidden && !findStackEntry(m, stackGroupId)) {
+          meta = setParentStackHidden(meta, stackGroupId)
+        } else if (!prev.hidden) {
+          meta = setParentStackHidden(meta, null)
+        }
+        const { restStyle, className } = clearPreviewStyle(
+          n as { style?: Record<string, unknown>; className?: string }
+        )
         return {
           ...n,
           hidden: prev.hidden,
           style: prev.expanded ? { ...restStyle, opacity: 1 } : restStyle,
-          className: className || undefined,
+          className,
           zIndex: prev.expanded ? 3 : n.zIndex,
           data: {
             ...n.data,
@@ -410,11 +596,15 @@ export function FrameStackRevealLine({
         }
       })
     )
-  }, [hideMates, setNodes])
+  }, [hideMates, setNodes, stackGroupId])
 
   const persistMatePatch = useCallback(
     async (
-      patchForMate: (order: number, pos: { x: number; y: number }) => Record<string, unknown>
+      patchForMate: (
+        order: number,
+        pos: { x: number; y: number },
+        meta: Record<string, unknown>
+      ) => Record<string, unknown>
     ) => {
       const live = getNodes()
       const host = live.find((n) => n.id === nodeId)
@@ -423,37 +613,71 @@ export function FrameStackRevealLine({
       const frontSize = nodeFlowSize(host)
       const sortedMates = collectMates(getNodes, nodeId, stackGroupId)
       const sizes = sortedMates.map((n) => nodeFlowSize(n))
+      const posById = new Map<string, { x: number; y: number }>()
+      sortedMates.forEach((n, order) => {
+        posById.set(
+          n.id,
+          stackExpandLayout(
+            {
+              x: frontAbs.x,
+              y: frontAbs.y,
+              width: frontSize.width,
+              height: frontSize.height,
+            },
+            stackSide,
+            sizes[order],
+            order,
+            sizes.slice(0, order)
+          )
+        )
+      })
+      const nestedIds = collectNestedSatelliteIds(
+        live,
+        sortedMates.map((n) => n.id),
+        [stackGroupId]
+      )
+      const nestedPos = layoutNestedFromMates(live, new Map(posById), stackGroupId)
+      for (const [id, pos] of nestedPos) {
+        if (nestedIds.includes(id)) posById.set(id, pos)
+      }
       const supabase = createClient()
       for (let order = 0; order < sortedMates.length; order++) {
         const mate = sortedMates[order]
-        const msgId = mate.data?.promptMessage?.id as string | undefined
+        const msgId = nodeMessageId(mate)
         if (!msgId) continue
-        const pos = stackExpandLayout(
-          {
-            x: frontAbs.x,
-            y: frontAbs.y,
-            width: frontSize.width,
-            height: frontSize.height,
-          },
-          stackSide,
-          sizes[order],
-          order,
-          sizes.slice(0, order)
-        )
+        const pos = posById.get(mate.id)
+        if (!pos) continue
         const { data: row } = await supabase
           .from('messages')
           .select('metadata')
           .eq('id', msgId)
           .maybeSingle()
         if (!row) continue
-        const next = {
-          ...((row.metadata as Record<string, unknown>) || {}),
-          ...patchForMate(order, pos),
-        }
+        const base = (row.metadata as Record<string, unknown>) || {}
+        const next = setParentStackHidden(patchForMate(order, pos, base), null)
         await supabase.from('messages').update({ metadata: next }).eq('id', msgId)
-        if (next.stackExpanded === true) {
+        if (entryExpanded(next, stackGroupId)) {
           await persistBlockPlacement(supabase, { messageId: msgId, position: pos })
         }
+      }
+      // Persist nested satellites parked with their owning mates
+      for (const nid of nestedIds) {
+        const n = live.find((x) => x.id === nid)
+        const msgId = n ? nodeMessageId(n) : undefined
+        const pos = posById.get(nid)
+        if (!msgId || !pos) continue
+        const { data: row } = await supabase
+          .from('messages')
+          .select('metadata')
+          .eq('id', msgId)
+          .maybeSingle()
+        if (!row) continue
+        const next = setParentStackHidden(
+          { ...((row.metadata as Record<string, unknown>) || {}), position: pos },
+          null
+        )
+        await supabase.from('messages').update({ metadata: next }).eq('id', msgId)
+        await persistBlockPlacement(supabase, { messageId: msgId, position: pos })
       }
     },
     [getNodes, nodeId, stackGroupId, stackSide]
@@ -465,32 +689,29 @@ export function FrameStackRevealLine({
     setPreviewing(false)
     showMatesOut(true)
     try {
-      await persistMatePatch((_order, pos) => ({
-        stackExpanded: true,
-        position: pos,
-      }))
+      await persistMatePatch((_order, pos, meta) => {
+        const next = patchGroupEntry(meta, stackGroupId, { expanded: true })
+        return { ...next, position: pos }
+      })
     } catch (err) {
       console.error('Failed to show stacked frames:', err)
     }
-  }, [persistMatePatch, showMatesOut])
+  }, [persistMatePatch, showMatesOut, stackGroupId])
 
-  /** Lock — toggle snapLockGroupId on host + mates (drag moves together). */
+  /** Lock — toggle lock on this side’s group (drag moves that tree together). */
   const actionLock = useCallback(async () => {
     setMenuOpen(false)
     const live = getNodes()
-    const hostMeta = (live.find((n) => n.id === nodeId)?.data?.promptMessage?.metadata ||
-      {}) as Record<string, unknown>
-    const currentlyLocked = hostMeta.snapLockGroupId === stackGroupId
-    const nextLock = currentlyLocked ? null : stackGroupId
+    const hostMeta = nodeStackMeta(live.find((n) => n.id === nodeId) || {})
+    const currentlyLocked = isGroupLocked(hostMeta, stackGroupId)
+    const nextLocked = !currentlyLocked
     const supabase = createClient()
     try {
       setNodes((nds) =>
         nds.map((n) => {
-          const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-          if (n.id !== nodeId && m.stackGroupId !== stackGroupId) return n
-          const meta = { ...m }
-          if (nextLock) meta.snapLockGroupId = nextLock
-          else delete meta.snapLockGroupId
+          const m = nodeStackMeta(n)
+          if (n.id !== nodeId && !findStackEntry(m, stackGroupId)) return n
+          const meta = setGroupLocked(m, stackGroupId, nextLocked)
           return {
             ...n,
             data: {
@@ -503,9 +724,9 @@ export function FrameStackRevealLine({
         })
       )
       for (const n of live) {
-        const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-        if (n.id !== nodeId && m.stackGroupId !== stackGroupId) continue
-        const msgId = n.data?.promptMessage?.id as string | undefined
+        const m = nodeStackMeta(n)
+        if (n.id !== nodeId && !findStackEntry(m, stackGroupId)) continue
+        const msgId = nodeMessageId(n)
         if (!msgId) continue
         const { data: row } = await supabase
           .from('messages')
@@ -513,9 +734,11 @@ export function FrameStackRevealLine({
           .eq('id', msgId)
           .maybeSingle()
         if (!row) continue
-        const meta = { ...((row.metadata as Record<string, unknown>) || {}) }
-        if (nextLock) meta.snapLockGroupId = nextLock
-        else delete meta.snapLockGroupId
+        const meta = setGroupLocked(
+          (row.metadata as Record<string, unknown>) || {},
+          stackGroupId,
+          nextLocked
+        )
         await supabase.from('messages').update({ metadata: meta }).eq('id', msgId)
       }
     } catch (err) {
@@ -556,8 +779,14 @@ export function FrameStackRevealLine({
           indexById.set(m.id, next++)
         }
         const supabase = createClient()
+        const showNested = collectNestedSatelliteIds(live, [mateId], [stackGroupId])
+        const hideMateIds = sorted.filter((n) => n.id !== mateId).map((n) => n.id)
+        const hideNested = collectNestedSatelliteIds(live, hideMateIds, [stackGroupId])
+        const placed = new Map<string, { x: number; y: number }>([[mateId, adjacentPos]])
+        const nestedPos = layoutNestedFromMates(live, placed, stackGroupId)
+
         for (const mate of sorted) {
-          const msgId = mate.data?.promptMessage?.id as string | undefined
+          const msgId = nodeMessageId(mate)
           if (!msgId) continue
           const isTarget = mate.id === mateId
           const { data: row } = await supabase
@@ -566,18 +795,57 @@ export function FrameStackRevealLine({
             .eq('id', msgId)
             .maybeSingle()
           if (!row) continue
-          const meta: Record<string, unknown> = {
-            ...((row.metadata as Record<string, unknown>) || {}),
-            stackExpanded: isTarget,
-            stackIndex: indexById.get(mate.id) ?? 99,
-          }
+          let meta = patchGroupEntry(
+            (row.metadata as Record<string, unknown>) || {},
+            stackGroupId,
+            {
+              expanded: isTarget,
+              index: indexById.get(mate.id) ?? 99,
+            }
+          )
           if (isTarget) {
-            meta.position = adjacentPos
+            meta = setParentStackHidden({ ...meta, position: adjacentPos }, null)
             await persistBlockPlacement(supabase, {
               messageId: msgId,
               position: adjacentPos,
             })
+          } else {
+            meta = setParentStackHidden(meta, stackGroupId)
           }
+          await supabase.from('messages').update({ metadata: meta }).eq('id', msgId)
+        }
+        for (const nid of showNested) {
+          const n = live.find((x) => x.id === nid)
+          const msgId = n ? nodeMessageId(n) : undefined
+          const pos = nestedPos.get(nid)
+          if (!msgId || !pos) continue
+          const { data: row } = await supabase
+            .from('messages')
+            .select('metadata')
+            .eq('id', msgId)
+            .maybeSingle()
+          if (!row) continue
+          const meta = setParentStackHidden(
+            { ...((row.metadata as Record<string, unknown>) || {}), position: pos },
+            null
+          )
+          await supabase.from('messages').update({ metadata: meta }).eq('id', msgId)
+          await persistBlockPlacement(supabase, { messageId: msgId, position: pos })
+        }
+        for (const nid of hideNested) {
+          const n = live.find((x) => x.id === nid)
+          const msgId = n ? nodeMessageId(n) : undefined
+          if (!msgId) continue
+          const { data: row } = await supabase
+            .from('messages')
+            .select('metadata')
+            .eq('id', msgId)
+            .maybeSingle()
+          if (!row) continue
+          const meta = setParentStackHidden(
+            (row.metadata as Record<string, unknown>) || {},
+            stackGroupId
+          )
           await supabase.from('messages').update({ metadata: meta }).eq('id', msgId)
         }
       } catch (err) {
@@ -638,12 +906,21 @@ export function FrameStackRevealLine({
         endPreview()
         return
       }
-      // Click previewed mate → fully open just that frame
+      // Click previewed mate (or nested satellite) → open that owning mate + its nested pack
       e.stopPropagation()
       e.preventDefault()
       clearEndPreview()
       prePreviewRef.current = null // Commit — don't restore on cancel paths
-      void openOneMate(id)
+      const live = getNodes()
+      const mates = collectMates(getNodes, nodeId, stackGroupId)
+      const owner =
+        findOwningMateId(
+          live,
+          id,
+          mates.map((m) => m.id),
+          [stackGroupId]
+        ) || id
+      void openOneMate(owner)
     }
     document.addEventListener('pointermove', onPointerMove, true)
     document.addEventListener('pointerdown', onPointerDown, true)
@@ -654,11 +931,13 @@ export function FrameStackRevealLine({
   }, [
     clearEndPreview,
     endPreview,
+    getNodes,
     isPreviewZoneEl,
     nodeId,
     openOneMate,
     previewing,
     scheduleEndPreview,
+    stackGroupId,
   ])
 
   // Close menu on outside click / Escape
@@ -683,23 +962,32 @@ export function FrameStackRevealLine({
   // Derive mate state after hooks (mateStateKey forces refresh)
   void mateStateKey
   const mates = collectMates(getNodes, nodeId, stackGroupId)
-  mateIdsRef.current = new Set(mates.map((n) => n.id))
+  const nestedForLine = collectNestedSatelliteIds(
+    getNodes(),
+    mates.map((n) => n.id),
+    [stackGroupId]
+  )
+  // Preview hit-tests: direct mates + nested satellites (C on A’s bottom, etc.)
+  mateIdsRef.current = new Set([...mates.map((n) => n.id), ...nestedForLine])
   // Truly stacked (collapsed) — not counting in-progress hover preview
-  const anyHidden = mates.some((n) => n.hidden === true)
+  const anyHidden = mates.some((n) => n.hidden === true) || nestedForLine.some((id) => {
+    const n = getNodes().find((x) => x.id === id)
+    return n?.hidden === true
+  })
   const allOpen =
     mates.length > 0 &&
     mates.every((n) => {
-      const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-      return m.stackExpanded === true && !n.hidden
+      const m = nodeStackMeta(n)
+      return entryExpanded(m, stackGroupId) && !n.hidden
+    }) &&
+    nestedForLine.every((id) => {
+      const n = getNodes().find((x) => x.id === id)
+      return n && !n.hidden
     })
   const hostNode = getNodes().find((n) => n.id === nodeId)
   const isLocked =
-    ((hostNode?.data?.promptMessage?.metadata || {}) as Record<string, unknown>)
-      .snapLockGroupId === stackGroupId ||
-    mates.some((n) => {
-      const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-      return m.snapLockGroupId === stackGroupId
-    })
+    isGroupLocked(nodeStackMeta(hostNode || {}), stackGroupId) ||
+    mates.some((n) => isGroupLocked(nodeStackMeta(n), stackGroupId))
 
   const onEnter = () => {
     if (menuOpen) return
@@ -707,25 +995,40 @@ export function FrameStackRevealLine({
     if (previewingRef.current) return // Already showing preview — stay
     // Start preview only when at least one mate is stacked/hidden
     const live = collectMates(getNodes, nodeId, stackGroupId)
+    const nested = collectNestedSatelliteIds(
+      getNodes(),
+      live.map((n) => n.id),
+      [stackGroupId]
+    )
     const stacked = live.filter((n) => {
       if (n.hidden) return true
-      const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-      return m.stackExpanded !== true
+      const m = nodeStackMeta(n)
+      return !entryExpanded(m, stackGroupId)
     })
-    if (stacked.length === 0) return
+    const nestedStacked = nested.filter((id) => {
+      const n = getNodes().find((x) => x.id === id)
+      return !n || n.hidden === true
+    })
+    if (stacked.length === 0 && nestedStacked.length === 0) return
     clearDwell()
     dwellRef.current = window.setTimeout(() => {
-      // Snapshot so cancel restores which frames were open
-      prePreviewRef.current = live.map((n) => {
-        const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+      // Snapshot mates + nested so cancel restores which frames were open
+      const snapNodes = [
+        ...live,
+        ...nested
+          .map((id) => getNodes().find((x) => x.id === id))
+          .filter(Boolean),
+      ] as typeof live
+      prePreviewRef.current = snapNodes.map((n) => {
+        const m = nodeStackMeta(n)
         return {
           id: n.id,
-          expanded: m.stackExpanded === true,
+          expanded: entryExpanded(m, stackGroupId),
           hidden: n.hidden === true,
         }
       })
       setPreviewing(true)
-      showMatesOut(false) // Faded preview of all stacked mates
+      showMatesOut(false) // Faded preview of all stacked mates + nested packs
     }, HOVER_DWELL_MS)
   }
 
@@ -800,14 +1103,21 @@ export function FrameStackRevealLine({
   // This gap's "outward" count = mates further out than this frame
   const myIndex = (() => {
     const self = getNodes().find((n) => n.id === nodeId)
-    return self ? stackIndexOf(self) : 0
+    return self ? stackIndexOf(self, stackGroupId) : 0
   })()
   const outwardMates = mates
-    .filter((n) => stackIndexOf(n) > myIndex)
-    .sort((a, b) => stackIndexOf(a) - stackIndexOf(b))
+    .filter((n) => stackIndexOf(n, stackGroupId) > myIndex)
+    .sort((a, b) => stackIndexOf(a, stackGroupId) - stackIndexOf(b, stackGroupId))
   const nextOutId = outwardMates[0]?.id as string | undefined
-  const markCount = stackMarkCount(Math.max(1, outwardMates.length))
-  const isDotted = outwardMates.length > STACK_LINE_DASH_CAP
+  // Count nested satellites of outward mates (C under A) in the line encoding
+  const outwardNestedCount = collectNestedSatelliteIds(
+    getNodes(),
+    outwardMates.map((n) => n.id),
+    [stackGroupId]
+  ).length
+  const totalOutCount = outwardMates.length + outwardNestedCount
+  const markCount = stackMarkCount(Math.max(1, totalOutCount))
+  const isDotted = totalOutCount > STACK_LINE_DASH_CAP
   const gapPct = isDotted ? undefined : markCount <= 1 ? 0 : `${100 / (markCount * 4)}%`
 
   // Arrow toward this frame (inward) vs toward the next mate (outward)

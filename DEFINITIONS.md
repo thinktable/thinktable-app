@@ -29,7 +29,7 @@ When the user says **block**, they mean the TipTap line (blue wash + ⋮⋮), no
 - Unarmed ⋮⋮ drag (frame not selected, or block not selected via ⋮⋮ click) → drag the **frame**, not the block.
 - Drag the **frame** (body / chrome) to move the box on the **page**.
 - Armed ⋮⋮ drag → reorder blocks, drop into another frame, or extract onto the page as a new frame.
-- Drag a **frame** until its edge snaps flush to another (both stay visible; stack line per gap). Snap does **not** lock. Click the line for **Open stack** / directional stack arrows (which frame the pack sits under — first Stack locks the group) / **Lock**. Unlock then drag away to delink. Blue resize box stays upright; blocks + shape rotate inside. Hover preview is fast (~100ms).
+- Drag a **frame** until its edge snaps flush to another’s **adjust box** (both stay visible; stack line per gap on that side). Each side (top / bottom / left / right) has its own stack tree. Frames attached to a mate’s other sides nest with it when stacked (preview / Open stack show the whole pack). Snap does **not** lock. Click the line for **Open stack** / directional stack arrows (which frame the pack sits under — first Stack locks that side’s group) / **Lock**. Unlock then drag away to delink; same drag can snap to another side or frame (the edge you left stays blocked until release). Blue resize box stays upright; blocks + shape rotate inside. Hover preview is fast (~100ms).
 - Frame menu → **Shape** applies a silhouette (circle, diamond, …) to that **frame**; **Default** clears it. Pages / page preview remain the deep-hierarchy tool; shapes are on-page composition.
 - Clicking an unselected frame selects it only — I-bar on a later click.
 

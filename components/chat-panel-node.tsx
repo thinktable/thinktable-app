@@ -22,9 +22,19 @@ import {
   frameShapeClipCss,
   parseFrameShape,
   FRAME_SHAPE_DEFAULT_SIZE,
+  rotatedFrameAabbSize,
+  rotatedRectAabbSize,
   type FrameShapeType,
-} from '@/lib/frame-shape' // Frame-as-shape parse + clip
+} from '@/lib/frame-shape' // Frame-as-shape parse + clip + rotation AABB
 import type { FrameStackSide } from '@/components/use-frame-nest-stack-drag'
+import {
+  applySnapMateRelayout,
+  persistSnapMateRelayout,
+} from '@/components/use-frame-nest-stack-drag' // Repark snap mates when AABB changes (rotation)
+import {
+  FRAME_STACK_SIDES,
+  readSideStacks,
+} from '@/lib/frame-side-stacks' // Per adjust-box side stack trees
 import { findEditorBlockAtClientY } from '@/lib/tiptap/block-selection' // Click in frame padding → block at Y
 import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Strip blank lines on frame deselect
 import { setAiTextSelection } from '@/lib/ai/selection-bridge' // Live highlighted-text pills in AI composer
@@ -75,10 +85,7 @@ const GRIP_ICON_INSET = 2 // ⋮⋮ glyph (16px) centered in its 20px hit button
 
 /** Axis-aligned box that contains a w×h rect rotated by `deg` degrees (around center). */
 function rotatedAabbSize(w: number, h: number, deg: number): { width: number; height: number } {
-  const rad = (deg * Math.PI) / 180
-  const c = Math.abs(Math.cos(rad))
-  const s = Math.abs(Math.sin(rad))
-  return { width: w * c + h * s, height: w * s + h * c }
+  return rotatedRectAabbSize(w, h, deg)
 }
 
 /**
@@ -239,6 +246,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { useEditorContext } from './editor-context'
+import { usePageAccess } from '@/lib/share/page-access-context' // Gate TipTap editable for shared viewers
 import { useReactFlowContext } from './react-flow-context'
 import { useTheme } from './theme-provider'
 import { SelectionFormatPopupAnchor } from './selection-format-popup' // Notion-style selection menu (stable edge anchor)
@@ -424,6 +432,7 @@ function TipTapContent({
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { setActiveEditor } = useEditorContext()
+  const { canEdit } = usePageAccess() // view/comment → read-only editors (RLS still enforces)
   // Live frame-selected flag for TipTap DOM handlers (useEditor config is not recreated each render)
   const isPanelSelectedRef = useRef(!!isPanelSelected)
   isPanelSelectedRef.current = !!isPanelSelected
@@ -533,7 +542,7 @@ function TipTapContent({
   const editor = useEditor({
     extensions,
     content,
-    editable: true, // Fully editable
+    editable: canEdit, // Shared view/comment cannot type; edit|owner can
     immediatelyRender: false, // Prevent SSR hydration mismatches
     shouldRerenderOnTransaction: false, // Avoid parent re-render storms; NodeViews update themselves
     editorProps,
@@ -563,6 +572,12 @@ function TipTapContent({
       }
     },
   })
+
+  // Keep TipTap editable in sync when share role changes (useEditor option is mount-time)
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return
+    if (editor.isEditable !== canEdit) editor.setEditable(canEdit)
+  }, [editor, canEdit])
 
   // Register editor on mount and cleanup on unmount
   useEffect(() => {
@@ -1552,7 +1567,13 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const initialTextAspectRatioRef = useRef<number | null>(null) // Track text's natural aspect ratio (width/height)
   const hasLoadedResizeStateRef = useRef(false) // Track if we've already loaded and applied resize state from metadata
   const isRotatingRef = useRef(false) // True while pointer-dragging the rotation handle
-  const rotationDragRef = useRef<{ startAngle: number; startRotation: number } | null>(null) // Pointer math for live rotate
+  // Pointer math for live rotate — pivot is frozen at gesture start (left-locked AABB would drift center)
+  const rotationDragRef = useRef<{
+    startAngle: number
+    startRotation: number
+    pivotX: number
+    pivotY: number
+  } | null>(null)
 
   // Helper function to convert hex color to rgba with opacity
   // Maintains transparency by converting hex to rgba with specified opacity
@@ -1822,14 +1843,30 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           } else if (dims.width && dims.height && dims.width > 0 && dims.height > 0) {
             setResizeDimensions({ width: dims.width, height: dims.height })
             setIsUserResized(true) // Persisted resize → wrap in fixed box; skip line-grow
-            
-            // Update React Flow node dimensions to match saved resize
+
+            // RF chrome size = upright AABB when rotated (content dims stay in resizeDimensions)
+            const rot =
+              typeof metadata.rotation === 'number' ? metadata.rotation : 0
+            const shape = parseFrameShape(metadata.frameShape)
+            const aabb =
+              Math.abs(rot) > 0.5
+                ? rotatedFrameAabbSize(dims.width, dims.height, rot, shape)
+                : { width: dims.width, height: dims.height }
             const setNodesFunc = getSetNodes()
             if (setNodesFunc) {
               setNodesFunc((nodes: any[]) =>
                 nodes.map((node: any) =>
                   node.id === id
-                    ? { ...node, width: dims.width, height: dims.height }
+                    ? {
+                        ...node,
+                        width: aabb.width,
+                        height: aabb.height,
+                        style: {
+                          ...(node.style || {}),
+                          width: aabb.width,
+                          height: aabb.height,
+                        },
+                      }
                     : node
                 )
               )
@@ -2096,33 +2133,27 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const showAdjustFrame = Boolean(selected && isBlock && !isThreadConnecting && !dragging && !pressing)
   // Transient blue outline while the frame is being moved (not a real selection)
   const showDragBorderOnly = Boolean(dragging && isBlock)
-  // Stack host: dashed edge line to reveal collapsed mates
+  // Stack lines: one per adjust-box side that has a mate further out on that side’s tree
   const stackMeta = (promptMessage?.metadata || {}) as Record<string, unknown>
-  const stackGroupId =
-    typeof stackMeta.stackGroupId === 'string' ? stackMeta.stackGroupId : null
-  const stackSide = (['top', 'right', 'bottom', 'left'] as const).includes(
-    stackMeta.stackSide as FrameStackSide
-  )
-    ? (stackMeta.stackSide as FrameStackSide)
-    : null
-  // Line between each snap gap: any frame that still has a mate further out on stackSide
-  const showStackGapLine = useStore((s) => {
-    if (!stackGroupId || !stackSide) return false
-    const myIdx =
-      typeof stackMeta.stackIndex === 'number'
-        ? (stackMeta.stackIndex as number)
-        : stackMeta.stackAnchor === true
-          ? 0
-          : 99
-    let hasOut = false
-    s.nodeInternals.forEach((n) => {
-      if (n.id === id || n.type !== 'chatPanel') return
-      const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-      if (m.stackGroupId !== stackGroupId) return
-      const idx = typeof m.stackIndex === 'number' ? m.stackIndex : 99
-      if (idx > myIdx) hasOut = true
-    })
-    return hasOut
+  const stackGapSides = useStore((s) => {
+    const mine = readSideStacks(stackMeta)
+    const sides: Array<{ side: FrameStackSide; groupId: string }> = []
+    for (const side of FRAME_STACK_SIDES) {
+      const entry = mine[side]
+      if (!entry) continue
+      const myIdx = entry.anchor ? 0 : entry.index
+      let hasOut = false
+      s.nodeInternals.forEach((n) => {
+        if (n.id === id || n.type !== 'chatPanel') return
+        const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+        const other = readSideStacks(m)[side]
+        if (!other || other.groupId !== entry.groupId) return
+        const idx = other.anchor ? 0 : other.index
+        if (idx > myIdx) hasOut = true
+      })
+      if (hasOut) sides.push({ side, groupId: entry.groupId })
+    }
+    return sides
   })
   // Indicators: selected frame (idle), OR nearby snap target while connecting — never during frame drag
   const showIndicators =
@@ -2402,46 +2433,98 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
 
   // Explicit box → RF node style. NEVER drive this from ResizeObserver: RF also writes measured
   // node.width/height, so RO→setNodes fights those numbers and allocates a new nodes[] every tick
-  // (LOOP-DIAG: nodes(ref) len N→N). Push only when resizeDimensions change.
-  const lastPushedBoxRef = useRef<{ w: number; h: number } | null>(null)
+  // (LOOP-DIAG: nodes(ref) len N→N). Push when resizeDimensions or rotation (AABB) change.
+  // Rotated: RF size = upright AABB so blue adjust chrome tracks live; left edge stays locked.
+  // Snap mates repark against that AABB so side-stacks ride rotation (not only the blue box).
+  const lastPushedBoxRef = useRef<{ w: number; h: number; rot: number } | null>(null)
+  const resizeDimensionsRef = useRef(resizeDimensions)
+  resizeDimensionsRef.current = resizeDimensions
+  const frameShapeRef = useRef(frameShape)
+  frameShapeRef.current = frameShape
+
+  /** Push host AABB + repark snap/stack mates for `rot` (live rotate + effect). */
+  const pushAabbAndSnapMates = useCallback(
+    (rot: number, opts?: { forceMates?: boolean }) => {
+      const dims = resizeDimensionsRef.current
+      if (!isBlock || !dims) return
+      const aabb =
+        Math.abs(rot) > 0.5
+          ? rotatedFrameAabbSize(dims.width, dims.height, rot, frameShapeRef.current)
+          : { width: dims.width, height: dims.height }
+      const boxW = Math.ceil(aabb.width)
+      const boxH = Math.ceil(aabb.height)
+      const prev = lastPushedBoxRef.current
+      const sizeSame =
+        !!prev && Math.abs(prev.w - boxW) <= 1 && Math.abs(prev.h - boxH) <= 1
+      const rotSame = !!prev && Math.abs(prev.rot - rot) < 0.05
+      // Skip only when AABB + angle unchanged (mates already parked for this box)
+      if (sizeSame && rotSame && !opts?.forceMates) return
+      lastPushedBoxRef.current = { w: boxW, h: boxH, rot }
+      // Keep the panel DOM in sync (defeats stale inline widths from line-grow helpers)
+      if (panelRef.current && Math.abs(rot) > 0.5) {
+        panelRef.current.style.width = `${boxW}px`
+        panelRef.current.style.height = `${boxH}px`
+        panelRef.current.style.maxWidth = `${boxW}px`
+        panelRef.current.style.maxHeight = `${boxH}px`
+      }
+      const setNodesFunc = getSetNodes()
+      if (!setNodesFunc) return
+      setNodesFunc((nodes: any[]) => {
+        let changed = false
+        let next = nodes.map((node: any) => {
+          if (node.id !== id) return node
+          const styleW =
+            typeof node.style?.width === 'number' ? node.style.width : parseFloat(node.style?.width)
+          const styleH =
+            typeof node.style?.height === 'number'
+              ? node.style.height
+              : parseFloat(node.style?.height)
+          // Compare intended style only — ignore RF measured node.width (drifts vs border-box)
+          const styleOk =
+            Number.isFinite(styleW) &&
+            Number.isFinite(styleH) &&
+            Math.abs(styleW - boxW) <= 1 &&
+            Math.abs(styleH - boxH) <= 1
+          if (styleOk) return node
+          changed = true
+          // Left-locked: do not shift position.x when AABB width grows/shrinks with rotation
+          return {
+            ...node,
+            width: boxW,
+            height: boxH,
+            style: { ...node.style, width: boxW, height: boxH },
+          }
+        })
+        // Keep snap/stack mates flush to the new upright AABB (live while rotating)
+        const withMates = applySnapMateRelayout(next, id, { width: boxW, height: boxH })
+        if (withMates !== next) {
+          changed = true
+          next = withMates
+        }
+        return changed ? next : nodes
+      })
+      updateNodeInternals(id) // Remeasure resize chrome to the new AABB
+    },
+    [isBlock, id, getSetNodes, updateNodeInternals]
+  )
+
   useEffect(() => {
     if (!isBlock || !isUserResized || !resizeDimensions) {
       if (!isUserResized) lastPushedBoxRef.current = null // Next resize must push fresh
       return
     }
-    const boxW = Math.ceil(resizeDimensions.width)
-    const boxH = Math.ceil(resizeDimensions.height)
-    const prev = lastPushedBoxRef.current
-    if (prev && Math.abs(prev.w - boxW) <= 1 && Math.abs(prev.h - boxH) <= 1) return // Already pushed
-    lastPushedBoxRef.current = { w: boxW, h: boxH }
-    const setNodesFunc = getSetNodes()
-    if (!setNodesFunc) return
-    setNodesFunc((nodes: any[]) => {
-      let changed = false
-      const next = nodes.map((node: any) => {
-        if (node.id !== id) return node
-        const styleW =
-          typeof node.style?.width === 'number' ? node.style.width : parseFloat(node.style?.width)
-        const styleH =
-          typeof node.style?.height === 'number' ? node.style.height : parseFloat(node.style?.height)
-        // Compare intended style only — ignore RF measured node.width (drifts vs border-box)
-        const styleOk =
-          Number.isFinite(styleW) &&
-          Number.isFinite(styleH) &&
-          Math.abs(styleW - boxW) <= 1 &&
-          Math.abs(styleH - boxH) <= 1
-        if (styleOk) return node
-        changed = true
-        return {
-          ...node,
-          width: boxW,
-          height: boxH,
-          style: { ...node.style, width: boxW, height: boxH },
-        }
-      })
-      return changed ? next : nodes
-    })
-  }, [isBlock, id, isUserResized, resizeDimensions?.width, resizeDimensions?.height, getSetNodes])
+    // Skip effect while pointer-rotating — move handler pushes AABB+mates every tick
+    if (isRotatingRef.current) return
+    pushAabbAndSnapMates(rotation)
+  }, [
+    isBlock,
+    isUserResized,
+    resizeDimensions?.width,
+    resizeDimensions?.height,
+    rotation,
+    frameShape,
+    pushAabbAndSnapMates,
+  ])
 
   // Unresized (max-content) frames: remasure handles via updateNodeInternals — never setNodes style.
   const lastSyncedNodeSizeRef = useRef<{ w: number; h: number } | null>(null)
@@ -2698,24 +2781,30 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     const cy = rect.top + rect.height / 2 // Vertical center in viewport
     const startAngle = Math.atan2(e.clientY - cy, e.clientX - cx) // Initial pointer angle (radians)
     isRotatingRef.current = true // Mark active rotate session
-    rotationDragRef.current = { startAngle, startRotation: rotation } // Baseline for delta math
+    // Freeze pivot — live AABB width grows left-locked, so rect center would drift mid-gesture
+    rotationDragRef.current = {
+      startAngle,
+      startRotation: rotation,
+      pivotX: cx,
+      pivotY: cy,
+    }
     e.currentTarget.setPointerCapture(e.pointerId) // Keep events on this handle while dragging
   }, [rotation, resizeDimensions, promptContent])
 
-  // Live-update rotation from pointer deltas relative to panel center
+  // Live-update rotation from pointer deltas relative to frozen pivot
   const handleRotatePointerMove = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
-    if (!isRotatingRef.current || !rotationDragRef.current || !panelRef.current) return // Ignore stray moves
-    const rect = panelRef.current.getBoundingClientRect() // Re-measure (zoom/pan may change)
-    const cx = rect.left + rect.width / 2 // Center X
-    const cy = rect.top + rect.height / 2 // Center Y
-    const angle = Math.atan2(e.clientY - cy, e.clientX - cx) // Current pointer angle
-    const deltaDeg = ((angle - rotationDragRef.current.startAngle) * 180) / Math.PI // Radians → degrees
-    let next = rotationDragRef.current.startRotation + deltaDeg // Apply delta to start rotation
+    if (!isRotatingRef.current || !rotationDragRef.current) return // Ignore stray moves
+    const { startAngle, startRotation, pivotX, pivotY } = rotationDragRef.current
+    const angle = Math.atan2(e.clientY - pivotY, e.clientX - pivotX) // Angle about start pivot
+    const deltaDeg = ((angle - startAngle) * 180) / Math.PI // Radians → degrees
+    let next = startRotation + deltaDeg // Apply delta to start rotation
     if (e.shiftKey) next = Math.round(next / 15) * 15 // Hold Shift to snap to 15° increments
-    setRotation(next) // Paint live rotation
-  }, [])
+    setRotation(next) // Paint live rotation on the inner shell
+    // Same tick: grow upright AABB + repark snap mates (don’t wait for useEffect)
+    pushAabbAndSnapMates(next)
+  }, [pushAabbAndSnapMates])
 
-  // End rotate: release capture and persist the final angle
+  // End rotate: release capture, persist angle, and persist snap-mate parks against final AABB
   const handleRotatePointerUp = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     if (!isRotatingRef.current) return // Only finish an active gesture
     isRotatingRef.current = false // Clear rotating flag
@@ -2723,9 +2812,27 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* already released */ }
     setRotation((current) => { // Read latest angle then persist
       void saveRotation(current) // Fire-and-forget metadata save
+      // Final AABB+mates push (in case last move was skipped) then persist mate parks
+      pushAabbAndSnapMates(current, { forceMates: true })
+      const cw = resizeDimensionsRef.current?.width
+      const ch = resizeDimensionsRef.current?.height
+      if (cw && ch) {
+        const aabb =
+          Math.abs(current) > 0.5
+            ? rotatedFrameAabbSize(cw, ch, current, frameShapeRef.current)
+            : { width: cw, height: ch }
+        // Defer read so setNodes from pushAabbAndSnapMates has flushed
+        queueMicrotask(() => {
+          const live = getNodes()
+          void persistSnapMateRelayout(live, id, {
+            width: Math.ceil(aabb.width),
+            height: Math.ceil(aabb.height),
+          })
+        })
+      }
       return current // No state change needed
     })
-  }, [saveRotation])
+  }, [saveRotation, pushAabbAndSnapMates, getNodes, id])
 
   // Toggle frame lock: lock hugs scaled text; unlock keeps the CURRENT visual box + scale
   // (blocks stay the size they were adjusted to while locked — no snap-back to a pre-lock shape).
@@ -4488,9 +4595,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       : itemBoxSize.height) ||
     FRAME_SHAPE_DEFAULT_SIZE.height
   const isContentRotated = isBlock && Math.abs(rotation) > 0.5
-  // Upright blue adjust frame = AABB of rotated content (snap / resize chrome)
+  // Upright blue adjust frame = tight AABB of the *visible* silhouette (ellipse/polygon), not just the content rect
   const displayBox = isContentRotated
-    ? rotatedAabbSize(contentBoxW, contentBoxH, rotation)
+    ? rotatedFrameAabbSize(contentBoxW, contentBoxH, rotation, frameShape)
     : { width: contentBoxW, height: contentBoxH }
   const shapeBoxW = contentBoxW
   const shapeBoxH = contentBoxH
@@ -4566,13 +4673,16 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                 : undefined,
         minWidth: pagePreviewOpen
           ? '520px'
-          : usesFitContent && !isContentRotated
-            ? `${frameMinW}px`
+          : isContentRotated
+            ? `${displayBox.width}px` // Lock outer to measured/tight AABB (no 200px floor widening)
+            : usesFitContent
+              ? `${frameMinW}px`
               : isFlashcard
                 ? '300px'
                 : '200px',
         minHeight: pagePreviewOpen ? '420px' : '0px',
-        maxWidth: undefined,
+        maxWidth: isContentRotated ? `${displayBox.width}px` : undefined, // Prevent width ballooning past AABB
+        maxHeight: isContentRotated ? `${displayBox.height}px` : undefined,
         opacity: isInitialShrinkComplete ? 1 : 0,
         // Rotated: outer is transparent shell (fill on inner) — kills upright ghost under rotated card
         backgroundColor:
@@ -4729,15 +4839,17 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         </>
       )}
 
-      {/* Stacked mates: line on each gap (not only the outermost host) */}
-      {showStackGapLine && stackGroupId && stackSide && !dragging && (
-        <FrameStackRevealLine
-          nodeId={id}
-          stackGroupId={stackGroupId}
-          stackSide={stackSide}
-          frameUiScale={frameUiScale}
-        />
-      )}
+      {/* Stacked mates: line on each adjust-box side gap (independent trees per side) */}
+      {!dragging &&
+        stackGapSides.map(({ side, groupId }) => (
+          <FrameStackRevealLine
+            key={`stack-line-${side}-${groupId}`}
+            nodeId={id}
+            stackGroupId={groupId}
+            stackSide={side}
+            frameUiScale={frameUiScale}
+          />
+        ))}
 
       {/* Connection indicators — DOM only (not RF Handles); arm the edge connection point */}
       {showIndicators && (
