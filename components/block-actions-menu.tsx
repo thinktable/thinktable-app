@@ -43,6 +43,13 @@ import {
 } from 'lucide-react' // Action + Turn into icons
 import { Button } from '@/components/ui/button' // Row buttons
 import { cn } from '@/lib/utils' // Class merge
+import Shape from '@/components/shapes/Shape' // Mini silhouette previews in the Shape flyout
+import {
+  FRAME_SHAPE_NONE,
+  FRAME_SHAPE_TYPES,
+  frameShapeLabel,
+  type FrameShapeChoice,
+} from '@/lib/frame-shape' // Frame-as-shape picker values
 
 /** Baseline block kinds (Notion Turn into list) — stored as metadata.blockType for now. */
 export type BlockTypeId =
@@ -88,11 +95,12 @@ export type BlockActionId =
   | 'presentFromHere'
   | 'askAI'
   | 'skills'
-  | 'frameShapeAutomations'
+  | 'setFrameShape' // Apply / clear a silhouette on the host frame
 
 export type BlockActionPayload = {
   blockType?: BlockTypeId // Present when action === 'turnInto'
   pageInParentId?: string | null // Nest target for Page in
+  frameShape?: FrameShapeChoice // Present when action === 'setFrameShape'
 }
 
 export type PageInTarget = {
@@ -110,6 +118,10 @@ export type BlockActionsMenuProps = {
   showAddChild?: boolean // Study-set may omit Add child
   currentBlockType?: BlockTypeId // Checkmark in Turn into
   pageInTargets?: PageInTarget[] // Pages available for "Page in"
+  /** Current frame silhouette (frame menu only). */
+  currentFrameShape?: FrameShapeChoice
+  /** Show Shape submenu — frame-level menu only (not TipTap ⋮⋮ block menu). */
+  showFrameShape?: boolean
   lastEditedLabel?: string // Footer metadata
   onAction: (action: BlockActionId, payload?: BlockActionPayload) => void
   onClose: () => void
@@ -134,7 +146,7 @@ type RowDef =
       shortcut?: string
       icon: React.ReactNode
       danger?: boolean
-      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'pageIn'
+      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'pageIn' | 'frameShape'
       hidden?: boolean
       beta?: boolean
     }
@@ -208,6 +220,8 @@ export function BlockActionsMenu({
   showAddChild = true,
   currentBlockType = 'text',
   pageInTargets = [],
+  currentFrameShape = FRAME_SHAPE_NONE,
+  showFrameShape = false,
   lastEditedLabel,
   onAction,
   onClose,
@@ -216,7 +230,7 @@ export function BlockActionsMenu({
   openLeft = false,
 }: BlockActionsMenuProps) {
   const [query, setQuery] = useState('') // Filter actions + turn-into
-  const [openSubmenu, setOpenSubmenu] = useState<'turnInto' | 'pageIn' | null>(null) // Flyout
+  const [openSubmenu, setOpenSubmenu] = useState<'turnInto' | 'pageIn' | 'frameShape' | null>(null) // Flyout
   const inputRef = useRef<HTMLInputElement>(null) // Autofocus search
   const rootRef = useRef<HTMLDivElement>(null) // Position flyout
 
@@ -295,10 +309,11 @@ export function BlockActionsMenu({
       },
       {
         kind: 'action',
-        id: 'frameShapeAutomations',
-        label: 'Frame shape automations',
+        id: 'setFrameShape',
+        label: 'Shape',
         icon: <Shapes className="h-4 w-4" />,
-        beta: true, // Entry point for saved frame-shape rules — behavior wired later
+        submenu: 'frameShape', // Silhouette picker — frames act as shapes
+        hidden: !showFrameShape, // Frame menu only (not TipTap block ⋮⋮)
       },
       {
         kind: 'action',
@@ -363,9 +378,15 @@ export function BlockActionsMenu({
         !r.hidden &&
         (r.label.toLowerCase().includes(q) ||
           (r.id === 'turnInto' &&
-            TURN_INTO_OPTIONS.some((t) => t.label.toLowerCase().includes(q))))
+            TURN_INTO_OPTIONS.some((t) => t.label.toLowerCase().includes(q))) ||
+          (r.id === 'setFrameShape' &&
+            ['default', 'shape', ...FRAME_SHAPE_TYPES].some((s) =>
+              frameShapeLabel(s === 'default' ? FRAME_SHAPE_NONE : (s as FrameShapeChoice))
+                .toLowerCase()
+                .includes(q)
+            )))
     )
-  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType])
+  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape])
 
   // When searching, also surface matching Turn into types as flat picks
   const turnIntoMatches = useMemo(() => {
@@ -448,6 +469,7 @@ export function BlockActionsMenu({
           }
           const hasSub = Boolean(row.submenu)
           const isTurnIntoOpen = row.submenu === 'turnInto' && openSubmenu === 'turnInto'
+          const isShapeOpen = row.submenu === 'frameShape' && openSubmenu === 'frameShape'
           return (
             <Button
               key={row.id}
@@ -455,6 +477,7 @@ export function BlockActionsMenu({
               size="sm"
               onMouseEnter={() => {
                 if (row.submenu === 'turnInto') setOpenSubmenu('turnInto')
+                else if (row.submenu === 'frameShape') setOpenSubmenu('frameShape')
                 else setOpenSubmenu(null)
               }}
               onClick={(e) => {
@@ -462,6 +485,10 @@ export function BlockActionsMenu({
                 e.stopPropagation()
                 if (row.submenu === 'turnInto') {
                   setOpenSubmenu((s) => (s === 'turnInto' ? null : 'turnInto'))
+                  return
+                }
+                if (row.submenu === 'frameShape') {
+                  setOpenSubmenu((s) => (s === 'frameShape' ? null : 'frameShape'))
                   return
                 }
                 // Submenus without UI yet — fire stub action and close
@@ -475,7 +502,7 @@ export function BlockActionsMenu({
               className={cn(
                 'justify-start text-sm h-8 px-2 font-normal',
                 row.danger && 'text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950',
-                isTurnIntoOpen && 'bg-gray-100 dark:bg-[#2a2a2a]'
+                (isTurnIntoOpen || isShapeOpen) && 'bg-gray-100 dark:bg-[#2a2a2a]'
               )}
             >
               <span className="mr-2 text-gray-500 dark:text-gray-400">{row.icon}</span>
@@ -587,6 +614,70 @@ export function BlockActionsMenu({
               </Button>
             )
           )}
+        </div>
+      )}
+
+      {/* Shape — frame silhouette picker (frames act as shapes) */}
+      {openSubmenu === 'frameShape' && (
+        <div
+          className="absolute left-full top-0 ml-1 z-[1001] w-[220px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2"
+          onMouseEnter={() => setOpenSubmenu('frameShape')}
+        >
+          <div className="px-1 pb-1.5 text-[11px] text-gray-400">Frame shape</div>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onAction('setFrameShape', { frameShape: FRAME_SHAPE_NONE })
+              onClose()
+            }}
+            className={cn(
+              'mb-1.5 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-gray-100 dark:hover:bg-[#2a2a2a]',
+              (currentFrameShape === FRAME_SHAPE_NONE || !currentFrameShape) &&
+                'bg-blue-50 dark:bg-blue-950/40'
+            )}
+          >
+            <span className="flex h-7 w-7 items-center justify-center rounded border border-dashed border-gray-300 dark:border-gray-600 text-[10px] text-gray-400">
+              —
+            </span>
+            <span className="flex-1 text-left">Default</span>
+            {(currentFrameShape === FRAME_SHAPE_NONE || !currentFrameShape) && (
+              <Check className="h-3.5 w-3.5 text-gray-500" />
+            )}
+          </button>
+          <div className="grid grid-cols-5 gap-1">
+            {FRAME_SHAPE_TYPES.map((shapeType) => {
+              const selected = currentFrameShape === shapeType
+              return (
+                <button
+                  key={shapeType}
+                  type="button"
+                  title={frameShapeLabel(shapeType)}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    onAction('setFrameShape', { frameShape: shapeType })
+                    onClose()
+                  }}
+                  className={cn(
+                    'flex h-9 w-full items-center justify-center rounded-md p-1.5 hover:bg-gray-100 dark:hover:bg-[#2a2a2a]',
+                    selected && 'bg-blue-50 dark:bg-blue-950/40'
+                  )}
+                >
+                  <Shape
+                    type={shapeType}
+                    width={22}
+                    height={22}
+                    fill="transparent"
+                    strokeWidth={1.25}
+                    stroke="#222"
+                    className="dark:[&_*]:stroke-gray-300"
+                  />
+                </button>
+              )
+            })}
+          </div>
         </div>
       )}
 

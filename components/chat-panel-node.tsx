@@ -16,6 +16,15 @@ import { DOMParser as PMDOMParser } from '@tiptap/pm/model' // Parse stored HTML
 import { TextSelection } from '@tiptap/pm/state' // Only text ranges keep a frame "active" — not pageLink NodeSelection
 import { createPanelExtensions } from '@/lib/tiptap/extensions' // StarterKit + Turn into nodes
 import { TipTapBlockHandles } from '@/components/tiptap-block-handles' // Per-content-block ⋮⋮ (Notion)
+import { FrameStackRevealLine } from '@/components/frame-stack-reveal-line' // Stack edge dashed line → reveal
+import { FrameShapeBackdrop } from '@/components/frame-shape-backdrop' // SVG silhouette behind TipTap
+import {
+  frameShapeClipCss,
+  parseFrameShape,
+  FRAME_SHAPE_DEFAULT_SIZE,
+  type FrameShapeType,
+} from '@/lib/frame-shape' // Frame-as-shape parse + clip
+import type { FrameStackSide } from '@/components/use-frame-nest-stack-drag'
 import { findEditorBlockAtClientY } from '@/lib/tiptap/block-selection' // Click in frame padding → block at Y
 import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Strip blank lines on frame deselect
 import { setAiTextSelection } from '@/lib/ai/selection-bridge' // Live highlighted-text pills in AI composer
@@ -63,6 +72,45 @@ function blockMinFrameWidth(html: string): number {
 const BLOCK_MIN_FRAME_W = BLOCK_HANDLE_GUTTER_W + PAGE_LINK_ICON_W + PAGE_OPEN_MENU_W // Default / pageLink floor
 const BLOCK_LOCKED_MIN_W = BLOCK_HANDLE_GUTTER_W + BLOCK_THREE_CHARS_W // Absolute floor when hugging
 const GRIP_ICON_INSET = 2 // ⋮⋮ glyph (16px) centered in its 20px hit button → (20-16)/2 from the gutter left
+
+/** Axis-aligned box that contains a w×h rect rotated by `deg` degrees (around center). */
+function rotatedAabbSize(w: number, h: number, deg: number): { width: number; height: number } {
+  const rad = (deg * Math.PI) / 180
+  const c = Math.abs(Math.cos(rad))
+  const s = Math.abs(Math.sin(rad))
+  return { width: w * c + h * s, height: w * s + h * c }
+}
+
+/**
+ * Invert AABB → unrotated content size at `deg`.
+ * Near 45° the map is singular — fall back to uniform scale from `fallback`.
+ */
+function contentSizeFromAabb(
+  aabbW: number,
+  aabbH: number,
+  deg: number,
+  fallback: { width: number; height: number }
+): { width: number; height: number } {
+  const rad = (deg * Math.PI) / 180
+  const c = Math.abs(Math.cos(rad))
+  const s = Math.abs(Math.sin(rad))
+  const det = c * c - s * s // cos(2θ)
+  if (Math.abs(det) < 1e-3) {
+    const prev = rotatedAabbSize(fallback.width, fallback.height, deg)
+    const scale = Math.min(
+      aabbW / Math.max(1, prev.width),
+      aabbH / Math.max(1, prev.height)
+    )
+    return {
+      width: Math.max(1, fallback.width * scale),
+      height: Math.max(1, fallback.height * scale),
+    }
+  }
+  return {
+    width: Math.max(1, (c * aabbW - s * aabbH) / det),
+    height: Math.max(1, (c * aabbH - s * aabbW) / det),
+  }
+}
 
 /**
  * Natural content width = longest rendered line of real text, not the stretched w-full box.
@@ -197,6 +245,7 @@ import { SelectionFormatPopupAnchor } from './selection-format-popup' // Notion-
 import { PageLinkProvider, type PageLinkActions } from '@/lib/page-link-context' // Bridge pageLink NodeViews → frame preview/open/rename
 import { PageOpenMenu } from '@/components/page-open-menu' // Preview/open chrome for page frames without a pageLink
 import { NestedBoardPreview, prefetchPageEmbed } from './nested-board-preview' // Page-within-page board preview
+import { unwrapNestedFramesHtml } from '@/lib/tiptap/unwrap-nested-frames' // Flatten legacy nest wrappers
 import { deleteLinkedPageForBlock, isBlockContentEmpty, isBlockMeta, isPageBodyMeta } from '@/lib/blocks' // Block detection + empty check + delete sync
 import { applyTurnInto } from '@/lib/blocks/turn-into' // Page / Page in from content-block menu
 import { migrateSoleDatabaseBlockToPageLink, ensureNotionMapFrameIsPageLink, isSoleDatabaseBlockContent } from '@/lib/notion/migrate-frame' // Notion DB map frames → pageLink
@@ -239,6 +288,7 @@ interface ChatPanelNodeData {
   borderColor?: string // Panel border color (optional, defaults to theme-based)
   borderStyle?: string // Panel border style (solid, dashed, dotted)
   borderWeight?: string // Panel border thickness (1px, 2px, 4px)
+  frameShape?: FrameShapeType | null // Silhouette when frames act as shapes
 }
 
 interface ProjectBoardPanelNodeData {
@@ -266,8 +316,8 @@ function mergePanelHtml(prompt?: string, response?: string): string {
   const empty = (s?: string) => !s?.trim() || s === '<p></p>' || s === '<p><br></p>' // TipTap empty docs
   const a = empty(prompt) ? '' : (prompt as string) // Prompt / primary body
   const b = empty(response) ? '' : (response as string) // Former response section
-  if (a && b) return `${a}${b}` // Concatenate HTML fragments
-  return a || b || '' // Whichever side has content
+  const merged = a && b ? `${a}${b}` : a || b || '' // Concatenate HTML fragments
+  return unwrapNestedFramesHtml(merged) // Flatten legacy nestedFrame shells
 }
 
 // Format response content - if it's already HTML, return as-is (TipTap will render it)
@@ -377,6 +427,8 @@ function TipTapContent({
   // Live frame-selected flag for TipTap DOM handlers (useEditor config is not recreated each render)
   const isPanelSelectedRef = useRef(!!isPanelSelected)
   isPanelSelectedRef.current = !!isPanelSelected
+  // Same gesture that selects an unselected frame must not place the I-bar
+  const selectOnlyClickRef = useRef(false)
   const lastAiForceSyncRef = useRef(0) // Last forceContentSyncKey we allowed while focused
   // Keep latest callbacks in refs so editorProps / onUpdate stay referentially stable across
   // RF drag re-renders (unstable options → useEditor setOptions every frame → databaseBlock NodeView remounts → table vanishes).
@@ -422,8 +474,10 @@ function TipTapContent({
           const mouseEvent = event as MouseEvent
           // Unselected frame: do not place caret / select text — let RF select + drag the frame
           if (!isPanelSelectedRef.current) {
+            selectOnlyClickRef.current = true // Suppress I-bar on the matching click
             return true // Prevent ProseMirror default; do not stopPropagation
           }
+          selectOnlyClickRef.current = false
           // Selected frame: keep pointer inside the editor so RF does not start a frame drag
           mouseEvent.stopPropagation()
 
@@ -731,7 +785,7 @@ function TipTapContent({
       let differs = true
       try {
         const tmp = document.createElement('div') // Off-DOM parse target
-        tmp.innerHTML = content || '<p></p>'
+        tmp.innerHTML = unwrapNestedFramesHtml(content || '<p></p>')
         const parsed = PMDOMParser.fromSchema(editor.schema).parse(tmp) // Stored HTML → PM doc
         differs = !editor.state.doc.eq(parsed) // Semantic equality (not string)
       } catch {
@@ -741,7 +795,7 @@ function TipTapContent({
       if (differs) {
         // emitUpdate:false — programmatic AI eye/discard/save must not fire onUpdate
         // (that set promptHasChanges and blocked discard from restoring the original)
-        editor.commands.setContent(content || '<p></p>', { emitUpdate: false })
+        editor.commands.setContent(unwrapNestedFramesHtml(content || '<p></p>'), { emitUpdate: false })
         // Ensure cursor is visible by focusing if editor is empty
         if (!content || content.trim() === '' || content === '<p></p>') {
           // Set cursor position to start to show cursor
@@ -800,11 +854,16 @@ function TipTapContent({
     return () => observer.disconnect()
   }, [containerRef])
 
-  // Focus editor + place I-bar — only when the frame is already selected
+  // Focus editor + place I-bar — only when the frame is already selected (not the select click)
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
     if (!editor) return
     // Unselected: never place caret — RF selects/drags the frame first
     if (!isPanelSelected) return
+    // Same gesture that just selected the frame / armed a nest — no I-bar
+    if (selectOnlyClickRef.current) {
+      selectOnlyClickRef.current = false
+      return
+    }
     e.stopPropagation()
 
     const clientX = e.clientX
@@ -1479,6 +1538,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const [isFrameHovering, setIsFrameHovering] = useState(false) // Frame hover — page-open menu (not lock/rotate)
   const [clipPreviewReady, setClipPreviewReady] = useState(false) // True after hover dwell — delayed full-content peek
   const [rotation, setRotation] = useState(0) // Degrees of item rotation (persisted in message metadata)
+  const [frameShape, setFrameShape] = useState<FrameShapeType | null>(null) // Silhouette (null = default frame)
   const isResizingRef = useRef(false) // Track if currently resizing
   const contentFitRef = useRef<HTMLDivElement>(null) // Inner unscaled content wrapper for intrinsic measure
   const frameScaleRef = useRef(1) // Latest scale — resize-end must not close over a stale render
@@ -1687,6 +1747,11 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           setRotation(metadata.rotation) // Apply persisted angle so layout survives reload
         }
 
+        // Frame silhouette (frames act as shapes)
+        if (isBlockPanel) {
+          setFrameShape(parseFrameShape(metadata.frameShape))
+        }
+
         // Frame lock: default locked; unlocked lets the box resize independently of content
         if (isBlockPanel && typeof metadata.frameUnlocked === 'boolean') {
           setFrameUnlocked(metadata.frameUnlocked)
@@ -1780,7 +1845,6 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     loadResizeState()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isProjectBoard, promptMessage?.id]) // Load once on mount - only depend on promptMessage.id
-
 
   // Update node data when collapse state changes
   const handleCollapseChange = useCallback((collapsed: boolean) => {
@@ -1988,6 +2052,39 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
      !responseMessage && 
      (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
 
+  // Live silhouette from menu / optimistic node patch (not only first metadata load)
+  useEffect(() => {
+    if (!isBlock) return
+    const fromMeta = parseFrameShape(promptMessage?.metadata?.frameShape)
+    const fromData = !isProjectBoard
+      ? parseFrameShape((data as ChatPanelNodeData).frameShape)
+      : null
+    setFrameShape(fromMeta ?? fromData)
+  }, [isBlock, isProjectBoard, promptMessage?.metadata?.frameShape, data])
+
+  // When Shape menu patches metadata, adopt unlock + box without waiting for remount
+  useEffect(() => {
+    if (!isBlock || !promptMessage?.metadata) return
+    const meta = promptMessage.metadata as Record<string, unknown>
+    if (!('frameShape' in meta) && !meta.resizeDimensions) return
+    if (typeof meta.frameUnlocked === 'boolean') {
+      setFrameUnlocked(meta.frameUnlocked)
+    }
+    const dims = meta.resizeDimensions as { width?: number; height?: number } | null | undefined
+    if (dims && typeof dims.width === 'number' && typeof dims.height === 'number') {
+      setResizeDimensions({ width: dims.width, height: dims.height })
+      setIsUserResized(true)
+    }
+  }, [
+    isBlock,
+    promptMessage?.metadata?.frameShape,
+    promptMessage?.metadata?.frameUnlocked,
+    // Intentionally stringify dims so object identity from patches still triggers
+    JSON.stringify(
+      (promptMessage?.metadata as Record<string, unknown> | undefined)?.resizeDimensions ?? null
+    ),
+  ])
+
   // Miro split (locked):
   // • Connection **point** = invisible RF Handle on the frame edge (geometry + snap)
   // • Connection **indicator** = plain DOM dot outside — starts drag on the edge point (not an RF Handle)
@@ -1999,6 +2096,34 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const showAdjustFrame = Boolean(selected && isBlock && !isThreadConnecting && !dragging && !pressing)
   // Transient blue outline while the frame is being moved (not a real selection)
   const showDragBorderOnly = Boolean(dragging && isBlock)
+  // Stack host: dashed edge line to reveal collapsed mates
+  const stackMeta = (promptMessage?.metadata || {}) as Record<string, unknown>
+  const stackGroupId =
+    typeof stackMeta.stackGroupId === 'string' ? stackMeta.stackGroupId : null
+  const stackSide = (['top', 'right', 'bottom', 'left'] as const).includes(
+    stackMeta.stackSide as FrameStackSide
+  )
+    ? (stackMeta.stackSide as FrameStackSide)
+    : null
+  // Line between each snap gap: any frame that still has a mate further out on stackSide
+  const showStackGapLine = useStore((s) => {
+    if (!stackGroupId || !stackSide) return false
+    const myIdx =
+      typeof stackMeta.stackIndex === 'number'
+        ? (stackMeta.stackIndex as number)
+        : stackMeta.stackAnchor === true
+          ? 0
+          : 99
+    let hasOut = false
+    s.nodeInternals.forEach((n) => {
+      if (n.id === id || n.type !== 'chatPanel') return
+      const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+      if (m.stackGroupId !== stackGroupId) return
+      const idx = typeof m.stackIndex === 'number' ? m.stackIndex : 99
+      if (idx > myIdx) hasOut = true
+    })
+    return hasOut
+  })
   // Indicators: selected frame (idle), OR nearby snap target while connecting — never during frame drag
   const showIndicators =
     isBlock &&
@@ -2453,6 +2578,13 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     const minW = blockMinFrameWidth(promptContent)
     let width = Math.max(params?.width ?? resizeDimensions?.width ?? 0, minW)
     let height = Math.max(params?.height ?? resizeDimensions?.height ?? 0, BLOCK_MIN_FRAME_H)
+    // RF end params are AABB when rotated — store unrotated content size
+    if (Math.abs(rotation) > 0.5 && params?.width && params?.height) {
+      const fallback = resizeDimensions || { width, height }
+      const content = contentSizeFromAabb(params.width, params.height, rotation, fallback)
+      width = Math.max(content.width, minW)
+      height = Math.max(content.height, BLOCK_MIN_FRAME_H)
+    }
     const finalScale = frameScaleRef.current // Latest scale from the drag (avoid stale closure)
     let colToPersist: number | undefined // New wrap column width to store (unlocked-wrap resize sets the point)
     if (!frameUnlocked && frameTextWrap) {
@@ -2488,14 +2620,24 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       ...(frameUnlocked ? { unlockedFrameSize: { width, height }, unlockedFrameScale: finalScale } : {}),
       ...(colToPersist != null ? { wrapColWidth: colToPersist } : {}), // Save the new unlocked wrap point
     })
-  }, [resizeDimensions, frameUnlocked, frameTextWrap, wrapColWidth, fontScale, persistFrameMeta, intrinsicSize, promptContent])
+  }, [resizeDimensions, frameUnlocked, frameTextWrap, wrapColWidth, fontScale, persistFrameMeta, intrinsicSize, promptContent, rotation])
 
   // Corner-drag: locked → proportional content scale; unlocked → free frame (content stays)
+  // When rotated, RF reports AABB size — convert back to unrotated content size.
   const handleResize = useCallback((_event: any, params: { width: number; height: number }) => {
     if (!isResizingRef.current) return // Ignore mount/select noise — only after handleResizeStart
     const minW = blockMinFrameWidth(promptContent)
-    const width = Math.max(params.width, minW)
-    const height = Math.max(params.height, BLOCK_MIN_FRAME_H)
+    const fallback = resizeDimensions || lockedResizeStartRef.current || {
+      width: minW,
+      height: BLOCK_MIN_FRAME_H,
+    }
+    let width = Math.max(params.width, minW)
+    let height = Math.max(params.height, BLOCK_MIN_FRAME_H)
+    if (Math.abs(rotation) > 0.5) {
+      const content = contentSizeFromAabb(width, height, rotation, fallback)
+      width = Math.max(content.width, minW)
+      height = Math.max(content.height, BLOCK_MIN_FRAME_H)
+    }
     if (!frameUnlocked && lockedResizeStartRef.current) {
       // Locked (wrap OR nowrap): proportional content scale — width/text scale together.
       const start = lockedResizeStartRef.current
@@ -2513,7 +2655,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       }
     }
     setResizeDimensions({ width, height }) // Drive panel style — matches RF dimension changes
-  }, [frameUnlocked, frameTextWrap, wrapColWidth, intrinsicSize, promptContent])
+  }, [frameUnlocked, frameTextWrap, wrapColWidth, intrinsicSize, promptContent, rotation, resizeDimensions])
 
   // Persist item rotation degrees into message metadata after a rotate gesture ends
   const saveRotation = useCallback(async (nextRotation: number) => {
@@ -2540,6 +2682,17 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     e.stopPropagation() // Do not select/drag the RF node
     e.preventDefault() // Avoid text selection while rotating
     if (!panelRef.current) return // Need geometry for center
+    // Lock current unrotated content size so AABB math has a stable base (outer becomes AABB)
+    if (!resizeDimensions) {
+      const fit = contentFitRef.current
+      const w = Math.max(
+        blockMinFrameWidth(promptContent),
+        fit?.offsetWidth || panelRef.current.offsetWidth || 200
+      )
+      const h = Math.max(BLOCK_MIN_FRAME_H, fit?.offsetHeight || panelRef.current.offsetHeight || 40)
+      setResizeDimensions({ width: w, height: h })
+      setIsUserResized(true)
+    }
     const rect = panelRef.current.getBoundingClientRect() // Screen-space panel bounds
     const cx = rect.left + rect.width / 2 // Horizontal center in viewport
     const cy = rect.top + rect.height / 2 // Vertical center in viewport
@@ -2547,7 +2700,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     isRotatingRef.current = true // Mark active rotate session
     rotationDragRef.current = { startAngle, startRotation: rotation } // Baseline for delta math
     e.currentTarget.setPointerCapture(e.pointerId) // Keep events on this handle while dragging
-  }, [rotation])
+  }, [rotation, resizeDimensions, promptContent])
 
   // Live-update rotation from pointer deltas relative to panel center
   const handleRotatePointerMove = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
@@ -4321,6 +4474,39 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   ])
 
   // Map-card frame is a container (like a Notion page) — ⋮⋮ lives on TipTap content blocks inside
+  // Logical (unrotated) content box — never use outer AABB measure when rotated
+  const contentBoxW =
+    (isUserResized && resizeDimensions?.width) ||
+    (Math.abs(rotation) > 0.5
+      ? Math.max(intrinsicSize.width + 8, BLOCK_MIN_FRAME_W) // +pad; outer RO is AABB — don't use it
+      : itemBoxSize.width) ||
+    FRAME_SHAPE_DEFAULT_SIZE.width
+  const contentBoxH =
+    (isUserResized && resizeDimensions?.height) ||
+    (Math.abs(rotation) > 0.5
+      ? Math.max(intrinsicSize.height + 8, BLOCK_MIN_FRAME_H)
+      : itemBoxSize.height) ||
+    FRAME_SHAPE_DEFAULT_SIZE.height
+  const isContentRotated = isBlock && Math.abs(rotation) > 0.5
+  // Upright blue adjust frame = AABB of rotated content (snap / resize chrome)
+  const displayBox = isContentRotated
+    ? rotatedAabbSize(contentBoxW, contentBoxH, rotation)
+    : { width: contentBoxW, height: contentBoxH }
+  const shapeBoxW = contentBoxW
+  const shapeBoxH = contentBoxH
+  const shapeClip = frameShape ? frameShapeClipCss(frameShape) : undefined
+  const shapeStroke =
+    data.borderColor && data.borderColor !== ''
+      ? data.borderColor
+      : resolvedTheme === 'dark'
+        ? '#9ca3af'
+        : '#6b7280'
+  const shapeFill =
+    data.fillColor && data.fillColor !== ''
+      ? data.fillColor
+      : 'transparent'
+  const shapeStrokeW = Math.max(1, parseFloat(String(data.borderWeight || '2')) || 2)
+
   return (
     <div
         ref={panelRef}
@@ -4328,23 +4514,26 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         data-block-node={isBlock ? 'true' : undefined} // Marks blocks for selected connection-dot styling
         data-block-resized={wrapActive ? 'wrap' : undefined} // Wrap (locked/unlocked): soft-wrap in fixed width; else nowrap / clip
         data-clip-preview={showClipPreview ? 'true' : undefined} // Unlocked hover: full-content peek
+        data-frame-shape={frameShape || undefined} // Silhouette id when frames act as shapes
         data-ai-pending-frame={
           !isProjectBoard && promptMessage?.id && isFramePending(promptMessage.id) ? 'true' : undefined
         }
         className={cn(
-          'group rounded-2xl border relative cursor-grab active:cursor-grabbing overflow-visible transition-[opacity,box-shadow,background-color,border-color] duration-300', // Chrome sits outside; clip only inner body
-          !isFillTransparent && 'backdrop-blur-sm', // Frost only when a fill is set — blur alone looks like a tinted plate
+          'group border relative cursor-grab active:cursor-grabbing overflow-visible transition-[opacity,box-shadow,background-color,border-color] duration-300', // Chrome sits outside; clip only inner body
+          // When rotated, fill lives on the inner shell only (avoids upright+rotated double shape)
+          !frameShape && !isContentRotated && 'rounded-2xl',
+          !isFillTransparent && !frameShape && !isContentRotated && 'backdrop-blur-sm',
           // Always show blue border when selected, otherwise use custom border color or default theme-based color
           // Selection uses the connected resize rectangle (not a rounded card border)
           selected && isBlock
             ? (data.borderColor ? '' : 'border-transparent') // Selection chrome is the resize rect, not the frame border
             : selected
               ? 'border-blue-500 dark:border-blue-400'
-              : (data.borderColor ? '' : 'border-transparent'), // Default frame: no visible border until styled
+              : (data.borderColor || frameShape ? '' : 'border-transparent'), // Default frame: no visible border until styled
           isBookmarked
             ? 'shadow-[0_0_8px_rgba(250,204,21,0.6)] dark:shadow-[0_0_8px_rgba(250,204,21,0.4)]'
-            : isBorderNone
-              ? 'shadow-none' // Transparent / none border — no card shadow (looked like a border)
+            : isBorderNone || frameShape || isContentRotated
+              ? 'shadow-none' // Transparent / none border / silhouette / rotated — no card shadow on outer
               : showClipPreview
                 ? 'shadow-md' // Soft lift while full clipped content is revealed
                 : 'shadow-sm',
@@ -4356,53 +4545,53 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             'tt-ai-pending-frame'
         )}
       style={{
-        // Unresized blocks: max-content × fit-content so the frame hugs text (nowrap until Enter)
-        // Page preview expands the item into a board-within-board window
+        // Rotated: outer = AABB so blue adjust box covers content; unrotated: hug / resize as before
         width: pagePreviewOpen
           ? '520px'
-          : isUserResized && resizeDimensions
-            ? `${resizeDimensions.width}px`
-            : growsWithLine
-              ? 'max-content'
-              : `${panelWidthToUse}px`,
-        // Preview mode: fixed window — body text is hidden so it can’t sit under the preview chrome
+          : isContentRotated
+            ? `${displayBox.width}px`
+            : isUserResized && resizeDimensions
+              ? `${resizeDimensions.width}px`
+              : growsWithLine
+                ? 'max-content'
+                : `${panelWidthToUse}px`,
         height: pagePreviewOpen
           ? '420px'
-          : isUserResized && resizeDimensions
-            ? `${resizeDimensions.height}px`
-            : growsWithLine
-              ? 'fit-content'
-              : undefined,
+          : isContentRotated
+            ? `${displayBox.height}px`
+            : isUserResized && resizeDimensions
+              ? `${resizeDimensions.height}px`
+              : growsWithLine
+                ? 'fit-content'
+                : undefined,
         minWidth: pagePreviewOpen
           ? '520px'
-          : usesFitContent
-            ? `${frameMinW}px` // pageLink: grip+icon+menu; plain: grip+3ch
+          : usesFitContent && !isContentRotated
+            ? `${frameMinW}px`
               : isFlashcard
                 ? '300px'
                 : '200px',
         minHeight: pagePreviewOpen ? '420px' : '0px',
         maxWidth: undefined,
         opacity: isInitialShrinkComplete ? 1 : 0,
-        backgroundColor: panelBackgroundColor,
-        // Transparent border color: drop stroke entirely (don't leave width/style with no color)
+        // Rotated: outer is transparent shell (fill on inner) — kills upright ghost under rotated card
+        backgroundColor:
+          frameShape || isContentRotated ? 'transparent' : panelBackgroundColor,
         borderColor: selected
           ? undefined
-          : isBorderColorTransparent
+          : frameShape || isBorderColorTransparent || isContentRotated
             ? 'transparent'
             : data.borderColor,
         borderStyle: selected
           ? 'solid'
-          : isBorderNone
+          : frameShape || isBorderNone || isContentRotated
             ? 'none'
             : ((data.borderStyle as React.CSSProperties['borderStyle']) || undefined),
         borderWidth: selected
           ? (data.borderWeight || '1px')
-          : isBorderNone
+          : frameShape || isBorderNone || isContentRotated
             ? 0
             : (data.borderWeight || undefined),
-        transform: rotation ? `rotate(${rotation}deg)` : undefined, // Apply persisted/live item rotation
-        transformOrigin: 'center center', // Rotate around panel center (matches drag math)
-        // Selection chrome (blue lines + corner handles) reads these — scales with frame size
         ['--tt-frame-ui-scale' as string]: frameUiScale,
         ['--tt-frame-line-w' as string]: `${frameLineW}px`,
         ['--tt-frame-line-hit' as string]: `${frameLineHit}px`,
@@ -4477,13 +4666,31 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         }
       }}
     >
+      {/* Frame silhouette + body: one rotated shell (no double fill). Outer AABB stays upright. */}
+      {isBlock && frameShape && !pagePreviewOpen && !isContentRotated && (
+        <FrameShapeBackdrop
+          type={frameShape}
+          width={shapeBoxW}
+          height={shapeBoxH}
+          fill={shapeFill}
+          fillOpacity={0.2}
+          stroke={shapeStroke}
+          strokeWidth={shapeStrokeW}
+        />
+      )}
+
       {/* Drag move: blue box only (no resize corners / indicators / chrome) — not a real selection */}
       {showDragBorderOnly && (
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 z-[20] rounded-2xl"
+          className={cn(
+            'pointer-events-none absolute inset-0 z-[20]',
+            !frameShape && 'rounded-2xl'
+          )}
           style={{
             boxShadow: `inset 0 0 0 ${frameLineW}px #3b82f6`, // Same blue as selection chrome, no hit target
+            // Upright AABB outline — don't clip to rotated silhouette
+            clipPath: !isContentRotated ? shapeClip : undefined,
           }}
         />
       )}
@@ -4522,6 +4729,16 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         </>
       )}
 
+      {/* Stacked mates: line on each gap (not only the outermost host) */}
+      {showStackGapLine && stackGroupId && stackSide && !dragging && (
+        <FrameStackRevealLine
+          nodeId={id}
+          stackGroupId={stackGroupId}
+          stackSide={stackSide}
+          frameUiScale={frameUiScale}
+        />
+      )}
+
       {/* Connection indicators — DOM only (not RF Handles); arm the edge connection point */}
       {showIndicators && (
         <>
@@ -4551,38 +4768,14 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             data-frame-chrome
             className="nodrag nopan absolute z-[25] flex items-center gap-0.5" // Below connection indicators (z-30)
             style={(() => {
-              // Unrotated: pin under the local bottom-left (historical placement).
-              if (!rotation) {
-                return {
-                  left: 0,
-                  top: '100%',
-                  marginLeft: `${-8 * frameChromeScale}px`,
-                  marginTop: `${frameChromeGapY * frameChromeScale}px`,
-                  transform: `scale(${frameChromeScale})`,
-                  transformOrigin: 'top left' as const,
-                }
-              }
-              // Rotated: local bottom-left becomes a side on screen. Anchor top-center under the
-              // AABB bottom (screen-down) and counter-rotate so controls stay upright + usable.
-              const rad = (rotation * Math.PI) / 180
-              const pw =
-                panelRef.current?.offsetWidth ||
-                resizeDimensions?.width ||
-                intrinsicSize.width
-              const ph =
-                panelRef.current?.offsetHeight ||
-                resizeDimensions?.height ||
-                intrinsicSize.height
-              const aabbHalfH =
-                (Math.abs(pw * Math.sin(rad)) + Math.abs(ph * Math.cos(rad))) / 2
-              const dist = aabbHalfH + frameChromeGapY // Panel center → AABB bottom + gap
-              const tx = Math.sin(rad) * dist // Screen-down expressed in local px
-              const ty = Math.cos(rad) * dist
+              // Outer node is always upright — pin chrome under the blue box bottom-left
               return {
-                left: '50%',
-                top: '50%',
-                transform: `translate(${tx}px, ${ty}px) translate(-50%, 0) rotate(${-rotation}deg) scale(${frameChromeScale})`,
-                transformOrigin: 'top center' as const,
+                left: 0,
+                top: '100%',
+                marginLeft: `${-8 * frameChromeScale}px`,
+                marginTop: `${frameChromeGapY * frameChromeScale}px`,
+                transform: `scale(${frameChromeScale})`,
+                transformOrigin: 'top left' as const,
               }
             })()}
             onMouseEnter={() => setIsFrameHovering(true)} // Keep hover while on chrome
@@ -4840,24 +5033,48 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         </>
       )}
 
-      {/* Single text body — no prompt/response sections or collapse */}
+      {/* Single text body — when rotated, one centered shell holds fill + shape + blocks (no double card). */}
       <div
         className={cn(
-          'rounded-2xl relative',
-          !isFillTransparent && 'backdrop-blur-sm', // Same as outer: no frost when fill is fully transparent
-          !isBlock && 'p-1', // Chat/flashcards keep outer pad; blocks pad inside the scaled wrapper
-          // Preview open: fill the card; body editor is hidden (content lives on the nested page)
+          'relative z-[1]', // Above shape backdrop
+          !frameShape && 'rounded-2xl',
+          !isFillTransparent && !frameShape && 'backdrop-blur-sm',
+          !isBlock && 'p-1',
           pagePreviewOpen && 'flex flex-col h-full min-h-0',
-          // Clip when unlocked frame < content; hover unclips for a full-content preview
-          unlockedResized && !showClipPreview ? 'h-full overflow-hidden' : 'overflow-visible',
+          unlockedResized && !showClipPreview && !isContentRotated
+            ? 'h-full overflow-hidden'
+            : 'overflow-visible',
           promptMessage?.metadata?.fadeIn === true &&
             isBlockContentEmpty(promptContent) &&
-            'animate-note-fade-in' // Empty grip-spawn only — typed I-bar frames stay solid (no opacity blink)
+            'animate-note-fade-in',
+          isContentRotated && 'absolute'
         )}
         style={{
-          backgroundColor: responseAreaBackgroundColor,
+          backgroundColor: frameShape ? 'transparent' : responseAreaBackgroundColor,
+          clipPath: frameShape && !showClipPreview ? shapeClip : undefined,
+          ...(isContentRotated
+            ? {
+                width: contentBoxW,
+                height: contentBoxH,
+                left: '50%',
+                top: '50%',
+                transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
+                transformOrigin: 'center center',
+              }
+            : {}),
         }}
       >
+        {isBlock && frameShape && !pagePreviewOpen && isContentRotated && (
+          <FrameShapeBackdrop
+            type={frameShape}
+            width={shapeBoxW}
+            height={shapeBoxH}
+            fill={shapeFill}
+            fillOpacity={0.2}
+            stroke={shapeStroke}
+            strokeWidth={shapeStrokeW}
+          />
+        )}
         {/* Hover full-content preview: fill behind spilled blocks (frame box stays the saved size) */}
         {showClipPreview && resizeDimensions && (
           <div
@@ -4953,7 +5170,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               if (!isBlock || !selected) return
               const t = e.target as HTMLElement
               if (t.closest?.('.ProseMirror, [data-tt-block-handle], [data-tt-insert-line], .block-actions-menu')) {
-                return // Editor / grip already handle these
+                return // Editor / grip / nest already handle these
               }
               const ed = promptEditorRef.current
               if (!ed || ed.isDestroyed) return

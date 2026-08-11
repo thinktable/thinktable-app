@@ -5,7 +5,6 @@ import {
   editSystemPrompt,
   buildContextPack,
   formatContextPack,
-  plainToHtml,
 } from '@/lib/ai/context-pack'
 import { skillHintsForIds } from '@/lib/ai/skills'
 import { isSelectableAiMode } from '@/lib/ai/modes'
@@ -585,7 +584,8 @@ export async function POST(request: NextRequest) {
             status: 'complete',
             metadata: {
               mode,
-              html: plainToHtml(full),
+              // TipTap blocks (lists → listItem grips), not one plain paragraph
+              html: markdownToTipTapHtml(full),
             },
           })
           .eq('id', assistantRow.id)

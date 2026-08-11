@@ -42,6 +42,13 @@ import {
   type BlockTypeId,
 } from './block-actions-menu' // Notion-style block actions + Turn into baseline
 import {
+  FRAME_SHAPE_DEFAULT_SIZE,
+  FRAME_SHAPE_MIN_SIZE,
+  FRAME_SHAPE_NONE,
+  parseFrameShape,
+  type FrameShapeChoice,
+} from '@/lib/frame-shape' // Frame-as-shape silhouette helpers
+import {
   ThreadActionsMenu,
   type ThreadActionId,
 } from './thread-actions-menu' // Thread click menu (same chrome as handle menu)
@@ -69,6 +76,7 @@ import { setAiSelectedFrames, setAiViewportCenter } from '@/lib/ai/selection-bri
 import { htmlToPlain } from '@/lib/ai/context-pack' // Frame hover previews from content
 import { AI_CHAT_BLOCK_MIME, type AiChatBlockDragPayload } from '@/lib/ai/types' // Drag chat turn onto page
 import { markHtmlWithAiOrigin } from '@/lib/ai/wrap-ai-html' // Persist AI provenance on chat-drop
+import { markdownToTipTapHtml } from '@/lib/ai/markdown-to-tiptap' // Chat drop → TipTap blocks (lists as listItems)
 import { AiEditReviewBar } from '@/components/ai/ai-edit-review-bar' // Pending edit review chrome
 import { useAiEditSession } from '@/lib/ai/edit-session' // Frame pending glow / focus
 import {
@@ -84,7 +92,9 @@ import {
   persistBlockPlacement,
   ungroupBlocks,
 } from '@/lib/blocks' // blocks, groups, page-body ensure
-import { absFlowPosition, useBlockGroupDrag } from './use-block-group-drag' // Drag attach/detach between groups / page
+import { absFlowPosition, nodeFlowSize, useBlockGroupDrag } from './use-block-group-drag' // Drag attach/detach between groups / page
+import { useFrameNestStackDrag, isStackCollapsedMeta } from './use-frame-nest-stack-drag' // Edge-snap → stack reveal
+import { FrameNestStackOverlay } from './frame-nest-stack-overlay' // Snap preview line on host edge
 import {
   armMarqueeFrameSelect,
   clearMarqueeFrameSelect,
@@ -131,6 +141,7 @@ interface ChatPanelNodeData {
   borderColor?: string // Panel border color (optional, defaults to theme-based)
   borderStyle?: string // Panel border style (solid, dashed, dotted)
   borderWeight?: string // Panel border thickness (1px, 2px, 4px)
+  frameShape?: string | null // Silhouette when frames act as shapes
 }
 
 const MINIMAP_HEIGHT = 120 // Keep in sync with .minimap-custom-size height in globals.css
@@ -1895,6 +1906,23 @@ function BoardFlowInner({
     window.addEventListener('ai-edits-mutated', onMutated)
     return () => window.removeEventListener('ai-edits-mutated', onMutated)
   }, [refetchMessages, queryClient, conversationId])
+
+  // Nest frame between TipTap blocks / stack behind on 4-side drop (after refetch + snapshot exist)
+  const {
+    dropUi: frameNestStackUi,
+    onNodeDrag: onFrameNestStackDrag,
+    onNodeDragStart: onFrameNestStackDragStart,
+    onNodeDragStop: onFrameNestStackDragStop,
+  } = useFrameNestStackDrag({
+    conversationId,
+    getNodes: () => reactFlowInstance.getNodes(),
+    setNodes,
+    isLocked,
+    takeSnapshot,
+    refetchMessages: () => {
+      void refetchMessages()
+    },
+  })
 
   // Signal host as soon as RF can pan/zoom — don’t wait on messages (that delayed the veil)
   useEffect(() => {
@@ -4302,6 +4330,8 @@ function BoardFlowInner({
 
             // Load panel styling from message metadata (fillColor, borderColor, borderStyle, borderWeight)
             const messageMetadata = message.metadata || {}
+            const stackIndex =
+              typeof messageMetadata.stackIndex === 'number' ? messageMetadata.stackIndex : null
             const panelNode: Node<ChatPanelNodeData> = {
               id: nodeId,
               type: 'chatPanel',
@@ -4317,8 +4347,12 @@ function BoardFlowInner({
                 borderColor: messageMetadata.borderColor === null ? undefined : (messageMetadata.borderColor || undefined),
                 borderStyle: messageMetadata.borderStyle === null ? 'none' : (messageMetadata.borderStyle || undefined),
                 borderWeight: messageMetadata.borderWeight === null ? undefined : (messageMetadata.borderWeight || undefined),
+                frameShape: parseFrameShape(messageMetadata.frameShape) ?? undefined,
               },
               draggable: !isLocked, // Draggable in both canvas and linear modes (unless locked)
+              // Collapsed stack mates stay hidden until edge-line reveal
+              hidden: isStackCollapsedMeta(messageMetadata as Record<string, unknown>),
+              zIndex: stackIndex == null ? undefined : Math.max(0, 10 - stackIndex),
             }
 
             // Store position
@@ -4342,6 +4376,8 @@ function BoardFlowInner({
 
           // Load panel styling from message metadata (fillColor, borderColor, borderStyle, borderWeight)
           const messageMetadata = message.metadata || {}
+          const stackIndex =
+            typeof messageMetadata.stackIndex === 'number' ? messageMetadata.stackIndex : null
           const panelNode: Node<ChatPanelNodeData> = {
             id: baseNodeId,
             type: 'chatPanel',
@@ -4357,8 +4393,12 @@ function BoardFlowInner({
               borderColor: messageMetadata.borderColor === null ? undefined : (messageMetadata.borderColor || undefined),
               borderStyle: messageMetadata.borderStyle === null ? 'none' : (messageMetadata.borderStyle || undefined),
               borderWeight: messageMetadata.borderWeight === null ? undefined : (messageMetadata.borderWeight || undefined),
+              frameShape: parseFrameShape(messageMetadata.frameShape) ?? undefined,
             },
             draggable: !isLocked, // Draggable in both canvas and linear modes (unless locked)
+            // Collapsed stack mates stay hidden until edge-line reveal
+            hidden: isStackCollapsedMeta(messageMetadata as Record<string, unknown>),
+            zIndex: stackIndex == null ? undefined : Math.max(0, 10 - stackIndex),
           }
 
           // Store position
@@ -5916,6 +5956,74 @@ function BoardFlowInner({
     [conversationId, nodes, edges, queryClient]
   )
 
+  // Apply / clear a silhouette on the focused frame (frames act as shapes)
+  const handleSetFrameShape = useCallback(
+    async (choice: FrameShapeChoice) => {
+      const target = rightClickedNode
+      if (!target || target.type !== 'chatPanel') return
+      const msgId = target.data?.promptMessage?.id as string | undefined
+      if (!msgId) return
+
+      const shape = choice === FRAME_SHAPE_NONE ? null : parseFrameShape(choice)
+      takeSnapshot?.()
+
+      const live = nodes.find((n) => n.id === target.id) || target
+      const meta = {
+        ...((live.data?.promptMessage?.metadata as Record<string, unknown>) || {}),
+      }
+      const prevDims = meta.resizeDimensions as { width?: number; height?: number } | undefined
+      const measured = nodeFlowSize(live)
+      let nextW = Math.max(
+        FRAME_SHAPE_MIN_SIZE.width,
+        prevDims?.width || measured.width || FRAME_SHAPE_DEFAULT_SIZE.width
+      )
+      let nextH = Math.max(
+        FRAME_SHAPE_MIN_SIZE.height,
+        prevDims?.height || measured.height || FRAME_SHAPE_DEFAULT_SIZE.height
+      )
+      // First time applying a silhouette: bump tiny hugged frames up to a readable box
+      if (shape && nextW < FRAME_SHAPE_DEFAULT_SIZE.width) nextW = FRAME_SHAPE_DEFAULT_SIZE.width
+      if (shape && nextH < FRAME_SHAPE_DEFAULT_SIZE.height) nextH = FRAME_SHAPE_DEFAULT_SIZE.height
+
+      const nextMeta: Record<string, unknown> = {
+        ...meta,
+        frameShape: shape, // null clears → default transparent frame
+      }
+      if (shape) {
+        // Shaped frames need an explicit box so the silhouette is visible (unlock = free resize)
+        nextMeta.frameUnlocked = true
+        nextMeta.resizeDimensions = { width: nextW, height: nextH }
+        nextMeta.unlockedFrameSize = { width: nextW, height: nextH }
+      }
+
+      const supabase = createClient()
+      try {
+        await supabase.from('messages').update({ metadata: nextMeta }).eq('id', msgId)
+      } catch (err) {
+        console.error('Failed to save frame shape:', err)
+        return
+      }
+
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.id !== target.id) return n
+          const pm = n.data?.promptMessage
+          if (!pm) return n
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              frameShape: shape ?? undefined,
+              promptMessage: { ...pm, metadata: { ...pm.metadata, ...nextMeta } },
+            },
+          }
+        })
+      )
+      setRightClickedNode(null)
+    },
+    [rightClickedNode, nodes, setNodes, takeSnapshot]
+  )
+
   // Dispatch block action from the shared menu
   const handleBlockAction = useCallback(
     (action: BlockActionId, payload?: BlockActionPayload) => {
@@ -5960,6 +6068,11 @@ function BoardFlowInner({
             }
           }
           break
+        case 'setFrameShape':
+          if (payload?.frameShape) {
+            void handleSetFrameShape(payload.frameShape)
+          }
+          break
         // Baseline stubs — menu entries present; behavior later
         case 'color':
         case 'listFormat':
@@ -5969,7 +6082,6 @@ function BoardFlowInner({
         case 'presentFromHere':
         case 'askAI':
         case 'skills':
-        case 'frameShapeAutomations': // Placeholder entry — saved frame-shape automations land here later
           setRightClickedNode(null)
           break
       }
@@ -5983,6 +6095,7 @@ function BoardFlowInner({
       handleUngroupBlocks,
       handleTurnInto,
       handleSelectionToPage,
+      handleSetFrameShape,
       nodes,
       rightClickedNode,
       addChildNode,
@@ -6976,7 +7089,7 @@ function BoardFlowInner({
       y: event.clientY,
     })
 
-    // AI chat block → new frame with that content (never auto-place; user dropped it)
+    // AI chat turn → new frame; contents are TipTap blocks (lists = listItem grips)
     const aiRaw = event.dataTransfer.getData(AI_CHAT_BLOCK_MIME)
     if (aiRaw) {
       let payload: AiChatBlockDragPayload | null = null
@@ -6991,7 +7104,10 @@ function BoardFlowInner({
           const { data: { user } } = await supabase.auth.getUser()
           if (!user || !conversationId) return
           takeSnapshot()
-          const rawContent = payload.html || `<p>${payload.plain}</p>`
+          // Prefer TipTap HTML; markdown plain → proper blocks (never one giant paragraph)
+          const rawContent = payload.html?.trim()
+            ? payload.html
+            : markdownToTipTapHtml(payload.plain || '')
           // Only assistant (AI) response text gets persistent AI-origin marks — not user prompts
           const content =
             payload.role === 'assistant' ? markHtmlWithAiOrigin(rawContent) : rawContent
@@ -7011,12 +7127,12 @@ function BoardFlowInner({
               }),
             })
           if (error) {
-            console.error('Failed to place AI chat block as frame:', error)
+            console.error('Failed to place AI chat turn as frame:', error)
             return
           }
           refetchMessages()
         } catch (err) {
-          console.error('AI chat block drop failed:', err)
+          console.error('AI chat turn drop failed:', err)
         }
         return
       }
@@ -7118,6 +7234,7 @@ function BoardFlowInner({
       onDoubleClick={embedded ? undefined : handlePaneDoubleClick}
     >
       {!embedded && <AiEditReviewBar />}
+      <FrameNestStackOverlay ui={frameNestStackUi} />
       <ReactFlow
         // Hide React Flow watermark; Pro license by launch
         proOptions={{ hideAttribution: true }}
@@ -7151,6 +7268,8 @@ function BoardFlowInner({
           if (isTargetNode && (node.selected || currentNode?.selected)) {
             setIsSelectedNodeDragging(true)
           }
+
+          onFrameNestStackDragStart(event, node) // Snapshot lock-group origins / reset unstack
         }}
         onNodeDrag={(event, node) => {
           // Hide placeholders only when the connected target node is dragged, not when placeholder itself is dragged
@@ -7176,6 +7295,7 @@ function BoardFlowInner({
           }
 
           onBlockGroupNodeDrag(event, node) // Highlight group drop target while dragging a block
+          onFrameNestStackDrag(event, node) // Edge-snap preview / magnet
         }}
         onNodeDragStop={(event, node) => {
           // Clear drag state when drag stops
@@ -7185,6 +7305,8 @@ function BoardFlowInner({
             rebuildIndex(nodes)
           }
           void onBlockGroupNodeDragStop(event, node) // Attach to group / detach onto the page + persist
+          void onFrameNestStackDragStop(event, node) // Link snap pair → stack line (no hide)
+
           // Guard: some RF versions still fire onNodeClick after a drag — skip click-select briefly
           if (node?.type === 'chatPanel') {
             justDraggedFrameRef.current.add(node.id)
@@ -8138,6 +8260,11 @@ function BoardFlowInner({
           currentBlockType={
             (rightClickedNode.data?.promptMessage?.metadata?.blockType as BlockTypeId) || 'text'
           }
+          currentFrameShape={
+            parseFrameShape(rightClickedNode.data?.promptMessage?.metadata?.frameShape) ??
+            FRAME_SHAPE_NONE
+          }
+          showFrameShape={rightClickedNode.type === 'chatPanel'}
           pageInTargets={(() => {
             // Pages the new page can nest under (from sidebar cache)
             const convs =

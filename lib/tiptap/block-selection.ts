@@ -27,15 +27,17 @@ export function editorForHostNode(hostNodeId: string): Editor | null {
 /** Frame + editor under the pointer (skips ⋮⋮ drag chrome). */
 export function findHostEditorAtPoint(
   clientX: number,
-  clientY: number
+  clientY: number,
+  skipHostNodeId?: string // Ignore this frame (e.g. the one being RF-dragged)
 ): { hostNodeId: string; editor: Editor } | null {
   const els = document.elementsFromPoint(clientX, clientY) // Topmost → bottom
   for (const el of els) {
     if (!(el instanceof HTMLElement)) continue
     if (el.closest('[data-tt-block-drag-ghost], [data-tt-drop-line]')) continue // Ignore drag overlays
+    if (el.closest('[data-tt-frame-drop-overlay]')) continue // Ignore stack drop chrome
     const node = el.closest('.react-flow__node') as HTMLElement | null
     const id = node?.getAttribute('data-id')
-    if (!id) continue
+    if (!id || id === skipHostNodeId) continue
     const editor = editorForHostNode(id)
     if (editor) return { hostNodeId: id, editor }
   }
@@ -71,9 +73,38 @@ export function isHandleBlockType(name: string): boolean {
   )
 }
 
+/** Screen Y band for a handle-block — prefer the block’s own DOM rect. */
+function blockScreenYBand(
+  editor: Editor,
+  node: PMNode,
+  pos: number
+): { top: number; bottom: number } | null {
+  try {
+    const dom = editor.view.nodeDOM(pos)
+    // Prefer the content element for a reliable painted band
+    let el: HTMLElement | null =
+      dom instanceof HTMLElement
+        ? dom
+        : dom?.parentElement instanceof HTMLElement
+          ? dom.parentElement
+          : null
+    if (el) {
+      const rect = el.getBoundingClientRect()
+      if (rect.height > 0) return { top: rect.top, bottom: rect.bottom }
+    }
+    if (node.isAtom || node.isLeaf) return null
+    const start = editor.view.coordsAtPos(pos + 1)
+    const endPos = Math.max(pos + 1, pos + node.nodeSize - 1)
+    const end = editor.view.coordsAtPos(endPos)
+    return { top: start.top, bottom: Math.max(start.bottom, end.bottom) }
+  } catch {
+    return null
+  }
+}
+
 /**
  * Resolve the content block whose vertical band contains clientY (any X — full frame width).
- * Prefers listItem/taskItem over inner paragraphs; otherwise the tightest matching block.
+ * Prefers listItem/taskItem; otherwise the **tightest** matching block DOM rect.
  */
 export function findEditorBlockAtClientY(editor: Editor, clientY: number): EditorBlockRef | null {
   const { doc } = editor.state
@@ -81,53 +112,26 @@ export function findEditorBlockAtClientY(editor: Editor, clientY: number): Edito
 
   doc.descendants((node, pos) => {
     const name = node.type.name
-    // Descend into lists so each item is its own handle target
     if (name === 'bulletList' || name === 'orderedList' || name === 'taskList') return true
     if (!isHandleBlockType(name)) return true
 
-    try {
-      // Prefer DOM rect (matches visible line / pageLink); coordsAtPos can undershoot empty <p>
-      let top: number
-      let bottom: number
-      const dom = editor.view.nodeDOM(pos)
-      const rect =
-        dom instanceof HTMLElement
-          ? dom.getBoundingClientRect()
-          : dom?.parentElement instanceof HTMLElement
-            ? dom.parentElement.getBoundingClientRect()
-            : null
-      if (rect && rect.height > 0) {
-        top = rect.top
-        bottom = rect.bottom
-      } else if (node.isAtom || node.isLeaf) {
-        return true // Atom with no measurable DOM — skip
-      } else {
-        const start = editor.view.coordsAtPos(pos + 1) // Top of block
-        const endPos = Math.max(pos + 1, pos + node.nodeSize - 1)
-        const end = editor.view.coordsAtPos(endPos) // Bottom of block
-        top = start.top
-        bottom = Math.max(start.bottom, end.bottom)
-      }
-      if (clientY < top || clientY > bottom) {
-        // Skip children of list items — the item itself is the handle unit
-        return name !== 'listItem' && name !== 'taskItem'
-      }
-      const height = Math.max(1, bottom - top)
-      const ref: EditorBlockRef = { from: pos, to: pos + node.nodeSize, node, typeName: name }
-      // Prefer list/task items; else prefer the tighter (more nested) match
-      const prefer =
-        !best ||
-        name === 'listItem' ||
-        name === 'taskItem' ||
-        (best.ref.typeName !== 'listItem' &&
-          best.ref.typeName !== 'taskItem' &&
-          height <= best.height)
-      if (prefer) best = { ref, height }
-    } catch {
-      // coordsAtPos can throw for odd positions — skip
+    const band = blockScreenYBand(editor, node, pos)
+    if (!band) return true
+    const { top, bottom } = band
+    if (clientY < top || clientY > bottom) {
+      return name !== 'listItem' && name !== 'taskItem'
     }
+    const height = Math.max(1, bottom - top)
+    const ref: EditorBlockRef = { from: pos, to: pos + node.nodeSize, node, typeName: name }
+    const prefer =
+      !best ||
+      name === 'listItem' ||
+      name === 'taskItem' ||
+      (best.ref.typeName !== 'listItem' &&
+        best.ref.typeName !== 'taskItem' &&
+        height < best.height) // Strictly tighter — equal height keeps earlier (doc order)
+    if (prefer) best = { ref, height }
 
-    // Don’t treat nested paragraphs inside a list item as separate handles
     if (name === 'listItem' || name === 'taskItem') return false
     return true
   })
@@ -154,13 +158,13 @@ export function findEditorBlockAtPos(editor: Editor, pos: number): EditorBlockRe
     }
   }
 
-  // Top-level doc child (depth 1)
-  if ($pos.depth >= 1) {
-    const node = $pos.node(1)
+  // Nearest handle-block ancestor
+  for (let d = $pos.depth; d >= 1; d--) {
+    const node = $pos.node(d)
     if (isHandleBlockType(node.type.name) || node.isBlock) {
       return {
-        from: $pos.before(1),
-        to: $pos.after(1),
+        from: $pos.before(d),
+        to: $pos.after(d),
         node,
         typeName: node.type.name,
       }

@@ -49,7 +49,7 @@ import {
 } from '@/lib/tiptap/page-blocks' // Block → linked page (inline pageLink node)
 
 type HandleLayout = {
-  top: number // CSS px relative to editor gutter container (local, not screen)
+  top: number // CSS px relative to host gutter container
   height: number
   firstLineH: number // First-line box height (local px) — grip centers vertically on the first line
   lineCenter: number // Vertical center of the FIRST rendered text line (local px) — where the grip sits
@@ -114,6 +114,7 @@ function blockDom(editor: Editor, block: EditorBlockRef): HTMLElement | null {
   return null
 }
 
+
 /** Topmost non-empty client rect from a Range — the FIRST visual text line (not a flex-centered icon). */
 function topmostClientRect(el: HTMLElement): DOMRect | null {
   try {
@@ -133,10 +134,7 @@ function topmostClientRect(el: HTMLElement): DOMRect | null {
 }
 
 /**
- * Measure handle Y/height in the gutter container’s local CSS pixels.
- * Must divide out React Flow viewport scale — getBoundingClientRect is screen-space,
- * but position:absolute top is pre-transform CSS px inside .react-flow__viewport.
- * Use rotation-safe scale + screen→local (AABB height/width ratio breaks under frame rotate).
+ * Measure grip Y from the block’s first line into the host gutter container.
  */
 function layoutForBlock(
   editor: Editor,
@@ -144,47 +142,58 @@ function layoutForBlock(
   block: EditorBlockRef
 ): HandleLayout | null {
   try {
+    const root = container
     const el = blockDom(editor, block)
 
-    if (el) {
-      const blockRect = el.getBoundingClientRect()
-      const topLeft = screenToLocal(container, blockRect.left, blockRect.top)
-      const bottomLeft = screenToLocal(container, blockRect.left, blockRect.bottom)
-      const top = topLeft.y
-      const height = Math.max(22, Math.abs(bottomLeft.y - topLeft.y))
-      // Prefer a short header chrome for tall atoms — otherwise Range/rects span the whole
-      // databaseBlock table and lineCenter becomes the vertical middle of the DB.
-      const dbHeader =
-        (el.querySelector?.('.tt-database-block-row') as HTMLElement | null) ||
-        (el.querySelector?.('.tt-database-block-label') as HTMLElement | null)
-      const pageLabel = el.querySelector?.('.tt-page-link-label') as HTMLElement | null
-      const textEl = dbHeader || pageLabel || el
-      // First-line height (local px): computed line-height is transform-independent already
+    const dbHeader = el
+      ? ((el.querySelector?.('.tt-database-block-row') as HTMLElement | null) ||
+          (el.querySelector?.('.tt-database-block-label') as HTMLElement | null))
+      : null
+    const pageLabel = el?.querySelector?.('.tt-page-link-label') as HTMLElement | null
+    const textEl = dbHeader || pageLabel || el
+
+    // Always pin to first-line mid via screen→local on the layout root (rotation-safe)
+    if (textEl) {
       const lh = parseFloat(getComputedStyle(textEl).lineHeight)
-      const firstLineH = Number.isFinite(lh) && lh > 0 ? lh : Math.min(height, 28)
-      // Center of the FIRST rendered text line — prefer Range mid converted to local; else lh/2.
-      let lineCenter = top + Math.min(firstLineH, height) / 2
       const fr = topmostClientRect(textEl)
-      if (fr) {
-        // Tall rect (whole table) or DB header chrome → pin to top of rect, not vertical mid
-        const isDb = !!(dbHeader || el.classList?.contains?.('tt-database-block'))
+      let firstLineH =
+        Number.isFinite(lh) && lh > 0 ? lh : fr && fr.height > 0 ? Math.min(fr.height, 28) : 22
+      let lineCenter: number
+      if (fr && fr.height > 0) {
+        const isDb = !!(dbHeader || el?.classList?.contains?.('tt-database-block'))
         const useTop = isDb || fr.height > firstLineH * 2
         const midY = useTop ? fr.top + Math.min(firstLineH, fr.height) / 2 : (fr.top + fr.bottom) / 2
-        const mid = screenToLocal(container, (fr.left + fr.right) / 2, midY)
-        lineCenter = mid.y
+        lineCenter = screenToLocal(root, (fr.left + fr.right) / 2, midY).y
+        if (!(Number.isFinite(lh) && lh > 0)) {
+          firstLineH = Math.min(Math.max(14, fr.height), 28)
+        }
+      } else {
+        const start = editor.view.coordsAtPos(block.from + 1)
+        lineCenter = screenToLocal(root, start.left, (start.top + start.bottom) / 2).y
       }
-      return { top, height, firstLineH, lineCenter, block }
+      return {
+        top: lineCenter - firstLineH / 2,
+        height: firstLineH,
+        firstLineH,
+        lineCenter,
+        block,
+      }
     }
 
-    // Fallback: coordsAtPos is also screen-space — same rotation-safe conversion
     const start = editor.view.coordsAtPos(block.from + 1)
     const end = editor.view.coordsAtPos(Math.max(block.from + 1, block.to - 1))
-    const startLocal = screenToLocal(container, start.left, start.top)
-    const endLocal = screenToLocal(container, end.left, end.bottom)
+    const startLocal = screenToLocal(root, start.left, start.top)
+    const endLocal = screenToLocal(root, end.left, end.bottom)
     const top = startLocal.y
     const height = Math.max(22, Math.abs(endLocal.y - startLocal.y))
-    const lineCenter = screenToLocal(container, start.left, (start.top + start.bottom) / 2).y
-    return { top, height, firstLineH: Math.min(height, 28), lineCenter, block }
+    const lineCenter = screenToLocal(root, start.left, (start.top + start.bottom) / 2).y
+    return {
+      top,
+      height,
+      firstLineH: Math.min(height, 28),
+      lineCenter,
+      block,
+    }
   } catch {
     return null
   }
@@ -867,33 +876,33 @@ export function TipTapBlockHandles({
   // (like the portaled actions menu). `rfZoom` in deps forces this to re-measure on zoom.
   void rfZoom // Referenced so zoom changes re-render this component (measurement below reads live DOM)
   const localToScreen = container ? elementUniformScale(container) : 1 // Rotation-safe (not AABB height ratio)
-  // Grip sizing (comfort, not strict screen-constancy):
-  //  • Zoomed OUT (localToScreen ≤ 1): scale = 1 → grip rides WITH the content, staying in the
-  //    (also-shrinking) gutter, aligned exactly where designed. A constant screen size here would
-  //    overflow the tiny gutter and spill left of the frame.
-  //  • Zoomed IN (localToScreen > 1): scale = 1/√localToScreen → grip grows sub-linearly vs the
-  //    text (screen size ∝ √scale: ~1.4× at 200%, 2× at 400%) so it's neither tiny nor huge.
-  const chromeScale = 1 / Math.max(1, Math.sqrt(localToScreen))
+  void localToScreen
   // Horizontal: keep the grip CENTERED in the gutter — midway between the frame's left edge (local 0)
-  // and the block's text left (local HANDLE_GUTTER). This rides with the content, so it stays visually
-  // centered between frame-edge and block-text at every zoom (transform-origin center holds it there).
+  // and the block's text left (local HANDLE_GUTTER).
   const gutterCenterLeft = HANDLE_GUTTER / 2 - GRIP_W / 2 // Left so the grip's center sits at gutter mid
   const gripLayouts = new Map<number, HandleLayout>() // keyed by block.from (dedupe)
   if (container) {
     for (const b of selection) {
+            // Re-measure fresh from live DOM
       const gl = layoutForBlock(editor, container, b)
       if (gl) gripLayouts.set(b.from, gl)
     }
-    // Always show grips on blocks with pending AI edits (rainbow handle)
     for (const b of aiPendingBlocks) {
       if (gripLayouts.has(b.from)) continue
       const gl = layoutForBlock(editor, container, b)
       if (gl) gripLayouts.set(b.from, gl)
     }
   }
-  const hoverLayout = hover ?? focusLayout
-  if (hoverLayout && !gripLayouts.has(hoverLayout.block.from)) {
-    gripLayouts.set(hoverLayout.block.from, hoverLayout)
+  const hoverLayout =
+    hover
+      ? hover
+      : focusLayout
+        ? focusLayout
+        : null
+  if (hoverLayout && !gripLayouts.has(hoverLayout.block.from) && container) {
+    // Refresh Y from live DOM
+    const fresh = layoutForBlock(editor, container, hoverLayout.block)
+    if (fresh) gripLayouts.set(fresh.block.from, fresh)
   }
   if (menu && container && !gripLayouts.has(menu.block.from)) {
     const ml = layoutForBlock(editor, container, menu.block)
@@ -917,7 +926,10 @@ export function TipTapBlockHandles({
         const gutterTop = firstLineTop - GUTTER_EDGE_PAD
         const gutterH = lineH + GUTTER_EDGE_PAD * 2
         const gripTopInGutter = gl.lineCenter - gutterTop
-        return (
+        const gripRoot = container
+        const uniformScale = gripRoot ? elementUniformScale(gripRoot) : 1
+        const gripChromeScale = 1 / Math.max(1, Math.sqrt(uniformScale))
+        const grip = (
           <div
             key={gl.block.from}
             data-tt-gutter-hover
@@ -930,7 +942,6 @@ export function TipTapBlockHandles({
               height: gutterH,
             }}
           >
-            {/* Top + bottom hairlines on the first-line band — soft like rules, darker on hover */}
             {isPanelSelected ? (
               <>
                 <button
@@ -953,7 +964,7 @@ export function TipTapBlockHandles({
                       'dark:bg-gray-600 dark:group-hover/insert:bg-white/40'
                     )}
                     aria-hidden
-                    style={{ transform: `translateX(-50%) scale(${chromeScale})` }}
+                    style={{ transform: `translateX(-50%) scale(${gripChromeScale})` }}
                   />
                 </button>
                 <button
@@ -976,12 +987,11 @@ export function TipTapBlockHandles({
                       'dark:bg-gray-600 dark:group-hover/insert:bg-white/40'
                     )}
                     aria-hidden
-                    style={{ transform: `translateX(-50%) scale(${chromeScale})` }}
+                    style={{ transform: `translateX(-50%) scale(${gripChromeScale})` }}
                   />
                 </button>
               </>
             ) : null}
-            {/* ⋮⋮ grip — first-line center; hovering it is still inside group/gutter */}
             <div
               role="button"
               tabIndex={0}
@@ -997,7 +1007,7 @@ export function TipTapBlockHandles({
               )}
               style={{
                 top: gripTopInGutter,
-                transform: `translateY(-50%) scale(${chromeScale})`,
+                transform: `translateY(-50%) scale(${gripChromeScale})`,
                 transformOrigin: 'center',
               }}
               title={
@@ -1024,6 +1034,7 @@ export function TipTapBlockHandles({
             </div>
           </div>
         )
+        return grip
       })}
 
       {dropLine &&

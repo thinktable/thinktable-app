@@ -21,6 +21,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260811024400_frame_edge_snap_stack_shapes_rotation` — frame edge-snap / stack / shapes / AABB rotation
 - `20260810165853_chat_reload_persist_live_context` — chat reload persist + live context pills
 
 Earlier markers:

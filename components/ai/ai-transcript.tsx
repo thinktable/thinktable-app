@@ -1,10 +1,10 @@
 'use client'
 
-// Transcript of AI turns — each turn is a draggable block (page frame or composer context)
+// Transcript of AI turns — each turn drags onto the page as a frame (contents = TipTap blocks)
 import { useState } from 'react' // Local edit state
 import type { AiMessage, AiChatBlockDragPayload } from '@/lib/ai/types' // Types
 import { AI_CHAT_BLOCK_MIME } from '@/lib/ai/types' // MIME
-import { plainToHtml } from '@/lib/ai/context-pack' // HTML for page drop
+import { markdownToTipTapHtml } from '@/lib/ai/markdown-to-tiptap' // Lists/paragraphs → TipTap blocks
 import { cn } from '@/lib/utils' // cn
 import { GripVertical, Loader2 } from 'lucide-react' // Icons
 
@@ -44,14 +44,15 @@ export function AiTranscript({
   }
 
   const onDragStart = (event: React.DragEvent, m: AiMessage) => {
-    const plain = m.content || '' // Plain body
-    const html =
-      typeof m.metadata?.html === 'string' ? (m.metadata.html as string) : plainToHtml(plain) // Prefer stored html
+    const plain = m.content || '' // Plain / markdown body
+    // Prefer stored TipTap HTML; else convert markdown so bullets become listItem blocks
+    const stored = typeof m.metadata?.html === 'string' ? (m.metadata.html as string) : ''
+    const html = stored.trim() ? stored : markdownToTipTapHtml(plain)
     const payload: AiChatBlockDragPayload = {
       source: 'ai-chat-block', // Discriminator
       messageId: m.id, // Origin
-      plain, // Text (for snapshot / page)
-      html, // HTML (page frame)
+      plain, // Text (for snapshot / composer context)
+      html, // TipTap HTML — frame holds these blocks
       role: m.role, // Provenance: only assistant text is AI-written
     }
     event.dataTransfer.setData(AI_CHAT_BLOCK_MIME, JSON.stringify(payload)) // Primary MIME
@@ -82,7 +83,7 @@ export function AiTranscript({
                 onDragStart={(e) => onDragStart(e, m)}
                 className="mt-0.5 flex-shrink-0 w-5 h-5 flex items-center justify-center rounded text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 cursor-grab active:cursor-grabbing"
                 title="Drag onto page as a frame, or onto the input as context"
-                aria-label="Drag chat block"
+                aria-label="Drag chat turn as frame"
               >
                 <GripVertical className="h-3.5 w-3.5" />
               </button>

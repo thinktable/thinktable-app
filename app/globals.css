@@ -1355,94 +1355,9 @@ span[data-added="true"] {
     background-color: rgba(59, 130, 246, 0.22) !important;
   }
 
-  /* Preview chrome: semi-transparent, icon-only pill; left is set in JS so it stays inside the frame
-     when an unlocked frame is narrower than the page block (title would otherwise clip the menu).
-     Also used as a frame-level menu (outside ProseMirror) for linkedPageId frames without a pageLink. */
-  .tt-page-link-preview {
-    position: absolute;
-    right: 0; /* Fallback before first measure / frame-level pin */
-    top: 50%;
-    transform: translateY(-50%);
-    display: inline-flex;
-    align-items: center;
-    gap: 0.125rem;
-    padding: 2px 4px;
-    border-radius: 6px;
-    background: rgba(255, 255, 255, 0.6);   /* Semi-transparent glass */
-    border: 1px solid rgba(0, 0, 0, 0.08);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 120ms ease;
-    z-index: 2; /* Above clipped body text so the menu stays hit-testable */
-  }
-  .tt-page-link-preview-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2px;
-    border-radius: 4px;
-    color: #4b5563;
-    cursor: pointer;
-  }
-  .tt-page-link-preview-btn:hover {
-    background: rgba(0, 0, 0, 0.06);
-    color: #111827;
-  }
-  /* Reveal on hover, or keep shown while the preview is active; hide entirely while editing the title */
-  .tt-page-link:hover .tt-page-link-preview,
-  .tt-page-link-preview:has(.tt-page-link-preview-active),
-  .tt-page-link-preview-force {
-    opacity: 1;
-    pointer-events: auto;
-  }
-  /* Title pageLink menu also shows when hovering anywhere on the host frame — so regular body
-     blocks inside a page frame still expose preview/open (not only when hovering the title line). */
-  .react-flow__node:hover .tt-page-link-title .tt-page-link-preview {
-    opacity: 1;
-    pointer-events: auto;
-  }
-  .tt-page-link-editing .tt-page-link-preview {
-    opacity: 0 !important;
-    pointer-events: none !important;
-  }
-  .dark .tt-page-link-preview {
-    background: rgba(31, 31, 31, 0.6);
-    border-color: rgba(255, 255, 255, 0.12);
-  }
-  .dark .tt-page-link-preview-btn { color: #d1d5db; }
-  .dark .tt-page-link-preview-btn:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
-  .tt-page-link-preview-active { color: #2563eb; }
-
-  /* databaseBlock map frames (legacy sole-DB) — same hover reveal as pageLink for PageOpenMenu */
-  .tt-database-block:hover .tt-page-link-preview,
-  .react-flow__node:hover .tt-database-block .tt-page-link-preview {
-    opacity: 1;
-    pointer-events: auto;
-  }
-  .tt-database-block-editing .tt-page-link-preview {
-    opacity: 0 !important;
-    pointer-events: none !important;
-  }
-
-  /* pageLink layout (still scoped to the editor) */
-  .ProseMirror .tt-page-link {
-    position: relative;
-    margin: 2px 0;
-    width: max-content; /* Shrink-wrap to icon+title — open menu sits just right of title */
-    max-width: 100%;
-  }
-  /* Single-line frames: don’t clamp pageLink to the (possibly stale) frame width — that made
-     locked hug measure offsetWidth too small so the title overflowed the blue box. */
-  .ProseMirror[data-single-line="true"] .tt-page-link,
-  .ProseMirror[data-single-line="true"] .react-renderer.node-pageLink {
-    max-width: none;
-  }
-  .ProseMirror[data-single-line="true"] .tt-page-link-label {
-    white-space: nowrap; /* Title is one line until Enter; matches body blocks */
-  }
+  /* Frame-within-frame: same style as host (no extra card chrome). Shell has no host-gutter ⋮⋮;
+     content inside has its own grips (pl-6 gutter). Hover outline on outer so it tracks CSS rotate;
+     armed nest shows blue adjust + resize + rotate/fit/wrap. */
   /* TipTap wraps NodeViews in a block .react-renderer — keep that shrink-wrapped too */
   .ProseMirror .react-renderer.node-pageLink {
     width: max-content;
