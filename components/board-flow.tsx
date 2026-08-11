@@ -5846,15 +5846,15 @@ function BoardFlowInner({
           blockType,
           boardInParentId: boardInParentId || null,
         })
-        // Also insert client-side (idempotent) so the title block appears even if the editor was
-        // focused (which skips the content re-sync). No duplicate — insertBoardTitleBlock updates in place.
+        // Live editor may be focused (skips content re-sync) — replace the WHOLE doc with the sole
+        // title boardLink. Prepend-only insert left sibling blocks visible and could re-save them.
         if ((blockType === 'board' || blockType === 'boardIn') && linkedBoardId && nodeId) {
           const { editorForHostNode } = await import('@/lib/tiptap/block-selection')
-          const { insertBoardTitleBlock } = await import('@/lib/tiptap/board-blocks')
+          const { setFrameToSoleBoardLink } = await import('@/lib/tiptap/board-blocks')
           const ed = editorForHostNode(nodeId)
           if (ed) {
             const title = htmlToPlainText(frameContent).split('\n')[0]?.trim() || 'Untitled'
-            insertBoardTitleBlock(ed, { boardId: linkedBoardId, title, icon: null, variant: 'title' })
+            setFrameToSoleBoardLink(ed, { boardId: linkedBoardId, title, icon: null, variant: 'title' })
           }
         }
         await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
@@ -5864,7 +5864,13 @@ function BoardFlowInner({
           await queryClient.refetchQueries({ queryKey: ['conversations'] })
         }
       } catch (err) {
-        console.error('Failed to turn block into type:', err)
+        const msg =
+          err instanceof Error
+            ? err.message
+            : typeof err === 'object' && err && 'message' in err
+              ? String((err as { message: unknown }).message)
+              : String(err)
+        console.error('Failed to turn block into type:', msg, err)
       }
     },
     [rightClickedNode, conversationId, queryClient]

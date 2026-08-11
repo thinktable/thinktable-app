@@ -11,9 +11,11 @@ import { useQueryClient } from '@tanstack/react-query' // Refresh Pages menu + p
 import { cn } from '@/lib/utils' // Class merge for chip chrome
 import {
   ensureBoardBodyBlock,
+  isBlockContentEmpty,
   migrateLegacyBlockFlags,
   syncBlockAndBoardTitle,
 } from '@/lib/blocks' // Dual-write, page-body materialize, drop legacy item/note keys
+import { bodyHtmlWithoutBoardTitle } from '@/lib/blocks/turn-into' // Title line ≠ board body block
 import { useBoardEmbed } from '@/lib/board-embed-context' // Hide preview when already inside a nested board
 
 /** Map perimeter parameter t ∈ [0,1) → pixel offset from panel top-left (clockwise from top-left). */
@@ -224,12 +226,13 @@ export function BlockTitleEdge({
             .select('content')
             .eq('id', messageId)
             .maybeSingle()
-          // Body seed = current frame HTML without boardLink atoms (those stay as links, not body)
+          // Body seed = frame HTML without boardLink atoms; strip title line so name ≠ body block
           const rawHtml = (srcMsg?.content as string) || ''
-          const bodySeed = rawHtml
+          const withoutLinks = rawHtml
             .replace(/<div[^>]*data-type=["'](?:boardLink|pageLink)["'][^>]*>[\s\S]*?<\/div>/gi, '')
             .trim()
-          const hasBody = bodySeed.length > 0 && bodySeed !== '<p></p>' && bodySeed !== '<p><br></p>'
+          const bodySeed = bodyHtmlWithoutBoardTitle(withoutLinks, title)
+          const hasBody = !isBlockContentEmpty(bodySeed)
 
           const { data: child, error: childError } = await supabase
             .from('conversations')
@@ -257,19 +260,18 @@ export function BlockTitleEdge({
             title,
             titleEdgeT: edgeT,
           })
-          // Move non-link content onto the child board; parent frame becomes the boardLink only
+          // Move non-title content onto the child board; parent frame becomes the boardLink only
           await ensureBoardBodyBlock(supabase, {
             boardId: child.id,
             userId: user.id,
             bodyHtml: hasBody ? bodySeed : undefined,
           })
-          if (hasBody) {
-            const linkHtml = `<div data-type="boardLink" data-board-id="${child.id}" data-title="${title
-              .replace(/&/g, '&amp;')
-              .replace(/</g, '&lt;')
-              .replace(/"/g, '&quot;')}" data-variant="title"></div>`
-            await supabase.from('messages').update({ content: linkHtml }).eq('id', messageId)
-          }
+          // Always leave a sole boardLink on the parent (even when body is empty / title-only)
+          const linkHtml = `<div data-type="boardLink" data-board-id="${child.id}" data-title="${title
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/"/g, '&quot;')}" data-variant="title"></div>`
+          await supabase.from('messages').update({ content: linkHtml }).eq('id', messageId)
           await queryClient.invalidateQueries({ queryKey: ['conversations'] })
           await queryClient.refetchQueries({ queryKey: ['conversations'] })
           await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })

@@ -1,7 +1,8 @@
 // Normalize Notion map frames to title boardLink (same chrome as local page blocks).
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { newBlockMetadata } from '@/lib/blocks'
+import { ensureBoardBodyBlock, isBlockContentEmpty, newBlockMetadata } from '@/lib/blocks'
+import { bodyHtmlWithoutBoardTitle } from '@/lib/blocks/turn-into'
 
 /** Escape text used inside HTML attrs. */
 function escapeHtml(text: string): string {
@@ -17,6 +18,22 @@ export function buildBoardLinkHtml(opts: {
   const title = escapeHtml(opts.title || 'Untitled')
   const iconAttr = opts.icon ? ` data-icon="${escapeHtml(opts.icon)}"` : ''
   return `<div data-type="boardLink" data-board-id="${escapeHtml(opts.boardId)}" data-title="${title}" data-variant="title"${iconAttr}></div>`
+}
+
+/** Strip boardLink/pageLink atoms; leftover HTML is sibling body content. */
+export function stripBoardLinksFromHtml(content: string): string {
+  return content
+    .replace(/<div[^>]*data-type=["'](?:boardLink|pageLink)["'][^>]*>[\s\S]*?<\/div>/gi, '')
+    .trim()
+}
+
+/** True when frame HTML is only a boardLink/pageLink (optional empty trailing paragraphs). */
+export function isSoleBoardLinkContent(content: string): boolean {
+  if (!content || !/data-type=["'](?:boardLink|pageLink)["']/i.test(content)) return false
+  const leftover = stripBoardLinksFromHtml(content)
+    .replace(/<p>(?:\s|&nbsp;|<br\s*\/?>)*<\/p>/gi, '')
+    .replace(/\s+/g, '')
+  return leftover === ''
 }
 
 /** True when the frame body is only a databaseBlock (optional empty trailing paragraphs). */
@@ -172,4 +189,58 @@ export async function ensureNotionMapFrameIsBoardLink(
   }
 
   return { content: nextContent, linkedBoardId, metadata: nextMeta }
+}
+
+/**
+ * Frame Turn into Board / title promote leaves a sole title boardLink; a buggy client prepend
+ * could re-save siblings into the parent. Repair: move leftover HTML onto the linked board body
+ * and rewrite the parent to a sole boardLink. Only for board/boardIn (and legacy page*) frames.
+ */
+export async function repairBoardFrameToSoleLink(
+  supabase: SupabaseClient,
+  opts: {
+    messageId: string
+    userId: string
+    content: string
+    metadata: Record<string, unknown>
+  }
+): Promise<{ content: string } | null> {
+  const { messageId, userId, content, metadata } = opts
+  const bt = typeof metadata.blockType === 'string' ? metadata.blockType : ''
+  if (bt !== 'board' && bt !== 'boardIn' && bt !== 'page' && bt !== 'pageIn') return null
+  const linkedBoardId =
+    typeof metadata.linkedBoardId === 'string'
+      ? metadata.linkedBoardId
+      : typeof metadata.linkedPageId === 'string'
+        ? metadata.linkedPageId
+        : null
+  if (!linkedBoardId) return null
+  if (isSoleBoardLinkContent(content)) return null // Already correct
+
+  const title =
+    (typeof metadata.blockTitle === 'string' && metadata.blockTitle.trim()) ||
+    content.match(/data-title="([^"]*)"/i)?.[1] ||
+    'Untitled'
+  const bodySeed = bodyHtmlWithoutBoardTitle(stripBoardLinksFromHtml(content), title)
+  const hasBody = !isBlockContentEmpty(bodySeed)
+  if (hasBody) {
+    await ensureBoardBodyBlock(supabase, {
+      boardId: linkedBoardId,
+      userId,
+      bodyHtml: bodySeed,
+    })
+  }
+
+  const icon = content.match(/data-icon="([^"]*)"/i)?.[1] || null
+  const nextContent = buildBoardLinkHtml({ boardId: linkedBoardId, title, icon })
+
+  const { error } = await supabase
+    .from('messages')
+    .update({ content: nextContent })
+    .eq('id', messageId)
+  if (error) {
+    console.error('Failed to repair board frame to sole boardLink:', error)
+    return null
+  }
+  return { content: nextContent }
 }

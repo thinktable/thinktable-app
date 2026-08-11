@@ -155,6 +155,14 @@ export async function ensureBoardBodyBlock(
     .eq('id', boardId)
     .maybeSingle()
   if (!page || page.user_id !== userId) {
+    // Cannot verify ownership / read the new board — surface so Turn into doesn't look like a silent no-op
+    if (!isBlockContentEmpty(bodyHtml)) {
+      throw new Error(
+        !page
+          ? `Cannot read board ${boardId} to seed body (RLS or missing row)`
+          : `Cannot seed board body: user_id mismatch`
+      )
+    }
     return { created: false, messageId: null }
   }
 
@@ -178,8 +186,11 @@ export async function ensureBoardBodyBlock(
     .single()
 
   if (error || !created) {
-    console.error('Failed to create board-body frame:', error)
-    return { created: false, messageId: null }
+    const msg =
+      error && typeof error === 'object' && 'message' in error
+        ? String((error as { message: unknown }).message)
+        : 'unknown error'
+    throw new Error(`Failed to create board-body frame: ${msg}`)
   }
 
   // Mark board contentful + remember the body message for sync; drop legacy source key

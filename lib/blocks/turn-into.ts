@@ -6,7 +6,6 @@ import {
   ensureBoardBodyBlock,
   isBlockContentEmpty,
   migrateLegacyBlockFlags,
-  syncBlockAndBoardTitle,
 } from '@/lib/blocks'
 
 /** Strip tags → plain text (title / list item seed). */
@@ -32,6 +31,47 @@ function escapeHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+/**
+ * Top-level TipTap blocks in document order (p / headings / lists / quote / pre / div).
+ * Used to peel the title line off a frame before seeding a child board body.
+ */
+function topLevelBlocks(html: string): string[] {
+  const trimmed = (html || '').trim()
+  if (!trimmed) return []
+  const blocks: string[] = []
+  const re = /<(p|h[1-6]|blockquote|pre|ul|ol|div)(\s[^>]*)?>[\s\S]*?<\/\1>/gi
+  for (const m of trimmed.matchAll(re)) blocks.push(m[0])
+  return blocks
+}
+
+/**
+ * Board name is the first plain-text line — it must NOT also appear as a body block on the
+ * child board. Returns leftover HTML after removing that title line (empty → no body).
+ */
+export function bodyHtmlWithoutBoardTitle(html: string, title: string): string {
+  const t = (title || '').trim()
+  const raw = (html || '').trim()
+  if (!raw || !t) return raw
+  const blocks = topLevelBlocks(raw)
+  if (blocks.length === 0) {
+    // No structured blocks — plain compare
+    return htmlToPlainText(raw) === t ? '' : raw
+  }
+  const firstPlain = htmlToPlainText(blocks[0])
+  const firstLines = firstPlain.split('\n').map((l) => l.trim()).filter(Boolean)
+  // First block is exactly the title (one line) → drop the whole block
+  if (firstLines.length === 1 && firstLines[0] === t) {
+    return blocks.slice(1).join('').trim()
+  }
+  // First block starts with the title line then more → keep remaining lines as paragraphs
+  if (firstLines.length > 1 && firstLines[0] === t) {
+    const restLines = firstLines.slice(1).map((l) => `<p>${escapeHtml(l)}</p>`).join('')
+    return (restLines + blocks.slice(1).join('')).trim()
+  }
+  // Title didn't match first block — leave body as-is (title may have come from metadata)
+  return raw
 }
 
 /** Split plain text into non-empty lines (fallback to single empty line). */
@@ -188,7 +228,7 @@ export type ApplyTurnIntoOpts = {
 }
 
 /**
- * Apply Turn into: rewrite HTML + metadata; promote to Page / Page in when needed.
+ * Apply Turn into: rewrite HTML + metadata; promote to Board / Board in when needed.
  */
 export async function applyTurnInto(
   supabase: SupabaseClient,
@@ -201,102 +241,105 @@ export async function applyTurnInto(
     .select('id, content, metadata, conversation_id')
     .eq('id', messageId)
     .single()
-  if (loadError || !row) throw loadError || new Error('Block message not found')
+  if (loadError || !row) {
+    throw new Error(`Frame message not found (${messageId}): ${formatSbError(loadError)}`)
+  }
 
   const { meta: migrated } = migrateLegacyBlockFlags((row.metadata as Record<string, unknown>) || {})
   const nextContent = transformHtmlToBlockType(row.content || '', blockType)
 
-  // Page / Page in — promote untitled block to a linked page (Notion parity)
-  const bt = blockType as string // Dual-read legacy page/pageIn from older clients
+  // Board / Board in — promote frame to a linked board; dual-read legacy page*
+  const bt = blockType as string
   if (bt === 'board' || bt === 'boardIn' || bt === 'page' || bt === 'pageIn') {
     const title =
       htmlToPlainText(row.content || '').split('\n')[0]?.trim() ||
       (typeof migrated.blockTitle === 'string' && migrated.blockTitle.trim()) ||
       'Untitled'
     const parentId =
-      ((bt === 'boardIn' || bt === 'pageIn') && opts.boardInParentId) ? opts.boardInParentId : conversationId
+      (bt === 'boardIn' || bt === 'pageIn') && opts.boardInParentId
+        ? opts.boardInParentId
+        : conversationId
 
     let linkedBoardId =
-      typeof migrated.linkedBoardId === 'string'
-        ? migrated.linkedBoardId
-        : typeof migrated.linkedPageId === 'string'
-          ? migrated.linkedPageId
-          : null // Dual-read legacy linkedPageId
+      typeof migrated.linkedBoardId === 'string' && migrated.linkedBoardId.trim()
+        ? migrated.linkedBoardId.trim()
+        : typeof migrated.linkedPageId === 'string' && migrated.linkedPageId.trim()
+          ? migrated.linkedPageId.trim()
+          : null
 
     if (!linkedBoardId) {
-      // Seed body with frame content; parent frame becomes boardLink-only (no sibling leak)
-      const bodySeed = (row.content || '')
+      // Move non-link content onto the child board; parent frame becomes boardLink-only
+      // Title = first line — strip it from the body so the board name isn't a duplicate block
+      const withoutLinks = (row.content || '')
         .replace(/<div[^>]*data-type=["'](?:boardLink|pageLink)["'][^>]*>[\s\S]*?<\/div>/gi, '')
         .trim()
+      const bodySeed = bodyHtmlWithoutBoardTitle(withoutLinks, title)
       const hasBody = !isBlockContentEmpty(bodySeed)
-      const { data: child, error: childError } = await supabase
-        .from('conversations')
-        .insert({
-          user_id: userId,
-          title,
-          metadata: {
-            parent_id: parentId,
-            sourceBlockMessageId: messageId,
-            hasContent: hasBody,
-          },
-        })
-        .select('id')
-        .single()
-      if (childError || !child) throw childError || new Error('Failed to create board')
-      const newPageId = child.id as string
-      linkedBoardId = newPageId
-      await syncBlockAndBoardTitle(supabase, {
-        messageId,
-        linkedBoardId: newPageId,
+      const newBoardId = crypto.randomUUID() // Avoid INSERT…RETURNING SELECT-policy race
+
+      const { error: childError } = await supabase.from('conversations').insert({
+        id: newBoardId,
+        user_id: userId,
         title,
+        metadata: {
+          parent_id: parentId,
+          sourceBlockMessageId: messageId,
+          hasContent: hasBody,
+        },
       })
+      if (childError) {
+        throw new Error(`Failed to create board: ${formatSbError(childError)}`)
+      }
+      linkedBoardId = newBoardId
+
+      // Seed body explicitly (never auto-copy from the linking frame on open)
       await ensureBoardBodyBlock(supabase, {
-        boardId: newPageId,
+        boardId: linkedBoardId,
         userId,
         bodyHtml: hasBody ? bodySeed : undefined,
       })
-    } else if (linkedBoardId && ((bt === 'boardIn' || bt === 'pageIn') && opts.boardInParentId)) {
-      // Re-parent existing linked board
-      const existingPageId = linkedBoardId
+    } else if ((bt === 'boardIn' || bt === 'pageIn') && opts.boardInParentId) {
       const { data: page } = await supabase
         .from('conversations')
         .select('metadata')
-        .eq('id', existingPageId)
+        .eq('id', linkedBoardId)
         .maybeSingle()
       const pageMeta = (page?.metadata as Record<string, unknown>) || {}
-      await supabase
+      const { error: reparentError } = await supabase
         .from('conversations')
         .update({ metadata: { ...pageMeta, parent_id: opts.boardInParentId } })
-        .eq('id', existingPageId)
-      await syncBlockAndBoardTitle(supabase, { messageId, linkedBoardId: existingPageId, title })
-    } else if (linkedBoardId) {
-      await syncBlockAndBoardTitle(supabase, { messageId, linkedBoardId, title })
+        .eq('id', linkedBoardId)
+      if (reparentError) {
+        throw new Error(`Failed to re-parent board: ${formatSbError(reparentError)}`)
+      }
+      await supabase.from('conversations').update({ title }).eq('id', linkedBoardId)
+    } else {
+      await supabase.from('conversations').update({ title }).eq('id', linkedBoardId)
     }
 
-    const { data: refreshed } = await supabase
-      .from('messages')
-      .select('metadata')
-      .eq('id', messageId)
-      .single()
-    const meta = (refreshed?.metadata as Record<string, unknown>) || migrated
-
-    // Parent frame = boardLink only; body content lives on the linked board
+    // Parent frame = sole title boardLink; body lives on the linked board
     const titleDiv = `<div data-type="boardLink" data-board-id="${linkedBoardId}" data-title="${escapeHtml(
       title
     )}" data-variant="title"></div>`
-    const linkOnlyContent =
-      /data-type="(?:boardLink|pageLink)"/.test(nextContent) ? nextContent : titleDiv // Dual-read legacy pageLink
+    // Keep nextContent only when it is already a sole boardLink (no sibling blocks)
+    const withoutLinks = nextContent.replace(
+      /<div[^>]*data-type=["'](?:boardLink|pageLink)["'][^>]*>[\s\S]*?<\/div>/gi,
+      ''
+    )
+    const alreadyLinkOnly =
+      /data-type="(?:boardLink|pageLink)"/.test(nextContent) && isBlockContentEmpty(withoutLinks)
+    const linkOnlyContent = alreadyLinkOnly ? nextContent : titleDiv
 
-    const normalizedBoardType = bt === 'pageIn' || bt === 'boardIn' ? 'boardIn' : 'board' // Writers emit board*
+    const normalizedBoardType = bt === 'pageIn' || bt === 'boardIn' ? 'boardIn' : 'board'
 
-    await supabase
+    const { error: msgError } = await supabase
       .from('messages')
       .update({
         content: linkOnlyContent,
         metadata: {
-          ...meta,
+          ...migrated,
           isBlock: true,
-          blockType: normalizedBoardType, // Persist Board / Board in only
+          blockType: normalizedBoardType,
           isBoard: true,
           linkedBoardId,
           blockTitle: title,
@@ -305,12 +348,14 @@ export async function applyTurnInto(
         },
       })
       .eq('id', messageId)
+    if (msgError) {
+      throw new Error(`Failed to update frame to boardLink: ${formatSbError(msgError)}`)
+    }
 
     return { linkedBoardId }
   }
 
-  // Non-page types — clear page-only flags only when leaving page type
-  const wasPage = migrated.blockType === 'page' || migrated.blockType === 'pageIn' || migrated.blockType === 'board' || migrated.blockType === 'boardIn' || migrated.isBoard === true || migrated.isPage === true
+  // Non-board types
   const metaPatch: Record<string, unknown> = {
     ...migrated,
     isBlock: true,
@@ -328,21 +373,46 @@ export async function applyTurnInto(
     isSyncedBlock: blockType === 'syncedBlock',
   }
   if (blockType === 'syncedBlock' && !metaPatch.syncedBlockId) {
-    metaPatch.syncedBlockId = messageId // Source id for future replicas
-  }
-
-  // Turning away from page does not delete the linked page (Notion keeps the page in workspace);
-  // card stays linked if already a page card — only change display type when not demoting.
-  // If user turns a page card into text, keep link but update blockType for rendering.
-  if (!wasPage) {
-    // leave linkedBoardId as-is when absent
+    metaPatch.syncedBlockId = messageId
   }
 
   const { error: updateError } = await supabase
     .from('messages')
     .update({ content: nextContent, metadata: metaPatch })
     .eq('id', messageId)
-  if (updateError) throw updateError
+  if (updateError) throw new Error(`Failed to update frame: ${formatSbError(updateError)}`)
 
-  return { linkedBoardId: typeof migrated.linkedBoardId === 'string' ? migrated.linkedBoardId : typeof migrated.linkedPageId === 'string' ? migrated.linkedPageId : null }
+  return {
+    linkedBoardId:
+      typeof migrated.linkedBoardId === 'string'
+        ? migrated.linkedBoardId
+        : typeof migrated.linkedPageId === 'string'
+          ? migrated.linkedPageId
+          : null,
+  }
+}
+
+/** Readable Supabase / Postgrest error for UI logs (avoids `{}` from Error serialization). */
+function formatSbError(err: unknown): string {
+  if (!err) return 'unknown error'
+  if (typeof err === 'string') return err
+  if (err instanceof Error && err.message) {
+    const anyErr = err as Error & { code?: string; details?: string; hint?: string }
+    const parts = [anyErr.message]
+    if (anyErr.code) parts.push(`code=${anyErr.code}`)
+    if (anyErr.details) parts.push(String(anyErr.details))
+    if (anyErr.hint) parts.push(String(anyErr.hint))
+    return parts.join(' | ')
+  }
+  if (typeof err === 'object') {
+    const o = err as { message?: string; code?: string; details?: string; hint?: string }
+    if (o.message || o.code) {
+      return [o.message, o.code && `code=${o.code}`, o.details, o.hint].filter(Boolean).join(' | ')
+    }
+  }
+  try {
+    return JSON.stringify(err)
+  } catch {
+    return String(err)
+  }
 }

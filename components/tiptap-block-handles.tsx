@@ -10,7 +10,8 @@ import { GripVertical } from 'lucide-react' // ⋮⋮ grip; between-block add is
 import { useReactFlow, useStore } from 'reactflow' // screenToFlowPosition when extracting a line onto the map; useStore = live zoom to keep grips screen-constant
 import { useQueryClient } from '@tanstack/react-query' // Refresh panels after extract-to-card
 import { createClient } from '@/lib/supabase/client' // Persist a new map card from a dragged line
-import { newBlockMetadata } from '@/lib/blocks' // Canonical isBlock metadata for extracted cards
+import { isBlockContentEmpty, newBlockMetadata } from '@/lib/blocks' // Canonical isBlock metadata + empty check
+import { bodyHtmlWithoutBoardTitle } from '@/lib/blocks/turn-into' // Title line ≠ board body block
 import { cn } from '@/lib/utils'
 import { elementUniformScale, screenToLocal } from '@/lib/dom-transform' // Rotation-safe local↔screen
 import {
@@ -74,15 +75,26 @@ const GUTTER_EDGE_PAD = 6 // Extra gutter height so top/bottom hairlines stay in
 
 /** True when a TipTap block range contains an aiPending mark. */
 function blockHasAiPending(editor: Editor, block: EditorBlockRef): boolean {
+  if (!editor || editor.isDestroyed) return false
+  const doc = editor.state.doc
+  const size = doc.content.size // Valid positions are 0..size (inclusive end for nodesBetween)
+  // Stale grips after doc swaps (Turn into Board → boardLink) can hold from/to past the new doc
+  const from = Math.max(0, Math.min(block.from, size))
+  const to = Math.max(from, Math.min(block.to, size))
+  if (from >= to) return false
   let found = false
-  editor.state.doc.nodesBetween(block.from, block.to, (node) => {
-    if (found) return false
-    if (node.isText && node.marks.some((m) => m.type.name === 'aiPending')) {
-      found = true
-      return false
-    }
-    return true
-  })
+  try {
+    doc.nodesBetween(from, to, (node) => {
+      if (found) return false
+      if (node.isText && node.marks.some((m) => m.type.name === 'aiPending')) {
+        found = true
+        return false
+      }
+      return true
+    })
+  } catch {
+    return false // Doc mutated mid-walk — treat as no pending marks
+  }
   return found
 }
 
@@ -142,6 +154,9 @@ function layoutForBlock(
   block: EditorBlockRef
 ): HandleLayout | null {
   try {
+    if (!editor || editor.isDestroyed) return null
+    const size = editor.state.doc.content.size
+    if (block.from < 0 || block.from >= size || block.to > size || block.from >= block.to) return null
     const root = container
     const el = blockDom(editor, block)
 
@@ -719,8 +734,7 @@ export function TipTapBlockHandles({
     screenToFlowPosition,
   ])
 
-  // Single block → linked page: create a child page seeded with this block's content,
-  // then replace the block with an inline boardLink node (icon LEFT of the link text).
+  // Single TipTap block → linked board: seed child board with this block's HTML, replace with boardLink
   const turnBlockIntoBoard = useCallback(
     async (block: EditorBlockRef, blockType: 'board' | 'boardIn', boardInParentId?: string | null) => {
       if (!editor || editor.isDestroyed || !conversationId) return
@@ -730,29 +744,40 @@ export function TipTapBlockHandles({
           data: { user },
         } = await supabase.auth.getUser()
         if (!user) return
-        const bodyHtml = htmlForEditorRange(editor, block.from, block.to) // Seed page body
-        const title = titleForBlock(editor, block) // First-line label
+        const rawBody = htmlForEditorRange(editor, block.from, block.to) // Block HTML before title strip
+        const title = titleForBlock(editor, block) // First-line label → board name
+        // Name lives on the board — don't also seed it as the only body block
+        const bodyHtml = bodyHtmlWithoutBoardTitle(rawBody, title)
         const parentId =
           blockType === 'boardIn' && boardInParentId ? boardInParentId : conversationId // Nest target
+        // RF node id is `panel-{messageId}` — reverse-link needs the message UUID
+        const sourceMessageId = (hostNodeId || '').replace(/^panel-/, '').replace(/-panel-.*$/, '')
+        if (!sourceMessageId) {
+          console.error('Failed to turn block into board: missing host message id')
+          return
+        }
         const boardId = await createChildBoardForBlock(supabase, {
           userId: user.id,
           parentId,
-          sourceMessageId: hostNodeId ?? '',
+          sourceMessageId,
           title,
-          bodyHtml,
+          bodyHtml: isBlockContentEmpty(bodyHtml) ? undefined : bodyHtml,
         })
-        if (!boardId) return
+        if (!boardId) {
+          throw new Error('Failed to create child board (see prior console error)')
+        }
         replaceBlockWithBoardLink(editor, block, { boardId, title, icon: null, variant: 'inline' })
         await queryClient.invalidateQueries({ queryKey: ['conversations'] })
         await queryClient.refetchQueries({ queryKey: ['conversations'] })
       } catch (err) {
-        console.error('Failed to turn block into page:', err)
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('Failed to turn block into board:', msg, err)
       }
     },
     [editor, conversationId, hostNodeId, queryClient]
   )
 
-  // Multiple selected blocks → one linked page (snapshot: blocks stay, a title boardLink is added on top).
+  // Multiple selected blocks → one linked board (snapshot: blocks stay, a title boardLink is added on top).
   const turnSelectionIntoBoard = useCallback(
     async (blocks: EditorBlockRef[], blockType: 'board' | 'boardIn', boardInParentId?: string | null) => {
       if (!editor || editor.isDestroyed || !conversationId || blocks.length === 0) return
@@ -763,22 +788,32 @@ export function TipTapBlockHandles({
         } = await supabase.auth.getUser()
         if (!user) return
         const ordered = [...blocks].sort((a, b) => a.from - b.from) // Document order
-        const bodyHtml = ordered.map((b) => htmlForEditorRange(editor, b.from, b.to)).join('') // Combined body
-        const title = titleForBlock(editor, ordered[0]) // Seed from first block
+        const rawBody = ordered.map((b) => htmlForEditorRange(editor, b.from, b.to)).join('') // Combined body
+        const title = titleForBlock(editor, ordered[0]) // Seed from first block → board name
+        // Don't duplicate the title line as the first body block on the child board
+        const bodyHtml = bodyHtmlWithoutBoardTitle(rawBody, title)
         const parentId = blockType === 'boardIn' && boardInParentId ? boardInParentId : conversationId
+        const sourceMessageId = (hostNodeId || '').replace(/^panel-/, '').replace(/-panel-.*$/, '')
+        if (!sourceMessageId) {
+          console.error('Failed to turn selection into board: missing host message id')
+          return
+        }
         const boardId = await createChildBoardForBlock(supabase, {
           userId: user.id,
           parentId,
-          sourceMessageId: hostNodeId ?? '',
+          sourceMessageId,
           title,
-          bodyHtml,
+          bodyHtml: isBlockContentEmpty(bodyHtml) ? undefined : bodyHtml,
         })
-        if (!boardId) return
+        if (!boardId) {
+          throw new Error('Failed to create child board (see prior console error)')
+        }
         insertBoardTitleBlock(editor, { boardId, title, icon: null, variant: 'title' }) // Title link on top of frame
         await queryClient.invalidateQueries({ queryKey: ['conversations'] })
         await queryClient.refetchQueries({ queryKey: ['conversations'] })
       } catch (err) {
-        console.error('Failed to turn selection into page:', err)
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('Failed to turn selection into board:', msg, err)
       }
     },
     [editor, conversationId, hostNodeId, queryClient]
@@ -917,6 +952,9 @@ export function TipTapBlockHandles({
   return (
     <>
       {Array.from(gripLayouts.values()).map((gl) => {
+        // Skip grips whose range no longer exists in the doc (e.g. after Turn into Board)
+        const docSize = editor.state.doc.content.size
+        if (gl.block.from < 0 || gl.block.from >= docSize || gl.block.to > docSize) return null
         // nodrag only when this block is armed — otherwise RF must receive the pointer to drag the frame
         const armed = isPanelSelected && isBlockArmed(gl.block)
         const aiPending = blockHasAiPending(editor, gl.block)

@@ -18,7 +18,8 @@ The database includes the following tables:
 See `migration-list.txt` + `schema-snapshot.md` for the full local/remote snapshot.
 
 Latest on thinkable (DDL):
-- `rename_page_to_board_share_and_ai` (+ local `20260811220510_…`) — `board_share_*`, `user_board_*` RPCs, `ai_threads.board_id`
+- `20260811225342_conversations_owner_select_for_insert_returning` (+ local `20260811225322_…`) — conversations SELECT/UPDATE allow owner `user_id` or share rank (INSERT…RETURNING)
+- `rename_page_to_board_share_and_ai` / remote `20260811223628_…` (+ local `20260811220510_…`) — `board_share_*`, `user_board_*` RPCs, `ai_threads.board_id`
 - `20260811103152_page_share_links_and_people` (+ local `20260811063000_…`) — original share tables (renamed above)
 - `20260811104322_secure_page_share_access` / `20260811104342_secure_page_share_rls_policies` (+ local `20260811070000_…`) — hashed tokens + RLS (updated by rename)
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`

@@ -1,15 +1,22 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-11T22:35:00Z`
+- Snapped at: `2026-08-11T23:14:05Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
-- Remote applied tops out at `rename_page_to_board_share_and_ai` (board share + `ai_threads.board_id`)
+- Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
 
 - **DDL (thinkable, applied via MCP):**
-  - Local `20260811220510_rename_page_to_board_share_and_ai.sql` ↔ remote `rename_page_to_board_share_and_ai`
+  - Local `20260811225322_conversations_owner_select_for_insert_returning.sql` ↔ remote `20260811225342_conversations_owner_select_for_insert_returning`
+  - `conversations` SELECT/UPDATE RLS: allow `auth.uid() = user_id` **or** share rank (fixes INSERT…RETURNING when STABLE `user_board_role_rank` misses the new row)
+- App: linked-board content isolation (sole `boardLink` after Turn into Board; strip board name from child body; restore open-menu CSS; repair polluted frames)
+
+## Prior: Page → Board rename
+
+- **DDL (thinkable, applied via MCP):**
+  - Local `20260811220510_rename_page_to_board_share_and_ai.sql` ↔ remote `20260811223628_rename_page_to_board_share_and_ai`
   - `page_share_*` → `board_share_*` (tables, `board_id` columns, indexes, triggers, policies)
   - RPCs `user_page_access_role` / `user_page_role_rank` → `user_board_access_role` / `user_board_role_rank` (RLS policies updated)
   - `ai_threads.page_id` → `ai_threads.board_id`

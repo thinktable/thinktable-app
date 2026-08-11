@@ -30,30 +30,32 @@ export async function createChildBoardForBlock(
 ): Promise<string | null> {
   const { userId, parentId, sourceMessageId, title, bodyHtml } = opts
   const hasBody = !!bodyHtml && !isBlockContentEmpty(bodyHtml) // Only mark contentful when real content
+  const boardId = crypto.randomUUID() // Client id so INSERT need not RETURNING through SELECT RLS
 
   // Create the nested board
-  const { data: child, error } = await supabase
-    .from('conversations')
-    .insert({
-      user_id: userId,
-      title: title || 'Untitled',
-      metadata: {
-        parent_id: parentId, // Nest under current board
-        sourceBlockMessageId: sourceMessageId, // Reverse link to the hosting frame
-        hasContent: hasBody, // Filled icon when it has a body
-      },
-    })
-    .select('id')
-    .single()
-  if (error || !child) {
-    console.error('Failed to create child board for block:', error)
+  const { error } = await supabase.from('conversations').insert({
+    id: boardId,
+    user_id: userId,
+    title: title || 'Untitled',
+    metadata: {
+      parent_id: parentId, // Nest under current board
+      sourceBlockMessageId: sourceMessageId, // Reverse link to the hosting frame
+      hasContent: hasBody, // Filled icon when it has a body
+    },
+  })
+  if (error) {
+    const msg =
+      error && typeof error === 'object' && 'message' in error
+        ? String((error as { message: unknown }).message)
+        : 'unknown error'
+    console.error('Failed to create child board for block:', msg, error)
     return null
   }
 
   // Seed the board body as its own frame on the child board's map
   if (hasBody) {
     const { error: bodyError } = await supabase.from('messages').insert({
-      conversation_id: child.id,
+      conversation_id: boardId,
       user_id: userId,
       role: 'user',
       content: bodyHtml,
@@ -67,7 +69,7 @@ export async function createChildBoardForBlock(
     if (bodyError) console.error('Failed to seed child board body:', bodyError)
   }
 
-  return child.id as string
+  return boardId
 }
 
 /** Replace a block range with an inline boardLink node (icon LEFT of the link text). */
@@ -91,6 +93,7 @@ export function replaceBlockWithBoardLink(
 /**
  * Insert (or update) a title-variant boardLink at the TOP of the frame — icon on top, left-aligned.
  * Idempotent: if the first node is already a boardLink for this board, just refresh its attrs.
+ * Does NOT remove sibling blocks — use `setFrameToSoleBoardLink` after frame Turn into Board.
  */
 export function insertBoardTitleBlock(
   editor: Editor,
@@ -113,6 +116,33 @@ export function insertBoardTitleBlock(
     .chain()
     .focus()
     .insertContentAt(0, { type: 'boardLink', attrs: { ...attrs, variant: 'title' } })
+    .run()
+}
+
+/**
+ * Replace the whole frame doc with a sole title boardLink (matches DB after applyTurnInto).
+ * Avoids prepend-only insertBoardTitleBlock leaving sibling blocks visible / re-saving into DB.
+ */
+export function setFrameToSoleBoardLink(
+  editor: Editor,
+  attrs: BoardLinkAttrs
+): boolean {
+  if (!editor || editor.isDestroyed) return false
+  return editor
+    .chain()
+    .setContent(
+      {
+        type: 'doc',
+        content: [
+          {
+            type: 'boardLink',
+            attrs: { ...attrs, variant: 'title' },
+          },
+        ],
+      },
+      { emitUpdate: false } // DB already has sole link — don't race a blur-save of stale siblings
+    )
+    .focus() // Stay focused so content-sync can't re-apply stale sibling HTML before refetch
     .run()
 }
 

@@ -263,8 +263,8 @@ import { BoardOpenMenu } from '@/components/board-open-menu' // Preview/open chr
 import { NestedBoardPreview, prefetchBoardEmbed } from './nested-board-preview' // Page-within-page board preview
 import { unwrapNestedFramesHtml } from '@/lib/tiptap/unwrap-nested-frames' // Flatten legacy nest wrappers
 import { deleteLinkedBoardForBlock, getLinkedBoardId, isBlockContentEmpty, isBlockMeta, isBoardBodyMeta } from '@/lib/blocks' // Block detection + empty check + delete sync
-import { applyTurnInto } from '@/lib/blocks/turn-into' // Page / Page in from content-block menu
-import { migrateSoleDatabaseBlockToBoardLink, ensureNotionMapFrameIsBoardLink, isSoleDatabaseBlockContent } from '@/lib/notion/migrate-frame' // Notion DB map frames → boardLink
+import { applyTurnInto, bodyHtmlWithoutBoardTitle } from '@/lib/blocks/turn-into' // Page promote + strip title from board body
+import { migrateSoleDatabaseBlockToBoardLink, ensureNotionMapFrameIsBoardLink, isSoleDatabaseBlockContent, isSoleBoardLinkContent, repairBoardFrameToSoleLink } from '@/lib/notion/migrate-frame' // Notion DB map frames → boardLink; repair polluted board frames
 
 interface Message {
   id: string
@@ -2316,6 +2316,121 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     promptMessage?.content,
     promptMessage?.metadata,
     hasBoardLinkForFrame,
+    promptContent,
+    blockTitleLabel,
+    conversationId,
+    queryClient,
+  ])
+
+  // One-shot: board/boardIn frames must be sole boardLink — repair sibling leak from prepend-only sync
+  const repairedBoardFrameRef = useRef(false)
+  useEffect(() => {
+    if (repairedBoardFrameRef.current || isProjectBoard || isBoardBody) return
+    if (!promptMessage?.id || !linkedBoardId) return
+    const meta = (promptMessage.metadata as Record<string, unknown>) || {}
+    const bt = typeof meta.blockType === 'string' ? meta.blockType : ''
+    if (bt !== 'board' && bt !== 'boardIn' && bt !== 'page' && bt !== 'pageIn') return
+    const serverContent = promptMessage.content || ''
+    const source = !isSoleBoardLinkContent(serverContent)
+      ? serverContent
+      : !isSoleBoardLinkContent(promptContent)
+        ? promptContent
+        : null
+    if (!source) return
+
+    repairedBoardFrameRef.current = true
+    void (async () => {
+      try {
+        const client = createClient()
+        const { data: auth } = await client.auth.getUser()
+        const userId = auth.user?.id
+        if (!userId) {
+          repairedBoardFrameRef.current = false
+          return
+        }
+        const result = await repairBoardFrameToSoleLink(client, {
+          messageId: promptMessage.id,
+          userId,
+          content: source,
+          metadata: meta,
+        })
+        if (!result) {
+          repairedBoardFrameRef.current = false
+          return
+        }
+        setPromptContent(result.content)
+        setAiForceSyncKey((k) => k + 1) // Swap TipTap even if focused
+        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', linkedBoardId] })
+      } catch (err) {
+        console.error('Failed to repair board frame to sole boardLink:', err)
+        repairedBoardFrameRef.current = false
+      }
+    })()
+  }, [
+    isProjectBoard,
+    isBoardBody,
+    linkedBoardId,
+    promptMessage?.id,
+    promptMessage?.content,
+    promptMessage?.metadata,
+    promptContent,
+    conversationId,
+    queryClient,
+  ])
+
+  // One-shot: board-body must not duplicate the board name as its only/first block
+  const cleanedTitleBodyRef = useRef(false)
+  useEffect(() => {
+    if (cleanedTitleBodyRef.current || !isBoardBody || isProjectBoard) return
+    if (!promptMessage?.id || !conversationId) return
+    const title =
+      (blockTitleLabel || '').trim() ||
+      (typeof promptMessage.metadata?.blockTitle === 'string'
+        ? promptMessage.metadata.blockTitle.trim()
+        : '')
+    if (!title) return
+    const source = promptMessage.content || promptContent || ''
+    const cleaned = bodyHtmlWithoutBoardTitle(source, title)
+    if (cleaned === source.trim()) return // Already free of a title-line duplicate
+
+    cleanedTitleBodyRef.current = true
+    void (async () => {
+      try {
+        const client = createClient()
+        if (isBlockContentEmpty(cleaned)) {
+          // Title-only body → remove the frame; name stays on conversations.title
+          await client.from('messages').delete().eq('id', promptMessage.id)
+          const { data: page } = await client
+            .from('conversations')
+            .select('metadata')
+            .eq('id', conversationId)
+            .maybeSingle()
+          if (page) {
+            const meta = (page.metadata as Record<string, unknown>) || {}
+            await client
+              .from('conversations')
+              .update({ metadata: { ...meta, hasContent: false } })
+              .eq('id', conversationId)
+          }
+        } else {
+          await client.from('messages').update({ content: cleaned }).eq('id', promptMessage.id)
+          setPromptContent(cleaned)
+          setAiForceSyncKey((k) => k + 1)
+        }
+        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+        await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      } catch (err) {
+        console.error('Failed to strip board title from board-body:', err)
+        cleanedTitleBodyRef.current = false
+      }
+    })()
+  }, [
+    isBoardBody,
+    isProjectBoard,
+    promptMessage?.id,
+    promptMessage?.content,
+    promptMessage?.metadata,
     promptContent,
     blockTitleLabel,
     conversationId,
