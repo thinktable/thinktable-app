@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { ReactQueryProvider } from "@/lib/react-query-provider";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -17,6 +17,15 @@ export const metadata: Metadata = {
   icons: {
     icon: "/thinktable-logo.svg",
   },
+};
+
+// Board has its own pinch-zoom — lock browser page zoom so iOS doesn’t auto-zoom on TipTap focus
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

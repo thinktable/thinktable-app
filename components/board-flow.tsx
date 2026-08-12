@@ -556,6 +556,14 @@ function BoardFlowInner({
   
   // Viewport state for I-bar rendering - triggers re-render when viewport changes
   const [iBarViewport, setIBarViewport] = useState<{ x: number; y: number; zoom: number }>({ x: 0, y: 0, zoom: 1 })
+  // Screen/flow anchor for the hidden capture field — kept through first-keystroke spawn so iOS doesn’t drop the keyboard when the visual I-bar clears
+  const [iBarInputAnchor, setIBarInputAnchor] = useState<{
+    x: number
+    y: number
+    vx: number
+    vy: number
+    zoom: number
+  } | null>(null)
   
   // Track if we're creating an inline note (to prevent double-creation)
   const [isCreatingInlineNote, setIsCreatingInlineNote] = useState(false)
@@ -567,6 +575,15 @@ function BoardFlowInner({
   const iBarPendingMessageIdRef = useRef<string | null>(null)
   // True while insert is in flight — ref so rapid keydowns don’t double-create
   const iBarCreatingRef = useRef(false)
+  // Hidden textarea that receives focus on board tap so iPhone/iPad soft keyboard can open (keydown-only I-bar cannot)
+  const iBarInputRef = useRef<HTMLTextAreaElement>(null)
+  // Latest buffer applier from the I-bar capture effect — textarea onInput calls this without stale closures
+  const iBarApplyTextRef = useRef<(text: string) => void>(() => {})
+  // Armed when I-bar is shown or mid-create — set synchronously on tap so the first soft-key `input` isn’t dropped before React re-renders
+  const iBarArmedRef = useRef(false)
+  // Mirror of iBarPosition for the always-on capture effect (avoids remounting listeners every place/clear)
+  const iBarPositionRef = useRef<{ x: number; y: number } | null>(null)
+  iBarPositionRef.current = iBarPosition
 
   // Load preferences from localStorage first (instant), then Supabase (sync)
   useEffect(() => {
@@ -4547,175 +4564,20 @@ function BoardFlowInner({
       
       setNodes(updatedCanvasNodes)
 
-      // Center new panels above prompt box and set zoom to 100% for all chats (new and existing)
+      // Persist new frame positions only — never recenter or force 100% zoom on create
+      // (I-bar / grip / AI / Notion frames must stay under the user’s current viewport)
       if (trulyNewNodesCanvas.length > 0) {
-        // Set flag to prevent fitView from interfering with our centering
-        fitViewInProgressRef.current = true
-        
-        // Get the first new panel (or the first one if multiple were created)
-        const firstNewPanel = trulyNewNodesCanvas[0]
-        
-        // Helper function to center the panel
-        const centerNewPanel = (
-          reactFlowElement: HTMLElement,
-          promptBox: HTMLElement,
-          panel: Node<ChatPanelNodeData>,
-          instance: ReactFlowInstance
-        ) => {
-          const mapAreaWidth = reactFlowElement.clientWidth
-          const currentZoom = 1 // Force 100% zoom
-          const promptBoxMaxWidth = 768
-          
-          // Calculate left gap same as prompt box (push/center mechanics)
-          const expandedSidebarWidth = 256
-          const collapsedSidebarWidth = 64
-          const minimapWidth = 179
-          const minimapMargin = 15
-          
-          const sidebarElement = document.querySelector('[class*="w-16"], [class*="w-64"]') as HTMLElement
-          const isSidebarExpanded = sidebarElement?.classList.contains('w-64') ?? false
-          const currentSidebarWidth = isSidebarExpanded ? expandedSidebarWidth : collapsedSidebarWidth
-          
-          const fullWindowWidth = window.screen.width
-          const fullMapAreaWidth = fullWindowWidth - currentSidebarWidth
-          const minimapLeftEdge = fullMapAreaWidth - minimapWidth - minimapMargin
-          const gapFromSidebarToMinimap = minimapLeftEdge - 0
-          const calculatedLeftGap = Math.max(0, (1 / 2) * (gapFromSidebarToMinimap - promptBoxMaxWidth))
-          
-          // Check if minimap has moved up
-          const minimapElement = document.querySelector('.react-flow__minimap') as HTMLElement
-          let minimapBottom = 15
-          if (minimapElement) {
-            const computedStyle = getComputedStyle(minimapElement)
-            const bottomValue = computedStyle.bottom
-            if (bottomValue && bottomValue !== 'auto') {
-              minimapBottom = parseInt(bottomValue) || 15
-            }
-          }
-          const minimapMovedUp = minimapBottom > 15
-          const baseRightGap = minimapMovedUp ? 0 : 16
-          
-          const leftAlignedWidth = Math.min(promptBoxMaxWidth, mapAreaWidth - calculatedLeftGap - baseRightGap)
-          const rightGapWhenLeftAligned = mapAreaWidth - calculatedLeftGap - leftAlignedWidth
-          
-          // Use actual prompt box width from context (for 100% zoom) or default 768px
-          const panelWidthToUse = (currentZoom <= 1.0 && 768 >= contextPanelWidth) ? contextPanelWidth : 768
-          
-          const currentPanelX = panel.position.x
-          let targetViewportX: number
-          
-          // Use the EXACT same centering logic as prompt box
-          if (rightGapWhenLeftAligned < calculatedLeftGap) {
-            // Center the panels
-            const screenCenterX = mapAreaWidth / 2
-            targetViewportX = screenCenterX - (panelWidthToUse / 2) - (currentPanelX * currentZoom)
-          } else {
-            // Position panels with left gap (pushed)
-            targetViewportX = calculatedLeftGap - (currentPanelX * currentZoom)
-          }
-          
-          // Calculate Y position to place panel above prompt box
-          const promptBoxRect = promptBox.getBoundingClientRect()
-          const reactFlowRect = reactFlowElement.getBoundingClientRect()
-          const promptBoxTop = promptBoxRect.top - reactFlowRect.top
-          const availableHeight = promptBoxTop - 16
-          const panelHeight = nodeHeightsRef.current.get(panel.id) || 400
-          const targetPanelTop = 16 + (availableHeight - panelHeight) / 2
-          const panelY = panel.position.y
-          const newViewportY = targetPanelTop - panelY * currentZoom
-          
-          if (isFinite(targetViewportX) && isFinite(newViewportY)) {
-            // Set viewport IMMEDIATELY with no animation - panel will appear centered from the start
-            instance.setViewport({
-              x: targetViewportX,
-              y: newViewportY,
-              zoom: 1,
-            }, { duration: 0 })
-            fitViewInProgressRef.current = false
-          }
-        }
-        
-        // Calculate and set viewport after fitView completes
-        // Wait for fitView to finish (it runs automatically when nodes are added)
-        const attemptCentering = (attempt: number = 0) => {
-          if (attempt > 10) {
-            // Give up after 10 attempts (1 second)
-            fitViewInProgressRef.current = false
-            return
-          }
-          
-          if (!reactFlowInstance || !firstNewPanel) {
-            fitViewInProgressRef.current = false
-            return
-          }
-          
-          // Get elements
-          const reactFlowElement = document.querySelector('.react-flow')
-          const promptBox = document.querySelector('textarea[placeholder*="Ask"], textarea[placeholder*="Type"], textarea[placeholder*="message"]')?.closest('[class*="pointer-events-auto"]') as HTMLElement
-          
-          if (!reactFlowElement || !promptBox) {
-            // Elements not ready, try again
-            setTimeout(() => attemptCentering(attempt + 1), 50)
-            return
-          }
-          
-          // Check if fitView is still running by checking if zoom is being animated
-          const viewport = reactFlowInstance.getViewport()
-          const isZoomChanging = Math.abs(viewport.zoom - 0.6) < 0.1 // fitView typically starts at 0.6
-          
-          // Wait a bit longer if fitView might still be running
-          if (isZoomChanging && attempt < 5) {
-            setTimeout(() => attemptCentering(attempt + 1), 100)
-            return
-          }
-          
-          // Center the panel
-          centerNewPanel(reactFlowElement, promptBox, firstNewPanel, reactFlowInstance)
-          
-          // Retry once more after a short delay to ensure it sticks
-          if (attempt === 0) {
-            setTimeout(() => {
-              const reactFlowEl = document.querySelector('.react-flow')
-              const promptBoxEl = document.querySelector('textarea[placeholder*="Ask"], textarea[placeholder*="Type"], textarea[placeholder*="message"]')?.closest('[class*="pointer-events-auto"]') as HTMLElement
-              if (reactFlowEl && promptBoxEl && reactFlowInstance && firstNewPanel) {
-                centerNewPanel(reactFlowEl, promptBoxEl, firstNewPanel, reactFlowInstance)
-              }
-            }, 200)
-          }
-        }
-        
-        // Start attempting to center after a short delay to let fitView start
-        setTimeout(() => {
-          attemptCentering()
-        }, 50)
-        
-        // Also enforce zoom to 100% to ensure it sticks (in case fitView overrides)
-        setTimeout(() => {
-          if (reactFlowInstance) {
-            const viewport = reactFlowInstance.getViewport()
-            if (Math.abs(viewport.zoom - 1) > 0.01) {
-              reactFlowInstance.setViewport({
-                x: viewport.x,
-                y: viewport.y,
-                zoom: 1,
-              }, { duration: 0 })
-            }
-          }
-        }, 100)
-
-        // Save positions to localStorage for all new nodes
         trulyNewNodesCanvas.forEach((node) => {
           originalPositionsRef.current.set(node.id, {
-            x: node.position.x,
+            x: node.position.x, // Cache flow coords for reload / mode switches
             y: node.position.y,
           })
 
-          // Save to localStorage
           if (conversationId && typeof window !== 'undefined') {
             try {
               const saved = localStorage.getItem(`thinktable-canvas-positions-${conversationId}`)
               const positions = saved ? JSON.parse(saved) : {}
-              positions[node.id] = node.position
+              positions[node.id] = node.position // Write-through so refresh keeps placement
               localStorage.setItem(`thinktable-canvas-positions-${conversationId}`, JSON.stringify(positions))
             } catch (error) {
               console.error('Failed to save position to localStorage:', error)
@@ -5480,6 +5342,12 @@ function BoardFlowInner({
     event.preventDefault() // Prevent default browser context menu
     event.stopPropagation() // Prevent other handlers
     setIBarPosition(null) // Dismiss empty-page I-bar when acting on a node
+    setIBarInputAnchor(null)
+    iBarArmedRef.current = false
+    if (iBarInputRef.current && document.activeElement === iBarInputRef.current) {
+      iBarInputRef.current.value = ''
+      iBarInputRef.current.blur()
+    }
 
     // If node is not selected, select it first
     if (!node.selected) {
@@ -5526,6 +5394,12 @@ function BoardFlowInner({
     event.preventDefault()
     event.stopPropagation()
     setIBarPosition(null) // Don't keep empty-page I-bar over a selection menu
+    setIBarInputAnchor(null)
+    iBarArmedRef.current = false
+    if (iBarInputRef.current && document.activeElement === iBarInputRef.current) {
+      iBarInputRef.current.value = ''
+      iBarInputRef.current.blur()
+    }
     const firstSelectedNode = selectedNodes[0]
     const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
     if (reactFlowInstance && reactFlowElement) {
@@ -5549,6 +5423,12 @@ function BoardFlowInner({
     const cursorOffsetY = 20 // p-1 + pt padding to first line
     const itemPosition = { x: flowX - cursorOffsetX, y: flowY - cursorOffsetY }
     setIBarPosition(null) // Clear pre-create cursor
+    setIBarInputAnchor(null) // Grip path goes straight to TipTap — drop capture field
+    iBarArmedRef.current = false
+    if (iBarInputRef.current) {
+      iBarInputRef.current.value = ''
+      if (document.activeElement === iBarInputRef.current) iBarInputRef.current.blur()
+    }
 
     try {
       const supabase = createClient() // Browser Supabase client for insert
@@ -6130,6 +6010,12 @@ function BoardFlowInner({
       const node = nodes.find((n) => n.id === detail.nodeId)
       if (!node) return
       setIBarPosition(null)
+      setIBarInputAnchor(null)
+      iBarArmedRef.current = false
+      if (iBarInputRef.current && document.activeElement === iBarInputRef.current) {
+        iBarInputRef.current.value = ''
+        iBarInputRef.current.blur()
+      }
       if (!node.selected) {
         setNodes((nds) => nds.map((n) => (n.id === node.id ? { ...n, selected: true } : n)))
       }
@@ -6748,9 +6634,8 @@ function BoardFlowInner({
   }, [clickedEdge])
 
   // Map I-bar typing: keep capturing keys until the new frame editor takes over (no dropped chars)
+  // Listeners stay mounted; `iBarArmedRef` / creating refs gate work so the first iOS `input` after tap isn’t lost waiting for useEffect
   useEffect(() => {
-    if (!iBarPosition && !isCreatingInlineNote) return // Idle — nothing to capture
-
     const escapeHtml = (s: string) =>
       s
         .replace(/&/g, '&amp;')
@@ -6775,6 +6660,19 @@ function BoardFlowInner({
       )
     }
 
+    // True when the spawned frame’s ProseMirror already owns focus — hand off and stop capturing
+    const tipTapHasFocus = () => {
+      if (!iBarPendingMessageIdRef.current) return false
+      const nodeEl = document.querySelector(
+        `.react-flow__node[data-id="panel-${iBarPendingMessageIdRef.current}"]`
+      )
+      const pm = nodeEl?.querySelector?.('.ProseMirror') as HTMLElement | null
+      return !!(pm && (document.activeElement === pm || pm.contains(document.activeElement)))
+    }
+
+    const isCapturing = () =>
+      iBarArmedRef.current || iBarCreatingRef.current || !!iBarPendingMessageIdRef.current
+
     // Frame asked for the latest buffer (editor just mounted / focused)
     const onRequestSeed = (event: Event) => {
       const messageId = (event as CustomEvent<{ messageId?: string }>).detail?.messageId
@@ -6782,103 +6680,26 @@ function BoardFlowInner({
       pushSeed()
     }
 
-    const handleKeyDown = async (event: KeyboardEvent) => {
-      // Escape dismisses the I-bar (only before create starts)
-      if (event.key === 'Escape') {
-        if (!iBarCreatingRef.current) {
-          setIBarPosition(null)
-          iBarTypeBufferRef.current = ''
-        }
-        return
-      }
+    // Shared path for desktop keydown chars and iOS soft-keyboard `input` (full buffer string)
+    const applyIBarText = (nextText: string) => {
+      if (!isCapturing()) return
 
-      const ignoredKeys = [
-        'Shift',
-        'Control',
-        'Alt',
-        'Meta',
-        'Tab',
-        'CapsLock',
-        'ArrowUp',
-        'ArrowDown',
-        'ArrowLeft',
-        'ArrowRight',
-        'Home',
-        'End',
-        'PageUp',
-        'PageDown',
-        'Insert',
-        'Delete',
-        'F1',
-        'F2',
-        'F3',
-        'F4',
-        'F5',
-        'F6',
-        'F7',
-        'F8',
-        'F9',
-        'F10',
-        'F11',
-        'F12',
-      ]
-      if (ignoredKeys.includes(event.key)) return
-      if (event.ctrlKey || event.altKey || event.metaKey) return
-
-      const isPrintable = event.key.length === 1
-      const isEnter = event.key === 'Enter'
-      const isBackspace = event.key === 'Backspace'
-      if (!isPrintable && !isEnter && !isBackspace) return
-
-      // TipTap already focused on the spawned frame — stop capturing so typing is normal
-      if (iBarPendingMessageIdRef.current) {
-        const nodeEl = document.querySelector(
-          `.react-flow__node[data-id="panel-${iBarPendingMessageIdRef.current}"]`
+      if (tipTapHasFocus()) {
+        window.dispatchEvent(
+          new CustomEvent('tt-ibar-seed-applied', {
+            detail: { messageId: iBarPendingMessageIdRef.current },
+          })
         )
-        const pm = nodeEl?.querySelector?.('.ProseMirror') as HTMLElement | null
-        if (pm && (document.activeElement === pm || pm.contains(document.activeElement))) {
-          window.dispatchEvent(
-            new CustomEvent('tt-ibar-seed-applied', {
-              detail: { messageId: iBarPendingMessageIdRef.current },
-            })
-          )
-          return // Do not preventDefault — this keystroke goes into TipTap
-        }
-      }
-
-      event.preventDefault()
-      event.stopPropagation()
-
-      if (isBackspace) {
-        iBarTypeBufferRef.current = iBarTypeBufferRef.current.slice(0, -1)
-        pushSeed()
-        // Keep optimistic panel content in sync while TipTap isn’t focused yet
-        const mid = iBarPendingMessageIdRef.current
-        if (mid) {
-          const html = bufferToHtml(iBarTypeBufferRef.current)
-          setNodes((nds) =>
-            nds.map((n) =>
-              n.id === `panel-${mid}`
-                ? {
-                    ...n,
-                    data: {
-                      ...n.data,
-                      promptMessage: { ...n.data.promptMessage, content: html },
-                    },
-                  }
-                : n
-            )
-          )
-        }
         return
       }
-      if (isEnter) return // Frame owns Enter after focus
 
-      iBarTypeBufferRef.current += event.key
+      if (nextText === iBarTypeBufferRef.current) return // No change (composition tick / duplicate input)
+      iBarTypeBufferRef.current = nextText
 
-      // First keystroke: spawn the frame immediately (no await) so text never blanks
+      // First non-empty buffer: spawn the frame immediately (no await) so text never blanks
       if (!iBarCreatingRef.current) {
-        const pos = iBarPosition ?? iBarCreatePosRef.current
+        if (!nextText) return // Still idle at the empty I-bar
+        const pos = iBarPositionRef.current ?? iBarCreatePosRef.current
         if (!pos) return
 
         iBarCreatingRef.current = true
@@ -7030,6 +6851,98 @@ function BoardFlowInner({
         )
       }
     }
+    iBarApplyTextRef.current = applyIBarText // Textarea onInput + compositionend call this
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isCapturing()) return
+
+      // Escape dismisses the I-bar (only before create starts)
+      if (event.key === 'Escape') {
+        if (!iBarCreatingRef.current) {
+          iBarArmedRef.current = false
+          setIBarPosition(null)
+          setIBarInputAnchor(null)
+          iBarTypeBufferRef.current = ''
+          const el = iBarInputRef.current
+          if (el) {
+            el.value = ''
+            el.blur()
+          }
+        }
+        return
+      }
+
+      // Soft keyboard / focused capture field: `input` owns the buffer (iOS often sends Unidentified keydowns)
+      if (event.target === iBarInputRef.current) {
+        if (event.key === 'Enter') {
+          event.preventDefault() // Don’t insert a bare newline into the capture field
+        }
+        return
+      }
+
+      const ignoredKeys = [
+        'Shift',
+        'Control',
+        'Alt',
+        'Meta',
+        'Tab',
+        'CapsLock',
+        'ArrowUp',
+        'ArrowDown',
+        'ArrowLeft',
+        'ArrowRight',
+        'Home',
+        'End',
+        'PageUp',
+        'PageDown',
+        'Insert',
+        'Delete',
+        'F1',
+        'F2',
+        'F3',
+        'F4',
+        'F5',
+        'F6',
+        'F7',
+        'F8',
+        'F9',
+        'F10',
+        'F11',
+        'F12',
+      ]
+      if (ignoredKeys.includes(event.key)) return
+      if (event.ctrlKey || event.altKey || event.metaKey) return
+
+      const isPrintable = event.key.length === 1
+      const isEnter = event.key === 'Enter'
+      const isBackspace = event.key === 'Backspace'
+      if (!isPrintable && !isEnter && !isBackspace) return
+
+      // TipTap already focused on the spawned frame — stop capturing so typing is normal
+      if (tipTapHasFocus()) {
+        window.dispatchEvent(
+          new CustomEvent('tt-ibar-seed-applied', {
+            detail: { messageId: iBarPendingMessageIdRef.current },
+          })
+        )
+        return // Do not preventDefault — this keystroke goes into TipTap
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+
+      if (isBackspace) {
+        applyIBarText(iBarTypeBufferRef.current.slice(0, -1))
+        const el = iBarInputRef.current
+        if (el) el.value = iBarTypeBufferRef.current // Keep capture field in sync for a later soft keyboard
+        return
+      }
+      if (isEnter) return // Frame owns Enter after focus
+
+      applyIBarText(iBarTypeBufferRef.current + event.key)
+      const el = iBarInputRef.current
+      if (el) el.value = iBarTypeBufferRef.current
+    }
 
     // Frame editor took over — stop document capture
     const onSeedApplied = (event: Event) => {
@@ -7039,7 +6952,14 @@ function BoardFlowInner({
       iBarPendingMessageIdRef.current = null
       iBarCreatePosRef.current = null
       iBarCreatingRef.current = false
+      iBarArmedRef.current = false
       setIsCreatingInlineNote(false)
+      setIBarInputAnchor(null) // Release capture-field anchor now that TipTap owns the keyboard
+      const el = iBarInputRef.current
+      if (el) {
+        el.value = ''
+        if (document.activeElement === el) el.blur()
+      }
     }
 
     document.addEventListener('keydown', handleKeyDown, true) // Capture so nothing else eats keys
@@ -7049,8 +6969,19 @@ function BoardFlowInner({
       document.removeEventListener('keydown', handleKeyDown, true)
       window.removeEventListener('tt-ibar-seed-applied', onSeedApplied)
       window.removeEventListener('tt-ibar-request-seed', onRequestSeed)
+      iBarApplyTextRef.current = () => {}
     }
-  }, [iBarPosition, isCreatingInlineNote, conversationId, router, refetchMessages, setNodes, queryClient])
+  }, [conversationId, router, refetchMessages, setNodes, queryClient])
+
+  // Focus the hidden capture field in the same user-gesture turn as the board tap (required for iOS keyboard)
+  const focusIBarCapture = useCallback(() => {
+    iBarArmedRef.current = true // Arm before focus so an immediate soft-key input isn’t ignored
+    const el = iBarInputRef.current
+    if (!el) return
+    el.value = ''
+    iBarTypeBufferRef.current = ''
+    el.focus({ preventScroll: true })
+  }, [])
 
   // Handle double-click on map pane to place I-bar cursor
   // The I-bar shows where the note will be created when user starts typing
@@ -7083,8 +7014,17 @@ function BoardFlowInner({
     
     // Store flow coordinates and current viewport for rendering
     setIBarPosition({ x: flowX, y: flowY })
+    iBarPositionRef.current = { x: flowX, y: flowY } // Sync before paint so first soft-key can spawn
     setIBarViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom })
-  }, [reactFlowInstance])
+    setIBarInputAnchor({
+      x: flowX,
+      y: flowY,
+      vx: viewport.x,
+      vy: viewport.y,
+      zoom: viewport.zoom,
+    })
+    focusIBarCapture() // Same tap/double-tap gesture → soft keyboard on iOS
+  }, [reactFlowInstance, focusIBarCapture])
   
   // Handle drag and drop for shapes from dropdown - matches shapes-pro-example
   // Also accepts AI sidebar chat blocks → create a page frame (user-initiated placement only)
@@ -7589,8 +7529,14 @@ function BoardFlowInner({
         onEdgeClick={handleEdgeClick}
         onNodeClick={(event, node) => {
           // Clear I-bar cursor when clicking on a node/panel
-          if (iBarPosition) {
+          if (iBarPosition || iBarInputAnchor) {
             setIBarPosition(null)
+            setIBarInputAnchor(null)
+            iBarArmedRef.current = false
+            if (iBarInputRef.current && document.activeElement === iBarInputRef.current) {
+              iBarInputRef.current.value = ''
+              iBarInputRef.current.blur()
+            }
           }
           // Clicking a host block (outside nested preview chrome) clears preview style-focus
           if (!embedded && previewFocus?.focusedBoardId) {
@@ -7635,6 +7581,13 @@ function BoardFlowInner({
           const hasSelectedPanel = selectedNodeIdsRef.current.length > 0
           if (hasSelectedPanel) {
             setIBarPosition(null)
+            setIBarInputAnchor(null)
+            iBarArmedRef.current = false
+            const el = iBarInputRef.current
+            if (el && document.activeElement === el) {
+              el.value = ''
+              el.blur()
+            }
             return
           }
 
@@ -7651,7 +7604,16 @@ function BoardFlowInner({
           setRightClickedNode(null) // Don't stack with node action popup
           // Place blinking cursor + grip (type or click grip to create block) — not Item/Flashcard menu
           setIBarPosition({ x: flowX, y: flowY })
+          iBarPositionRef.current = { x: flowX, y: flowY } // Available immediately for first soft-key spawn
           setIBarViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom })
+          setIBarInputAnchor({
+            x: flowX,
+            y: flowY,
+            vx: viewport.x,
+            vy: viewport.y,
+            zoom: viewport.zoom,
+          })
+          focusIBarCapture() // Must focus editable in this tap turn or iPhone keyboard never opens
         }}
         defaultViewport={{ x: 0, y: 0, zoom: embedded ? 0.8 : 0.6 }}
         // Embedded previews: no continuous fitView (fights pan/zoom); host keeps canvas fitView
@@ -8190,6 +8152,53 @@ function BoardFlowInner({
           />
         </div>
       )}
+
+      {/* Always-mounted capture field: board tap focuses it so iOS shows the keyboard; feeds I-bar buffer via onInput */}
+      <textarea
+        ref={iBarInputRef}
+        aria-label="Type to create a frame"
+        autoCapitalize="sentences"
+        autoCorrect="on"
+        autoComplete="off"
+        enterKeyHint="done"
+        inputMode="text"
+        rows={1}
+        tabIndex={-1}
+        className="tt-ibar-capture nodrag nopan"
+        onInput={(e) => iBarApplyTextRef.current(e.currentTarget.value)}
+        onCompositionEnd={(e) => iBarApplyTextRef.current(e.currentTarget.value)}
+        onBlur={() => {
+          // Phone: keyboard dismissed — release create capture without focusing edge TipTap (avoids Safari zoom)
+          const pending = iBarPendingMessageIdRef.current
+          if (!pending) return
+          window.dispatchEvent(
+            new CustomEvent('tt-ibar-seed-applied', { detail: { messageId: pending } })
+          )
+        }}
+        style={{
+          // Park capture at board center (not the edge tap) so iOS doesn’t pan/zoom to an off-center caret
+          position: 'absolute',
+          left: iBarInputAnchor ? '50%' : '-9999px',
+          top: iBarInputAnchor ? '50%' : '0px',
+          transform: iBarInputAnchor ? 'translate(-50%, -50%)' : undefined,
+          zIndex: 1001,
+          width: 12,
+          height: 24,
+          margin: 0,
+          padding: 0,
+          opacity: 0.01, // Fully invisible / zero-size fields often won’t open the iOS keyboard
+          border: 'none',
+          outline: 'none',
+          resize: 'none',
+          overflow: 'hidden',
+          background: 'transparent',
+          color: 'transparent',
+          caretColor: 'transparent',
+          fontSize: 16, // Avoid iOS Safari zoom-on-focus
+          lineHeight: '24px',
+          pointerEvents: 'none', // Programmatic focus only — don’t steal map taps
+        }}
+      />
 
       {/* Minimap pill + Free nav — host map only (hidden in page previews) */}
       {!embedded && (

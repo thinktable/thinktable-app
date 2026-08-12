@@ -273,6 +273,14 @@ span[data-added="true"] {
     font-size: 0.875rem; /* 14px - ChatGPT chat text size */
   }
 
+  /* Phone Safari auto-zooms focused editors under 16px — keep board TipTap at 16px on touch */
+  @media (hover: none), (pointer: coarse) {
+    .react-flow .prose,
+    .react-flow .ProseMirror {
+      font-size: 16px;
+    }
+  }
+
   /* Dark mode prose text */
   .dark .prose {
     color: #e5e7eb; /* gray-200 - very light text for dark mode */

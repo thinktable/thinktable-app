@@ -4559,6 +4559,55 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   useEffect(() => {
     if (!isComponentPanel || isFlashcard) return
 
+    // TipTap iOS focus() omits preventScroll; pin page + overflow ancestors so edge creates don’t jump
+    const focusFrameEditor = (ed: NonNullable<typeof promptEditorRef.current>) => {
+      const sx = window.scrollX // Document scroll (rare on board, but cheap to pin)
+      const sy = window.scrollY
+      // Board shell uses overflow-auto main — Safari pans that when the caret is near the edge
+      const scrollParents: { el: HTMLElement; left: number; top: number }[] = []
+      let node: HTMLElement | null = ed.view.dom as HTMLElement
+      while (node && node !== document.body) {
+        const style = window.getComputedStyle(node)
+        const canScroll =
+          /(auto|scroll|overlay)/.test(style.overflowY) ||
+          /(auto|scroll|overlay)/.test(style.overflowX)
+        if (canScroll && (node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth)) {
+          scrollParents.push({ el: node, left: node.scrollLeft, top: node.scrollTop })
+        }
+        node = node.parentElement
+      }
+      // Force ≥16px before focus — Safari zooms any focused editor under 16px (inline beats CSS)
+      const pm = ed.view.dom as HTMLElement
+      const prevFont = pm.style.fontSize
+      if (typeof window !== 'undefined' && (window.matchMedia('(hover: none)').matches || window.matchMedia('(pointer: coarse)').matches)) {
+        pm.style.fontSize = '16px'
+      }
+      ed.commands.focus('end', { scrollIntoView: false }) // Don’t scroll caret into view (edge frames)
+      const pin = () => {
+        window.scrollTo(sx, sy)
+        for (const p of scrollParents) {
+          p.el.scrollLeft = p.left
+          p.el.scrollTop = p.top
+        }
+      }
+      pin()
+      requestAnimationFrame(pin)
+      window.setTimeout(pin, 50) // Keyboard / visualViewport settle
+      window.setTimeout(pin, 150)
+      // Restore prior inline fontScale after focus if we overrode it (blocks use CSS frameScale)
+      if (prevFont && prevFont !== '16px') {
+        window.setTimeout(() => {
+          if (!ed.isDestroyed) pm.style.fontSize = prevFont
+        }, 200)
+      }
+    }
+
+    // Phone I-bar: keep keyboard on the centered 16px capture field — don’t steal focus into an edge TipTap
+    const captureOwnsKeyboard = () => {
+      const el = document.activeElement as HTMLElement | null
+      return !!el?.classList?.contains('tt-ibar-capture')
+    }
+
     const applySeed = (html: string, text: string) => {
       const ed = promptEditorRef.current
       if (!ed || ed.isDestroyed) return false
@@ -4566,13 +4615,13 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       // Only replace when seed is ahead — avoid setContent flicker when already in sync
       if (text.length > current.length || (text.length === current.length && text !== current)) {
         ed.commands.setContent(html || '<p></p>')
-        ed.commands.focus('end')
+        if (!captureOwnsKeyboard()) focusFrameEditor(ed) // Desktop / grip path — capture already released
         setPromptContent(html || '<p></p>')
         setPromptHasChanges(true) // Persist the buffered typing; block remote wipe
         hasAutoFocusedRef.current = true
         return true
       }
-      if (!ed.isFocused) ed.commands.focus('end')
+      if (!ed.isFocused && !captureOwnsKeyboard()) focusFrameEditor(ed)
       hasAutoFocusedRef.current = true
       setPromptHasChanges(true)
       return true
@@ -4583,6 +4632,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       if (!detail?.messageId || detail.messageId !== promptMessage?.id) return
       const ok = applySeed(detail.html || '<p></p>', detail.text || '')
       const ed = promptEditorRef.current
+      // Capture still owns the keyboard on phone — don’t release it (would drop the soft keyboard / hand edge TipTap)
+      if (captureOwnsKeyboard()) return
       // Only release map capture once TipTap actually has focus (otherwise more keys would drop)
       if (ok && ed && !ed.isDestroyed && ed.isFocused) {
         window.dispatchEvent(
@@ -4604,7 +4655,10 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       if (isEmpty || isNewInlineNote) {
         const t = window.setTimeout(() => {
           if (!promptEditorRef.current || promptEditorRef.current.isDestroyed) return
-          promptEditorRef.current.commands.focus('end')
+          // Phone: I-bar capture already focused — sync only; TipTap focus would Safari-zoom near edges
+          if (!captureOwnsKeyboard()) {
+            focusFrameEditor(promptEditorRef.current)
+          }
           hasAutoFocusedRef.current = true
           // If a seed is still in flight, ask board-flow to re-push it
           if (promptMessage?.id) {
