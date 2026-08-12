@@ -41,6 +41,7 @@ import {
 } from '@/lib/ai/selection-bridge'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
+import { useSidebarContext } from '@/components/sidebar-context'
 
 /** + menu skill rows — driven by the skill registry (user-attached, not LLM tools). */
 const MENU_SKILLS: Array<{
@@ -88,6 +89,8 @@ interface AiComposerProps {
   onStreamingId: (id: string | null) => void
   seedPrompt?: string
   onSeedConsumed?: () => void
+  /** When true, focus the textarea after mount (phone map-dock opens the soft keyboard). */
+  autoFocus?: boolean
   onEdits?: (
     edits: Array<{
       kind?: 'update_frame' | 'create_frame' | 'create_thread'
@@ -235,8 +238,10 @@ export function AiComposer({
   onStreamingId,
   seedPrompt,
   onSeedConsumed,
+  autoFocus = false,
   onEdits,
 }: AiComposerProps) {
+  const { registerAiComposerFocus } = useSidebarContext()
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [dropActive, setDropActive] = useState(false)
@@ -321,6 +326,23 @@ export function AiComposer({
       textareaRef.current?.focus()
     }
   }, [seedPrompt, onSeedConsumed])
+
+  // Phone map-dock: focus in the same open gesture so the soft keyboard appears
+  useEffect(() => {
+    if (!autoFocus) return
+    const id = window.requestAnimationFrame(() => {
+      textareaRef.current?.focus({ preventScroll: true })
+    })
+    return () => window.cancelAnimationFrame(id)
+  }, [autoFocus])
+
+  // Register sync focus for brand-tap open (iOS requires focus inside the click turn)
+  useEffect(() => {
+    registerAiComposerFocus(() => {
+      textareaRef.current?.focus({ preventScroll: true })
+    })
+    return () => registerAiComposerFocus(null)
+  }, [registerAiComposerFocus])
 
   // New / switched thread → drop skill pills (snapshots are parent-owned)
   useEffect(() => {
@@ -777,7 +799,8 @@ export function AiComposer({
             className={cn(
               // block (not flex) + matched line-height so placeholder sits on the control midline
               'block min-h-[32px] max-h-[200px] resize-none border-0 bg-transparent shadow-none',
-              'text-sm leading-5 flex-1 self-center',
+              // 16px on touch — Safari auto-zooms focused fields under 16px
+              'text-base leading-5 sm:text-sm flex-1 self-center',
               'placeholder:text-gray-400 dark:placeholder:text-gray-500',
               'focus-visible:ring-0 focus-visible:ring-offset-0',
               'px-1 py-[6px]'

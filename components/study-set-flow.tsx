@@ -573,8 +573,8 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
     if (boardStyle === 'grid') return BackgroundVariant.Lines // Grid pattern (both horizontal and vertical lines)
     return null // Default to none
   }, [boardStyle])
-  const { setIsMobileMode, isChatSidebarOpen, toggleChatSidebar, logoDrawing } = useSidebarContext()
-  useChatSidebarViewportAdjust(reactFlowInstance, isChatSidebarOpen) // Shrink/grow map zoom with chat column
+  const { setIsMobileMode, isMobileMode, isChatSidebarOpen, toggleChatSidebar, logoDrawing } = useSidebarContext()
+  useChatSidebarViewportAdjust(reactFlowInstance, isChatSidebarOpen && !isMobileMode) // No column shrink on phone dock
   const originalPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map()) // Store original positions for Linear mode
   const isLinearModeRef = useRef(false) // Track if we're currently in Linear mode
 
@@ -4968,10 +4968,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
               style={{
                 opacity: isScrollingToBottom ? 0 : 1,
                 transition: 'opacity 0.1s',
-                borderTopLeftRadius: '0px',
-                borderTopRightRadius: '0px',
-                borderBottomLeftRadius: '8px',
-                borderBottomRightRadius: '8px',
+                borderRadius: '8px', // All corners — matches board Free nav gap layout
                 overflow: 'hidden',
                 cursor: 'pointer', // Indicate clickability
                 bottom: `${minimapBottom - 12}px`, // 5px from bottom when at default (1px lower)
@@ -5298,7 +5295,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
       >
         <div
           className={cn(
-            "bg-gray-100 dark:bg-[#2a2a3a] rounded-lg p-1 flex items-center gap-1 relative",
+            "bg-gray-50 dark:bg-[#0f0f0f] rounded-lg p-1 flex items-center gap-1 relative border-0 shadow-none",
             isMinimapHidden && "shadow-sm"
           )}
         >
@@ -5466,7 +5463,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
         </div>
       </div>
 
-      {/* Brand logo — opens chat sidebar; hidden while chat is open; bottom-right of map */}
+      {/* Brand logo — opens chat; hide while chat is open (desktop column + phone dock) */}
       {!isChatSidebarOpen && (
         <button
           type="button"
@@ -5477,8 +5474,8 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
             bottom: '12px',
             right: '12px',
           }}
-          title="Show chat"
-          aria-label="Show chat sidebar"
+          title={isChatSidebarOpen ? 'Hide chat' : 'Show chat'}
+          aria-label={isChatSidebarOpen ? 'Hide chat sidebar' : 'Show chat sidebar'}
         >
           <ThinktableBrandMark drawingUrl={logoDrawing} size={42} />
         </button>

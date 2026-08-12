@@ -648,6 +648,7 @@ span[data-added="true"] {
     height: 120px !important;
     overflow: hidden !important;
     border: none !important;
+    border-radius: 8px !important; /* All corners — Free nav stacks above in-flow */
     background-color: white !important;
   }
 

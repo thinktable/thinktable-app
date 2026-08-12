@@ -48,6 +48,14 @@ interface SidebarContextType {
   setChatSidebarOpen: (open: boolean) => void // Explicit open/close for chat sidebar
   logoDrawing: string | null // Custom logo PNG data URL (shared by chat + map open icon)
   setLogoDrawing: (url: string | null) => void // Persist + sync custom logo across chrome
+  /** Phone: AiComposer registers focus so brand tap can open the soft keyboard in the same gesture. */
+  registerAiComposerFocus: (fn: (() => void) | null) => void
+  /** Phone: px to lift Free nav / minimap chrome above the map-docked AI composer (+ keyboard). */
+  aiMapDockLiftPx: number
+  setAiMapDockLiftPx: (px: number) => void
+  /** Phone: left inset so Free nav aligns with the AI dock’s left edge when jumped. */
+  aiMapDockLeftPx: number | null
+  setAiMapDockLeftPx: (px: number | null) => void
 }
 
 const SidebarContext = createContext<SidebarContextType | undefined>(undefined)
@@ -58,17 +66,38 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
   const [isSidebarPinned, setIsSidebarPinned] = useState(false) // Click-pinned: stay open across leave/nav
   const [isChatSidebarOpen, setIsChatSidebarOpen] = useState(false) // Closed until client hydrates localStorage
   const [logoDrawing, setLogoDrawingState] = useState<string | null>(null) // Shared custom logo drawing
+  const [aiMapDockLiftPx, setAiMapDockLiftPx] = useState(0) // Phone: lift Free nav above AI dock
+  const [aiMapDockLeftPx, setAiMapDockLeftPx] = useState<number | null>(null) // Phone: align Free nav to dock left
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Delayed-close handle for left nav
   const isSidebarPinnedRef = useRef(false) // Latest pin for scheduleClose without stale closure
+  const isMobileModeRef = useRef(false) // Latest mobile flag for sync focus in toggle
+  const isChatOpenRef = useRef(false) // Latest chat open for sync focus in toggle
+  const aiComposerFocusRef = useRef<(() => void) | null>(null) // Phone composer.focus (same-tap keyboard)
 
   // Keep pin ref in sync for delayed-close guard
   useEffect(() => {
     isSidebarPinnedRef.current = isSidebarPinned
   }, [isSidebarPinned])
 
+  useEffect(() => {
+    isMobileModeRef.current = isMobileMode
+  }, [isMobileMode])
+
+  useEffect(() => {
+    isChatOpenRef.current = isChatSidebarOpen
+  }, [isChatSidebarOpen])
+
+  const registerAiComposerFocus = useCallback((fn: (() => void) | null) => {
+    aiComposerFocusRef.current = fn // Mounted phone AiComposer wires this
+  }, [])
+
   // Hydrate chat open + logo after mount (SSR useState init stays false — must re-read here)
   useEffect(() => {
-    setIsChatSidebarOpen(getStoredChatSidebarOpen()) // Reopen if it was open before reload
+    const narrow = window.innerWidth < 900 // Same threshold as board-flow minimap mobile mode
+    setIsMobileMode(narrow) // Ready before first brand tap (phone map-dock path)
+    const storedOpen = getStoredChatSidebarOpen() // Last session flag
+    // Phone: don’t restore an open column — brand tap opens the map dock + keyboard instead
+    setIsChatSidebarOpen(narrow ? false : storedOpen)
     setLogoDrawingState(getStoredLogoDrawing()) // Custom logo PNG
   }, [])
 
@@ -120,6 +149,14 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
   }, [cancelCloseSidebar])
 
   const toggleChatSidebar = useCallback(() => {
+    const opening = !isChatOpenRef.current // About to open?
+    // iOS: focus must run in this tap — phone dock keeps composer mounted while closed
+    if (opening && isMobileModeRef.current) {
+      aiComposerFocusRef.current?.()
+    } else if (!opening && isMobileModeRef.current) {
+      const ae = document.activeElement as HTMLElement | null
+      if (ae?.closest?.('[data-chat-map-dock]')) ae.blur() // Dismiss soft keyboard
+    }
     setIsChatSidebarOpen((prev) => {
       const next = !prev // Logo by minimap toggles chat column
       persistChatSidebarOpen(next) // Remember for reload
@@ -128,6 +165,12 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const setChatSidebarOpen = useCallback((open: boolean) => {
+    if (open && isMobileModeRef.current && !isChatOpenRef.current) {
+      aiComposerFocusRef.current?.() // Same-tap keyboard when opened explicitly
+    } else if (!open && isMobileModeRef.current) {
+      const ae = document.activeElement as HTMLElement | null
+      if (ae?.closest?.('[data-chat-map-dock]')) ae.blur() // Dismiss soft keyboard
+    }
     persistChatSidebarOpen(open) // Remember for reload
     setIsChatSidebarOpen(open)
   }, [])
@@ -148,6 +191,11 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
         setChatSidebarOpen,
         logoDrawing,
         setLogoDrawing,
+        registerAiComposerFocus,
+        aiMapDockLiftPx,
+        setAiMapDockLiftPx,
+        aiMapDockLeftPx,
+        setAiMapDockLeftPx,
       }}
     >
       {children}
@@ -174,6 +222,11 @@ export function useSidebarContext() {
       setChatSidebarOpen: () => {},
       logoDrawing: null as string | null,
       setLogoDrawing: () => {},
+      registerAiComposerFocus: () => {},
+      aiMapDockLiftPx: 0,
+      setAiMapDockLiftPx: () => {},
+      aiMapDockLeftPx: null as number | null,
+      setAiMapDockLeftPx: () => {},
     }
   }
   return context
