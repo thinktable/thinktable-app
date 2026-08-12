@@ -50,6 +50,9 @@ interface SidebarContextType {
   setLogoDrawing: (url: string | null) => void // Persist + sync custom logo across chrome
   /** Phone: AiComposer registers focus so brand tap can open the soft keyboard in the same gesture. */
   registerAiComposerFocus: (fn: (() => void) | null) => void
+  /** Phone/desktop: true when AI transcript (chat box) has messages — Free nav uses board fill then. */
+  aiChatHasTranscript: boolean
+  setAiChatHasTranscript: (value: boolean) => void
   /** Phone: px to lift Free nav / minimap chrome above the map-docked AI composer (+ keyboard). */
   aiMapDockLiftPx: number
   setAiMapDockLiftPx: (px: number) => void
@@ -68,6 +71,7 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
   const [logoDrawing, setLogoDrawingState] = useState<string | null>(null) // Shared custom logo drawing
   const [aiMapDockLiftPx, setAiMapDockLiftPx] = useState(0) // Phone: lift Free nav above AI dock
   const [aiMapDockLeftPx, setAiMapDockLeftPx] = useState<number | null>(null) // Phone: align Free nav to dock left
+  const [aiChatHasTranscript, setAiChatHasTranscript] = useState(false) // Chat box has messages (vs input-only)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Delayed-close handle for left nav
   const isSidebarPinnedRef = useRef(false) // Latest pin for scheduleClose without stale closure
   const isMobileModeRef = useRef(false) // Latest mobile flag for sync focus in toggle
@@ -192,6 +196,8 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
         logoDrawing,
         setLogoDrawing,
         registerAiComposerFocus,
+        aiChatHasTranscript,
+        setAiChatHasTranscript,
         aiMapDockLiftPx,
         setAiMapDockLiftPx,
         aiMapDockLeftPx,
@@ -223,6 +229,8 @@ export function useSidebarContext() {
       logoDrawing: null as string | null,
       setLogoDrawing: () => {},
       registerAiComposerFocus: () => {},
+      aiChatHasTranscript: false,
+      setAiChatHasTranscript: () => {},
       aiMapDockLiftPx: 0,
       setAiMapDockLiftPx: () => {},
       aiMapDockLeftPx: null as number | null,

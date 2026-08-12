@@ -47,6 +47,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     setLogoDrawing,
     setAiMapDockLiftPx,
     setAiMapDockLeftPx,
+    setAiChatHasTranscript,
   } = useSidebarContext()
   const { addPendingEdits } = useAiEditSession()
   const [personalizeOpen, setPersonalizeOpen] = useState(false) // Logo modal
@@ -66,6 +67,12 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   const mapDockContentRef = useRef<HTMLDivElement>(null) // Inner max-w-lg — left edge Free nav aligns to
 
   const [threadHydrated, setThreadHydrated] = useState(false) // Block persist-until-restore (Strict Mode safe)
+
+  // Publish whether the chat box (transcript) has messages — Free nav fill depends on it
+  useEffect(() => {
+    setAiChatHasTranscript(messages.length > 0)
+    return () => setAiChatHasTranscript(false) // Clear on unmount
+  }, [messages.length, setAiChatHasTranscript])
 
   // Restore the last active thread once on mount (same chat after reload)
   useEffect(() => {
