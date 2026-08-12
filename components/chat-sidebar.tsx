@@ -180,12 +180,12 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     const content = mapDockContentRef.current
     if (!shell || !content) {
       // Closed-opacity dock still mounted — estimate composer height until next open paint
-      setAiMapDockLiftPx(Math.round(72 + keyboardInset + 8))
+      setAiMapDockLiftPx(Math.round(72 + keyboardInset + 2)) // Tight to chat when estimate only
       return
     }
     const publish = () => {
       const h = shell.offsetHeight // Composer (+ transcript / chrome) height
-      setAiMapDockLiftPx(Math.round(h + keyboardInset + 8)) // + keyboard + gap
+      setAiMapDockLiftPx(Math.round(h + keyboardInset + 2)) // + keyboard + small gap to chat
       // Prefer measured left (safe-area / subpixel) over geometric
       setAiMapDockLeftPx(Math.round(content.getBoundingClientRect().left))
     }
@@ -406,8 +406,11 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
         >
           <div
             ref={mapDockContentRef}
-            // Solid board fill behind the column so gaps + chrome mask map content (no border)
-            className="pointer-events-auto mx-auto w-full max-w-lg flex flex-col gap-1.5 bg-gray-50 dark:bg-[#0f0f0f]"
+            // Solid board fill when open; never steal taps while closed (brand / Free nav sit under z-30)
+            className={cn(
+              'mx-auto w-full max-w-lg flex flex-col gap-1.5 bg-gray-50 dark:bg-[#0f0f0f]',
+              isChatSidebarOpen ? 'pointer-events-auto' : 'pointer-events-none'
+            )}
           >
             {hasTranscript && isChatSidebarOpen && (
               <div

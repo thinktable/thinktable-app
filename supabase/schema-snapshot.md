@@ -1,12 +1,18 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-12T01:58:46Z`
+- Snapped at: `2026-08-12T11:01:23Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260812110123_free_nav_minimap_map_icon_chrome.sql`.
+- Free nav white chrome; Map open/close icon (white + shadow) overlays minimap top-left when open and Free nav top-left when closed; removed hover pill / open-on-hover.
+- Schema unchanged.
+
+## Prior: phone AI map dock chrome
 
 - No DDL. Marker `20260812015846_phone_ai_map_dock_chrome.sql`.
 - Phone AI map dock: composer on the board above keyboard; Free nav snaps above + left-aligns to chat card; minimap unmounts while AI open; brand logo hides while open; dock/nav use board fill; Free nav + minimap column-stack (no overlap).

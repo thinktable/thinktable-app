@@ -68,7 +68,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { ArrowDown, GripVertical, MousePointer2, Hand } from 'lucide-react'
+import { ArrowDown, GripVertical, MousePointer2, Hand, Map as MapIcon } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
@@ -149,6 +149,7 @@ interface ChatPanelNodeData {
 const MINIMAP_HEIGHT = 120 // Keep in sync with .minimap-custom-size height in globals.css
 const MINIMAP_BOTTOM = 8 // Inset from map column bottom edge
 const MINIMAP_LEFT = 8 // Match top-bar menu button (sticky-prompt-panel paddingLeft 0.5rem)
+const MINIMAP_NAV_GAP = 6 // Air between Free nav and minimap in the column stack
 const BRAND_RIGHT = 12 // Inset from map column right edge
 // Stable key-code arrays — new array literals each render make RF's useKeyPress loop (Max update depth).
 const MULTI_SELECT_KEYS = ['Shift', 'Meta', 'Control'] // Shift/Cmd/Ctrl+click adds to selection
@@ -1336,7 +1337,7 @@ function BoardFlowInner({
   const { setIsMobileMode, isMobileMode, isChatSidebarOpen, toggleChatSidebar, logoDrawing, aiMapDockLiftPx, aiMapDockLeftPx } =
     useSidebarContext()
   useChatSidebarViewportAdjust(reactFlowInstance, isChatSidebarOpen && !isMobileMode) // No column shrink on phone dock
-  // Phone AI dock lift — Free nav / pill / brand jump above the composer
+  // Phone AI dock lift — Free nav / brand jump above the composer
   const mapChromeBottomPad = isMobileMode && isChatSidebarOpen ? aiMapDockLiftPx : 0
   // Phone AI open: align Free nav (+ minimap chrome) to the chat card’s left edge
   const mapChromeLeft =
@@ -1551,19 +1552,18 @@ function BoardFlowInner({
   const [minimapLeft, setMinimapLeft] = useState<number>(MINIMAP_LEFT)
   const [navBottomTransition, setNavBottomTransition] = useState(false) // Gate bottom animation until after load settle
   const boardRootRef = useRef<HTMLDivElement>(null) // Map column box — chrome is absolute on this (outside RF)
-  const [minimapHoverLeft, setMinimapHoverLeft] = useState<number>(0) // Left position for hover zone to align with minimap left edge
-  const [minimapPillCenter, setMinimapPillCenter] = useState<number>(0) // Center position for pill to center on minimap
-  const [minimapPillBottom, setMinimapPillBottom] = useState<number>(8) // Bottom position for pill to center on minimap bottom edge
-  const [minimapHoverBottom, setMinimapHoverBottom] = useState<number>(0) // Bottom position for hover area when jumped
-  const [minimapHoverHeight, setMinimapHoverHeight] = useState<number>(28) // Height for hover area
   // Sync from localStorage on first client render so nav bottom isn't wrong before effects run
   const [isMinimapHidden, setIsMinimapHidden] = useState(() => {
     if (typeof window === 'undefined') return false
     return localStorage.getItem('thinktable-minimap-hidden') === 'true'
   })
-  // Phone AI open: treat minimap as collapsed (same as pill) without mutating saved preference
-  const minimapCollapsed =
-    isMinimapHidden || (isMobileMode && isChatSidebarOpen)
+  // Phone AI dock open (= Free nav "jumped"): minimap auto-closes but can still be peeked / pinned
+  const phoneAiOpen = isMobileMode && isChatSidebarOpen
+  const [aiDockMinimapOpen, setAiDockMinimapOpen] = useState(false) // Visible while jumped
+  const [aiDockMinimapPinned, setAiDockMinimapPinned] = useState(false) // Click-to-keep-open (no auto-close)
+  const aiDockMinimapPinnedRef = useRef(false) // Latest pin for leave-timeout (avoid stale close)
+  // Collapse = preference hidden, OR jumped without an active peek/pin
+  const minimapCollapsed = phoneAiOpen ? !aiDockMinimapOpen : isMinimapHidden
   const [isScrollingToBottom, setIsScrollingToBottom] = useState(false) // Track if we're currently scrolling to bottom (for minimap flash prevention)
   const [clickedEdge, setClickedEdge] = useState<Edge | null>(null) // Track clicked edge for popup (local state for popup logic)
 
@@ -1591,7 +1591,6 @@ function BoardFlowInner({
   // (Empty-page click places an I-bar + grip; typing / grip creates the block — no Item/Flashcard menu)
   const [isMinimapManuallyHidden, setIsMinimapManuallyHidden] = useState(false) // Track if minimap was manually hidden (vs auto-hidden)
   const [isMinimapHovering, setIsMinimapHovering] = useState(false) // Track if mouse is hovering over minimap area
-  const [isPillHoverAreaHovering, setIsPillHoverAreaHovering] = useState(false) // Track if mouse is hovering over pill hover area specifically
   // Minimap visibility mode: 'shown' | 'hidden' | 'hover'
   // Use useUserPreference hook for Supabase persistence, default to 'shown'
   const supabaseForMinimap = createClient() // Create Supabase client for useUserPreference
@@ -1800,50 +1799,65 @@ function BoardFlowInner({
     }
   }, [minimapMode, isLoadingMinimapMode])
 
+  // Phone AI open: reset minimap peek/pin so it auto-closes when the dock jumps
+  useEffect(() => {
+    if (phoneAiOpen) {
+      setAiDockMinimapOpen(false)
+      setAiDockMinimapPinned(false)
+      aiDockMinimapPinnedRef.current = false
+      return
+    }
+    // Chat closed on phone: restore minimap if preference is shown (don't leave it stuck collapsed)
+    if (isMobileMode && minimapMode === 'shown') {
+      setIsMinimapHidden(false)
+      setIsMinimapManuallyHidden(false)
+      wasAutoHiddenRef.current = false
+    }
+  }, [phoneAiOpen, isMobileMode, minimapMode])
+
+  useEffect(() => {
+    aiDockMinimapPinnedRef.current = aiDockMinimapPinned
+  }, [aiDockMinimapPinned])
+
   // Keep ref in sync with state
   useEffect(() => {
     isMinimapHoveringRef.current = isMinimapHovering
   }, [isMinimapHovering])
 
-  // Function to check if minimap should be hidden (called when leaving any related area)
+  // Keep ref in sync with state
+  useEffect(() => {
+    isMinimapHoveringRef.current = isMinimapHovering
+  }, [isMinimapHovering])
+
+  // Auto-hide only for phone+chat hover-leave of an unpinned peek (open is click-only — no hover-to-open)
   const checkAndHideMinimap = useCallback((relatedTarget?: HTMLElement | null) => {
-    // Don't hide if mode is 'shown' or 'hidden' (only hide in 'hover' mode)
-    if (minimapMode !== 'hover') {
+    // Phone + chat: auto-close unpinned peek when leaving the cluster
+    if (phoneAiOpen) {
+      if (aiDockMinimapPinned) return
+      if (minimapHideTimeoutRef.current) {
+        clearTimeout(minimapHideTimeoutRef.current)
+        minimapHideTimeoutRef.current = null
+      }
+      if (relatedTarget && relatedTarget instanceof HTMLElement) {
+        const minimapElement = relatedTarget.closest('[data-minimap-context]')
+        const toggleElement = relatedTarget.closest('[data-minimap-toggle-context]')
+        const pillElement = relatedTarget.closest('[data-minimap-pill-context]')
+        if (minimapElement || toggleElement || pillElement) return
+      }
+      minimapHideTimeoutRef.current = setTimeout(() => {
+        if (!isMinimapHoveringRef.current && !aiDockMinimapPinnedRef.current) {
+          setAiDockMinimapOpen(false)
+        }
+      }, 200)
       return
     }
 
-    // Clear any existing hide timeout
+    // Desktop: no hover-to-open — nothing to auto-hide on leave (click pins 'shown' / 'hidden')
     if (minimapHideTimeoutRef.current) {
       clearTimeout(minimapHideTimeoutRef.current)
       minimapHideTimeoutRef.current = null
     }
-
-    // Check if relatedTarget is still in any related area
-    if (relatedTarget && relatedTarget instanceof HTMLElement) {
-      const minimapElement = relatedTarget.closest('[data-minimap-context]')
-      const toggleElement = relatedTarget.closest('[data-minimap-toggle-context]')
-      const pillElement = relatedTarget.closest('[data-minimap-pill-context]')
-      const hoverZoneElement = relatedTarget.closest('[style*="zIndex: 9"]') // Hover zones have z-index 9
-
-      // If moving to another related area, don't hide
-      if (minimapElement || toggleElement || pillElement || hoverZoneElement) {
-        return
-      }
-    }
-
-    // Small delay to allow transition between areas
-    minimapHideTimeoutRef.current = setTimeout(() => {
-      // Re-check ref at timeout execution time
-      const isInAnyArea = isMinimapHoveringRef.current
-
-      // If minimap is shown and we're not in any related area, hide it
-      if (!isMinimapHidden && !isInAnyArea && minimapMode === 'hover') {
-        setIsMinimapHidden(true)
-        setIsMinimapManuallyHidden(false)
-        wasAutoHiddenRef.current = false
-      }
-    }, 200) // Slight delay to allow moving between areas
-  }, [minimapMode, isMinimapHidden])
+  }, [phoneAiOpen, aiDockMinimapPinned])
 
   // Close context menu when clicking outside
   useEffect(() => {
@@ -2174,222 +2188,39 @@ function BoardFlowInner({
     return () => window.clearTimeout(t)
   }, [])
 
-  // Calculate hover zone left position to align with minimap left edge
+  // Mobile mode for narrow viewports (phone layout). Do NOT auto-hide minimap here —
+  // minimap only auto-hides when phone chat opens (phoneAiOpen / aiDock peek).
   useEffect(() => {
-    const calculateHoverLeft = () => {
-      const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
-      // Try both selectors to find minimap
-      const minimapElement = document.querySelector('.minimap-custom-size') as HTMLElement ||
-        document.querySelector('.react-flow__minimap') as HTMLElement
+    const MINIMAP_AUTO_HIDE_THRESHOLD = 900 // Same width as phone / mobile layout
 
-      if (!reactFlowElement) return
-
-      // Get React Flow rect first (needed for all calculations)
-      const reactFlowRect = reactFlowElement.getBoundingClientRect()
-
-      // Pill centers on minimap/nav cluster (shared left = minimapLeft)
-      const reactFlowPaddingLeft = parseFloat(getComputedStyle(reactFlowElement).paddingLeft) || 0
-      const minimapWidth = 179
-      const clusterLeft = minimapLeft + reactFlowPaddingLeft
-      const centerPosition = clusterLeft + minimapWidth / 2
-      setMinimapPillCenter(centerPosition)
-
-      // Get actual minimap position if available, otherwise calculate
-      if (minimapElement) {
-        const minimapRect = minimapElement.getBoundingClientRect()
-        // Calculate left position relative to React Flow container
-        // Use the actual minimap's left edge position - move much farther left
-        // Check for SVG or content element inside minimap for more accurate position
-        const minimapSvg = minimapElement.querySelector('svg') as unknown as HTMLElement
-        const contentRect = minimapSvg ? minimapSvg.getBoundingClientRect() : minimapRect
-        const leftPosition = contentRect.left - reactFlowRect.left
-        setMinimapHoverLeft(leftPosition)
-        // Calculate center position for pill using actual minimap SVG/content center
-        // Use the SVG element inside the minimap for the true visual center
-        // (Note: centerPosition already calculated above, but update with actual position when minimap is visible)
-        if (minimapSvg) {
-          const svgRect = minimapSvg.getBoundingClientRect()
-          const svgCenterX = svgRect.left + svgRect.width / 2
-          const centerPosition = svgCenterX - reactFlowRect.left
-          setMinimapPillCenter(centerPosition)
-          // Calculate bottom position - center of pill height on prompt box top edge when jumped, otherwise use default
-          // Check if minimap has jumped (minimapBottom > 17 when jumped, 17 when default)
-          const reactFlowBottom = reactFlowRect.bottom
-          if (minimapBottom > 17) {
-            // Minimap has jumped - center pill on prompt box top edge instead of minimap bottom edge
-            const chatInputElement = document.querySelector('textarea[placeholder*="Type"], textarea[placeholder*="message"]') as HTMLElement
-            const promptBoxContainer = chatInputElement?.closest('[class*="pointer-events-auto"]') as HTMLElement
-            if (promptBoxContainer) {
-              const promptBoxRect = promptBoxContainer.getBoundingClientRect()
-              const promptBoxTop = promptBoxRect.top
-              // Pill is 6px tall, so center is 3px from bottom - position so center aligns with prompt box top edge
-              // bottom = distance from reactFlow bottom to (prompt box top - 3px) = reactFlowBottom - promptBoxTop - 3
-              const pillBottom = reactFlowBottom - promptBoxTop - 3
-              setMinimapPillBottom(pillBottom)
-              // Calculate hover area position - starts at minimap bottom, extends downward
-              const minimapBottomEdge = minimapRect.bottom
-              // Position hover area starting at minimap bottom - top edge at minimap bottom
-              // bottom CSS value: distance from ReactFlow bottom to minimap bottom
-              const hoverAreaBottomFromReactFlow = reactFlowBottom - minimapBottomEdge
-              // Height: distance from minimap bottom to just above prompt box
-              const hoverAreaHeight = minimapBottomEdge - promptBoxTop
-              setMinimapHoverBottom(hoverAreaBottomFromReactFlow)
-              setMinimapHoverHeight(hoverAreaHeight)
-            } else {
-              // Fallback to minimap bottom edge if prompt box not found
-              const minimapBottomEdge = minimapRect.bottom
-              const pillBottom = reactFlowBottom - minimapBottomEdge - 3
-              setMinimapPillBottom(pillBottom)
-              setMinimapHoverBottom(0)
-              setMinimapHoverHeight(28)
-            }
-          } else {
-            // Default position when not jumped
-            setMinimapPillBottom(8)
-            setMinimapHoverBottom(0)
-            setMinimapHoverHeight(28)
-          }
-        } else {
-          // Fallback to container center if SVG not found
-          // (Note: centerPosition already calculated above, but update with actual position when minimap is visible)
-          const minimapCenterX = minimapRect.left + minimapRect.width / 2
-          const centerPosition = minimapCenterX - reactFlowRect.left
-          setMinimapPillCenter(centerPosition)
-          // Calculate bottom position - center of pill height on prompt box top edge when jumped, otherwise use default
-          const reactFlowBottom = reactFlowRect.bottom
-          if (minimapBottom === 79) {
-            // Minimap has jumped - center pill on prompt box top edge instead of minimap bottom edge
-            const chatInputElement = document.querySelector('textarea[placeholder*="Type"], textarea[placeholder*="message"]') as HTMLElement
-            const promptBoxContainer = chatInputElement?.closest('[class*="pointer-events-auto"]') as HTMLElement
-            if (promptBoxContainer) {
-              const promptBoxRect = promptBoxContainer.getBoundingClientRect()
-              const promptBoxTop = promptBoxRect.top
-              // Pill is 6px tall, so center is 3px from bottom - position so center aligns with prompt box top edge
-              // bottom = distance from reactFlow bottom to (prompt box top - 3px) = reactFlowBottom - promptBoxTop - 3
-              const pillBottom = reactFlowBottom - promptBoxTop - 3
-              setMinimapPillBottom(pillBottom)
-            } else {
-              // Fallback to minimap bottom edge if prompt box not found
-              const minimapBottomEdge = minimapRect.bottom
-              const pillBottom = reactFlowBottom - minimapBottomEdge - 3
-              setMinimapPillBottom(pillBottom)
-            }
-          } else {
-            // Default position when not jumped
-            setMinimapPillBottom(8)
-          }
-        }
-      } else {
-        // Fallback calculation - calculate from container width
-        // (Note: centerPosition already calculated above, stays the same)
-        const minimapWidth = 179
-        // Hover zone aligns with shared minimap/nav left
-        const leftPosition = minimapLeft
-        setMinimapHoverLeft(leftPosition)
-        // When minimap is hidden, calculate bottom position
-        // If minimap was jumped (minimapBottom > 17), center pill on prompt box top edge
-        const reactFlowBottom = reactFlowRect.bottom
-        if (minimapBottom > 17) {
-          // Minimap was jumped - center pill on prompt box top edge
-          const chatInputElement = document.querySelector('textarea[placeholder*="Type"], textarea[placeholder*="message"]') as HTMLElement
-          const promptBoxContainer = chatInputElement?.closest('[class*="pointer-events-auto"]') as HTMLElement
-          if (promptBoxContainer) {
-            const promptBoxRect = promptBoxContainer.getBoundingClientRect()
-            const promptBoxTop = promptBoxRect.top
-            // Pill is 6px tall, so center is 3px from bottom - position so center aligns with prompt box top edge
-            // bottom = distance from reactFlow bottom to (prompt box top - 3px) = reactFlowBottom - promptBoxTop - 3
-            const pillBottom = reactFlowBottom - promptBoxTop - 3
-            setMinimapPillBottom(pillBottom)
-            // Calculate hover area position - between minimap bottom and prompt box top
-            // When minimap is hidden, nav sits at minimapBottom
-            const toggleBottomFromReactFlowBottom = minimapBottom
-            const toggleBottom = reactFlowBottom - toggleBottomFromReactFlowBottom
-            const hoverAreaTop = promptBoxTop // Hover area top is at prompt box top
-            const hoverAreaBottom = toggleBottom // Hover area bottom is at toggle bottom
-            const hoverAreaHeight = hoverAreaTop - hoverAreaBottom
-            const hoverAreaBottomFromReactFlow = reactFlowBottom - hoverAreaBottom
-            setMinimapHoverBottom(hoverAreaBottomFromReactFlow)
-            setMinimapHoverHeight(hoverAreaHeight)
-          } else {
-            // Fallback: calculate where toggle bottom edge would be
-            const toggleBottomFromReactFlowBottom = minimapBottom
-            const toggleBottom = reactFlowBottom - toggleBottomFromReactFlowBottom
-            const pillBottom = reactFlowBottom - toggleBottom - 3
-            setMinimapPillBottom(pillBottom)
-            setMinimapHoverBottom(0)
-            setMinimapHoverHeight(28)
-          }
-        } else {
-          // Default position when not jumped
-          setMinimapPillBottom(8)
-          setMinimapHoverBottom(0)
-          setMinimapHoverHeight(28)
-        }
-      }
-    }
-
-    calculateHoverLeft()
-    window.addEventListener('resize', calculateHoverLeft)
-
-    // Watch for React Flow container resize - this catches sidebar collapse/expand
-    // This ensures hover zone and toggle align correctly when sidebar collapses/expands
-    const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
-    const reactFlowResizeObserver = reactFlowElement ? new ResizeObserver(() => {
-      calculateHoverLeft()
-    }) : null
-    
-    if (reactFlowResizeObserver && reactFlowElement) {
-      reactFlowResizeObserver.observe(reactFlowElement)
-    }
-
-    // Also check periodically to catch minimap position changes
-    const interval = setInterval(calculateHoverLeft, 100)
-
-    return () => {
-      window.removeEventListener('resize', calculateHoverLeft)
-      if (reactFlowResizeObserver) reactFlowResizeObserver.disconnect()
-      clearInterval(interval)
-    }
-  }, [minimapLeft, isMinimapHidden, minimapBottom])
-
-  // Auto-hide minimap when window shrinks below threshold, auto-show when expanded (if not manually closed while expanded)
-  // Also triggers mobile mode for sidebar (sidebar hides, toggle moves to top bar)
-  useEffect(() => {
-    const MINIMAP_AUTO_HIDE_THRESHOLD = 900 // Window width threshold to auto-hide minimap
-
-    const checkMinimapAutoHide = () => {
+    const checkMobileMode = () => {
       const windowWidth = window.innerWidth
       const isAboveThreshold = windowWidth >= MINIMAP_AUTO_HIDE_THRESHOLD
       const wasAbove = wasAboveThresholdRef.current
 
       if (!isAboveThreshold && wasAbove) {
-        // Window just crossed BELOW threshold - auto-hide minimap and enable mobile mode
-        if (!isMinimapHidden) {
-          setIsMinimapHidden(true)
-          wasAutoHiddenRef.current = true // Mark as auto-hidden
-        }
-        setIsMobileMode(true) // Enable mobile mode - hides sidebar
+        setIsMobileMode(true) // Enter phone layout — keep minimap visibility as-is
       } else if (isAboveThreshold && !wasAbove) {
-        // Window just crossed ABOVE threshold - auto-show if it was auto-hidden or not manually hidden
+        // Leaving phone width: restore minimap if it was only width-auto-hidden historically
         if (isMinimapHidden && (wasAutoHiddenRef.current || !isMinimapManuallyHidden)) {
           setIsMinimapHidden(false)
           wasAutoHiddenRef.current = false
         }
-        setIsMobileMode(false) // Disable mobile mode - shows sidebar normally
+        setIsMobileMode(false)
       }
 
       wasAboveThresholdRef.current = isAboveThreshold
     }
 
-    // Initial check - set both ref and mobile mode state
+    // Initial check - set both ref and mobile mode state (no minimap hide)
     const initialAboveThreshold = window.innerWidth >= MINIMAP_AUTO_HIDE_THRESHOLD
     wasAboveThresholdRef.current = initialAboveThreshold
-    setIsMobileMode(!initialAboveThreshold) // Set initial mobile mode state
+    setIsMobileMode(!initialAboveThreshold)
 
-    window.addEventListener('resize', checkMinimapAutoHide)
+    window.addEventListener('resize', checkMobileMode)
 
     return () => {
-      window.removeEventListener('resize', checkMinimapAutoHide)
+      window.removeEventListener('resize', checkMobileMode)
     }
   }, [isMinimapHidden, isMinimapManuallyHidden, setIsMobileMode])
 
@@ -7877,15 +7708,20 @@ function BoardFlowInner({
          className="z-10 flex flex-col items-stretch"
          style={{
            position: 'absolute',
-           bottom: `${MINIMAP_BOTTOM + mapChromeBottomPad}px`,
+           bottom: `${
+             // Tighter to the AI dock when phone chat is open; keep default inset otherwise
+             (isMobileMode && isChatSidebarOpen ? 2 : MINIMAP_BOTTOM) + mapChromeBottomPad
+           }px`,
            left: `${mapChromeLeft}px`,
            width: 179,
+           gap: `${MINIMAP_NAV_GAP}px`, // Slight air between Free nav and minimap
            transition: 'none', // Instant with AI dock — no lag
          }}
        >
         {/* Free nav: Scroll/Zoom + zoom % + select/pan — always first in the stack */}
         <div
           data-minimap-toggle-context
+          className="relative"
           onContextMenu={(e) => {
             e.preventDefault()
             e.stopPropagation()
@@ -7905,10 +7741,48 @@ function BoardFlowInner({
             checkAndHideMinimap(e.relatedTarget as HTMLElement)
           }}
         >
+          {/* Minimap toggle on Free nav top-left only while minimap is closed */}
+          {(minimapCollapsed || isScrollingToBottom) && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              data-minimap-pill-context
+              className={cn(
+                // White chrome + shadow; overlays Free nav top-left when map closed
+                'absolute -top-1 -left-1 z-20 h-5 w-5 p-0 rounded-md border-0 shadow-sm bg-white dark:bg-[#0f0f0f] focus-visible:ring-0 focus-visible:ring-offset-0',
+                'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#171717]'
+              )}
+              title="Show minimap"
+              aria-label="Show minimap"
+              aria-pressed={false}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
+              }}
+              onClick={(e) => {
+                e.stopPropagation()
+                // Phone AI jumped: click when closed → pin open
+                if (phoneAiOpen) {
+                  setAiDockMinimapOpen(true)
+                  setAiDockMinimapPinned(true)
+                  aiDockMinimapPinnedRef.current = true
+                  return
+                }
+                setMinimapMode('shown')
+                setIsMinimapHidden(false)
+                setIsMinimapManuallyHidden(false)
+                wasAutoHiddenRef.current = false
+              }}
+            >
+              <MapIcon className="h-2.5 w-2.5" />
+            </Button>
+          )}
           <div
             className={cn(
-              // Board fill — no card chrome; fully rounded (minimap is a separate rounded stack below)
-              "bg-gray-50 dark:bg-[#0f0f0f] p-1 flex items-center gap-1 relative min-w-[179px] border-0 shadow-none rounded-lg"
+              // White chrome + light shadow (distinct from board fill)
+              'bg-white dark:bg-[#0f0f0f] p-1 flex items-center gap-1 relative min-w-[179px] border-0 shadow-sm rounded-lg'
             )}
           >
             <div className="flex-[1.25] basis-0 min-w-0 flex items-center justify-center">
@@ -7956,6 +7830,7 @@ function BoardFlowInner({
         {!minimapCollapsed && !isScrollingToBottom && (
           <div
             data-minimap-context
+            className="relative"
             onContextMenu={(e) => {
               e.preventDefault()
               e.stopPropagation()
@@ -7982,6 +7857,42 @@ function BoardFlowInner({
               pointerEvents: 'auto',
             }}
           >
+            {/* Minimap toggle — top-left of map while open */}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              data-minimap-pill-context
+              className={cn(
+                // White chrome + shadow; overlays minimap top-left when map open
+                'absolute -top-1 -left-1 z-20 h-5 w-5 p-0 rounded-md border-0 shadow-sm bg-white dark:bg-[#0f0f0f] focus-visible:ring-0 focus-visible:ring-offset-0',
+                'text-gray-900 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#171717]'
+              )}
+              title="Hide minimap"
+              aria-label="Hide minimap"
+              aria-pressed={true}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
+              }}
+              onClick={(e) => {
+                e.stopPropagation()
+                // Phone AI jumped: click when pinned → close
+                if (phoneAiOpen) {
+                  setAiDockMinimapOpen(false)
+                  setAiDockMinimapPinned(false)
+                  aiDockMinimapPinnedRef.current = false
+                  return
+                }
+                setMinimapMode('hidden')
+                setIsMinimapHidden(true)
+                setIsMinimapManuallyHidden(true)
+                wasAutoHiddenRef.current = false
+              }}
+            >
+              <MapIcon className="h-2.5 w-2.5" />
+            </Button>
             <MiniMap
               position="bottom-left"
               nodeColor={(node) => {
@@ -7994,7 +7905,7 @@ function BoardFlowInner({
               zoomable={true}
               className="minimap-custom-size shadow-sm"
               style={{
-                // All corners rounded — Free nav is in-flow above, so tops are not covered
+                // Same 8px radius on all corners (Free nav sits above with a gap — tops stay visible)
                 borderRadius: '8px',
                 overflow: 'hidden',
                 cursor: 'pointer',
@@ -8010,82 +7921,27 @@ function BoardFlowInner({
         )}
        </div>
 
-      {/* Hover zone for minimap collapse pill - limited to minimap width (179px) */}
-      {!minimapCollapsed && (
-        // eslint-disable-next-line react/jsx-no-duplicate-props
-        <div
-          style={{
-            position: 'absolute',
-            pointerEvents: 'auto',
-            bottom: minimapBottom > 17 ? `${minimapHoverBottom}px` : '0px',
-            left: `${minimapHoverLeft}px`,
-            width: '179px',
-            height: minimapBottom > 17 ? `${minimapHoverHeight}px` : '28px',
-            zIndex: 9,
-          }}
-          onMouseEnter={() => {
-            setIsPillHoverAreaHovering(true)
-            setIsMinimapHovering(true)
-            isMinimapHoveringRef.current = true
-            if (minimapHideTimeoutRef.current) {
-              clearTimeout(minimapHideTimeoutRef.current)
-              minimapHideTimeoutRef.current = null
-            }
-          }}
-          onMouseLeave={(e) => {
-            setIsPillHoverAreaHovering(false)
-            setIsMinimapHovering(false)
-            isMinimapHoveringRef.current = false
-            checkAndHideMinimap(e.relatedTarget as HTMLElement)
-          }}
-        />
-      )}
-      {minimapCollapsed && (
-        // eslint-disable-next-line react/jsx-no-duplicate-props
-        <div
-          className="absolute pointer-events-auto"
-          style={{
-            bottom: `${mapChromeBottomPad}px`,
-            left: `${mapChromeLeft}px`,
-            width: '179px',
-            height: `${minimapPillBottom + 20}px`,
-            zIndex: 9,
-          }}
-          onMouseEnter={() => {
-            setIsPillHoverAreaHovering(true)
-            setIsMinimapHovering(true)
-            isMinimapHoveringRef.current = true
-            if (minimapHideTimeoutRef.current) {
-              clearTimeout(minimapHideTimeoutRef.current)
-              minimapHideTimeoutRef.current = null
-            }
-          }}
-          onMouseLeave={(e) => {
-            setIsPillHoverAreaHovering(false)
-            setIsMinimapHovering(false)
-            isMinimapHoveringRef.current = false
-            checkAndHideMinimap(e.relatedTarget as HTMLElement)
-          }}
-        />
-      )}
       </>
       )}
 
       {/* Brand logo — opens chat; hide while chat is open (desktop column + phone dock) */}
+      {/* Omitted in embedded page-preview boards (chrome belongs to the parent map) */}
       {!embedded && !isChatSidebarOpen && (
         <button
           type="button"
           data-chat-sidebar-toggle
           onClick={() => toggleChatSidebar()}
-          className="z-10 flex items-center justify-center bg-transparent opacity-80 hover:opacity-100 transition-opacity p-0 border-0 overflow-visible"
+          className="z-40 flex items-center justify-center bg-transparent opacity-80 hover:opacity-100 transition-opacity p-0 border-0 overflow-visible"
           style={{
             position: 'absolute',
             bottom: `${MINIMAP_BOTTOM + mapChromeBottomPad}px`,
             right: `${BRAND_RIGHT}px`,
             transition: 'none',
+            // Above phone map-dock shell (z-30) so taps always hit the brand when closed
+            pointerEvents: 'auto',
           }}
-          title={isChatSidebarOpen ? 'Hide chat' : 'Show chat'}
-          aria-label={isChatSidebarOpen ? 'Hide chat sidebar' : 'Show chat sidebar'}
+          title="Show chat"
+          aria-label="Show chat sidebar"
         >
           <ThinktableBrandMark drawingUrl={logoDrawing} size={42} />
         </button>
@@ -8184,86 +8040,6 @@ function BoardFlowInner({
           pointerEvents: 'none', // Programmatic focus only — don’t steal map taps
         }}
       />
-
-      {/* Minimap pill + Free nav — host map only (hidden in page previews) */}
-      {!embedded && (
-      <div
-        data-minimap-pill-context
-        onContextMenu={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
-        }}
-        onClick={() => {
-          // Toggle between 'shown' and 'hidden' by default
-          // If in 'hover' mode, clicking pill changes it to 'shown'
-          if (minimapMode === 'shown') {
-            setMinimapMode('hidden')
-            setIsMinimapHidden(true) // Trigger fade out animation
-            setIsMinimapManuallyHidden(true)
-            wasAutoHiddenRef.current = false
-          } else if (minimapMode === 'hover') {
-            setMinimapMode('shown') // If in hover mode, click makes it shown
-            setIsMinimapHidden(false) // Trigger fade in animation
-            setIsMinimapManuallyHidden(false)
-            wasAutoHiddenRef.current = false
-          } else {
-            // If mode is 'hidden', switch to 'shown' and show minimap with animation
-            setMinimapMode('shown')
-            setIsMinimapHidden(false)
-            setIsMinimapManuallyHidden(false)
-            wasAutoHiddenRef.current = false
-          }
-        }}
-        onMouseEnter={() => {
-          // Track pill hover area specifically
-          setIsPillHoverAreaHovering(true)
-          setIsMinimapHovering(true)
-          isMinimapHoveringRef.current = true
-          // Cancel any pending hide timeout
-          if (minimapHideTimeoutRef.current) {
-            clearTimeout(minimapHideTimeoutRef.current)
-            minimapHideTimeoutRef.current = null
-          }
-          // Only pill hover shows the minimap in hover mode
-          if (isMinimapHidden && minimapMode === 'hover') {
-            setTimeout(() => {
-              if (isMinimapHidden && minimapMode === 'hover') {
-                setIsMinimapHidden(false)
-                setIsMinimapManuallyHidden(false)
-                wasAutoHiddenRef.current = false
-              }
-            }, 100) // 100ms delay - quick response
-          }
-        }}
-        onMouseLeave={(e) => {
-          setIsPillHoverAreaHovering(false)
-          setIsMinimapHovering(false)
-          isMinimapHoveringRef.current = false
-          // Check if minimap should hide after leaving pill
-          checkAndHideMinimap(e.relatedTarget as HTMLElement)
-        }}
-        className={cn(
-          'absolute w-12 h-1.5 rounded-full cursor-pointer transition-all duration-200 bg-gray-300',
-          // Show pill only when hovering over pill hover area (not minimap or toggle)
-          isPillHoverAreaHovering ? 'opacity-100' : 'opacity-0'
-        )}
-        style={{
-          // Center pill vertically on minimap bottom edge (dynamically calculated) + AI dock lift
-          bottom: `${minimapPillBottom + mapChromeBottomPad}px`,
-          // Center on minimap; when AI dock open, center on Free nav which is flush with chat left
-          left: `${
-            isMobileMode && isChatSidebarOpen && aiMapDockLeftPx != null
-              ? aiMapDockLeftPx + 179 / 2
-              : minimapPillCenter
-          }px`,
-          transform: 'translateX(-50%)', // Center the pill on the calculated center position
-          zIndex: 50, // Higher than toggle's z-10 to ensure pill appears above
-          transition: 'none', // Snap with Free nav / AI dock — no lag
-        }}
-        title={minimapCollapsed ? 'Show minimap' : 'Hide minimap'}
-      />
-      )}
 
       {/* Block actions menu — handle click or right-click on a node */}
       {rightClickedNode && reactFlowInstance && (

@@ -5469,13 +5469,14 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
           type="button"
           data-chat-sidebar-toggle
           onClick={() => toggleChatSidebar()}
-          className="absolute z-10 flex items-center justify-center bg-transparent opacity-80 hover:opacity-100 transition-opacity p-0 border-0 overflow-visible"
+          className="absolute z-40 flex items-center justify-center bg-transparent opacity-80 hover:opacity-100 transition-opacity p-0 border-0 overflow-visible"
           style={{
             bottom: '12px',
             right: '12px',
+            pointerEvents: 'auto', // Above closed phone map-dock (z-30)
           }}
-          title={isChatSidebarOpen ? 'Hide chat' : 'Show chat'}
-          aria-label={isChatSidebarOpen ? 'Hide chat sidebar' : 'Show chat sidebar'}
+          title="Show chat"
+          aria-label="Show chat sidebar"
         >
           <ThinktableBrandMark drawingUrl={logoDrawing} size={42} />
         </button>
