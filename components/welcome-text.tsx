@@ -111,8 +111,10 @@ export function WelcomeText() {
 
   return (
     <div 
-      className="absolute inset-0 flex items-center pointer-events-none z-[5]"
+      className="absolute inset-0 flex items-center pointer-events-none z-[5] select-none"
       style={{
+        WebkitUserSelect: 'none',
+        WebkitTouchCallout: 'none',
         ...(isPromptBoxCentered 
           ? { 
               left: '50%', 
@@ -128,11 +130,11 @@ export function WelcomeText() {
         ),
       }}
     >
-      <div className="text-center w-full">
-        <h1 className="text-4xl font-bold text-gray-900 dark:text-gray-100 mb-4">
+      <div className="text-center w-full select-none">
+        <h1 className="text-4xl font-bold text-gray-900 dark:text-gray-100 mb-4 select-none">
           {phrases[currentPhraseIndex]}
         </h1>
-        <p className="text-xl text-gray-600 dark:text-gray-400">
+        <p className="text-xl text-gray-600 dark:text-gray-400 select-none">
           Start a conversation to create your first board
         </p>
       </div>

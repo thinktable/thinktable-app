@@ -170,6 +170,110 @@
   }
 }
 
+/* Frame load shells — solid box when empty; text-line stubs when content has visible text */
+@keyframes tt-frame-shimmer-sweep {
+  0% {
+    background-position: 100% 0; /* Sweep starts off the right */
+  }
+  100% {
+    background-position: -100% 0; /* Sweep exits left */
+  }
+}
+
+.tt-frame-shimmer {
+  width: 100%;
+  height: 100%;
+  min-width: 8rem; /* Keep unresized empty frames from collapsing to zero */
+  min-height: 2.5rem; /* ~one empty frame row */
+  border-radius: 4px; /* Soft frame silhouette */
+  pointer-events: none; /* Loading only — never steal drag/select */
+  background: linear-gradient(
+    90deg,
+    #e5e7eb 0%,
+    #e5e7eb 35%,
+    #f3f4f6 50%,
+    #e5e7eb 65%,
+    #e5e7eb 100%
+  );
+  background-size: 200% 100%;
+  animation: tt-frame-shimmer-sweep 1.4s ease-in-out infinite;
+}
+
+.dark .tt-frame-shimmer {
+  background: linear-gradient(
+    90deg,
+    #2a2a2a 0%,
+    #2a2a2a 35%,
+    #3a3a3a 50%,
+    #2a2a2a 65%,
+    #2a2a2a 100%
+  );
+  background-size: 200% 100%;
+}
+
+/* Text-content frames: placeholder lines (not a solid box) */
+.tt-frame-shimmer-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55em; /* ≈ TipTap block line gap */
+  width: 100%;
+  min-width: 8rem;
+  padding: 0.15em 0;
+  pointer-events: none;
+}
+
+.tt-frame-shimmer-line {
+  height: 0.85em; /* Roughly one text line */
+  max-width: 100%;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    #e5e7eb 0%,
+    #e5e7eb 35%,
+    #f3f4f6 50%,
+    #e5e7eb 65%,
+    #e5e7eb 100%
+  );
+  background-size: 200% 100%;
+  animation: tt-frame-shimmer-sweep 1.4s ease-in-out infinite;
+}
+
+.tt-frame-shimmer-line:nth-child(1) {
+  width: 92%;
+}
+.tt-frame-shimmer-line:nth-child(2) {
+  width: 68%;
+  animation-delay: 0.08s;
+}
+.tt-frame-shimmer-line:nth-child(3) {
+  width: 80%;
+  animation-delay: 0.16s;
+}
+.tt-frame-shimmer-line:nth-child(4) {
+  width: 54%;
+  animation-delay: 0.24s;
+}
+.tt-frame-shimmer-line:nth-child(5) {
+  width: 74%;
+  animation-delay: 0.32s;
+}
+.tt-frame-shimmer-line:nth-child(n + 6) {
+  width: 60%;
+  animation-delay: 0.4s;
+}
+
+.dark .tt-frame-shimmer-line {
+  background: linear-gradient(
+    90deg,
+    #2a2a2a 0%,
+    #2a2a2a 35%,
+    #3a3a3a 50%,
+    #2a2a2a 65%,
+    #2a2a2a 100%
+  );
+  background-size: 200% 100%;
+}
+
 /* Shimmer effect - applies to text elements within shimmer container */
 /* Targets all paragraph elements and spans inside the shimmer wrapper */
 /* Uses explicit colors (gray-900/gray-500) to ensure proper text visibility */
@@ -761,6 +865,47 @@ span[data-added="true"] {
   }
   .react-flow.tt-map-pan-tool .react-flow__pane:active {
     cursor: grabbing;
+  }
+
+  /* Board chrome: never select pane / overlay text on long-press (iOS callout) */
+  .react-flow__pane,
+  .react-flow__renderer,
+  .react-flow__viewport,
+  .react-flow__container {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  /* TipTap body text stays selectable for editing — only while the frame is selected */
+  .react-flow .ProseMirror,
+  .react-flow .ProseMirror * {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  /* Unselected frame: never start iOS text loupe / Copy bar (long-press → frame menu) */
+  .tt-frame-unselected .ProseMirror,
+  .tt-frame-unselected .ProseMirror * {
+    -webkit-user-select: none !important;
+    user-select: none !important;
+    -webkit-touch-callout: none !important;
+    cursor: grab !important; /* Not I-bar — press+drag moves the frame */
+  }
+  .tt-frame-unselected .ProseMirror:active,
+  .tt-frame-unselected .ProseMirror:active * {
+    cursor: grabbing !important;
+  }
+
+  /* Phone long-press armed: no browser text selection / hide RF marquee flash */
+  .tt-long-press-armed,
+  .tt-long-press-armed * {
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    -webkit-touch-callout: none !important;
+  }
+  .tt-long-press-armed .react-flow__nodesselection,
+  .tt-long-press-armed .react-flow__nodesselection-rect,
+  .tt-long-press-armed .react-flow__selection {
+    display: none !important;
   }
 
   /* Override React Flow's default positioning for top/bottom handles to ensure half-on-half-off */

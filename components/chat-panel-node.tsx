@@ -39,6 +39,11 @@ import { findEditorBlockAtClientY } from '@/lib/tiptap/block-selection' // Click
 import { deleteLinkedBoardForBlock, getLinkedBoardId, isBlockContentEmpty, isBlockMeta, isBoardBodyMeta, readNotionConnection, type NotionSyncMode } from '@/lib/blocks' // Block detection + Notion connection
 import { NotionMarkIcon } from '@/components/notion-mark-icon' // Logo at bottom of a Notion-connected frame
 import { createPortal } from 'react-dom'
+import {
+  FrameContentShimmer,
+  frameHasVisibleText,
+  shimmerBarCountFromHtml,
+} from '@/components/frame-content-shimmer' // Frame vs text-line load shell while TipTap mounts
 import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Strip blank lines on frame deselect
 import { setAiTextSelection } from '@/lib/ai/selection-bridge' // Live highlighted-text pills in AI composer
 import { BlockActionsMenu, type BoardInTarget } from '@/components/block-actions-menu'
@@ -509,10 +514,11 @@ function TipTapContent({
       handleDOMEvents: {
         mousedown: (view: any, event: Event) => {
           const mouseEvent = event as MouseEvent
-          // Unselected frame: do not place caret / select text — let RF select + drag the frame
+          // Unselected: editor is already editable:false — do NOT preventDefault here
+          // (that aborted RF/d3 frame drag on press+move). Only suppress the follow-up I-bar.
           if (!isPanelSelectedRef.current) {
             selectOnlyClickRef.current = true // Suppress I-bar on the matching click
-            return true // Prevent ProseMirror default; do not stopPropagation
+            return false
           }
           selectOnlyClickRef.current = false
           // Selected frame: keep pointer inside the editor so RF does not start a frame drag
@@ -570,7 +576,8 @@ function TipTapContent({
   const editor = useEditor({
     extensions,
     content,
-    editable: canEdit, // Shared view/comment cannot type; edit|owner can
+    // Unselected frames are not contenteditable — iOS long-press opens the frame menu, not text select
+    editable: canEdit && !!isPanelSelected,
     immediatelyRender: false, // Prevent SSR hydration mismatches
     shouldRerenderOnTransaction: false, // Avoid parent re-render storms; NodeViews update themselves
     editorProps,
@@ -601,11 +608,21 @@ function TipTapContent({
     },
   })
 
-  // Keep TipTap editable in sync when share role changes (useEditor option is mount-time)
+  // Editable only when this frame is selected (and share role allows). Unselected = no iOS text loupe.
   useEffect(() => {
     if (!editor || editor.isDestroyed) return
-    if (editor.isEditable !== canEdit) editor.setEditable(canEdit)
-  }, [editor, canEdit])
+    const next = canEdit && !!isPanelSelected
+    if (editor.isEditable !== next) editor.setEditable(next)
+    // Drop any caret / native selection when the frame becomes unselected
+    if (!next && editor.view?.dom) {
+      try {
+        editor.commands.blur()
+        window.getSelection()?.removeAllRanges()
+      } catch {
+        // ignore
+      }
+    }
+  }, [editor, canEdit, isPanelSelected])
 
   // Register editor on mount and cleanup on unmount
   useEffect(() => {
@@ -927,11 +944,14 @@ function TipTapContent({
     }, 0)
   }, [editor, isPanelSelected])
 
-  if (!editor) return null
-
   // Extract 'inline' from className if present to apply inline-block display
   const isInline = className?.includes('inline')
   const otherClasses = className?.replace(/\binline\b/g, '').trim()
+  // Only while TipTap is actually mounting (immediatelyRender: false) — drop as soon as editor exists
+  const showFrameShimmer = !!enableBlockHandles && !isFlashcard && !editor
+  const shimmerHasText = frameHasVisibleText(content) // Text lines vs solid box (empty / spaces)
+
+  if (!editor && (!enableBlockHandles || isFlashcard)) return null // Chat/flashcard keep prior null mount
 
   return (
     <div
@@ -940,6 +960,7 @@ function TipTapContent({
         'relative overflow-visible w-full', // Full frame content width so short/empty blocks stretch
         // Unselected → grab (drag frame); selected → text caret; flashcards keep pointer
         isFlashcard ? 'cursor-pointer' : isPanelSelected ? 'cursor-text' : 'cursor-grab',
+        !isPanelSelected && 'tt-frame-unselected', // CSS: no text select / callout until selected
         isInline && 'inline-block',
         otherClasses
       )}
@@ -950,29 +971,40 @@ function TipTapContent({
       }}
     >
       {/* Notion-style format popup — outside highlight edge, stays open with selection */}
-      <SelectionFormatPopupAnchor editor={editor} containerRef={containerRef} />
+      {editor ? <SelectionFormatPopupAnchor editor={editor} containerRef={containerRef} /> : null}
 
       {/* Apply shimmer animation to prompt text when response is loading (not for flashcards) */}
       <div
         className={cn(
           'relative w-full', // Match frame width — gutter + editor share one row
-          enableBlockHandles && 'pl-6', // Gutter for ⋮⋮ only (add-block is the between-line)
+          enableBlockHandles && !showFrameShimmer && 'pl-6', // Real blocks need ⋮⋮ gutter; shimmer handles its own
           isLoading && !isFlashcard && 'shimmer'
         )}
       >
-        <TipTapBlockHandles
-          editor={editor}
-          enabled={enableBlockHandles && !isFlashcard}
-          isPanelSelected={!!isPanelSelected} // Frame must be selected (and not mid-drag) before ⋮⋮ can arm a block
-          hostNodeId={hostNodeId}
-          conversationId={conversationId}
-          boardInTargets={boardInTargets}
-          onPageTurnInto={onPageTurnInto}
-          notionConnected={notionConnected} // Notion-connected frames get a slimmer block ⋮⋮ menu
-        />
-        <EditorContent editor={editor} className="block w-full" />
+        {showFrameShimmer ? (
+          <FrameContentShimmer
+            hasText={shimmerHasText}
+            barCount={shimmerBarCountFromHtml(content)}
+            withGutter={shimmerHasText}
+            className={shimmerHasText ? undefined : 'min-h-[2.5rem]'}
+          />
+        ) : editor ? (
+          <>
+            <TipTapBlockHandles
+              editor={editor}
+              enabled={enableBlockHandles && !isFlashcard}
+              isPanelSelected={!!isPanelSelected} // Frame must be selected (and not mid-drag) before ⋮⋮ can arm a block
+              hostNodeId={hostNodeId}
+              conversationId={conversationId}
+              boardInTargets={boardInTargets}
+              onPageTurnInto={onPageTurnInto}
+              notionConnected={notionConnected} // Notion-connected frames get a slimmer block ⋮⋮ menu
+            />
+            <EditorContent editor={editor} className="block w-full" />
+          </>
+        ) : null}
         {/* Notion connection mark: bottom of frame, left-aligned with block text; own ⋮⋮ */}
-        {notionConnected && enableBlockHandles && !isFlashcard && (
+        {notionConnected && enableBlockHandles && !isFlashcard && !showFrameShimmer && (
           <div
             className="relative mt-0.5 flex h-7 items-center"
             data-tt-notion-footer

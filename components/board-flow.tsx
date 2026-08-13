@@ -53,6 +53,11 @@ import {
   ThreadActionsMenu,
   type ThreadActionId,
 } from './thread-actions-menu' // Thread click menu (same chrome as handle menu)
+import {
+  BoardActionsMenu,
+  type BoardActionId,
+} from './board-actions-menu' // Empty-board right-click menu
+import { createLongPressController } from '@/lib/long-press' // Phone long-press → context menus
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useRef, useMemo, useState, useCallback } from 'react'
@@ -127,6 +132,15 @@ import { usePlaceholderManager } from './dynamic-layouting/hooks/usePlaceholderM
 // Placeholder node and edge components
 import PlaceholderNode from './dynamic-layouting/PlaceholderNode'
 import PlaceholderEdge from './dynamic-layouting/PlaceholderEdge'
+import { FrameShimmerNode } from './frame-shimmer-node' // Layout-cached shells while messages fetch
+import {
+  type FrameLayoutCache,
+  frameHasVisibleText,
+  shimmerBarCountFromHtml,
+  readFrameLayoutCache,
+  writeFrameLayoutCache,
+  patchFrameLayoutEntry,
+} from '@/components/frame-content-shimmer' // Shared shimmer + layout cache helpers
 
 interface Message {
   id: string
@@ -392,6 +406,7 @@ const nodeTypes = Object.freeze({
   freehand: FreehandNode, // Freehand drawing node type
   shape: ShapeNode, // Shape node type
   placeholder: PlaceholderNode, // Placeholder node for dynamic layouting
+  frameShimmer: FrameShimmerNode, // Layout-cached shell while messages fetch
 })
 
 // Define edgeTypes outside component as a module-level constant
@@ -1415,8 +1430,10 @@ function BoardFlowInner({
     reloadTopBarPrefs()
   }, [conversationId, setLayoutMode, setIsDeterministicMapping, setLineStyle, setArrowDirection])
   const selectedNodeIdRef = useRef<string | null>(null) // Track selected node ID
-  // Frame ids that just finished a drag — ignore onNodeClick so drag never selects
+  // Frame ids that just finished a real move — ignore onNodeClick so drag never selects
   const justDraggedFrameRef = useRef<Set<string>>(new Set())
+  // Position at drag-start — distinguish tap (RF fires drag start at threshold 0) from a real move
+  const frameDragOriginRef = useRef<{ id: string; x: number; y: number } | null>(null)
   // Track selected node IDs for restoring selection after pane click (when zoom !== 100%)
   const selectedNodeIdsRef = useRef<string[]>([])
   // Track when we're restoring selection from map click (to prevent nav mode exit)
@@ -1581,6 +1598,11 @@ function BoardFlowInner({
   const [edgePopupPosition, setEdgePopupPosition] = useState({ x: 0, y: 0 }) // Position for edge popup
   const [rightClickedNode, setRightClickedNode] = useState<Node<ChatPanelNodeData> | null>(null) // Track right-clicked node for popup
   const [nodePopupPosition, setNodePopupPosition] = useState({ x: 0, y: 0 }) // Position for node popup
+  const [boardMenuPosition, setBoardMenuPosition] = useState<{ x: number; y: number } | null>(null) // Empty-board right-click menu
+  const boardClickFlowRef = useRef<{ x: number; y: number } | null>(null) // Flow coords for Add frame / zoom-to-100%
+  const nodesRef = useRef(nodes) // Long-press lookups without stale closures
+  nodesRef.current = nodes
+  const longPressRef = useRef<ReturnType<typeof createLongPressController> | null>(null) // Phone long-press controller
 
   // Keep the target block highlighted while its actions menu is open
   useEffect(() => {
@@ -1871,9 +1893,14 @@ function BoardFlowInner({
     }
 
     const handleContextMenu = (e: MouseEvent) => {
-      // Close if right-clicking elsewhere
+      // Close if right-clicking elsewhere (keep open when re-clicking map chrome or the menu)
       const target = e.target as HTMLElement
-      if (!target.closest('[data-minimap-context]') && !target.closest('[data-minimap-pill-context]') && !target.closest('[data-minimap-toggle-context]')) {
+      if (
+        !target.closest('[data-minimap-context]') &&
+        !target.closest('[data-minimap-pill-context]') &&
+        !target.closest('[data-minimap-toggle-context]') &&
+        !target.closest('[data-map-menu]')
+      ) {
         setMinimapContextMenuPosition(null)
       }
     }
@@ -1897,7 +1924,11 @@ function BoardFlowInner({
   }, [])
 
   // Fetch messages if conversationId is provided
-  const { data: messages = [], refetch: refetchMessages } = useQuery({
+  const {
+    data: messages = [],
+    refetch: refetchMessages,
+    isPending: isMessagesPending,
+  } = useQuery({
     // Embed uses lean fetch; still share cache with full board when possible for instant paint
     queryKey: ['messages-for-panels', conversationId, embedded ? 'embed' : 'full'],
     queryFn: () =>
@@ -1930,6 +1961,36 @@ function BoardFlowInner({
       return previousData
     },
   })
+
+  // Cold load: paint shimmer shells at last-visit positions so fitView has real places to focus
+  useEffect(() => {
+    if (!conversationId || !isMessagesPending || messages.length > 0) return
+    const layout = readFrameLayoutCache(conversationId)
+    const entries = Object.entries(layout)
+    if (entries.length === 0) return // First visit — nothing to place until messages arrive
+    setNodes(
+      entries.map(([id, entry]) => ({
+        id, // Same ids as real chatPanels so the swap is stable
+        type: 'frameShimmer' as const,
+        position: { x: entry.x, y: entry.y },
+        data: {
+          width: entry.width,
+          height: entry.height,
+          hasText: entry.hasText,
+          barCount: entry.barCount,
+        },
+        draggable: false,
+        selectable: false,
+        // Explicit size so RF fitView / AABB use the cached box
+        style: {
+          width: entry.width || 220,
+          height: entry.height || 72,
+        },
+        width: entry.width || 220,
+        height: entry.height || 72,
+      }))
+    )
+  }, [conversationId, isMessagesPending, messages.length, setNodes])
 
   // Refetch frames when AI edit session saves/discards/applies pending
   useEffect(() => {
@@ -3843,13 +3904,10 @@ function BoardFlowInner({
     if (!conversationId || viewMode !== 'canvas') return
 
     try {
-      const saved = localStorage.getItem(`thinktable-canvas-positions-${conversationId}`)
-      if (saved) {
-        const positions = JSON.parse(saved) as Record<string, { x: number; y: number }>
-        Object.entries(positions).forEach(([nodeId, pos]) => {
-          originalPositionsRef.current.set(nodeId, pos)
-        })
-      }
+      const layout = readFrameLayoutCache(conversationId)
+      Object.entries(layout).forEach(([nodeId, pos]) => {
+        originalPositionsRef.current.set(nodeId, { x: pos.x, y: pos.y })
+      })
     } catch (error) {
       console.error('Failed to load canvas positions from localStorage:', error)
     }
@@ -3869,11 +3927,37 @@ function BoardFlowInner({
     savePositionsTimeoutRef.current = setTimeout(() => {
       try {
         if (!nodes || !Array.isArray(nodes)) return
-        const positions: Record<string, { x: number; y: number }> = {}
+        const layout: FrameLayoutCache = {}
         nodes.forEach((node) => {
-          positions[node.id] = absFlowPosition(node, nodes) // Always page-absolute (grouped nodes are relative in RF)
+          if (node.type === 'frameShimmer' || node.type === 'placeholder') return // Don’t persist load shells
+          if (node.type !== 'chatPanel' && node.type !== 'blockGroup') return // Frames (+ legacy groups) only
+          const abs = absFlowPosition(node, nodes) // Always page-absolute (grouped nodes are relative in RF)
+          const data = node.data as ChatPanelNodeData | undefined
+          const html = data?.promptMessage?.content
+          const hasText = frameHasVisibleText(html)
+          const w =
+            typeof node.width === 'number'
+              ? node.width
+              : typeof (node.style as { width?: number } | undefined)?.width === 'number'
+                ? (node.style as { width: number }).width
+                : undefined
+          const h =
+            typeof node.height === 'number'
+              ? node.height
+              : typeof (node.style as { height?: number } | undefined)?.height === 'number'
+                ? (node.style as { height: number }).height
+                : undefined
+          layout[node.id] = {
+            x: abs.x,
+            y: abs.y,
+            width: w,
+            height: h,
+            hasText,
+            barCount: hasText ? shimmerBarCountFromHtml(html) : undefined,
+          }
         })
-        localStorage.setItem(`thinktable-canvas-positions-${conversationId}`, JSON.stringify(positions))
+        if (Object.keys(layout).length === 0) return
+        writeFrameLayoutCache(conversationId, layout)
       } catch (error) {
         console.error('Failed to save canvas positions to localStorage:', error)
       }
@@ -3917,8 +4001,9 @@ function BoardFlowInner({
     const messagesKeyToUse = messagesToUse.map(m => `${m.id}:${m.role}`).join(',')
     console.log('🔄 BoardFlow: Creating panels from messages, count:', messagesToUse.length, 'messagesKey:', messagesKeyToUse, 'prevKey:', prevMessagesKeyRef.current)
 
-    // Skip if messages haven't actually changed
-    if (messagesKeyToUse === prevMessagesKeyRef.current) {
+    // Skip if messages haven't actually changed (but always rebuild if load shells are still up)
+    const hasShimmerShells = (nodes || []).some((n) => n.type === 'frameShimmer')
+    if (messagesKeyToUse === prevMessagesKeyRef.current && !hasShimmerShells) {
       console.log('🔄 BoardFlow: Messages key unchanged, skipping panel creation')
       return
     }
@@ -4022,14 +4107,10 @@ function BoardFlowInner({
         // This ensures positions are preserved on reload regardless of view mode
         if (!storedPos && conversationId && typeof window !== 'undefined') {
           try {
-            const saved = localStorage.getItem(`thinktable-canvas-positions-${conversationId}`)
-            if (saved) {
-              const positions = JSON.parse(saved) as Record<string, { x: number; y: number }>
-              const savedPos = positions[baseNodeId]
-              if (savedPos) {
-                storedPos = savedPos
-                originalPositionsRef.current.set(baseNodeId, savedPos) // Cache in memory
-              }
+            const savedPos = readFrameLayoutCache(conversationId)[baseNodeId]
+            if (savedPos) {
+              storedPos = { x: savedPos.x, y: savedPos.y }
+              originalPositionsRef.current.set(baseNodeId, storedPos) // Cache in memory
             }
           } catch (error) {
             console.error('Failed to load position from localStorage:', error)
@@ -4359,6 +4440,8 @@ function BoardFlowInner({
         if (!existingNodeIds.has(n.id)) return false // Not an existing node
         const existingNode = nodes.find(existing => existing.id === n.id)
         if (!existingNode) return false
+        // Load shells share real frame ids — always swap them for chatPanel
+        if (existingNode.type === 'frameShimmer') return true
         // Update if response changed (e.g., response was added or updated)
         const existingResponseId = existingNode.data?.responseMessage?.id
         const newResponseId = n.data?.responseMessage?.id
@@ -4370,16 +4453,28 @@ function BoardFlowInner({
           n.type === 'blockGroup'
         return existingResponseId !== newResponseId || groupChanged
       })
-      const unchangedNodesCanvas = nodes.filter(n => {
-        const needsUpdate = nodesToUpdateCanvas.some(update => update.id === n.id)
-        // Drop message-derived nodes that disappeared (e.g. ungrouped empty group deleted)
-        const stillInMessages =
-          n.type === 'freehand' ||
-          n.type === 'shape' ||
-          n.type === 'placeholder' ||
-          deduplicatedNodes.some((d) => d.id === n.id)
-        return !needsUpdate && stillInMessages
-      })
+      // Keep local-only nodes + message nodes that do not need a data refresh — but always
+      // re-apply fresh `draggable` from metadata (?? kept stale false after Linear / pin / bugs;
+      // Lock-to-board toggle “fixed” drag only because it forced draggable:true).
+      const unchangedNodesCanvas = nodes
+        .filter((n) => {
+          if (n.type === 'frameShimmer') return false // Never keep shimmer shells once messages resolve
+          const needsUpdate = nodesToUpdateCanvas.some((update) => update.id === n.id)
+          const stillInMessages =
+            n.type === 'freehand' ||
+            n.type === 'shape' ||
+            n.type === 'placeholder' ||
+            deduplicatedNodes.some((d) => d.id === n.id)
+          return !needsUpdate && stillInMessages
+        })
+        .map((n) => {
+          if (n.type === 'blockGroup') {
+            return n.draggable === false ? n : { ...n, draggable: false }
+          }
+          const fresh = deduplicatedNodes.find((d) => d.id === n.id)
+          if (!fresh || fresh.draggable === n.draggable) return n
+          return { ...n, draggable: fresh.draggable }
+        })
 
       console.log('🔄 BoardFlow: Adding', trulyNewNodesCanvas.length, 'new canvas nodes, updating', nodesToUpdateCanvas.length, 'existing nodes, keeping', unchangedNodesCanvas.length, 'unchanged')
 
@@ -4395,7 +4490,9 @@ function BoardFlowInner({
           extent: node.extent,
           style: node.style ?? existingNode?.style,
           zIndex: node.zIndex ?? existingNode?.zIndex, // Cards above group frame
-          draggable: node.type === 'blockGroup' ? false : (existingNode?.draggable ?? node.draggable), // Groups: ring-only; never RF dragItems
+          // Always take freshly computed draggable (!isLocked && !boardLocked). Do NOT prefer
+          // existingNode.draggable — `false ?? true` stays false and stuck frames until anchor toggle.
+          draggable: node.type === 'blockGroup' ? false : node.draggable,
         }
       })
 
@@ -4419,10 +4516,10 @@ function BoardFlowInner({
 
           if (conversationId && typeof window !== 'undefined') {
             try {
-              const saved = localStorage.getItem(`thinktable-canvas-positions-${conversationId}`)
-              const positions = saved ? JSON.parse(saved) : {}
-              positions[node.id] = node.position // Write-through so refresh keeps placement
-              localStorage.setItem(`thinktable-canvas-positions-${conversationId}`, JSON.stringify(positions))
+              patchFrameLayoutEntry(conversationId, node.id, {
+                x: node.position.x,
+                y: node.position.y,
+              })
             } catch (error) {
               console.error('Failed to save position to localStorage:', error)
             }
@@ -4488,10 +4585,7 @@ function BoardFlowInner({
           // Save to localStorage
           if (conversationId && typeof window !== 'undefined') {
             try {
-              const saved = localStorage.getItem(`thinktable-canvas-positions-${conversationId}`)
-              const positions = saved ? JSON.parse(saved) : {}
-              positions[n.id] = newPosition
-              localStorage.setItem(`thinktable-canvas-positions-${conversationId}`, JSON.stringify(positions))
+              patchFrameLayoutEntry(conversationId, n.id, newPosition)
             } catch (error) {
               console.error('Failed to save position to localStorage:', error)
             }
@@ -4542,10 +4636,7 @@ function BoardFlowInner({
         // Save to localStorage
         if (conversationId && typeof window !== 'undefined') {
           try {
-            const saved = localStorage.getItem(`thinktable-canvas-positions-${conversationId}`)
-            const positions = saved ? JSON.parse(saved) : {}
-            positions[n.id] = newPosition
-            localStorage.setItem(`thinktable-canvas-positions-${conversationId}`, JSON.stringify(positions))
+            patchFrameLayoutEntry(conversationId, n.id, newPosition)
           } catch (error) {
             console.error('Failed to save position to localStorage:', error)
           }
@@ -5181,84 +5272,341 @@ function BoardFlowInner({
     })
   }, [setEdges])
 
-  // Handle node right-click to show popup (select node if not selected, then show popup)
-  const handleNodeContextMenu = useCallback((event: React.MouseEvent, node: Node<ChatPanelNodeData>) => {
-    event.preventDefault() // Prevent default browser context menu
-    event.stopPropagation() // Prevent other handlers
-    setIBarPosition(null) // Dismiss empty-page I-bar when acting on a node
-    setIBarInputAnchor(null)
-    iBarArmedRef.current = false
-    if (iBarInputRef.current && document.activeElement === iBarInputRef.current) {
-      iBarInputRef.current.value = ''
-      iBarInputRef.current.blur()
-    }
+  // Open frame menu at a screen point (right-click or long-press)
+  const openFrameMenuAt = useCallback(
+    (clientX: number, clientY: number, node: Node<ChatPanelNodeData>) => {
+      setBoardMenuPosition(null)
+      boardClickFlowRef.current = null
+      setMinimapContextMenuPosition(null)
+      setIBarPosition(null)
+      setIBarInputAnchor(null)
+      iBarArmedRef.current = false
+      if (iBarInputRef.current && document.activeElement === iBarInputRef.current) {
+        iBarInputRef.current.value = ''
+        iBarInputRef.current.blur()
+      }
+      setClickedEdge(null)
 
-    // If node is not selected, select it first
-    if (!node.selected) {
-      setNodes((nds) =>
-        nds.map((n) =>
-          n.id === node.id
-            ? { ...n, selected: true }
-            : n
+      // Kill RF marquee from the hold; select this frame (keep multi if it was already in one)
+      rfStore.setState({
+        userSelectionActive: false,
+        userSelectionRect: null,
+        nodesSelectionActive: false,
+      })
+      setNodes((nds) => {
+        const targetSelected = nds.some((n) => n.id === node.id && n.selected)
+        const multi = nds.filter((n) => n.selected).length > 1
+        if (targetSelected && multi) return nds // Keep multi-select for bulk frame actions
+        return nds.map((n) => {
+          const sel = n.id === node.id
+          return n.selected === sel ? n : { ...n, selected: sel }
+        })
+      })
+
+      const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
+      if (reactFlowInstance && reactFlowElement) {
+        const rect = reactFlowElement.getBoundingClientRect()
+        const screenX = clientX - rect.left
+        const screenY = clientY - rect.top
+        const viewport = reactFlowInstance.getViewport()
+        const flowX = (screenX - viewport.x) / viewport.zoom
+        const flowY = (screenY - viewport.y) / viewport.zoom
+        nodeClickPositionRef.current = { x: flowX, y: flowY }
+        setNodePopupPosition({ x: screenX, y: screenY })
+        nodePopupZoomRef.current = viewport.zoom
+      }
+      setRightClickedNode(node)
+    },
+    [reactFlowInstance, setNodes, rfStore]
+  )
+
+  // Open board menu (or frame menu if selection) at a screen point
+  const openBoardMenuAt = useCallback(
+    (clientX: number, clientY: number, opts?: { forceBoard?: boolean }) => {
+      setIBarPosition(null)
+      setIBarInputAnchor(null)
+      iBarArmedRef.current = false
+      if (iBarInputRef.current && document.activeElement === iBarInputRef.current) {
+        iBarInputRef.current.value = ''
+        iBarInputRef.current.blur()
+      }
+      setClickedEdge(null)
+      setMinimapContextMenuPosition(null)
+
+      // Kill RF marquee / nodes-selection box that started during the hold
+      rfStore.setState({
+        userSelectionActive: false,
+        userSelectionRect: null,
+        nodesSelectionActive: false,
+      })
+
+      const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
+      let screenX = clientX
+      let screenY = clientY
+      let flowX = 0
+      let flowY = 0
+      if (reactFlowInstance && reactFlowElement) {
+        const rect = reactFlowElement.getBoundingClientRect()
+        screenX = clientX - rect.left
+        screenY = clientY - rect.top
+        const viewport = reactFlowInstance.getViewport()
+        flowX = (screenX - viewport.x) / viewport.zoom
+        flowY = (screenY - viewport.y) / viewport.zoom
+        nodeClickPositionRef.current = { x: flowX, y: flowY }
+        nodePopupZoomRef.current = viewport.zoom
+      }
+
+      // Long-press must open the board menu even if marquee selected frames mid-hold
+      if (opts?.forceBoard) {
+        setNodes((nds) =>
+          nds.some((n) => n.selected) ? nds.map((n) => (n.selected ? { ...n, selected: false } : n)) : nds
         )
-      )
+        setRightClickedNode(null)
+        boardClickFlowRef.current = { x: flowX, y: flowY }
+        setBoardMenuPosition({ x: screenX, y: screenY })
+        return
+      }
+
+      const selectedNodes = nodesRef.current.filter((n) => n.selected)
+      if (selectedNodes.length > 0) {
+        setBoardMenuPosition(null)
+        boardClickFlowRef.current = null
+        setNodePopupPosition({ x: screenX, y: screenY })
+        setRightClickedNode(selectedNodes[0] as Node<ChatPanelNodeData>)
+        return
+      }
+
+      setRightClickedNode(null)
+      boardClickFlowRef.current = { x: flowX, y: flowY }
+      setBoardMenuPosition({ x: screenX, y: screenY })
+    },
+    [reactFlowInstance, rfStore, setNodes]
+  )
+
+  // Handle node right-click to show popup (select node if not selected, then show popup)
+  const handleNodeContextMenu = useCallback(
+    (event: React.MouseEvent, node: Node<ChatPanelNodeData>) => {
+      event.preventDefault()
+      event.stopPropagation()
+      openFrameMenuAt(event.clientX, event.clientY, node)
+    },
+    [openFrameMenuAt]
+  )
+
+  // Handle pane (background) right-click — frame menu if selection, else board menu
+  const handlePaneContextMenu = useCallback(
+    (event: React.MouseEvent) => {
+      event.preventDefault()
+      event.stopPropagation()
+      openBoardMenuAt(event.clientX, event.clientY)
+    },
+    [openBoardMenuAt]
+  )
+
+  // Phone long-press → board / frame / map menus (mouse keeps right-click)
+  useEffect(() => {
+    if (embedded) return
+    const root = boardRootRef.current
+    if (!root) return
+
+    const clearDomSelection = () => {
+      // Dismiss iOS Copy / Find Selection bar that latches onto welcome / pane text
+      try {
+        const sel = window.getSelection()
+        if (sel && sel.rangeCount > 0) sel.removeAllRanges()
+      } catch {
+        // ignore
+      }
     }
 
-    // Get click position and convert to flow coordinates
-    const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
-    if (reactFlowInstance && reactFlowElement) {
-      const rect = reactFlowElement.getBoundingClientRect()
-      const screenX = event.clientX - rect.left
-      const screenY = event.clientY - rect.top
-
-      // Convert screen coordinates to flow coordinates
-      const viewport = reactFlowInstance.getViewport()
-      const flowX = screenX / viewport.zoom - viewport.x
-      const flowY = screenY / viewport.zoom - viewport.y
-
-      // Store click position in flow coordinates
-      nodeClickPositionRef.current = { x: flowX, y: flowY }
-
-      // Set initial screen position
-      setNodePopupPosition({ x: screenX, y: screenY })
-
-      // Store zoom when popup opens
-      nodePopupZoomRef.current = viewport.zoom
+    const clearRfMarquee = () => {
+      // selectionOnDrag draws a rect on tiny finger jitter — kill it while holding for a menu
+      const state = rfStore.getState()
+      if (state.userSelectionActive || state.userSelectionRect || state.nodesSelectionActive) {
+        rfStore.setState({
+          userSelectionActive: false,
+          userSelectionRect: null,
+          nodesSelectionActive: false,
+        })
+      }
     }
 
-    // Show popup for the right-clicked node (actions will affect all selected nodes)
-    // If a different node was right-clicked, close the previous popup and open a new one
-    setRightClickedNode(node)
-  }, [reactFlowInstance, setNodes])
+    const setArmedClass = (on: boolean) => {
+      if (on) {
+        root.classList.add('tt-long-press-armed')
+        clearDomSelection()
+      } else {
+        root.classList.remove('tt-long-press-armed')
+      }
+    }
 
-  // Handle pane (background) right-click to show popup when nodes are selected
-  const handlePaneContextMenu = useCallback((event: React.MouseEvent) => {
-    const selectedNodes = nodes.filter((n) => n.selected)
-    if (selectedNodes.length === 0) return
-    event.preventDefault()
-    event.stopPropagation()
-    setIBarPosition(null) // Don't keep empty-page I-bar over a selection menu
-    setIBarInputAnchor(null)
-    iBarArmedRef.current = false
-    if (iBarInputRef.current && document.activeElement === iBarInputRef.current) {
-      iBarInputRef.current.value = ''
-      iBarInputRef.current.blur()
+    const controller = createLongPressController({
+      onLongPress: (point, { target }) => {
+        setArmedClass(false)
+        clearRfMarquee()
+        clearDomSelection()
+        const el = target instanceof Element ? target : null
+        if (!el) return false
+
+        // Native inputs keep their own long-press (not frame chrome)
+        if (el.closest('input, textarea')) return false
+
+        // Free nav / minimap → Map menu
+        if (
+          el.closest('[data-minimap-context]') ||
+          el.closest('[data-minimap-toggle-context]') ||
+          el.closest('[data-minimap-pill-context]')
+        ) {
+          setRightClickedNode(null)
+          setBoardMenuPosition(null)
+          boardClickFlowRef.current = null
+          setClickedEdge(null)
+          setMinimapContextMenuPosition({ x: point.clientX, y: point.clientY })
+          clearDomSelection()
+          return true
+        }
+
+        // Ignore other overlay chrome
+        if (
+          el.closest('.node-popup') ||
+          el.closest('[data-chat-sidebar-toggle]') ||
+          el.closest('[data-map-menu]')
+        ) {
+          return false
+        }
+
+        // Frame (incl. TipTap text on an unselected frame) → frame menu
+        // Selected-frame text long-press never arms (see onDown) so editing keeps native select
+        const nodeEl = el.closest('.react-flow__node') as HTMLElement | null
+        if (nodeEl) {
+          const id = nodeEl.getAttribute('data-id')
+          const node = id
+            ? (nodesRef.current.find((n) => n.id === id) as Node<ChatPanelNodeData> | undefined)
+            : undefined
+          if (node && (node.type === 'chatPanel' || node.type === 'blockGroup')) {
+            openFrameMenuAt(point.clientX, point.clientY, node)
+            clearDomSelection()
+            requestAnimationFrame(() => {
+              clearDomSelection()
+              requestAnimationFrame(clearDomSelection)
+            })
+            return true
+          }
+          return false
+        }
+
+        // Empty board pane → board menu (always — ignore mid-hold marquee selection)
+        if (el.closest('.react-flow__pane') || el.closest('.react-flow__renderer')) {
+          openBoardMenuAt(point.clientX, point.clientY, { forceBoard: true })
+          clearDomSelection()
+          // iOS sometimes re-applies selection after the menu paints — clear again next frames
+          requestAnimationFrame(() => {
+            clearDomSelection()
+            requestAnimationFrame(clearDomSelection)
+          })
+          return true
+        }
+
+        return false
+      },
+    })
+    longPressRef.current = controller
+
+    const onDown = (e: PointerEvent) => {
+      const el = e.target instanceof Element ? e.target : null
+      // Selected frame + text: don't arm — keep iOS/TipTap text selection
+      if (
+        el &&
+        (el.closest('.ProseMirror') || el.closest('[contenteditable="true"]'))
+      ) {
+        const nodeEl = el.closest('.react-flow__node') as HTMLElement | null
+        const id = nodeEl?.getAttribute('data-id')
+        const node = id ? nodesRef.current.find((n) => n.id === id) : undefined
+        if (node?.selected) return
+        // Unselected frame text: arm → frame menu (selection cleared while armed)
+      }
+      if (el?.closest('input, textarea')) return
+
+      controller.pointerDown(e)
+      if (controller.isArmed()) {
+        setArmedClass(true)
+        clearDomSelection()
+        // Only kill pane marquee when holding empty board — never touch RF store during a frame press
+        // (store setState mid-gesture aborts d3 node drag)
+        if (el && !el.closest('.react-flow__node')) {
+          clearRfMarquee()
+        }
+      }
     }
-    const firstSelectedNode = selectedNodes[0]
-    const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
-    if (reactFlowInstance && reactFlowElement) {
-      const rect = reactFlowElement.getBoundingClientRect()
-      const screenX = event.clientX - rect.left
-      const screenY = event.clientY - rect.top
-      const viewport = reactFlowInstance.getViewport()
-      const flowX = screenX / viewport.zoom - viewport.x
-      const flowY = screenY / viewport.zoom - viewport.y
-      nodeClickPositionRef.current = { x: flowX, y: flowY }
-      setNodePopupPosition({ x: screenX, y: screenY })
-      nodePopupZoomRef.current = viewport.zoom
+    const onMove = (e: PointerEvent) => {
+      controller.pointerMove(e)
+      if (controller.isArmed()) {
+        // Do NOT clearRfMarquee here — rfStore.setState on every move breaks frame dragging
+        clearDomSelection()
+      } else {
+        setArmedClass(false)
+      }
     }
-    setRightClickedNode(firstSelectedNode)
-  }, [reactFlowInstance, nodes])
+    const onUp = (e: PointerEvent) => {
+      controller.pointerUp(e)
+      if (!controller.isArmed()) setArmedClass(false)
+      if (controller.didFire()) clearDomSelection()
+    }
+    const onCancel = (e: PointerEvent) => {
+      controller.pointerCancel(e)
+      setArmedClass(false)
+    }
+    const onSelectStart = (e: Event) => {
+      // Block browser text/image selection while holding for a menu
+      if (controller.isArmed() || controller.didFire()) {
+        e.preventDefault()
+        clearDomSelection()
+      }
+    }
+    const onSelectionChange = () => {
+      // iOS can create a selection without selectstart — wipe it while armed / after menu
+      if (controller.isArmed() || controller.didFire()) clearDomSelection()
+    }
+    const onContextMenu = (e: Event) => {
+      // Suppress iOS callout while armed or after we opened our menu (non-editor)
+      if (controller.isArmed() || controller.didFire()) {
+        e.preventDefault()
+        e.stopPropagation()
+        clearDomSelection()
+      }
+    }
+    const onClickCapture = (e: MouseEvent) => {
+      // Swallow the click that follows a successful long-press (I-bar, +/- toggle, select)
+      if (controller.consumeFired()) {
+        e.preventDefault()
+        e.stopPropagation()
+        clearDomSelection()
+      }
+    }
+
+    root.addEventListener('pointerdown', onDown, { capture: true })
+    root.addEventListener('pointermove', onMove, { capture: true })
+    root.addEventListener('pointerup', onUp, { capture: true })
+    root.addEventListener('pointercancel', onCancel, { capture: true })
+    root.addEventListener('selectstart', onSelectStart, { capture: true })
+    document.addEventListener('selectionchange', onSelectionChange)
+    root.addEventListener('contextmenu', onContextMenu, { capture: true })
+    root.addEventListener('click', onClickCapture, { capture: true })
+
+    return () => {
+      controller.cancel()
+      longPressRef.current = null
+      setArmedClass(false)
+      root.removeEventListener('pointerdown', onDown, { capture: true })
+      root.removeEventListener('pointermove', onMove, { capture: true })
+      root.removeEventListener('pointerup', onUp, { capture: true })
+      root.removeEventListener('pointercancel', onCancel, { capture: true })
+      root.removeEventListener('selectstart', onSelectStart, { capture: true })
+      document.removeEventListener('selectionchange', onSelectionChange)
+      root.removeEventListener('contextmenu', onContextMenu, { capture: true })
+      root.removeEventListener('click', onClickCapture, { capture: true })
+    }
+  }, [embedded, openBoardMenuAt, openFrameMenuAt, rfStore])
 
   // Create an empty block at a flow position (I-bar grip click — cursor lands with TipTap handle)
   const createBlockAtFlowPosition = useCallback(async (flowX: number, flowY: number) => {
@@ -5331,6 +5679,118 @@ function BoardFlowInner({
     }
   }, [conversationId, router, refetchMessages])
 
+  // Close board menu when clicking / right-clicking outside it
+  useEffect(() => {
+    if (!boardMenuPosition) return
+
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement
+      if (!target.closest('.board-actions-menu')) {
+        setBoardMenuPosition(null)
+        boardClickFlowRef.current = null
+      }
+    }
+
+    const handleContextMenuOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement
+      // Pane / node handlers open their own menus; close board menu unless re-clicking it
+      if (!target.closest('.board-actions-menu')) {
+        setBoardMenuPosition(null)
+        boardClickFlowRef.current = null
+      }
+    }
+
+    const timeoutId = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside, true)
+      document.addEventListener('contextmenu', handleContextMenuOutside, true)
+    }, 0)
+
+    return () => {
+      clearTimeout(timeoutId)
+      document.removeEventListener('mousedown', handleClickOutside, true)
+      document.removeEventListener('contextmenu', handleContextMenuOutside, true)
+    }
+  }, [boardMenuPosition])
+
+  // Board menu actions (empty-pane right-click)
+  const handleBoardMenuAction = useCallback(
+    (action: BoardActionId) => {
+      const flow = boardClickFlowRef.current
+      setBoardMenuPosition(null)
+      boardClickFlowRef.current = null
+
+      switch (action) {
+        case 'addFrame': {
+          if (!flow) return
+          void createBlockAtFlowPosition(flow.x, flow.y)
+          break
+        }
+        case 'paste': {
+          // Frame clipboard paste not wired yet — row stays disabled until then
+          break
+        }
+        case 'selectAll': {
+          setNodes((nds) =>
+            nds.map((n) =>
+              n.type === 'chatPanel' || n.type === 'freehand' || n.type === 'shape'
+                ? { ...n, selected: true }
+                : n
+            )
+          )
+          break
+        }
+        case 'undo': {
+          mapUndo()
+          break
+        }
+        case 'redo': {
+          mapRedo()
+          break
+        }
+        case 'zoomToFit': {
+          if (!reactFlowInstance) return
+          fitViewInProgressRef.current = true
+          reactFlowInstance.fitView({ padding: 0.2, minZoom: 0.3, maxZoom: 2, duration: 300 })
+          window.setTimeout(() => {
+            fitViewInProgressRef.current = false
+          }, 350)
+          break
+        }
+        case 'zoomTo100': {
+          if (!reactFlowInstance) return
+          fitViewInProgressRef.current = true
+          if (flow) {
+            reactFlowInstance.setCenter(flow.x, flow.y, { zoom: 1, duration: 300 })
+          } else {
+            const vp = reactFlowInstance.getViewport()
+            const el = document.querySelector('.react-flow') as HTMLElement | null
+            if (el) {
+              const rect = el.getBoundingClientRect()
+              const cx = (rect.width / 2 - vp.x) / vp.zoom
+              const cy = (rect.height / 2 - vp.y) / vp.zoom
+              reactFlowInstance.setCenter(cx, cy, { zoom: 1, duration: 300 })
+            } else {
+              reactFlowInstance.zoomTo(1, { duration: 300 })
+            }
+          }
+          window.setTimeout(() => {
+            fitViewInProgressRef.current = false
+          }, 350)
+          break
+        }
+        case 'copyLink': {
+          if (!conversationId || typeof window === 'undefined') return
+          const url = `${window.location.origin}/board/${conversationId}`
+          void navigator.clipboard.writeText(url).catch(() => {})
+          break
+        }
+        default:
+          break
+      }
+    },
+    [createBlockAtFlowPosition, mapUndo, mapRedo, reactFlowInstance, setNodes, conversationId]
+  )
+
   // Close popup when right-clicking on background or different node
   useEffect(() => {
     if (!rightClickedNode) return
@@ -5348,6 +5808,7 @@ function BoardFlowInner({
       // 1. Right-clicking on background (not on popup or any node)
       // 2. Right-clicking on a different node (not the same node that has the popup)
       // Note: handleNodeContextMenu will then open a new popup for the different node
+      // Note: empty pane opens board menu via handlePaneContextMenu
       if (!isOnPopup && (!isOnAnyNode || !isOnSameNode)) {
         setRightClickedNode(null)
         nodeClickPositionRef.current = null
@@ -6235,6 +6696,8 @@ function BoardFlowInner({
   // Handle edge click to show popup
   const handleEdgeClick = useCallback((event: React.MouseEvent, edge: Edge) => {
     event.stopPropagation() // Prevent other click handlers
+    setBoardMenuPosition(null) // Don't stack with board menu
+    boardClickFlowRef.current = null
 
     // Toggle popup - if same edge is clicked, close it; otherwise open it
     if (clickedEdge?.id === edge.id) {
@@ -7301,6 +7764,7 @@ function BoardFlowInner({
       ref={boardRootRef}
       // absolute inset-0 fills the map column (chrome uses getBoundingClientRect of this box)
       className="absolute inset-0"
+      style={{ WebkitTouchCallout: 'none' }} // Prefer our long-press menus over iOS callout
       onDoubleClick={embedded ? undefined : handlePaneDoubleClick}
     >
       {!embedded && <AiEditReviewBar />}
@@ -7317,6 +7781,15 @@ function BoardFlowInner({
         // (nodes/chrome still painted lower). inset:0 gives a definite full-height box.
         style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
         onNodeDragStart={(event, node) => {
+          // Do NOT cancel long-press here — RF threshold 0 fires drag-start on touchstart
+          // (canceling here blocked hold→menu). Cancel on first real move in onNodeDrag instead.
+          if (node) {
+            frameDragOriginRef.current = {
+              id: node.id,
+              x: node.position.x,
+              y: node.position.y,
+            }
+          }
           // Hide placeholders only when the connected target node is dragged, not when placeholder itself is dragged
           if (!node) return
           
@@ -7342,6 +7815,15 @@ function BoardFlowInner({
           onFrameNestStackDragStart(event, node) // Snapshot lock-group origins / reset unstack
         }}
         onNodeDrag={(event, node) => {
+          // First real move — abandon long-press so drag owns the gesture
+          const origin = frameDragOriginRef.current
+          if (origin && node && origin.id === node.id) {
+            const dx = node.position.x - origin.x
+            const dy = node.position.y - origin.y
+            if (dx * dx + dy * dy > 0.25) {
+              longPressRef.current?.cancel()
+            }
+          }
           // Hide placeholders only when the connected target node is dragged, not when placeholder itself is dragged
           if (!node) return
           
@@ -7377,10 +7859,16 @@ function BoardFlowInner({
           void onBlockGroupNodeDragStop(event, node) // Attach to group / detach onto the page + persist
           void onFrameNestStackDragStop(event, node) // Link snap pair → stack line (no hide)
 
-          // Guard: some RF versions still fire onNodeClick after a drag — skip click-select briefly
-          if (node?.type === 'chatPanel') {
-            justDraggedFrameRef.current.add(node.id)
-            window.setTimeout(() => justDraggedFrameRef.current.delete(node.id), 100)
+          // Only skip click-select when the frame actually moved (threshold-0 still fires drag start/stop on tap)
+          const origin = frameDragOriginRef.current
+          frameDragOriginRef.current = null
+          if (node?.type === 'chatPanel' && origin && origin.id === node.id) {
+            const dx = node.position.x - origin.x
+            const dy = node.position.y - origin.y
+            if (dx * dx + dy * dy > 0.25) {
+              justDraggedFrameRef.current.add(node.id)
+              window.setTimeout(() => justDraggedFrameRef.current.delete(node.id), 100)
+            }
           }
         }}
         nodeTypes={memoizedNodeTypes}
@@ -7642,6 +8130,8 @@ function BoardFlowInner({
         }}
         onEdgeClick={handleEdgeClick}
         onNodeClick={(event, node) => {
+          // Long-press already opened the frame menu — skip click-select
+          if (longPressRef.current?.consumeFired()) return
           // Clear I-bar cursor when clicking on a node/panel
           if (iBarPosition || iBarInputAnchor) {
             setIBarPosition(null)
@@ -7674,6 +8164,8 @@ function BoardFlowInner({
         onNodeContextMenu={handleNodeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}
         onPaneClick={(event) => {
+          // Long-press already opened the board menu — don't place I-bar
+          if (longPressRef.current?.consumeFired()) return
           // Empty host pane click drops nested preview style-focus
           if (!embedded && previewFocus?.focusedBoardId) {
             previewFocus.clearPreviewFocus()
@@ -7716,6 +8208,8 @@ function BoardFlowInner({
           const flowY = (screenY - viewport.y) / viewport.zoom
 
           setRightClickedNode(null) // Don't stack with node action popup
+          setBoardMenuPosition(null) // Don't stack with board menu
+          boardClickFlowRef.current = null
           // Place blinking cursor + grip (type or click grip to create block) — not Item/Flashcard menu
           setIBarPosition({ x: flowX, y: flowY })
           iBarPositionRef.current = { x: flowX, y: flowY } // Available immediately for first soft-key spawn
@@ -7996,7 +8490,8 @@ function BoardFlowInner({
         <div
           data-minimap-toggle-context
           className="relative"
-          onContextMenu={(e) => {
+          onContextMenuCapture={(e) => {
+            // Capture so RF MiniMap / child handlers cannot swallow the map menu
             e.preventDefault()
             e.stopPropagation()
             setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
@@ -8034,7 +8529,7 @@ function BoardFlowInner({
             title={minimapCollapsed || isScrollingToBottom ? 'Show minimap' : 'Hide minimap'}
             aria-label={minimapCollapsed || isScrollingToBottom ? 'Show minimap' : 'Hide minimap'}
             aria-pressed={!(minimapCollapsed || isScrollingToBottom)}
-            onContextMenu={(e) => {
+            onContextMenuCapture={(e) => {
               e.preventDefault()
               e.stopPropagation()
               setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
@@ -8131,7 +8626,8 @@ function BoardFlowInner({
           <div
             data-minimap-context
             className="relative"
-            onContextMenu={(e) => {
+            onContextMenuCapture={(e) => {
+              // Capture: MiniMap SVG can eat bubble-phase contextmenu
               e.preventDefault()
               e.stopPropagation()
               setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
@@ -8387,6 +8883,22 @@ function BoardFlowInner({
         />
       )}
 
+      {/* Board menu — empty-pane right-click */}
+      {boardMenuPosition && reactFlowInstance && (
+        <BoardActionsMenu
+          x={boardMenuPosition.x}
+          y={boardMenuPosition.y}
+          canUndo={canMapUndo}
+          canRedo={canMapRedo}
+          canPaste={false}
+          onAction={handleBoardMenuAction}
+          onClose={() => {
+            setBoardMenuPosition(null)
+            boardClickFlowRef.current = null
+          }}
+        />
+      )}
+
       {/* Thread click menu — same chrome as ⋮⋮ handle / text-select menus */}
       {clickedEdge && reactFlowInstance && (
         <ThreadActionsMenu
@@ -8438,21 +8950,27 @@ function BoardFlowInner({
         />
       )}
 
-      {/* Context menu for minimap control */}
+      {/* Map menu — right-click Free nav / minimap (Shown / Hidden / Hover) */}
       {!embedded && minimapContextMenuPosition && (
         <div
-          className="fixed z-50 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] py-1 min-w-[180px]"
+          data-map-menu
+          className="fixed z-[100] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] py-1 min-w-[180px]"
           style={{
+            // Open above + to the right of cursor so bottom-left chrome stays on-screen
             left: `${minimapContextMenuPosition.x}px`,
             top: `${minimapContextMenuPosition.y}px`,
-            transform: 'translate(-100%, -100%)', // Position top-left of cursor
-            marginTop: '-4px', // Small gap from cursor
-            marginLeft: '-4px', // Small gap from cursor
+            transform: 'translateY(-100%)',
+            marginTop: '-4px',
+            marginLeft: '4px',
           }}
           onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
         >
           <div className="px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-[#2f2f2f]">
-            Minimap control
+            Map menu
           </div>
           <div className="py-1">
             <button

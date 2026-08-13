@@ -955,9 +955,14 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
     }
 
     const handleContextMenu = (e: MouseEvent) => {
-      // Close if right-clicking elsewhere
+      // Close if right-clicking elsewhere (keep open on map chrome or Map menu)
       const target = e.target as HTMLElement
-      if (!target.closest('[data-minimap-context]') && !target.closest('[data-minimap-pill-context]') && !target.closest('[data-minimap-toggle-context]')) {
+      if (
+        !target.closest('[data-minimap-context]') &&
+        !target.closest('[data-minimap-pill-context]') &&
+        !target.closest('[data-minimap-toggle-context]') &&
+        !target.closest('[data-map-menu]')
+      ) {
         setMinimapContextMenuPosition(null)
       }
     }
@@ -4941,7 +4946,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
         {!isMinimapHidden && (
           <div
             data-minimap-context
-            onContextMenu={(e) => {
+            onContextMenuCapture={(e) => {
               e.preventDefault()
               e.stopPropagation()
               setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
@@ -5061,7 +5066,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
       {/* Moved outside ReactFlow to ensure proper z-index stacking above toggle */}
       <div
         data-minimap-pill-context
-        onContextMenu={(e) => {
+        onContextMenuCapture={(e) => {
           e.preventDefault()
           e.stopPropagation()
           setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
@@ -5261,7 +5266,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
       {/* Linear/Canvas toggle with Nav dropdown above minimap */}
       <div
         data-minimap-toggle-context
-        onContextMenu={(e) => {
+        onContextMenuCapture={(e) => {
           e.preventDefault()
           e.stopPropagation()
           setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
@@ -5482,21 +5487,27 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
         </button>
       )}
 
-      {/* Context menu for minimap control */}
+      {/* Map menu — right-click Free nav / minimap */}
       {minimapContextMenuPosition && (
         <div
-          className="fixed z-50 bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] py-1 min-w-[180px]"
+          data-map-menu
+          className="fixed z-[100] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] py-1 min-w-[180px]"
           style={{
+            // Open above + right of cursor so bottom-left chrome stays on-screen
             left: `${minimapContextMenuPosition.x}px`,
             top: `${minimapContextMenuPosition.y}px`,
-            transform: 'translate(-100%, -100%)', // Position top-left of cursor
-            marginTop: '-4px', // Small gap from cursor
-            marginLeft: '-4px', // Small gap from cursor
+            transform: 'translateY(-100%)',
+            marginTop: '-4px',
+            marginLeft: '4px',
           }}
           onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
         >
           <div className="px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-[#2f2f2f]">
-            Minimap control
+            Map menu
           </div>
           <div className="py-1">
             <button
