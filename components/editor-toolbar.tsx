@@ -68,6 +68,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useTheme } from './theme-provider'
 import { NotionConnectButton } from './notion-connect-button'
 import { ShareBoardMenu } from './share-board-menu' // Share dropdown: Notion people + role links
+import { AutomationsMenu } from './automations-menu' // Actions-bar Automations list popover
 import { useBoardAccess } from '@/lib/share/board-access-context' // Owner-only share menu
 import { useAiEditSession } from '@/lib/ai/edit-session' // Top-bar AI content mask toggle
 import { htmlHasAiOrigin } from '@/lib/ai/wrap-ai-html' // Detect AI-origin spans in frame HTML
@@ -374,6 +375,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const [drawColor, setDrawColor] = useState<'black' | 'blue' | 'green' | 'red'>('black') // Current drawing color
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set())
   const [boardSearch, setBoardSearch] = useState('') // Actions-bar live search over frame title + body
+  const [boardSearchOpen, setBoardSearchOpen] = useState(false) // Icon-only until click; then the field slides out
+  const boardSearchInputRef = useRef<HTMLInputElement>(null) // Place the I-bar in the sliding field
+  const boardSearchButtonRef = useRef<HTMLButtonElement>(null) // Ignore blur when the icon itself was clicked
   const didBoardSearchRef = useRef(false) // Skip setNodes on mount until the user actually searches
   const [boardLockUi, setBoardLockUi] = useState<{ hasSelection: boolean; locked: boolean }>({
     hasSelection: false,
@@ -758,6 +762,13 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     )
   }, [boardSearch, editMenuPillMode, reactFlowInstance])
 
+  // Put the I-bar in the field as soon as it slides open
+  useEffect(() => {
+    if (!boardSearchOpen) return
+    const id = requestAnimationFrame(() => boardSearchInputRef.current?.focus()) // Wait one frame so the input is visible/focusable
+    return () => cancelAnimationFrame(id)
+  }, [boardSearchOpen])
+
   // Update panel styling when fillColor, borderColor, borderStyle, or borderWeight changes
   // Apply to selected panels or panels connected to selected edge
   // Also save to database (message metadata)
@@ -927,7 +938,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             ]
             : [
               // Actions mode: undo + locks + filter/sort/automations + search + layout arrow
-              { id: 'search', width: 180 }, // Magnifier + Type to search field
+              { id: 'search', width: boardSearchOpen ? 180 : 40 }, // Icon-only until the field slides out
               { id: 'actions', width: 120 }, // Filter + Sort + Automations
               { id: 'arrows', width: 40 }, // Layout arrow direction
               { id: 'undoRedo', width: 70 },
@@ -974,7 +985,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       resizeObserver.disconnect()
       window.removeEventListener('resize', checkVisibility)
     }
-  }, [editor, editMenuPillMode]) // Re-run when edit menu mode changes
+  }, [editor, editMenuPillMode, boardSearchOpen]) // Re-run when edit menu mode or search slide changes
 
   const isItemHidden = (item: string) => hiddenItems.has(item)
 
@@ -1142,23 +1153,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   <div className="px-2 py-2 text-xs text-gray-400">No sorts yet</div>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <DropdownMenu open={openDropdown === 'boardAutomations'} onOpenChange={(open) => handleDropdownOpenChange('boardAutomations', open)}>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0 text-[#2383e2] hover:text-[#1a6fc9] hover:bg-blue-50 flex-shrink-0"
-                    title="Automations"
-                  >
-                    <Zap className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-52">
-                  <DropdownMenuLabel className="text-xs font-normal text-gray-500">Automations</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <div className="px-2 py-2 text-xs text-gray-400">No automations yet</div>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <AutomationsMenu
+                open={openDropdown === 'boardAutomations'}
+                onOpenChange={(open) => handleDropdownOpenChange('boardAutomations', open)}
+                conversationId={conversationId}
+              />
             </div>
             {/* If search is hidden, slash before layout arrow or More menu */}
             {isItemHidden('search') && (!isItemHidden('arrows') || hiddenItems.size > 0) && (
@@ -1167,22 +1166,58 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           </>
         )}
 
-        {/* Board search — Type to search frames by title or body */}
+        {/* Board search — icon until click, then Type to search slides out with I-bar */}
         {editMenuPillMode === 'home' && !isItemHidden('search') && (
           <>
-            <div className="flex items-center gap-1.5 h-7 px-1 flex-shrink-0 min-w-[10rem]">
-              <Search className="h-4 w-4 text-gray-400 flex-shrink-0" aria-hidden />
-              <input
-                type="search"
-                value={boardSearch}
-                onChange={(e) => setBoardSearch(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') setBoardSearch('') // Clear without leaving the bar
-                }}
-                placeholder="Type to search..."
+            <div className="flex items-center h-7 flex-shrink-0">
+              <Button
+                ref={boardSearchButtonRef}
+                type="button"
+                variant="ghost"
+                size="sm"
+                className={cn(
+                  'h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0',
+                  boardSearchOpen && 'bg-gray-100 dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100' // Stay pressed while the field is out
+                )}
+                title="Search"
                 aria-label="Search board"
-                className="h-7 w-36 bg-transparent border-0 outline-none text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400"
-              />
+                aria-expanded={boardSearchOpen}
+                onMouseDown={(e) => e.preventDefault()} // Don't steal I-bar from the field before toggle
+                onClick={() => {
+                  setBoardSearchOpen((open) => {
+                    if (open && !boardSearch.trim()) return false // Second click on an empty field collapses it
+                    return true // Closed → slide out; already open with a query → keep it
+                  })
+                }}
+              >
+                <Search className="h-4 w-4" />
+              </Button>
+              <div
+                className={cn(
+                  'overflow-hidden transition-[width,opacity] duration-200 ease-out', // Width slide + fade
+                  boardSearchOpen ? 'w-36 opacity-100' : 'w-0 opacity-0 pointer-events-none' // Collapsed: no hit target
+                )}
+              >
+                <input
+                  ref={boardSearchInputRef}
+                  type="search"
+                  value={boardSearch}
+                  tabIndex={boardSearchOpen ? 0 : -1} // Skip tab stop while collapsed
+                  onChange={(e) => setBoardSearch(e.target.value)}
+                  onBlur={(e) => {
+                    if (e.relatedTarget === boardSearchButtonRef.current) return // Icon click is not a dismiss
+                    if (!boardSearch.trim()) setBoardSearchOpen(false) // Empty + click away → icon only
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Escape') return
+                    setBoardSearch('') // Clear dimming
+                    setBoardSearchOpen(false) // Slide back to the icon
+                  }}
+                  placeholder="Type to search..."
+                  aria-label="Search board"
+                  className="h-7 w-36 bg-transparent border-0 outline-none text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400"
+                />
+              </div>
             </div>
             {/* Slash before layout arrow or More menu when arrow is overflowed */}
             {(!isItemHidden('arrows') || hiddenItems.size > 0) && (

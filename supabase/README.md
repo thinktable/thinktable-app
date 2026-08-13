@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260813103833_turn_into_property_pane` — Turn into Property pane + Automations UI
 - `20260811110630_frame_snap_rotate_mates_mid_drag_reshap` — snap mates follow rotation AABB; mid-drag re-snap
 - `20260811024400_frame_edge_snap_stack_shapes_rotation` — frame edge-snap / stack / shapes / AABB rotation
 - `20260810165853_chat_reload_persist_live_context` — chat reload persist + live context pills

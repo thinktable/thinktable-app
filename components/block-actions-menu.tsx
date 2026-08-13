@@ -43,7 +43,26 @@ import {
   PaintBucket,
   Pencil,
   Anchor,
-} from 'lucide-react' // Action + Turn into icons
+  AlignJustify,
+  Hash,
+  CircleChevronDown,
+  CircleDashed,
+  Calendar,
+  Users,
+  Paperclip,
+  SquareCheck,
+  Phone,
+  AtSign,
+  Search,
+  ArrowUpRight,
+  Clock,
+  CircleUser,
+  MapPin,
+  MousePointerClick,
+  HelpCircle,
+  Languages,
+  AlignLeft,
+} from 'lucide-react' // Action + Turn into + Property icons
 import { Button } from '@/components/ui/button' // Row buttons
 import { cn } from '@/lib/utils' // Class merge
 import { LegoBrickIcon } from './lego-brick-icon' // Frame-group lock: two bricks, top one stud back
@@ -107,11 +126,44 @@ export type BlockActionId =
 
 export type BlockActionPayload = {
   blockType?: BlockTypeId // Present when action === 'turnInto'
+  propertyType?: PropertyTypeId // Present when Turn into → Property pick
+  aiAutofill?: AiAutofillId // Present when Turn into → AI Autofill pick
   boardInParentId?: string | null // Nest target for Page in
   frameShape?: FrameShapeChoice // Present when action === 'setFrameShape'
   fillColor?: string // Empty string = transparent fill
   borderColor?: string // Empty string = transparent border
 }
+
+/** AI Autofill rows in the Property pane (stubs until wired). */
+export type AiAutofillId = 'summarize' | 'translate' | 'riskTier' | 'customerSentiment'
+
+/** Notion-like property kinds in the Turn into right pane. */
+export type PropertyTypeId =
+  | 'text'
+  | 'number'
+  | 'select'
+  | 'multiSelect'
+  | 'status'
+  | 'date'
+  | 'person'
+  | 'files'
+  | 'checkbox'
+  | 'url'
+  | 'phone'
+  | 'email'
+  | 'relation'
+  | 'rollup'
+  | 'formula'
+  | 'button'
+  | 'uniqueId'
+  | 'place'
+  | 'createdTime'
+  | 'lastEditedTime'
+  | 'createdBy'
+  | 'lastEditedBy'
+  | 'googleDriveFile'
+  | 'figmaFile'
+  | 'zendeskTicket'
 
 export type BoardInTarget = {
   id: string // Conversation id to nest under
@@ -156,6 +208,55 @@ type TurnIntoDef = {
   id: BlockTypeId
   label: string
   icon: React.ReactNode
+}
+
+type PropertyTurnIntoDef = {
+  id: PropertyTypeId // Stable pick id for the Property grid
+  label: string // Menu copy (matches the screenshot labels)
+  icon: React.ReactNode // Type icon to the left of the label
+  hint?: boolean // Formula-style trailing help mark
+}
+
+type AiAutofillDef = {
+  id: AiAutofillId // Stable pick id
+  label: string // Row copy
+  icon: React.ReactNode // Left icon
+  badge: 'Basic' | 'Custom Agent' // Pill on the right of the label
+  chevron?: boolean // Submenu affordance (Summarize / Translate)
+}
+
+type PropertySectionDef = {
+  id: string // basic | advanced | system | connector
+  items: PropertyTurnIntoDef[] // Two-col grid for this band
+}
+
+/** Compact brand marks for connector rows (16px). */
+function GoogleDriveIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden>
+      <path fill="#3777E3" d="M8.2 3.2h7.6L22 15.4h-7.6z" />
+      <path fill="#FFBA00" d="M8.2 3.2 1.2 15.4h7.6L15.8 3.2z" />
+      <path fill="#26A65B" d="M1.2 15.4 5 21.2h14l-3.8-5.8z" />
+    </svg>
+  )
+}
+function FigmaIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden>
+      <path fill="#F24E1E" d="M8.5 3h3.5v6H8.5a3 3 0 0 1 0-6z" />
+      <path fill="#FF7262" d="M12 3h3.5a3 3 0 1 1 0 6H12z" />
+      <path fill="#A259FF" d="M8.5 9H12v6H8.5a3 3 0 0 1 0-6z" />
+      <path fill="#1ABCFE" d="M12 9h3.5a3 3 0 1 1-3.5 3z" />
+      <path fill="#0ACF83" d="M8.5 15H12a3 3 0 1 1-3-3" />
+    </svg>
+  )
+}
+function ZendeskIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden>
+      <path fill="#03363D" d="M12.2 3.2c.5 2.2 2.8 5 7.6 6.1-4.2.9-6.9 3.8-7.6 11.5-.5-2.2-2.8-5-7.6-6.1 4.2-.9 6.9-3.8 7.6-11.5z" />
+    </svg>
+  )
 }
 
 type RowDef =
@@ -230,6 +331,66 @@ const TURN_INTO_OPTIONS: TurnIntoDef[] = [
   { id: 'columns5', label: '5 columns', icon: <Columns4 className="h-4 w-4" /> },
 ]
 
+/** AI Autofill rows — sit under the Property header, above type grids. */
+const AI_AUTOFILL_OPTIONS: AiAutofillDef[] = [
+  { id: 'summarize', label: 'Summarize', icon: <AlignLeft className="h-4 w-4" />, badge: 'Basic', chevron: true },
+  { id: 'translate', label: 'Translate', icon: <Languages className="h-4 w-4" />, badge: 'Basic', chevron: true },
+  { id: 'riskTier', label: 'Risk Tier', icon: <CircleChevronDown className="h-4 w-4" />, badge: 'Custom Agent' },
+  { id: 'customerSentiment', label: 'Customer Sentiment', icon: <CircleChevronDown className="h-4 w-4" />, badge: 'Custom Agent' },
+]
+
+/** Property type bands; each band is a 2-col grid separated by a hairline. */
+const PROPERTY_SECTIONS: PropertySectionDef[] = [
+  {
+    id: 'basic',
+    items: [
+      { id: 'text', label: 'Text', icon: <AlignJustify className="h-4 w-4" /> },
+      { id: 'number', label: 'Number', icon: <Hash className="h-4 w-4" /> },
+      { id: 'select', label: 'Select', icon: <CircleChevronDown className="h-4 w-4" /> },
+      { id: 'multiSelect', label: 'Multi-select', icon: <List className="h-4 w-4" /> },
+      { id: 'status', label: 'Status', icon: <CircleDashed className="h-4 w-4" /> },
+      { id: 'date', label: 'Date', icon: <Calendar className="h-4 w-4" /> },
+      { id: 'person', label: 'Person', icon: <Users className="h-4 w-4" /> },
+      { id: 'files', label: 'Files & media', icon: <Paperclip className="h-4 w-4" /> },
+      { id: 'checkbox', label: 'Checkbox', icon: <SquareCheck className="h-4 w-4" /> },
+      { id: 'url', label: 'URL', icon: <Link2 className="h-4 w-4" /> },
+      { id: 'phone', label: 'Phone', icon: <Phone className="h-4 w-4" /> },
+      { id: 'email', label: 'Email', icon: <AtSign className="h-4 w-4" /> },
+    ],
+  },
+  {
+    id: 'advanced',
+    items: [
+      { id: 'relation', label: 'Relation', icon: <ArrowUpRight className="h-4 w-4" /> },
+      { id: 'rollup', label: 'Rollup', icon: <Search className="h-4 w-4" /> },
+      { id: 'formula', label: 'Formula', icon: <Sigma className="h-4 w-4" />, hint: true },
+      { id: 'button', label: 'Button', icon: <MousePointerClick className="h-4 w-4" /> },
+      { id: 'uniqueId', label: 'ID', icon: <span className="text-[11px] font-semibold leading-none">№</span> },
+      { id: 'place', label: 'Place', icon: <MapPin className="h-4 w-4" /> },
+    ],
+  },
+  {
+    id: 'system',
+    items: [
+      { id: 'createdTime', label: 'Created time', icon: <Clock className="h-4 w-4" /> },
+      { id: 'lastEditedTime', label: 'Last edited time', icon: <Clock className="h-4 w-4" /> },
+      { id: 'createdBy', label: 'Created by', icon: <CircleUser className="h-4 w-4" /> },
+      { id: 'lastEditedBy', label: 'Last edited by', icon: <CircleUser className="h-4 w-4" /> },
+    ],
+  },
+  {
+    id: 'connector',
+    items: [
+      { id: 'googleDriveFile', label: 'Google Drive File', icon: <GoogleDriveIcon className="h-4 w-4" /> },
+      { id: 'figmaFile', label: 'Figma File', icon: <FigmaIcon className="h-4 w-4" /> },
+      { id: 'zendeskTicket', label: 'Zendesk Ticket', icon: <ZendeskIcon className="h-4 w-4" /> },
+    ],
+  },
+]
+
+/** Flat list for search hits in the main actions menu. */
+const PROPERTY_TURN_INTO_OPTIONS: PropertyTurnIntoDef[] = PROPERTY_SECTIONS.flatMap((s) => s.items)
+
 export function BlockActionsMenu({
   x,
   y,
@@ -255,15 +416,22 @@ export function BlockActionsMenu({
   openLeft = false,
 }: BlockActionsMenuProps) {
   const [query, setQuery] = useState('') // Filter actions + turn-into
+  const [propertyQuery, setPropertyQuery] = useState('') // Filter inside the Property pane
+  const [showPropertySearch, setShowPropertySearch] = useState(false) // Magnifier next to Property
   const [openSubmenu, setOpenSubmenu] = useState<
     'turnInto' | 'boardIn' | 'frameShape' | 'fillColor' | 'borderColor' | null
   >(null) // Flyout
   const inputRef = useRef<HTMLInputElement>(null) // Autofocus search
+  const propertySearchRef = useRef<HTMLInputElement>(null) // Focus when Property search opens
   const rootRef = useRef<HTMLDivElement>(null) // Position flyout
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  useEffect(() => {
+    if (showPropertySearch) propertySearchRef.current?.focus() // Caret in Property search
+  }, [showPropertySearch])
 
   const rows = useMemo((): RowDef[] => {
     const list: RowDef[] = [
@@ -435,7 +603,8 @@ export function BlockActionsMenu({
         !r.hidden &&
         (r.label.toLowerCase().includes(q) ||
           (r.id === 'turnInto' &&
-            TURN_INTO_OPTIONS.some((t) => t.label.toLowerCase().includes(q))) ||
+            (TURN_INTO_OPTIONS.some((t) => t.label.toLowerCase().includes(q)) ||
+              PROPERTY_TURN_INTO_OPTIONS.some((t) => t.label.toLowerCase().includes(q)))) ||
           (r.id === 'setFrameShape' &&
             ['default', 'shape', ...FRAME_SHAPE_TYPES].some((s) =>
               frameShapeLabel(s === 'default' ? FRAME_SHAPE_NONE : (s as FrameShapeChoice))
@@ -452,17 +621,40 @@ export function BlockActionsMenu({
     return TURN_INTO_OPTIONS.filter((t) => t.label.toLowerCase().includes(q))
   }, [query])
 
+  // Flat Properties hits in the main list while searching (⋮⋮ menu only)
+  const propertyMatches = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q || showFrameShape) return []
+    return PROPERTY_TURN_INTO_OPTIONS.filter((t) => t.label.toLowerCase().includes(q))
+  }, [query, showFrameShape])
+
   const filteredTurnInto = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return TURN_INTO_OPTIONS
     return TURN_INTO_OPTIONS.filter((t) => t.label.toLowerCase().includes(q))
   }, [query])
 
+  // Property pane search (magnifier) wins over the main menu query when set
+  const propertyFilterQ = (propertyQuery || query).trim().toLowerCase()
+
+  const filteredAiAutofill = useMemo(() => {
+    if (!propertyFilterQ) return AI_AUTOFILL_OPTIONS
+    return AI_AUTOFILL_OPTIONS.filter((t) => t.label.toLowerCase().includes(propertyFilterQ))
+  }, [propertyFilterQ])
+
+  const filteredPropertySections = useMemo(() => {
+    if (!propertyFilterQ) return PROPERTY_SECTIONS
+    return PROPERTY_SECTIONS.map((section) => ({
+      ...section,
+      items: section.items.filter((t) => t.label.toLowerCase().includes(propertyFilterQ)),
+    })).filter((section) => section.items.length > 0)
+  }, [propertyFilterQ])
+
   return (
     <div
       ref={rootRef}
       className={cn(
-        'block-actions-menu node-popup z-[1000] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[240px]',
+        'block-actions-menu node-popup z-[1000] overflow-visible bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[240px]',
         positionMode === 'fixed' ? 'fixed' : 'absolute',
         className
       )}
@@ -511,7 +703,7 @@ export function BlockActionsMenu({
       </div>
 
       <div className="flex flex-col gap-0.5 max-h-[360px] overflow-y-auto px-0.5 pb-0.5">
-        {rows.length === 0 && turnIntoMatches.length === 0 && (
+        {rows.length === 0 && turnIntoMatches.length === 0 && propertyMatches.length === 0 && (
           <div className="px-2 py-2 text-xs text-gray-400">No matching actions</div>
         )}
 
@@ -608,80 +800,204 @@ export function BlockActionsMenu({
             {currentBlockType === t.id && <Check className="h-3.5 w-3.5 text-gray-500" />}
           </Button>
         ))}
+
+        {/* Flat Properties hits while searching (block handle menu) */}
+        {propertyMatches.map((t) => (
+          <Button
+            key={`search-prop-${t.id}`}
+            variant="ghost"
+            size="sm"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onAction('turnInto', { propertyType: t.id }) // Property pick from search
+              onClose()
+            }}
+            className="justify-start text-sm h-8 px-2 font-normal"
+          >
+            <span className="mr-2 text-gray-500 dark:text-gray-400">{t.icon}</span>
+            <span className="flex-1 text-left">Turn into · {t.label}</span>
+          </Button>
+        ))}
       </div>
 
-      {/* Turn into flyout — full functional type list */}
+      {/* Turn into flyout: type list shrink-wraps; Property is a fixed second column */}
       {(openSubmenu === 'turnInto' || openSubmenu === 'boardIn') && (
         <div
-          className="absolute left-full top-0 ml-1 z-[1001] min-w-[220px] max-h-[420px] overflow-y-auto bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+          className={cn(
+            'absolute top-0 z-[1001] inline-flex w-fit max-h-[420px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f]',
+            // Toward the frame so the Property column stays on-screen (not past the viewport)
+            openLeft ? 'left-full ml-1' : 'right-full left-auto mr-1'
+          )}
           onMouseEnter={() => {
             if (openSubmenu !== 'boardIn') setOpenSubmenu('turnInto')
           }}
         >
-          {filteredTurnInto.map((t) => (
-            <Button
-              key={t.id}
-              variant="ghost"
-              size="sm"
-              onMouseEnter={() => {
-                if (t.id === 'boardIn') setOpenSubmenu('boardIn')
-                else if (openSubmenu === 'boardIn') setOpenSubmenu('turnInto')
-              }}
-              onClick={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                if (t.id === 'boardIn') {
-                  setOpenSubmenu('boardIn')
-                  return
-                }
-                onAction('turnInto', { blockType: t.id })
-                onClose()
-              }}
-              className={cn(
-                'justify-start text-sm h-8 px-2 font-normal w-full',
-                currentBlockType === t.id && 'bg-blue-50 dark:bg-blue-950/40',
-                t.id === 'boardIn' && openSubmenu === 'boardIn' && 'bg-gray-100 dark:bg-[#2a2a2a]'
-              )}
-            >
-              <span className="mr-2 text-gray-500 dark:text-gray-400">{t.icon}</span>
-              <span className="flex-1 text-left">{t.label}</span>
-              {t.id === 'boardIn' && <ChevronRight className="h-3.5 w-3.5 text-gray-400" />}
-              {currentBlockType === t.id && t.id !== 'boardIn' && (
-                <Check className="h-3.5 w-3.5 text-gray-500" />
-              )}
-            </Button>
-          ))}
-        </div>
-      )}
-
-      {/* Page in — pick parent page to nest under */}
-      {openSubmenu === 'boardIn' && (
-        <div
-          className="absolute left-full top-8 ml-1 z-[1002] min-w-[200px] max-h-[280px] overflow-y-auto bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
-          onMouseEnter={() => setOpenSubmenu('boardIn')}
-        >
-          <div className="px-2 py-1.5 text-[11px] text-gray-400">Nest board under…</div>
-          {(boardInTargets.length > 0 ? boardInTargets : [{ id: '', title: 'Current board' }]).map(
-            (target) => (
+          {/* Left: shrink-wrap to the longest type label; same row rhythm as the main menu */}
+          <div className="flex w-max min-w-max shrink-0 flex-col gap-1 max-h-[420px] overflow-y-auto p-1">
+            {filteredTurnInto.map((t) => (
               <Button
-                key={target.id || 'current'}
+                key={t.id}
                 variant="ghost"
                 size="sm"
+                onMouseEnter={() => {
+                  if (t.id === 'boardIn') setOpenSubmenu('boardIn')
+                  else if (openSubmenu === 'boardIn') setOpenSubmenu('turnInto')
+                }}
                 onClick={(e) => {
                   e.preventDefault()
                   e.stopPropagation()
-                  onAction('turnInto', {
-                    blockType: 'boardIn',
-                    boardInParentId: target.id || null, // null → current conversation in applyTurnInto
-                  })
+                  if (t.id === 'boardIn') {
+                    setOpenSubmenu('boardIn')
+                    return
+                  }
+                  onAction('turnInto', { blockType: t.id })
                   onClose()
                 }}
-                className="justify-start text-sm h-8 px-2 font-normal w-full"
+                className={cn(
+                  'justify-start gap-2 text-sm h-8 px-2 font-normal w-auto min-w-full whitespace-nowrap',
+                  currentBlockType === t.id && 'bg-blue-50 dark:bg-blue-950/40',
+                  t.id === 'boardIn' && openSubmenu === 'boardIn' && 'bg-gray-100 dark:bg-[#2a2a2a]'
+                )}
               >
-                <FileText className="h-4 w-4 mr-2 text-gray-500" />
-                <span className="truncate">{target.title || 'Untitled'}</span>
+                <span className="text-gray-500 dark:text-gray-400">{t.icon}</span>
+                <span className="flex-1 text-left">{t.label}</span>
+                {t.id === 'boardIn' && <ChevronRight className="h-3.5 w-3.5 text-gray-400" />}
+                {currentBlockType === t.id && t.id !== 'boardIn' && (
+                  <Check className="h-3.5 w-3.5 text-gray-500" />
+                )}
               </Button>
-            )
+            ))}
+          </div>
+
+          <div className="w-px shrink-0 self-stretch bg-gray-100 dark:bg-[#2f2f2f] my-1" />
+
+          {/* Right: Property header + AI Autofill + type grids + connectors */}
+          <div className="w-[320px] shrink-0 max-h-[420px] overflow-y-auto p-1.5">
+            <div className="flex items-center gap-1 px-1.5 py-1">
+              <span className="flex-1 text-[11px] text-gray-400">Property</span>
+              <button
+                type="button"
+                aria-label="Search properties"
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setShowPropertySearch((v) => !v) // Toggle the in-pane search field
+                }}
+                className="flex h-6 w-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-[#2a2a2a]"
+              >
+                <Search className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {showPropertySearch && (
+              <input
+                ref={propertySearchRef}
+                value={propertyQuery}
+                onChange={(e) => setPropertyQuery(e.target.value)}
+                onMouseDown={(e) => e.stopPropagation()} // Don't let the menu root preventDefault steal focus
+                placeholder="Type property name..."
+                className="mb-1.5 h-7 w-full rounded-md border border-gray-200 bg-gray-50 px-2 text-xs outline-none dark:border-[#3a3a3a] dark:bg-[#2a2a2a] dark:text-gray-100"
+              />
+            )}
+
+            {filteredAiAutofill.length > 0 && (
+              <>
+                <div className="px-1.5 pb-1 pt-0.5 text-[11px] text-gray-400">AI Autofill</div>
+                <div className="flex flex-col gap-0.5">
+                  {filteredAiAutofill.map((t) => (
+                    <Button
+                      key={t.id}
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        onAction('turnInto', { aiAutofill: t.id }) // AI Autofill stub
+                        onClose()
+                      }}
+                      className="justify-start text-sm h-8 px-1.5 font-normal w-full"
+                    >
+                      <span className="mr-1.5 shrink-0 text-gray-500 dark:text-gray-400">{t.icon}</span>
+                      <span className="min-w-0 truncate text-left">{t.label}</span>
+                      <span
+                        className={cn(
+                          'ml-1.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none',
+                          t.badge === 'Custom Agent'
+                            ? 'bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300'
+                            : 'bg-gray-100 text-gray-500 dark:bg-[#2a2a2a] dark:text-gray-400'
+                        )}
+                      >
+                        {t.badge}
+                      </span>
+                      {t.chevron && <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-gray-400" />}
+                    </Button>
+                  ))}
+                </div>
+                <div className="my-1.5 h-px bg-gray-100 dark:bg-[#2f2f2f]" />
+              </>
+            )}
+
+            {filteredPropertySections.map((section, i) => (
+              <div key={section.id}>
+                {i > 0 && <div className="my-1.5 h-px bg-gray-100 dark:bg-[#2f2f2f]" />}
+                <div className="grid grid-cols-2 gap-0.5">
+                  {section.items.map((t) => (
+                    <Button
+                      key={t.id}
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        onAction('turnInto', { propertyType: t.id }) // Property type pick
+                        onClose()
+                      }}
+                      className="justify-start text-sm h-8 px-1.5 font-normal w-full"
+                    >
+                      <span className="mr-1.5 flex h-4 w-4 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
+                        {t.icon}
+                      </span>
+                      <span className="min-w-0 truncate text-left">{t.label}</span>
+                      {t.hint && (
+                        <HelpCircle className="ml-auto h-3.5 w-3.5 shrink-0 text-gray-300" />
+                      )}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Board in — nest under a parent; sits to the right of the combined flyout */}
+          {openSubmenu === 'boardIn' && (
+            <div
+              className="absolute left-full top-8 ml-1 z-[1002] min-w-[200px] max-h-[280px] overflow-y-auto bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+              onMouseEnter={() => setOpenSubmenu('boardIn')}
+            >
+              <div className="px-2 py-1.5 text-[11px] text-gray-400">Nest board under…</div>
+              {(boardInTargets.length > 0 ? boardInTargets : [{ id: '', title: 'Current board' }]).map(
+                (target) => (
+                  <Button
+                    key={target.id || 'current'}
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      onAction('turnInto', {
+                        blockType: 'boardIn',
+                        boardInParentId: target.id || null, // null → current conversation in applyTurnInto
+                      })
+                      onClose()
+                    }}
+                    className="justify-start text-sm h-8 px-2 font-normal w-full"
+                  >
+                    <FileText className="h-4 w-4 mr-2 text-gray-500" />
+                    <span className="truncate">{target.title || 'Untitled'}</span>
+                  </Button>
+                )
+              )}
+            </div>
           )}
         </div>
       )}

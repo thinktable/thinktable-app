@@ -96,3 +96,4 @@
 20260813030128_chrome_slash_separators_overflow.sql
 20260813030725_remove_draw_shapes_top_bar.sql
 20260813032248_phone_ai_dock_separate_cards.sql
+20260813103833_turn_into_property_pane.sql
