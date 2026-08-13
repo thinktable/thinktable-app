@@ -51,7 +51,6 @@ import {
   GripHorizontal,
   Sparkles,
   Circle,
-  Shapes,
   Grid3x3,
   Table,
   File,
@@ -66,7 +65,6 @@ import {
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useQueryClient } from '@tanstack/react-query'
-import { ShapeGridItem } from './shapes/ShapeGridItem'
 import { useTheme } from './theme-provider'
 import { NotionConnectButton } from './notion-connect-button'
 import { ShareBoardMenu } from './share-board-menu' // Share dropdown: Notion people + role links
@@ -82,7 +80,7 @@ interface EditorToolbarProps {
 
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const { canShare, canEdit, role } = useBoardAccess() // Gate share + show view-only chrome
-  const { reactFlowInstance, isLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, drawShape: contextDrawShape, setDrawShape: setContextDrawShape, mapUndo, mapRedo, canMapUndo, canMapRedo, snapEnabled, setSnapEnabled, getMapTakeSnapshot } = useReactFlowContext()
+  const { reactFlowInstance, isLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, mapUndo, mapRedo, canMapUndo, canMapRedo, snapEnabled, setSnapEnabled, getMapTakeSnapshot } = useReactFlowContext()
   const { showAiOrigin, setShowAiOrigin } = useAiEditSession() // Reddish AI content overlay toggle
   const queryClientForAi = useQueryClient() // Scan page frames for AI-origin content
   const [hasAiContent, setHasAiContent] = useState(false)
@@ -370,11 +368,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   // Initialize with consistent defaults to avoid hydration mismatch, then load from Supabase
   const [lineStyle, setLineStyle] = useState<ThreadStylePref>('curved')
   const [editMode, setEditMode] = useState<'editing' | 'suggesting' | 'viewing'>('editing')
-  // Use context values for drawTool and drawShape, with local state as fallback
+  // Use context values for drawTool, with local state as fallback
   const drawTool = contextDrawTool ?? null
   const setDrawTool = setContextDrawTool
-  const drawShape = contextDrawShape ?? 'rectangle'
-  const setDrawShape = setContextDrawShape
   const [drawColor, setDrawColor] = useState<'black' | 'blue' | 'green' | 'red'>('black') // Current drawing color
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set())
   const [boardSearch, setBoardSearch] = useState('') // Actions-bar live search over frame title + body
@@ -918,21 +914,15 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             ? [
               // Draw mode buttons: grouped by divider sections
               // Each button: w-7 = 28px, gap-1 = 4px between buttons, px-2 = 8px each side = 16px total container padding
-              // Divider: w-px (1px) + mx-0.5 (2px each side = 4px total) = 5px
-              // Group 5 (Shapes): 1 button (w-7 = 28px, no container padding since standalone)
+              // Slash divider ~ same budget as former w-px divider (5px)
               // Group 4 (Colors - Black, Blue, Green, Red): 4 buttons (28 + 4 + 28 + 4 + 28 + 4 + 28) + 16px padding = 156px
-              // Divider after colors: 5px
               // Group 3 (Pencil, Highlighter): 2 buttons (28 + 4 + 28) + 16px padding = 76px
-              // Divider after tools: 5px
               // Group 2 (Eraser): 1 button (28) + 16px padding = 44px
-              // Divider after eraser: 5px
               // Group 1 (Lasso, Vertical, Horizontal): 3 buttons (28 + 4 + 28 + 4 + 28) + 16px padding = 108px
-              // Divider after group 1: 5px
-              { id: 'drawGroup5', width: 28 }, // Shapes (28px button)
-              { id: 'drawGroup4', width: 156 + 5 }, // Colors (156px) + divider after (5px)
-              { id: 'drawGroup3', width: 76 + 5 }, // Pencil, Highlighter (76px) + divider after (5px)
-              { id: 'drawGroup2', width: 44 + 5 }, // Eraser (44px) + divider after (5px)
-              { id: 'drawGroup1', width: 108 + 5 }, // Lasso, Vertical, Horizontal (108px) + divider after (5px)
+              { id: 'drawGroup4', width: 156 }, // Colors (no trailing slash — last draw group)
+              { id: 'drawGroup3', width: 76 + 5 }, // Pencil, Highlighter + slash
+              { id: 'drawGroup2', width: 44 + 5 }, // Eraser + slash
+              { id: 'drawGroup1', width: 108 + 5 }, // Lasso, Vertical, Horizontal + slash
               { id: 'undoRedo', width: 70 },
             ]
             : [
@@ -1292,7 +1282,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           </>
         )}
 
-        {/* Draw Mode Buttons - Lasso, Insert Spaces, Eraser, Pencil, Highlighter, Colors, Shapes */}
+        {/* Draw Mode Buttons - Lasso, Insert Spaces, Eraser, Pencil, Highlighter, Colors */}
         {editMenuPillMode === 'draw' && (
           <>
             {/* Group 1: Selection Mode Toggle (Lasso), Insert Vertical Space, Insert Horizontal Space */}
@@ -1518,74 +1508,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <Circle className="h-4 w-4 fill-red-600 text-red-600" />
                   </Button>
                 </div>
-                <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
               </>
-            )}
-            {/* Group 5: Shapes */}
-            {!isItemHidden('drawGroup5') && (
-              <DropdownMenu modal={false} open={openDropdown === 'shapes'} onOpenChange={(open) => handleDropdownOpenChange('shapes', open)}>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0"
-                    title="Shapes"
-                  >
-                    <Shapes className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent 
-                  align="start" 
-                  className="w-64 p-3"
-                  onInteractOutside={(e) => {
-                    // Prevent closing when dragging shapes
-                    if (e.target instanceof HTMLElement && e.target.closest('[draggable="true"]')) {
-                      e.preventDefault();
-                    }
-                  }}
-                >
-                  <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2 px-2">
-                    Drag shapes to the canvas
-                  </div>
-                  <div className="grid grid-cols-4 gap-2">
-                    {(['rectangle', 'round-rectangle', 'circle', 'hexagon', 'diamond', 'arrow-rectangle', 'cylinder', 'triangle', 'parallelogram', 'plus'] as const).map((shapeType) => (
-                      <ShapeGridItem
-                        key={shapeType}
-                        shapeType={shapeType}
-                        isSelected={drawShape === shapeType}
-                        onSelect={() => {
-                          setDrawShape(shapeType)
-                          setDrawTool(null)
-                          setIsDrawing(true)
-                        }}
-                      />
-                    ))}
-                  </div>
-                  <DropdownMenuSeparator className="my-2" />
-                  <div className="flex gap-1">
-                    <DropdownMenuItem 
-                      onClick={() => {
-                        setDrawShape('line')
-                        setDrawTool(null)
-                        setIsDrawing(true)
-                      }}
-                      className="flex-1"
-                    >
-                      Line
-                    </DropdownMenuItem>
-                    <DropdownMenuItem 
-                      onClick={() => {
-                        setDrawShape('arrow')
-                        setDrawTool(null)
-                        setIsDrawing(true)
-                      }}
-                      className="flex-1"
-                    >
-                      Arrow
-                    </DropdownMenuItem>
-                  </div>
-                </DropdownMenuContent>
-              </DropdownMenu>
             )}
           </>
         )}
@@ -2563,16 +2486,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             ) : editMenuPillMode === 'draw' ? (
               <>
                 {/* Draw mode items - grouped by toolbar dividers */}
-                {/* Group 5: Shapes */}
-                {isItemHidden('drawGroup5') && (
-                  <>
-                    <DropdownMenuItem onClick={() => setDrawShape('rectangle')}>
-                      <Shapes className="h-4 w-4 mr-2" />
-                      Shapes
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
                 {/* Group 4: Colors - Black, Blue, Green, Red */}
                 {isItemHidden('drawGroup4') && (
                   <>
