@@ -12,6 +12,9 @@ export const THREAD_SELECTED_COLOR = '#0375ff'
 /** Default stroke for idle threads. */
 export const THREAD_DEFAULT_COLOR = '#6b7280' // gray-500
 
+/** Default thread thickness in flow px (menu 1–4px options). */
+export const THREAD_DEFAULT_STROKE_WIDTH = 2
+
 /** Algorithm used for new threads. */
 export const DEFAULT_THREAD_ALGORITHM: ThreadAlgorithm = ThreadAlgorithm.BezierCatmullRom
 

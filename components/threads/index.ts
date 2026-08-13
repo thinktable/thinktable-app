@@ -23,6 +23,7 @@ export {
   ThreadAlgorithm,
   DEFAULT_THREAD_ALGORITHM,
   THREAD_DEFAULT_COLOR,
+  THREAD_DEFAULT_STROKE_WIDTH,
   THREAD_SELECTED_COLOR,
   threadAlgorithmFromStyle,
   threadStyleFromAlgorithm,

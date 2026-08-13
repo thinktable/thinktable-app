@@ -18,6 +18,7 @@ import {
   Trash2,
   Upload,
   Spline,
+  Minus,
 } from 'lucide-react' // Row icons matching FigJam-style action list
 import { Button } from '@/components/ui/button' // Ghost row buttons
 import { cn } from '@/lib/utils' // Class merge
@@ -40,6 +41,10 @@ export type ThreadActionId =
   | 'styleSmooth'
   | 'styleSharp'
   | 'styleLinear'
+  | 'thickness1'
+  | 'thickness2'
+  | 'thickness3'
+  | 'thickness4'
 
 export type ThreadActionsMenuProps = {
   x: number // Pane-relative screen x (click point)
@@ -47,7 +52,8 @@ export type ThreadActionsMenuProps = {
   isDotted?: boolean // Current dash state for Solid/Dotted label
   isCollapsedLabel?: 'Collapse' | 'Expand' // Connected-frames collapse toggle
   canPasteStyle?: boolean // Enables Paste style when a style was copied
-  currentStyle?: 'smooth' | 'sharp' | 'linear' // Checkmark in Arrange → path style
+  currentStyle?: 'smooth' | 'sharp' | 'linear' // Checkmark in Style → path style
+  currentStrokeWidth?: number // Checkmark in Thickness flyout (1–4)
   onAction: (action: ThreadActionId) => void // Parent wires delete / insert / style
   onClose: () => void // Dismiss on Escape / outside
   className?: string
@@ -62,7 +68,7 @@ type RowDef =
       icon: React.ReactNode
       danger?: boolean
       disabled?: boolean
-      submenu?: 'arrange' | 'info'
+      submenu?: 'arrange' | 'info' | 'thickness'
       trailingIcon?: React.ReactNode // e.g. save-as-template glyph
     }
   | { kind: 'separator' }
@@ -75,11 +81,12 @@ export function ThreadActionsMenu({
   isCollapsedLabel = 'Collapse',
   canPasteStyle = false,
   currentStyle = 'smooth',
+  currentStrokeWidth = 2,
   onAction,
   onClose,
   className,
 }: ThreadActionsMenuProps) {
-  const [openSubmenu, setOpenSubmenu] = useState<'arrange' | 'info' | null>(null) // Flyout
+  const [openSubmenu, setOpenSubmenu] = useState<'arrange' | 'info' | 'thickness' | null>(null) // Flyout
   const rootRef = useRef<HTMLDivElement>(null) // Root for Escape focus
 
   useEffect(() => {
@@ -143,10 +150,17 @@ export function ThreadActionsMenu({
     { kind: 'separator' },
     {
       kind: 'action',
-      id: 'styleSmooth', // Host opens Arrange submenu; id unused for click when submenu set
-      label: 'Arrange',
+      id: 'styleSmooth', // Host opens Style submenu; id unused for click when submenu set
+      label: 'Style',
       icon: <Spline className="h-4 w-4" />,
       submenu: 'arrange',
+    },
+    {
+      kind: 'action',
+      id: 'thickness2', // Host opens Thickness submenu; id unused for click when submenu set
+      label: 'Thickness',
+      icon: <Minus className="h-4 w-4" />,
+      submenu: 'thickness',
     },
     { kind: 'separator' },
     {
@@ -246,6 +260,7 @@ export function ThreadActionsMenu({
           const hasSub = Boolean(row.submenu)
           const isArrangeOpen = row.submenu === 'arrange' && openSubmenu === 'arrange'
           const isInfoOpen = row.submenu === 'info' && openSubmenu === 'info'
+          const isThicknessOpen = row.submenu === 'thickness' && openSubmenu === 'thickness'
           return (
             <Button
               key={`${row.id}-${row.label}`}
@@ -255,6 +270,7 @@ export function ThreadActionsMenu({
               onMouseEnter={() => {
                 if (row.submenu === 'arrange') setOpenSubmenu('arrange')
                 else if (row.submenu === 'info') setOpenSubmenu('info')
+                else if (row.submenu === 'thickness') setOpenSubmenu('thickness')
                 else setOpenSubmenu(null)
               }}
               onClick={(e) => {
@@ -269,13 +285,17 @@ export function ThreadActionsMenu({
                   setOpenSubmenu((s) => (s === 'info' ? null : 'info'))
                   return
                 }
+                if (row.submenu === 'thickness') {
+                  setOpenSubmenu((s) => (s === 'thickness' ? null : 'thickness'))
+                  return
+                }
                 onAction(row.id)
               }}
               className={cn(
                 'justify-start text-sm h-8 px-2 font-normal',
                 row.danger && 'text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950',
                 row.disabled && 'opacity-40 pointer-events-none',
-                (isArrangeOpen || isInfoOpen) && 'bg-gray-100 dark:bg-[#2a2a2a]'
+                (isArrangeOpen || isInfoOpen || isThicknessOpen) && 'bg-gray-100 dark:bg-[#2a2a2a]'
               )}
             >
               <span className="mr-2 text-gray-500 dark:text-gray-400">{row.icon}</span>
@@ -292,7 +312,7 @@ export function ThreadActionsMenu({
         })}
       </div>
 
-      {/* Arrange → path style (Smooth / Sharp / Linear) */}
+      {/* Style → path style (Smooth / Sharp / Linear) */}
       {openSubmenu === 'arrange' && (
         <div
           className="absolute left-full top-0 ml-1 z-[1001] min-w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
@@ -322,6 +342,40 @@ export function ThreadActionsMenu({
                     : opt.id === 'styleSharp'
                       ? 'sharp'
                       : 'linear') && 'bg-blue-50 dark:bg-blue-950/40'
+              )}
+            >
+              <span className="flex-1 text-left">{opt.label}</span>
+            </Button>
+          ))}
+        </div>
+      )}
+
+      {/* Thickness → 1–4px stroke */}
+      {openSubmenu === 'thickness' && (
+        <div
+          className="absolute left-full top-0 ml-1 z-[1001] min-w-[140px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+          onMouseEnter={() => setOpenSubmenu('thickness')}
+        >
+          {(
+            [
+              { id: 'thickness1' as const, label: '1px', width: 1 },
+              { id: 'thickness2' as const, label: '2px', width: 2 },
+              { id: 'thickness3' as const, label: '3px', width: 3 },
+              { id: 'thickness4' as const, label: '4px', width: 4 },
+            ] as const
+          ).map((opt) => (
+            <Button
+              key={opt.id}
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                onAction(opt.id)
+              }}
+              className={cn(
+                'justify-start text-sm h-8 px-2 font-normal w-full',
+                currentStrokeWidth === opt.width && 'bg-blue-50 dark:bg-blue-950/40'
               )}
             >
               <span className="flex-1 text-left">{opt.label}</span>

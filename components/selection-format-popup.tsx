@@ -13,9 +13,8 @@ import {
   Italic, // Italic toggle icon in format row
   Underline, // Underline toggle icon in format row
   Strikethrough, // Strikethrough toggle icon in format row
-  Link, // Insert-link icon in format row
   Code, // Inline-code icon in format row
-  RemoveFormatting, // Clear-formatting icon in format row
+  Paintbrush, // Clear-formatting (moved from top bar)
   MoreHorizontal, // Overflow / more-options icon
   MessageSquare, // Comment row label icon
   Smile, // Add-reaction face icon
@@ -27,6 +26,10 @@ import {
   SlidersHorizontal, // Skills section settings icon
   Baseline, // Text-color / A glyph stand-in
   EyeOff, // Hide text action icon
+  AlignLeft, // Text align left
+  AlignCenter, // Text align center
+  AlignRight, // Text align right
+  AlignJustify, // Text align justify
 } from 'lucide-react'
 import { cn } from '@/lib/utils' // Conditional classes for active Hide text row
 
@@ -45,21 +48,60 @@ const SKILL_LABELS = [
 const ICON_CELL =
   'flex h-8 w-8 items-center justify-center rounded-md text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'
 
+/** Text-align values the alignment flyout can apply. */
+const ALIGN_OPTIONS = [
+  { value: 'left' as const, label: 'Left', Icon: AlignLeft }, // Default paragraph align
+  { value: 'center' as const, label: 'Center', Icon: AlignCenter }, // Centered block
+  { value: 'right' as const, label: 'Right', Icon: AlignRight }, // Right-aligned block
+  { value: 'justify' as const, label: 'Justify', Icon: AlignJustify }, // Justified block
+]
+
+/** Compact text-color swatches (same set as the old top-bar picker). */
+const TEXT_COLORS = [
+  '#000000', // Black / default
+  '#ef4444', // Red
+  '#f97316', // Orange
+  '#eab308', // Yellow
+  '#22c55e', // Green
+  '#3b82f6', // Blue
+  '#a855f7', // Purple
+  '#ec4899', // Pink
+  '#6b7280', // Gray
+] as const
+
 /**
- * Formatting popup chrome. Hide text is wired; other controls stay visual-only for now.
+ * Formatting popup — marks, clear-format, and text align live here (moved off the top bar).
  */
 export function SelectionFormatPopup({ editor }: { editor: Editor | null }) {
+  const [, setTick] = useState(0) // Re-render when marks/align change so active styles stay in sync
+  const [openFlyout, setOpenFlyout] = useState<'color' | 'align' | null>(null) // One flyout at a time
   const isHazed = !!editor?.isActive('haze') // Selection already has haze mark
 
-  const handleHideText = () => {
+  useEffect(() => {
+    if (!editor) return
+    const bump = () => setTick((n) => n + 1) // Force active-state refresh after each transaction
+    editor.on('transaction', bump)
+    return () => {
+      editor.off('transaction', bump)
+    }
+  }, [editor])
+
+  const run = (fn: () => void) => {
     if (!editor || editor.isDestroyed) return
-    editor.chain().focus().toggleHaze().run() // Toggle frost on the current selection
+    fn() // Keep selection; mousedown on chrome already preventDefault
   }
+
+  const handleHideText = () => {
+    run(() => editor!.chain().focus().toggleHaze().run()) // Toggle frost on the current selection
+  }
+
+  const currentAlign = ALIGN_OPTIONS.find((o) => editor?.isActive({ textAlign: o.value })) ?? ALIGN_OPTIONS[0] // Icon for current align
+  const AlignIcon = currentAlign.Icon // Show the active alignment glyph
 
   return (
     // Outer card: white surface, light border, soft shadow, ~Notion corner radius
     <div
-      className="w-[220px] select-none overflow-hidden rounded-lg border border-gray-200 bg-white text-[13px] text-gray-900 shadow-lg dark:border-[#2f2f2f] dark:bg-[#1f1f1f] dark:text-gray-100"
+      className="relative w-[220px] select-none overflow-visible rounded-lg border border-gray-200 bg-white text-[13px] text-gray-900 shadow-lg dark:border-[#2f2f2f] dark:bg-[#1f1f1f] dark:text-gray-100"
       onMouseDown={(e) => {
         // Keep TipTap selection alive when interacting with the popup chrome
         e.preventDefault()
@@ -79,31 +121,73 @@ export function SelectionFormatPopup({ editor }: { editor: Editor | null }) {
       {/* Divider under style header */}
       <div className="mx-2 border-t border-gray-100 dark:border-[#2f2f2f]" />
 
-      {/* Format row 1: color, bold, italic, underline, clear */}
+      {/* Format row 1: color, bold, italic, underline, clear (paintbrush) */}
       <div className="flex items-center justify-between gap-0.5 px-2 py-1.5">
-        <button type="button" className={ICON_CELL} tabIndex={-1} title="Color">
+        <button
+          type="button"
+          className={cn(ICON_CELL, openFlyout === 'color' && 'bg-gray-100 dark:bg-gray-800')}
+          tabIndex={-1}
+          title="Color"
+          onClick={() => setOpenFlyout((s) => (s === 'color' ? null : 'color'))}
+        >
           <Baseline className="h-4 w-4" />
         </button>
-        <button type="button" className={ICON_CELL} tabIndex={-1} title="Bold">
+        <button
+          type="button"
+          className={cn(ICON_CELL, editor?.isActive('bold') && 'bg-gray-100 dark:bg-gray-800')}
+          tabIndex={-1}
+          title="Bold"
+          onClick={() => run(() => editor!.chain().focus().toggleBold().run())}
+        >
           <Bold className="h-4 w-4" />
         </button>
-        <button type="button" className={ICON_CELL} tabIndex={-1} title="Italic">
+        <button
+          type="button"
+          className={cn(ICON_CELL, editor?.isActive('italic') && 'bg-gray-100 dark:bg-gray-800')}
+          tabIndex={-1}
+          title="Italic"
+          onClick={() => run(() => editor!.chain().focus().toggleItalic().run())}
+        >
           <Italic className="h-4 w-4" />
         </button>
-        <button type="button" className={ICON_CELL} tabIndex={-1} title="Underline">
+        <button
+          type="button"
+          className={cn(ICON_CELL, editor?.isActive('underline') && 'bg-gray-100 dark:bg-gray-800')}
+          tabIndex={-1}
+          title="Underline"
+          onClick={() => run(() => editor!.chain().focus().toggleUnderline().run())}
+        >
           <Underline className="h-4 w-4" />
         </button>
-        <button type="button" className={ICON_CELL} tabIndex={-1} title="Clear formatting">
-          <RemoveFormatting className="h-4 w-4" />
+        <button
+          type="button"
+          className={ICON_CELL}
+          tabIndex={-1}
+          title="Clear formatting"
+          onClick={() => run(() => editor!.chain().focus().clearNodes().unsetAllMarks().run())}
+        >
+          <Paintbrush className="h-4 w-4" />
         </button>
       </div>
 
-      {/* Format row 2: link, strike, code, equation, more */}
+      {/* Format row 2: align, strike, code, equation, more */}
       <div className="flex items-center justify-between gap-0.5 px-2 pb-1.5">
-        <button type="button" className={ICON_CELL} tabIndex={-1} title="Link">
-          <Link className="h-4 w-4" />
+        <button
+          type="button"
+          className={cn(ICON_CELL, openFlyout === 'align' && 'bg-gray-100 dark:bg-gray-800')}
+          tabIndex={-1}
+          title="Align"
+          onClick={() => setOpenFlyout((s) => (s === 'align' ? null : 'align'))}
+        >
+          <AlignIcon className="h-4 w-4" />
         </button>
-        <button type="button" className={ICON_CELL} tabIndex={-1} title="Strikethrough">
+        <button
+          type="button"
+          className={cn(ICON_CELL, editor?.isActive('strike') && 'bg-gray-100 dark:bg-gray-800')}
+          tabIndex={-1}
+          title="Strikethrough"
+          onClick={() => run(() => editor!.chain().focus().toggleStrike().run())}
+        >
           <Strikethrough className="h-4 w-4" />
         </button>
         <button type="button" className={ICON_CELL} tabIndex={-1} title="Code">
@@ -116,6 +200,59 @@ export function SelectionFormatPopup({ editor }: { editor: Editor | null }) {
           <MoreHorizontal className="h-4 w-4" />
         </button>
       </div>
+
+      {/* Color flyout — sits beside the format card */}
+      {openFlyout === 'color' && (
+        <div className="absolute left-full top-10 z-[1001] ml-1 w-[168px] rounded-lg border border-gray-200 bg-white p-2 shadow-lg dark:border-[#2f2f2f] dark:bg-[#1f1f1f]">
+          <div className="grid grid-cols-5 gap-1.5">
+            {TEXT_COLORS.map((hex) => {
+              const active = editor?.getAttributes('textStyle').color === hex || (!editor?.getAttributes('textStyle').color && hex === '#000000')
+              return (
+                <button
+                  key={hex}
+                  type="button"
+                  title={hex}
+                  className={cn(
+                    'h-6 w-6 rounded border border-gray-200 dark:border-gray-600',
+                    active && 'ring-2 ring-offset-1 ring-gray-400'
+                  )}
+                  style={{ backgroundColor: hex }}
+                  onClick={() => {
+                    run(() => {
+                      if (hex === '#000000') editor!.chain().focus().unsetColor().run()
+                      else editor!.chain().focus().setColor(hex).run()
+                    })
+                    setOpenFlyout(null)
+                  }}
+                />
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Align flyout — left / center / right / justify */}
+      {openFlyout === 'align' && (
+        <div className="absolute left-full top-20 z-[1001] ml-1 min-w-[140px] rounded-lg border border-gray-200 bg-white p-1 shadow-lg dark:border-[#2f2f2f] dark:bg-[#1f1f1f]">
+          {ALIGN_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              className={cn(
+                'flex h-8 w-full items-center gap-2 rounded-md px-2 text-sm hover:bg-gray-100 dark:hover:bg-[#2a2a2a]',
+                editor?.isActive({ textAlign: opt.value }) && 'bg-blue-50 dark:bg-blue-950/40'
+              )}
+              onClick={() => {
+                run(() => editor!.chain().focus().setTextAlign(opt.value).run())
+                setOpenFlyout(null)
+              }}
+            >
+              <opt.Icon className="h-4 w-4 text-gray-500" />
+              <span>{opt.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Divider before interaction row */}
       <div className="mx-2 border-t border-gray-100 dark:border-[#2f2f2f]" />

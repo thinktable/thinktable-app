@@ -31,6 +31,7 @@ import {
   ThreadAlgorithm,
   threadAlgorithmFromStyle,
   threadStyleFromAlgorithm,
+  THREAD_DEFAULT_STROKE_WIDTH,
   normalizeHandleId,
   type ThreadEdgeData,
 } from '@/components/threads' // Miro-style editable threads + connection preview
@@ -1712,6 +1713,7 @@ function BoardFlowInner({
   const threadStyleClipboardRef = useRef<{
     algorithm: ThreadAlgorithm
     dotted: boolean
+    strokeWidth: number
   } | null>(null) // Copy style / Paste style payload
   const [hasThreadStyleClipboard, setHasThreadStyleClipboard] = useState(false) // Enables Paste style row
   const nodePopupZoomRef = useRef<number | null>(null) // Track zoom when node popup was opened
@@ -2793,6 +2795,7 @@ function BoardFlowInner({
                 algorithm: savedEdge.metadata?.algorithm ?? DEFAULT_THREAD_ALGORITHM,
                 points: savedEdge.metadata?.points ?? [],
                 dotted: savedEdge.metadata?.dotted ?? lineStyle === 'dotted',
+                strokeWidth: savedEdge.metadata?.strokeWidth ?? THREAD_DEFAULT_STROKE_WIDTH,
               } satisfies ThreadEdgeData,
             })
             console.log(`🔄 BoardFlow: Prepared edge: ${finalSource}(${finalSourceHandle}) -> ${finalTarget}(${finalTargetHandle})`)
@@ -5760,6 +5763,154 @@ function BoardFlowInner({
     [rightClickedNode, nodes, setNodes, takeSnapshot]
   )
 
+  // Frames the style/lock actions should hit: multi-select when the menu target is selected
+  const frameActionTargets = useCallback(() => {
+    const target = rightClickedNode
+    if (!target || target.type !== 'chatPanel') return []
+    const selected = nodes.filter((n) => n.selected && n.type === 'chatPanel')
+    if (target.selected && selected.length > 1) return selected
+    const live = nodes.find((n) => n.id === target.id)
+    return live ? [live] : [target]
+  }, [rightClickedNode, nodes])
+
+  // Persist fill/border onto the menu target (and selected mates)
+  const handleSetFrameColor = useCallback(
+    async (kind: 'fillColor' | 'borderColor', value: string) => {
+      const targets = frameActionTargets()
+      if (targets.length === 0) return
+      takeSnapshot?.()
+      const ids = new Set(targets.map((n) => n.id))
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (!ids.has(n.id)) return n
+          const pm = n.data?.promptMessage
+          const meta = { ...((pm?.metadata as Record<string, unknown>) || {}), [kind]: value || null }
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              [kind]: value,
+              promptMessage: pm ? { ...pm, metadata: meta } : pm,
+            },
+          }
+        })
+      )
+      setRightClickedNode((prev) => {
+        if (!prev || !ids.has(prev.id)) return prev
+        const pm = prev.data?.promptMessage
+        const meta = { ...((pm?.metadata as Record<string, unknown>) || {}), [kind]: value || null }
+        return {
+          ...prev,
+          data: {
+            ...prev.data,
+            [kind]: value,
+            promptMessage: pm ? { ...pm, metadata: meta } : pm,
+          },
+        }
+      })
+      const supabase = createClient()
+      for (const n of targets) {
+        const msgId = n.data?.promptMessage?.id as string | undefined
+        if (!msgId) continue
+        const live = nodes.find((x) => x.id === n.id) || n
+        const pm = live.data?.promptMessage
+        const meta = { ...((pm?.metadata as Record<string, unknown>) || {}), [kind]: value || null }
+        try {
+          await supabase.from('messages').update({ metadata: meta }).eq('id', msgId)
+        } catch (err) {
+          console.error('Failed to save frame color:', err)
+        }
+      }
+    },
+    [frameActionTargets, nodes, setNodes, takeSnapshot]
+  )
+
+  // Pin selected frames to the board (not draggable)
+  const handleToggleBoardLock = useCallback(() => {
+    const targets = frameActionTargets()
+    if (targets.length === 0) return
+    takeSnapshot?.()
+    const nextLocked = !targets.every((n) => {
+      const meta = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+      return meta.boardLocked === true
+    })
+    const ids = new Set(targets.map((n) => n.id))
+    setNodes((nds) =>
+      nds.map((n) => {
+        if (!ids.has(n.id)) return n
+        const pm = n.data?.promptMessage
+        if (!pm) return n
+        const meta = { ...(pm.metadata || {}) } as Record<string, unknown>
+        if (nextLocked) meta.boardLocked = true
+        else delete meta.boardLocked
+        return {
+          ...n,
+          draggable: nextLocked ? false : !isLocked,
+          data: { ...n.data, promptMessage: { ...pm, metadata: meta } },
+        }
+      })
+    )
+    window.dispatchEvent(new Event('tt-frame-lock-changed'))
+    const supabase = createClient()
+    void (async () => {
+      for (const n of targets) {
+        const msgId = n.data?.promptMessage?.id as string | undefined
+        if (!msgId) continue
+        const { data: row } = await supabase.from('messages').select('metadata').eq('id', msgId).maybeSingle()
+        if (!row) continue
+        const next = { ...((row.metadata as Record<string, unknown>) || {}) }
+        if (nextLocked) next.boardLocked = true
+        else delete next.boardLocked
+        await supabase.from('messages').update({ metadata: next }).eq('id', msgId)
+      }
+    })()
+    setRightClickedNode(null)
+  }, [frameActionTargets, isLocked, setNodes, takeSnapshot])
+
+  // Lock ≥2 selected frames so they drag as one group
+  const handleToggleFrameLock = useCallback(() => {
+    const targets = frameActionTargets()
+    if (targets.length < 2) return
+    takeSnapshot?.()
+    const groupIds = targets.map((n) => {
+      const meta = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+      return typeof meta.frameLockGroupId === 'string' ? meta.frameLockGroupId : null
+    })
+    const alreadyLocked =
+      groupIds.every((id) => typeof id === 'string') && new Set(groupIds).size === 1
+    const nextGroupId = alreadyLocked ? null : crypto.randomUUID()
+    const ids = new Set(targets.map((n) => n.id))
+    setNodes((nds) =>
+      nds.map((n) => {
+        if (!ids.has(n.id)) return n
+        const pm = n.data?.promptMessage
+        if (!pm) return n
+        const meta = { ...(pm.metadata || {}) } as Record<string, unknown>
+        if (nextGroupId) meta.frameLockGroupId = nextGroupId
+        else delete meta.frameLockGroupId
+        return {
+          ...n,
+          data: { ...n.data, promptMessage: { ...pm, metadata: meta } },
+        }
+      })
+    )
+    window.dispatchEvent(new Event('tt-frame-lock-changed'))
+    const supabase = createClient()
+    void (async () => {
+      for (const n of targets) {
+        const msgId = n.data?.promptMessage?.id as string | undefined
+        if (!msgId) continue
+        const { data: row } = await supabase.from('messages').select('metadata').eq('id', msgId).maybeSingle()
+        if (!row) continue
+        const next = { ...((row.metadata as Record<string, unknown>) || {}) }
+        if (nextGroupId) next.frameLockGroupId = nextGroupId
+        else delete next.frameLockGroupId
+        await supabase.from('messages').update({ metadata: next }).eq('id', msgId)
+      }
+    })()
+    setRightClickedNode(null)
+  }, [frameActionTargets, setNodes, takeSnapshot])
+
   // Dispatch block action from the shared menu
   const handleBlockAction = useCallback(
     (action: BlockActionId, payload?: BlockActionPayload) => {
@@ -5809,6 +5960,18 @@ function BoardFlowInner({
             void handleSetFrameShape(payload.frameShape)
           }
           break
+        case 'setFillColor':
+          void handleSetFrameColor('fillColor', payload?.fillColor ?? '')
+          break
+        case 'setBorderColor':
+          void handleSetFrameColor('borderColor', payload?.borderColor ?? '')
+          break
+        case 'lockToBoard':
+          handleToggleBoardLock()
+          break
+        case 'lockFramesTogether':
+          handleToggleFrameLock()
+          break
         // Baseline stubs — menu entries present; behavior later
         case 'color':
         case 'listFormat':
@@ -5832,6 +5995,9 @@ function BoardFlowInner({
       handleTurnInto,
       handleSelectionToBoard,
       handleSetFrameShape,
+      handleSetFrameColor,
+      handleToggleBoardLock,
+      handleToggleFrameLock,
       nodes,
       rightClickedNode,
       addChildNode,
@@ -6225,7 +6391,7 @@ function BoardFlowInner({
     setClickedEdge({ ...clickedEdge, type: 'editable', data: nextData })
   }, [clickedEdge, setEdges])
 
-  // Apply path algorithm + optional dotted flag to the open thread menu target
+  // Apply path algorithm + optional dotted/thickness to the open thread menu target
   const patchClickedThreadData = useCallback(
     (patch: Partial<ThreadEdgeData>) => {
       if (!clickedEdge) return
@@ -6242,8 +6408,24 @@ function BoardFlowInner({
         )
       )
       setClickedEdge({ ...clickedEdge, type: 'editable', data: nextData })
+      if (!conversationId) return
+      const sourceMsg = nodes.find((n) => n.id === clickedEdge.source)?.data?.promptMessage?.id
+      const targetMsg = nodes.find((n) => n.id === clickedEdge.target)?.data?.promptMessage?.id
+      if (!sourceMsg || !targetMsg) return
+      void (async () => {
+        const supabase = createClient()
+        const { error } = await supabase
+          .from('panel_edges')
+          .update({ metadata: nextData })
+          .eq('conversation_id', conversationId)
+          .eq('source_message_id', sourceMsg)
+          .eq('target_message_id', targetMsg)
+        if (error && !String(error.message || '').includes('metadata')) {
+          console.error('Failed to persist thread style:', error)
+        }
+      })()
     },
-    [clickedEdge, setEdges]
+    [clickedEdge, setEdges, conversationId, nodes]
   )
 
   // ThreadActionsMenu → existing handlers + style clipboard; stubs close the menu
@@ -6270,13 +6452,18 @@ function BoardFlowInner({
           threadStyleClipboardRef.current = {
             algorithm: prev.algorithm ?? DEFAULT_THREAD_ALGORITHM,
             dotted: prev.dotted === true || clickedEdge.type === 'animatedDotted',
+            strokeWidth: prev.strokeWidth ?? THREAD_DEFAULT_STROKE_WIDTH,
           }
           setHasThreadStyleClipboard(true) // Re-render so Paste style enables
           return // Keep menu open
         case 'pasteStyle': {
           const clip = threadStyleClipboardRef.current
           if (!clip) return
-          patchClickedThreadData({ algorithm: clip.algorithm, dotted: clip.dotted })
+          patchClickedThreadData({
+            algorithm: clip.algorithm,
+            dotted: clip.dotted,
+            strokeWidth: clip.strokeWidth,
+          })
           setClickedEdge(null)
           return
         }
@@ -6291,6 +6478,18 @@ function BoardFlowInner({
         case 'styleLinear':
           patchClickedThreadData({ algorithm: ThreadAlgorithm.Linear })
           setClickedEdge(null)
+          return
+        case 'thickness1':
+          patchClickedThreadData({ strokeWidth: 1 })
+          return // Keep menu open so thickness can be compared
+        case 'thickness2':
+          patchClickedThreadData({ strokeWidth: 2 })
+          return
+        case 'thickness3':
+          patchClickedThreadData({ strokeWidth: 3 })
+          return
+        case 'thickness4':
+          patchClickedThreadData({ strokeWidth: 4 })
           return
         default:
           // Stubs (copy / duplicate / lock / template / info…) — close for now
@@ -8050,6 +8249,32 @@ function BoardFlowInner({
             FRAME_SHAPE_NONE
           }
           showFrameShape={rightClickedNode.type === 'chatPanel'}
+          currentFillColor={
+            (rightClickedNode.data?.fillColor as string | undefined) ||
+            (rightClickedNode.data?.promptMessage?.metadata?.fillColor as string | undefined) ||
+            ''
+          }
+          currentBorderColor={
+            (rightClickedNode.data?.borderColor as string | undefined) ||
+            (rightClickedNode.data?.promptMessage?.metadata?.borderColor as string | undefined) ||
+            ''
+          }
+          boardLocked={
+            (rightClickedNode.data?.promptMessage?.metadata as Record<string, unknown> | undefined)
+              ?.boardLocked === true
+          }
+          canLockFramesTogether={
+            nodes.filter((n) => n.selected && n.type === 'chatPanel').length >= 2
+          }
+          framesLockedTogether={(() => {
+            const selected = nodes.filter((n) => n.selected && n.type === 'chatPanel')
+            if (selected.length < 2) return false
+            const groupIds = selected.map((n) => {
+              const meta = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+              return typeof meta.frameLockGroupId === 'string' ? meta.frameLockGroupId : null
+            })
+            return groupIds.every((id) => typeof id === 'string') && new Set(groupIds).size === 1
+          })()}
           boardInTargets={(() => {
             // Pages the new page can nest under (from sidebar cache)
             const convs =
@@ -8113,6 +8338,10 @@ function BoardFlowInner({
           currentStyle={threadStyleFromAlgorithm(
             (clickedEdge.data as ThreadEdgeData | undefined)?.algorithm
           )}
+          currentStrokeWidth={
+            (clickedEdge.data as ThreadEdgeData | undefined)?.strokeWidth ??
+            THREAD_DEFAULT_STROKE_WIDTH
+          }
           onAction={handleThreadMenuAction}
           onClose={() => {
             setClickedEdge(null)

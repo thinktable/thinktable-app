@@ -1,12 +1,18 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-13T00:52:33Z`
+- Snapped at: `2026-08-13T01:15:13Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260813011513_move_toolbar_controls_to_menus.sql`.
+- Home top-bar formatting moved: paintbrush + align to text select popup; fill/border + board/frame locks to frame right-click; thread Style/Thickness (`strokeWidth`) to thread click menu.
+- Schema unchanged.
+
+## Prior: free nav minimap plus minus circle
 
 - No DDL. Marker `20260813005233_free_nav_minimap_plus_minus_circle.sql`.
 - Minimap toggle is a circle **+/-** (matches Free nav fill) at Free nav top-left; removed Map icon + minimize/expand subicon.

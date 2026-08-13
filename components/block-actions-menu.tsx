@@ -40,6 +40,10 @@ import {
   FolderInput,
   PencilLine,
   Type,
+  PaintBucket,
+  Pencil,
+  Lock,
+  Unlock,
 } from 'lucide-react' // Action + Turn into icons
 import { Button } from '@/components/ui/button' // Row buttons
 import { cn } from '@/lib/utils' // Class merge
@@ -96,11 +100,17 @@ export type BlockActionId =
   | 'askAI'
   | 'skills'
   | 'setFrameShape' // Apply / clear a silhouette on the host frame
+  | 'setFillColor' // Frame background (transparent when empty)
+  | 'setBorderColor' // Frame border stroke
+  | 'lockToBoard' // Pin selected frames so they cannot drag
+  | 'lockFramesTogether' // Rigid-group lock for ≥2 selected frames
 
 export type BlockActionPayload = {
   blockType?: BlockTypeId // Present when action === 'turnInto'
   boardInParentId?: string | null // Nest target for Page in
   frameShape?: FrameShapeChoice // Present when action === 'setFrameShape'
+  fillColor?: string // Empty string = transparent fill
+  borderColor?: string // Empty string = transparent border
 }
 
 export type BoardInTarget = {
@@ -122,6 +132,16 @@ export type BlockActionsMenuProps = {
   currentFrameShape?: FrameShapeChoice
   /** Show Shape submenu — frame-level menu only (not TipTap ⋮⋮ block menu). */
   showFrameShape?: boolean
+  /** Current frame fill (frame menu). Empty = transparent. */
+  currentFillColor?: string
+  /** Current frame border (frame menu). Empty = transparent. */
+  currentBorderColor?: string
+  /** True when the focused frame is pinned to the board. */
+  boardLocked?: boolean
+  /** True when ≥2 selected frames share a frameLockGroupId. */
+  framesLockedTogether?: boolean
+  /** Enables “Lock frames to each other” (≥2 selected frames). */
+  canLockFramesTogether?: boolean
   lastEditedLabel?: string // Footer metadata
   onAction: (action: BlockActionId, payload?: BlockActionPayload) => void
   onClose: () => void
@@ -146,7 +166,7 @@ type RowDef =
       shortcut?: string
       icon: React.ReactNode
       danger?: boolean
-      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape'
+      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape' | 'fillColor' | 'borderColor'
       hidden?: boolean
       beta?: boolean
     }
@@ -222,6 +242,11 @@ export function BlockActionsMenu({
   boardInTargets = [],
   currentFrameShape = FRAME_SHAPE_NONE,
   showFrameShape = false,
+  currentFillColor = '',
+  currentBorderColor = '',
+  boardLocked = false,
+  framesLockedTogether = false,
+  canLockFramesTogether = false,
   lastEditedLabel,
   onAction,
   onClose,
@@ -230,7 +255,9 @@ export function BlockActionsMenu({
   openLeft = false,
 }: BlockActionsMenuProps) {
   const [query, setQuery] = useState('') // Filter actions + turn-into
-  const [openSubmenu, setOpenSubmenu] = useState<'turnInto' | 'boardIn' | 'frameShape' | null>(null) // Flyout
+  const [openSubmenu, setOpenSubmenu] = useState<
+    'turnInto' | 'boardIn' | 'frameShape' | 'fillColor' | 'borderColor' | null
+  >(null) // Flyout
   const inputRef = useRef<HTMLInputElement>(null) // Autofocus search
   const rootRef = useRef<HTMLDivElement>(null) // Position flyout
 
@@ -317,6 +344,36 @@ export function BlockActionsMenu({
       },
       {
         kind: 'action',
+        id: 'setFillColor',
+        label: 'Fill',
+        icon: <PaintBucket className="h-4 w-4" />,
+        submenu: 'fillColor', // Frame background color picker
+        hidden: !showFrameShape,
+      },
+      {
+        kind: 'action',
+        id: 'setBorderColor',
+        label: 'Border',
+        icon: <Pencil className="h-4 w-4" />,
+        submenu: 'borderColor', // Frame border color picker
+        hidden: !showFrameShape,
+      },
+      {
+        kind: 'action',
+        id: 'lockToBoard',
+        label: boardLocked ? 'Unlock from board' : 'Lock to board',
+        icon: boardLocked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />,
+        hidden: !showFrameShape, // Pin this frame (and selection) to the board
+      },
+      {
+        kind: 'action',
+        id: 'lockFramesTogether',
+        label: framesLockedTogether ? 'Unlock frames from each other' : 'Lock frames to each other',
+        icon: framesLockedTogether ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />,
+        hidden: !showFrameShape || !canLockFramesTogether, // Needs ≥2 selected frames
+      },
+      {
+        kind: 'action',
         id: 'group',
         label: 'Group',
         icon: <Group className="h-4 w-4" />,
@@ -386,7 +443,7 @@ export function BlockActionsMenu({
                 .includes(q)
             )))
     )
-  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape])
+  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape, boardLocked, framesLockedTogether, canLockFramesTogether])
 
   // When searching, also surface matching Turn into types as flat picks
   const turnIntoMatches = useMemo(() => {
@@ -470,6 +527,8 @@ export function BlockActionsMenu({
           const hasSub = Boolean(row.submenu)
           const isTurnIntoOpen = row.submenu === 'turnInto' && openSubmenu === 'turnInto'
           const isShapeOpen = row.submenu === 'frameShape' && openSubmenu === 'frameShape'
+          const isFillOpen = row.submenu === 'fillColor' && openSubmenu === 'fillColor'
+          const isBorderOpen = row.submenu === 'borderColor' && openSubmenu === 'borderColor'
           return (
             <Button
               key={row.id}
@@ -478,6 +537,8 @@ export function BlockActionsMenu({
               onMouseEnter={() => {
                 if (row.submenu === 'turnInto') setOpenSubmenu('turnInto')
                 else if (row.submenu === 'frameShape') setOpenSubmenu('frameShape')
+                else if (row.submenu === 'fillColor') setOpenSubmenu('fillColor')
+                else if (row.submenu === 'borderColor') setOpenSubmenu('borderColor')
                 else setOpenSubmenu(null)
               }}
               onClick={(e) => {
@@ -491,6 +552,14 @@ export function BlockActionsMenu({
                   setOpenSubmenu((s) => (s === 'frameShape' ? null : 'frameShape'))
                   return
                 }
+                if (row.submenu === 'fillColor') {
+                  setOpenSubmenu((s) => (s === 'fillColor' ? null : 'fillColor'))
+                  return
+                }
+                if (row.submenu === 'borderColor') {
+                  setOpenSubmenu((s) => (s === 'borderColor' ? null : 'borderColor'))
+                  return
+                }
                 // Submenus without UI yet — fire stub action and close
                 if (row.submenu) {
                   onAction(row.id)
@@ -502,7 +571,7 @@ export function BlockActionsMenu({
               className={cn(
                 'justify-start text-sm h-8 px-2 font-normal',
                 row.danger && 'text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950',
-                (isTurnIntoOpen || isShapeOpen) && 'bg-gray-100 dark:bg-[#2a2a2a]'
+                (isTurnIntoOpen || isShapeOpen || isFillOpen || isBorderOpen) && 'bg-gray-100 dark:bg-[#2a2a2a]'
               )}
             >
               <span className="mr-2 text-gray-500 dark:text-gray-400">{row.icon}</span>
@@ -678,6 +747,66 @@ export function BlockActionsMenu({
               )
             })}
           </div>
+        </div>
+      )}
+
+      {/* Fill — frame background color (empty = transparent) */}
+      {openSubmenu === 'fillColor' && (
+        <div
+          className="absolute left-full top-0 ml-1 z-[1001] w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2"
+          onMouseEnter={() => setOpenSubmenu('fillColor')}
+        >
+          <div className="px-1 pb-1.5 text-[11px] text-gray-400">Frame fill</div>
+          <input
+            type="color"
+            value={currentFillColor || '#ffffff'}
+            onChange={(e) => onAction('setFillColor', { fillColor: e.target.value })}
+            className="w-full h-8 rounded border border-gray-300 dark:border-gray-600 cursor-pointer"
+            title="Fill color"
+            aria-label="Fill color"
+          />
+          <Button
+            variant={!currentFillColor ? 'default' : 'outline'}
+            size="sm"
+            className="w-full mt-2 h-7 text-xs"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onAction('setFillColor', { fillColor: '' })
+            }}
+          >
+            Transparent
+          </Button>
+        </div>
+      )}
+
+      {/* Border — frame stroke color (empty = transparent) */}
+      {openSubmenu === 'borderColor' && (
+        <div
+          className="absolute left-full top-8 ml-1 z-[1001] w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2"
+          onMouseEnter={() => setOpenSubmenu('borderColor')}
+        >
+          <div className="px-1 pb-1.5 text-[11px] text-gray-400">Frame border</div>
+          <input
+            type="color"
+            value={currentBorderColor || '#000000'}
+            onChange={(e) => onAction('setBorderColor', { borderColor: e.target.value })}
+            className="w-full h-8 rounded border border-gray-300 dark:border-gray-600 cursor-pointer"
+            title="Border color"
+            aria-label="Border color"
+          />
+          <Button
+            variant={!currentBorderColor ? 'default' : 'outline'}
+            size="sm"
+            className="w-full mt-2 h-7 text-xs"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onAction('setBorderColor', { borderColor: '' })
+            }}
+          >
+            Transparent
+          </Button>
         </div>
       )}
 

@@ -15,6 +15,7 @@ import { getPath, getControlPoints } from './path' // Path math when user has be
 import {
   DEFAULT_THREAD_ALGORITHM,
   THREAD_DEFAULT_COLOR,
+  THREAD_DEFAULT_STROKE_WIDTH,
   THREAD_SELECTED_COLOR,
   ThreadAlgorithm,
   threadComfortScale,
@@ -30,6 +31,7 @@ export type ThreadEdgeData = {
   algorithm?: ThreadAlgorithm // Path math (default BezierCatmullRom)
   points?: ControlPointData[] // Active control points between source and target
   dotted?: boolean // Optional dashed stroke (View toolbar)
+  strokeWidth?: number // Thickness in flow px (1–4 from thread menu; default 2)
 }
 
 export type ThreadEdge = Edge<ThreadEdgeData>
@@ -86,6 +88,7 @@ export function EditableThread({
   const algorithm = data?.algorithm ?? DEFAULT_THREAD_ALGORITHM
   const points = data?.points ?? []
   const dotted = data?.dotted === true
+  const strokeWidth = data?.strokeWidth ?? THREAD_DEFAULT_STROKE_WIDTH // Menu thickness (1–4px)
   const { setEdges } = useReactFlow()
 
   // Live node boxes — path attaches here even if RF's handle coords are still on an indicator
@@ -184,7 +187,7 @@ export function EditableThread({
   }
 
   const stroke = selected ? THREAD_SELECTED_COLOR : (style?.stroke as string) || THREAD_DEFAULT_COLOR
-  const baseWidth = selected ? 2.5 : 2 // Base flow thickness at ≤100% zoom
+  const baseWidth = selected ? Math.max(strokeWidth, strokeWidth + 0.5) : strokeWidth // Selected reads slightly heavier
   const dash = 5 * comfort // Dash/gap tracks stroke comfort (thins when zoomed out)
 
   return (

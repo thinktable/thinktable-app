@@ -33,8 +33,6 @@ import {
   Minus,
   ChevronDown,
   List,
-  Lock,
-  Unlock,
   ArrowDown,
   ArrowUp,
   ArrowLeft,
@@ -55,7 +53,6 @@ import {
   GripHorizontal,
   Sparkles,
   Circle,
-  Square,
   Shapes,
   Grid3x3,
   Table,
@@ -64,9 +61,7 @@ import {
   Link as LinkIcon,
   Hash,
   Calendar,
-  FileText,
   Move,
-  type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
@@ -80,27 +75,6 @@ import { useAiEditSession } from '@/lib/ai/edit-session' // Top-bar AI content m
 import { htmlHasAiOrigin } from '@/lib/ai/wrap-ai-html' // Detect AI-origin spans in frame HTML
 import { newBlockMetadata } from '@/lib/blocks' // Canonical isBlock + isInlineBlock metadata
 
-/** Lock/Unlock with a tiny board or frame glyph so the two top-bar locks stay distinct. */
-function LockSubIcon({
-  locked,
-  SubIcon,
-}: {
-  locked: boolean
-  SubIcon: LucideIcon
-}) {
-  const Main = locked ? Lock : Unlock // Closed when locked, open when free
-  return (
-    <span className="relative inline-flex h-4 w-4 items-center justify-center">
-      <Main className="h-4 w-4" />
-      <SubIcon
-        className="absolute -bottom-0.5 -right-0.5 h-2 w-2 text-current"
-        strokeWidth={2.5}
-        aria-hidden
-      />
-    </span>
-  )
-}
-
 interface EditorToolbarProps {
   editor: Editor | null
   conversationId?: string
@@ -108,7 +82,7 @@ interface EditorToolbarProps {
 
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const { canShare, canEdit, role } = useBoardAccess() // Gate share + show view-only chrome
-  const { reactFlowInstance, isLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, drawShape: contextDrawShape, setDrawShape: setContextDrawShape, mapUndo, mapRedo, canMapUndo, canMapRedo, snapEnabled, setSnapEnabled, getMapTakeSnapshot } = useReactFlowContext()
+  const { reactFlowInstance, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, drawShape: contextDrawShape, setDrawShape: setContextDrawShape, mapUndo, mapRedo, canMapUndo, canMapRedo, snapEnabled, setSnapEnabled } = useReactFlowContext()
   const { showAiOrigin, setShowAiOrigin } = useAiEditSession() // Reddish AI content overlay toggle
   const queryClientForAi = useQueryClient() // Scan page frames for AI-origin content
   const [hasAiContent, setHasAiContent] = useState(false)
@@ -391,7 +365,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   }
 
   // Hide formatting options (clear formatting to line options) when insert/draw/view mode is selected
-  const shouldHideFormattingOptions = editMenuPillMode !== 'home' // Hide when not in 'home' mode
+  const shouldHideFormattingOptions = true // Text / frame / thread menus own these now
 
   // Initialize with consistent defaults to avoid hydration mismatch, then load from Supabase
   const [lineStyle, setLineStyle] = useState<ThreadStylePref>('curved')
@@ -741,175 +715,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     saveToSupabase()
   }, [editMode, supabase])
 
-  // Selected isBlock frames on the board (chatPanel with promptMessage)
-  const getSelectedFrames = () => {
-    if (!reactFlowInstance) return []
-    return reactFlowInstance.getNodes().filter((n) => {
-      if (!n.selected) return false
-      const meta = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-      return meta.isBlock === true
-    })
-  }
-
-  // Persist metadata patches for selected frames (board pin / frame-group lock)
-  const persistFrameMetaPatches = async (
-    nodes: ReturnType<typeof getSelectedFrames>,
-    patch: (meta: Record<string, unknown>) => Record<string, unknown>
-  ) => {
-    const supabase = createClient()
-    for (const n of nodes) {
-      const msgId = n.data?.promptMessage?.id as string | undefined
-      if (!msgId) continue
-      const { data: row } = await supabase
-        .from('messages')
-        .select('metadata')
-        .eq('id', msgId)
-        .maybeSingle()
-      if (!row) continue
-      const next = patch({ ...((row.metadata as Record<string, unknown>) || {}) })
-      await supabase.from('messages').update({ metadata: next }).eq('id', msgId)
-    }
-  }
-
-  // Board lock UI: pin selected frames in place on the board
-  const [boardLockUi, setBoardLockUi] = useState<{ hasSelection: boolean; locked: boolean }>({
-    hasSelection: false,
-    locked: false,
-  })
-
-  // Frame lock UI: lock ≥2 selected frames so they drag as one group
-  const [frameLockUi, setFrameLockUi] = useState<{
-    hasMulti: boolean
-    locked: boolean
-  }>({
-    hasMulti: false,
-    locked: false,
-  })
-
-  // Re-read board pin + frame-group lock from RF selection metadata
-  const refreshLockUi = () => {
-    if (!reactFlowInstance) {
-      setBoardLockUi({ hasSelection: false, locked: false })
-      setFrameLockUi({ hasMulti: false, locked: false })
-      return
-    }
-    const selected = getSelectedFrames()
-    if (selected.length === 0) {
-      setBoardLockUi({ hasSelection: false, locked: false })
-      setFrameLockUi({ hasMulti: false, locked: false })
-      return
-    }
-    const allBoardLocked = selected.every((n) => {
-      const meta = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-      return meta.boardLocked === true
-    })
-    setBoardLockUi({ hasSelection: true, locked: allBoardLocked })
-    if (selected.length < 2) {
-      setFrameLockUi({ hasMulti: false, locked: false })
-      return
-    }
-    const groupIds = selected.map((n) => {
-      const meta = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-      return typeof meta.frameLockGroupId === 'string' ? meta.frameLockGroupId : null
-    })
-    const locked =
-      groupIds.every((id) => typeof id === 'string') && new Set(groupIds).size === 1
-    setFrameLockUi({ hasMulti: true, locked })
-  }
-
-  useEffect(() => {
-    refreshLockUi()
-    const onSel = () => refreshLockUi()
-    window.addEventListener('node-selected', onSel)
-    window.addEventListener('tt-selection-changed', onSel)
-    window.addEventListener('tt-frame-lock-changed', onSel)
-    return () => {
-      window.removeEventListener('node-selected', onSel)
-      window.removeEventListener('tt-selection-changed', onSel)
-      window.removeEventListener('tt-frame-lock-changed', onSel)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh closes over reactFlowInstance
-  }, [reactFlowInstance])
-
-  // Lock selected frames to the board (pin: not draggable)
-  const handleToggleBoardLock = () => {
-    if (!reactFlowInstance) return
-    const selected = getSelectedFrames()
-    if (selected.length === 0) return
-    getMapTakeSnapshot()?.()
-    const nextLocked = !selected.every((n) => {
-      const meta = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-      return meta.boardLocked === true
-    })
-    const ids = new Set(selected.map((n) => n.id))
-    reactFlowInstance.setNodes((nds) =>
-      nds.map((n) => {
-        if (!ids.has(n.id)) return n
-        const pm = n.data?.promptMessage
-        if (!pm) return n
-        const meta = { ...(pm.metadata || {}), boardLocked: nextLocked }
-        if (!nextLocked) delete (meta as Record<string, unknown>).boardLocked
-        return {
-          ...n,
-          draggable: nextLocked ? false : !isLocked, // Stay undraggable if global board freeze is on
-          data: {
-            ...n.data,
-            promptMessage: { ...pm, metadata: meta },
-          },
-        }
-      })
-    )
-    setBoardLockUi({ hasSelection: true, locked: nextLocked })
-    window.dispatchEvent(new Event('tt-frame-lock-changed'))
-    void persistFrameMetaPatches(selected, (meta) => {
-      const next = { ...meta }
-      if (nextLocked) next.boardLocked = true
-      else delete next.boardLocked
-      return next
-    }).catch((err) => console.error('Failed to persist board lock:', err))
-  }
-
-  // Lock selected frames to each other (shared frameLockGroupId → rigid drag)
-  const handleToggleFrameLock = () => {
-    if (!reactFlowInstance) return
-    const selected = getSelectedFrames()
-    if (selected.length < 2) return // Need at least two frames
-    getMapTakeSnapshot()?.()
-    const groupIds = selected.map((n) => {
-      const meta = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-      return typeof meta.frameLockGroupId === 'string' ? meta.frameLockGroupId : null
-    })
-    const alreadyLocked =
-      groupIds.every((id) => typeof id === 'string') && new Set(groupIds).size === 1
-    const nextGroupId = alreadyLocked ? null : crypto.randomUUID()
-    const ids = new Set(selected.map((n) => n.id))
-    reactFlowInstance.setNodes((nds) =>
-      nds.map((n) => {
-        if (!ids.has(n.id)) return n
-        const pm = n.data?.promptMessage
-        if (!pm) return n
-        const meta = { ...(pm.metadata || {}) } as Record<string, unknown>
-        if (nextGroupId) meta.frameLockGroupId = nextGroupId
-        else delete meta.frameLockGroupId
-        return {
-          ...n,
-          data: {
-            ...n.data,
-            promptMessage: { ...pm, metadata: meta },
-          },
-        }
-      })
-    )
-    setFrameLockUi({ hasMulti: true, locked: !alreadyLocked })
-    window.dispatchEvent(new Event('tt-frame-lock-changed'))
-    void persistFrameMetaPatches(selected, (meta) => {
-      const next = { ...meta }
-      if (nextGroupId) next.frameLockGroupId = nextGroupId
-      else delete next.frameLockGroupId
-      return next
-    }).catch((err) => console.error('Failed to persist frame-group lock:', err))
-  }
-
   // Update panel styling when fillColor, borderColor, borderStyle, or borderWeight changes
   // Apply to selected panels or panels connected to selected edge
   // Also save to database (message metadata)
@@ -1064,7 +869,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           { id: 'insertGroup2', width: 252 }, // Link, Symbols, Date (72 + 92 + 72 + container padding)
           { id: 'insertGroup1', width: 237 + 17 }, // Table, File, Camera (72 + 67 + 82 + container padding) + divider after
           { id: 'undoRedo', width: 70 },
-          { id: 'lock', width: 40 },
         ]
         : editMenuPillMode === 'view'
           ? [
@@ -1073,7 +877,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             { id: 'boardStyle', width: 118 },
             { id: 'snap', width: 40 },
             { id: 'undoRedo', width: 70 },
-              { id: 'lock', width: 40 },
           ]
           : editMenuPillMode === 'draw'
             ? [
@@ -1095,19 +898,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               { id: 'drawGroup2', width: 44 + 5 }, // Eraser (44px) + divider after (5px)
               { id: 'drawGroup1', width: 108 + 5 }, // Lasso, Vertical, Horizontal (108px) + divider after (5px)
               { id: 'undoRedo', width: 70 },
-                  { id: 'lock', width: 88 }, // Board lock + / + frame lock
             ]
             : [
-              // Home mode buttons (formatting options)
-              { id: 'arrows', width: 120 }, // Arrow + Line + Curved/Boxed dropdowns
-              { id: 'panelControls', width: 120 }, // Fill Color + Border Color + Border Weight + Border Style (4 buttons * 28px + gaps)
-              { id: 'alignment', width: 40 },
-              { id: 'formatting', width: 180 }, // Bold, Italic, Underline, Strike, Highlight
-              { id: 'list', width: 40 },
-              { id: 'heading', width: 50 },
-              { id: 'paint', width: 40 },
+              // Home mode — formatting / fill / thread / locks moved to text, frame, and thread menus
+              { id: 'arrows', width: 40 }, // Layout arrow direction only
               { id: 'undoRedo', width: 70 },
-                  { id: 'lock', width: 88 }, // Board lock + / + frame lock
             ]
 
       // Calculate total width needed
@@ -1158,73 +953,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     >
       {/* Left Section - collapsible items */}
       <div ref={leftSectionRef} className="flex items-center gap-1 flex-shrink min-w-0">
-        {/* Board lock / frame lock — pin to board vs lock selected frames together */}
-        {!isItemHidden('lock') && (
-          <>
-            <div className="flex items-center px-1.5 flex-shrink-0 gap-0.5">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleToggleBoardLock}
-                className={cn(
-                  'h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0',
-                  boardLockUi.hasSelection &&
-                    boardLockUi.locked &&
-                    'bg-gray-100 dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100'
-                )}
-                disabled={!reactFlowInstance || !boardLockUi.hasSelection}
-                title={
-                  !boardLockUi.hasSelection
-                    ? 'Select a frame to lock to the board'
-                    : boardLockUi.locked
-                      ? 'Unlock from board'
-                      : 'Lock to board'
-                }
-                aria-label={boardLockUi.locked ? 'Unlock from board' : 'Lock to board'}
-              >
-                <LockSubIcon
-                  locked={boardLockUi.hasSelection && boardLockUi.locked}
-                  SubIcon={FileText}
-                />
-              </Button>
-              <span
-                className="text-gray-400 dark:text-gray-500 text-sm font-medium select-none px-0.5"
-                aria-hidden
-              >
-                /
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleToggleFrameLock}
-                className={cn(
-                  'h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0',
-                  frameLockUi.hasMulti &&
-                    frameLockUi.locked &&
-                    'bg-gray-100 dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100'
-                )}
-                disabled={!reactFlowInstance || !frameLockUi.hasMulti}
-                title={
-                  !frameLockUi.hasMulti
-                    ? 'Select 2+ frames to lock together'
-                    : frameLockUi.locked
-                      ? 'Unlock frames from each other'
-                      : 'Lock frames to each other'
-                }
-                aria-label={
-                  frameLockUi.locked ? 'Unlock frames from each other' : 'Lock frames to each other'
-                }
-              >
-                <LockSubIcon
-                  locked={frameLockUi.hasMulti && frameLockUi.locked}
-                  SubIcon={Square}
-                />
-              </Button>
-            </div>
-            <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-1 flex-shrink-0" />
-          </>
-        )}
-
         {/* Undo/Redo Controls */}
         {!isItemHidden('undoRedo') && (
           <>
@@ -1282,9 +1010,53 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 <Redo2 className="h-4 w-4" />
               </Button>
             </div>
-            {/* Slash separator after undo/redo through thread styling */}
+            {/* Slash separator after undo/redo */}
             <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
           </>
+        )}
+
+        {/* Layout arrow direction — stays in Home; thread style moved to the thread click menu */}
+        {editMenuPillMode === 'home' && !isItemHidden('arrows') && (
+          <DropdownMenu open={openDropdown === 'arrowDirection'} onOpenChange={(open) => handleDropdownOpenChange('arrowDirection', open)}>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 text-gray-600 hover:text-gray-900 hover:bg-gray-100 flex-shrink-0"
+              >
+                {arrowDirection === 'down' && <ArrowDown className="h-4 w-4" />}
+                {arrowDirection === 'up' && <ArrowUp className="h-4 w-4" />}
+                {arrowDirection === 'left' && <ArrowLeft className="h-4 w-4" />}
+                {arrowDirection === 'right' && <ArrowRight className="h-4 w-4" />}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
+              <DropdownMenuItem
+                onClick={() => setArrowDirection('down')}
+                className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'down' && 'bg-gray-100')}
+              >
+                <ArrowDown className="h-4 w-4" />
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => setArrowDirection('right')}
+                className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'right' && 'bg-gray-100')}
+              >
+                <ArrowRight className="h-4 w-4" />
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => setArrowDirection('left')}
+                className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'left' && 'bg-gray-100')}
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => setArrowDirection('up')}
+                className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'up' && 'bg-gray-100')}
+              >
+                <ArrowUp className="h-4 w-4" />
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
 
         {/* Insert Mode Buttons - Table, File, Camera, Link, Symbols, Date */}
@@ -2632,36 +2404,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <DropdownMenuSeparator />
                   </>
                 )}
-                {isItemHidden('lock') && reactFlowInstance && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={handleToggleBoardLock}
-                      disabled={!boardLockUi.hasSelection}
-                    >
-                      <span className="mr-2 inline-flex">
-                        <LockSubIcon
-                          locked={boardLockUi.hasSelection && boardLockUi.locked}
-                          SubIcon={FileText}
-                        />
-                      </span>
-                      {boardLockUi.locked ? 'Unlock from board' : 'Lock to board'}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={handleToggleFrameLock}
-                      disabled={!frameLockUi.hasMulti}
-                    >
-                      <span className="mr-2 inline-flex">
-                        <LockSubIcon
-                          locked={frameLockUi.hasMulti && frameLockUi.locked}
-                          SubIcon={Square}
-                        />
-                      </span>
-                      {frameLockUi.locked
-                        ? 'Unlock frames from each other'
-                        : 'Lock frames to each other'}
-                    </DropdownMenuItem>
-                  </>
-                )}
               </>
             ) : editMenuPillMode === 'view' ? (
               <>
@@ -2703,36 +2445,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       Redo
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
-                  </>
-                )}
-                {isItemHidden('lock') && reactFlowInstance && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={handleToggleBoardLock}
-                      disabled={!boardLockUi.hasSelection}
-                    >
-                      <span className="mr-2 inline-flex">
-                        <LockSubIcon
-                          locked={boardLockUi.hasSelection && boardLockUi.locked}
-                          SubIcon={FileText}
-                        />
-                      </span>
-                      {boardLockUi.locked ? 'Unlock from board' : 'Lock to board'}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={handleToggleFrameLock}
-                      disabled={!frameLockUi.hasMulti}
-                    >
-                      <span className="mr-2 inline-flex">
-                        <LockSubIcon
-                          locked={frameLockUi.hasMulti && frameLockUi.locked}
-                          SubIcon={Square}
-                        />
-                      </span>
-                      {frameLockUi.locked
-                        ? 'Unlock frames from each other'
-                        : 'Lock frames to each other'}
-                    </DropdownMenuItem>
                   </>
                 )}
               </>
@@ -2887,71 +2599,10 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <DropdownMenuSeparator />
                   </>
                 )}
-                {isItemHidden('lock') && reactFlowInstance && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={handleToggleBoardLock}
-                      disabled={!boardLockUi.hasSelection}
-                    >
-                      <span className="mr-2 inline-flex">
-                        <LockSubIcon
-                          locked={boardLockUi.hasSelection && boardLockUi.locked}
-                          SubIcon={FileText}
-                        />
-                      </span>
-                      {boardLockUi.locked ? 'Unlock from board' : 'Lock to board'}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={handleToggleFrameLock}
-                      disabled={!frameLockUi.hasMulti}
-                    >
-                      <span className="mr-2 inline-flex">
-                        <LockSubIcon
-                          locked={frameLockUi.hasMulti && frameLockUi.locked}
-                          SubIcon={Square}
-                        />
-                      </span>
-                      {frameLockUi.locked
-                        ? 'Unlock frames from each other'
-                        : 'Lock frames to each other'}
-                    </DropdownMenuItem>
-                  </>
-                )}
               </>
             ) : (
               <>
                 {/* Home mode items (formatting options) */}
-                {isItemHidden('lock') && reactFlowInstance && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={handleToggleBoardLock}
-                      disabled={!boardLockUi.hasSelection}
-                    >
-                      <span className="mr-2 inline-flex">
-                        <LockSubIcon
-                          locked={boardLockUi.hasSelection && boardLockUi.locked}
-                          SubIcon={FileText}
-                        />
-                      </span>
-                      {boardLockUi.locked ? 'Unlock from board' : 'Lock to board'}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={handleToggleFrameLock}
-                      disabled={!frameLockUi.hasMulti}
-                    >
-                      <span className="mr-2 inline-flex">
-                        <LockSubIcon
-                          locked={frameLockUi.hasMulti && frameLockUi.locked}
-                          SubIcon={Square}
-                        />
-                      </span>
-                      {frameLockUi.locked
-                        ? 'Unlock frames from each other'
-                        : 'Lock frames to each other'}
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
                 {isItemHidden('undoRedo') && editor && (
                   <>
                     <DropdownMenuItem
