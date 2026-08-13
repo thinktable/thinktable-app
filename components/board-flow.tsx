@@ -68,7 +68,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { ArrowDown, GripVertical, MousePointer2, Hand, Map as MapIcon, Minimize2, Maximize2 } from 'lucide-react'
+import { ArrowDown, GripVertical, MousePointer2, Hand, Plus, Minus } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
@@ -7741,114 +7741,65 @@ function BoardFlowInner({
             checkAndHideMinimap(e.relatedTarget as HTMLElement)
           }}
         >
-          {/* Minimap controls — fixed top-left of Free nav (no remapping) */}
-          <div className="absolute -top-1 -left-1 z-20">
-            {/* Map open/close */}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              data-minimap-pill-context
-              className={cn(
-                // White chrome + shadow
-                'relative h-5 w-5 p-0 rounded-md border-0 shadow-sm bg-white dark:bg-[#0f0f0f] focus-visible:ring-0 focus-visible:ring-offset-0',
-                minimapCollapsed || isScrollingToBottom
-                  ? 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#171717]'
-                  : 'text-gray-900 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#171717]'
-              )}
-              title={minimapCollapsed || isScrollingToBottom ? 'Show minimap' : 'Hide minimap'}
-              aria-label={minimapCollapsed || isScrollingToBottom ? 'Show minimap' : 'Hide minimap'}
-              aria-pressed={!(minimapCollapsed || isScrollingToBottom)}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
-              }}
-              onClick={(e) => {
-                e.stopPropagation()
-                // Phone AI jumped: click when closed → pin open; click when pinned → close
-                if (phoneAiOpen) {
-                  if (!aiDockMinimapOpen || !aiDockMinimapPinned) {
-                    setAiDockMinimapOpen(true)
-                    setAiDockMinimapPinned(true)
-                    aiDockMinimapPinnedRef.current = true
-                  } else {
-                    setAiDockMinimapOpen(false)
-                    setAiDockMinimapPinned(false)
-                    aiDockMinimapPinnedRef.current = false
-                  }
-                  return
-                }
-                // Closed → open and stay (shown). Open → hide.
-                if (minimapMode === 'shown' && !isMinimapHidden) {
-                  setMinimapMode('hidden')
-                  setIsMinimapHidden(true)
-                  setIsMinimapManuallyHidden(true)
-                  wasAutoHiddenRef.current = false
+          {/* Minimap +/- — circle, top-left of Free nav; fill matches nav menu */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-minimap-pill-context
+            className={cn(
+              'absolute -top-1 -left-1 z-20 h-5 w-5 p-0 rounded-full border-0 shadow-sm focus-visible:ring-0 focus-visible:ring-offset-0',
+              // Same fill as Free nav (board vs white input-only)
+              isChatSidebarOpen && !aiChatHasTranscript
+                ? 'bg-white dark:bg-[#0f0f0f]'
+                : 'bg-gray-50 dark:bg-[#0f0f0f]',
+              minimapCollapsed || isScrollingToBottom
+                ? 'text-gray-500 dark:text-gray-400 hover:opacity-90'
+                : 'text-gray-900 dark:text-gray-100 hover:opacity-90'
+            )}
+            title={minimapCollapsed || isScrollingToBottom ? 'Show minimap' : 'Hide minimap'}
+            aria-label={minimapCollapsed || isScrollingToBottom ? 'Show minimap' : 'Hide minimap'}
+            aria-pressed={!(minimapCollapsed || isScrollingToBottom)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              // Phone AI jumped: click when closed → pin open; click when pinned → close
+              if (phoneAiOpen) {
+                if (!aiDockMinimapOpen || !aiDockMinimapPinned) {
+                  setAiDockMinimapOpen(true)
+                  setAiDockMinimapPinned(true)
+                  aiDockMinimapPinnedRef.current = true
                 } else {
-                  setMinimapMode('shown')
-                  setIsMinimapHidden(false)
-                  setIsMinimapManuallyHidden(false)
-                  wasAutoHiddenRef.current = false
+                  setAiDockMinimapOpen(false)
+                  setAiDockMinimapPinned(false)
+                  aiDockMinimapPinnedRef.current = false
                 }
-              }}
-            >
-              <MapIcon className="h-2.5 w-2.5" />
-            </Button>
-            {/* Secondary minimize/expand — bottom-right of Map icon */}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              data-minimap-pill-context
-              className={cn(
-                'absolute -bottom-1.5 -right-1.5 h-3.5 w-3.5 p-0 rounded border-0 shadow-sm bg-white dark:bg-[#0f0f0f] focus-visible:ring-0 focus-visible:ring-offset-0',
-                minimapCollapsed || isScrollingToBottom
-                  ? 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#171717]'
-                  : 'text-gray-900 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#171717]'
-              )}
-              title={minimapCollapsed || isScrollingToBottom ? 'Expand minimap' : 'Minimize minimap'}
-              aria-label={minimapCollapsed || isScrollingToBottom ? 'Expand minimap' : 'Minimize minimap'}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
-              }}
-              onClick={(e) => {
-                e.stopPropagation()
-                // Same show/hide as Map — minimize when open, expand when closed
-                if (phoneAiOpen) {
-                  if (!aiDockMinimapOpen || !aiDockMinimapPinned) {
-                    setAiDockMinimapOpen(true)
-                    setAiDockMinimapPinned(true)
-                    aiDockMinimapPinnedRef.current = true
-                  } else {
-                    setAiDockMinimapOpen(false)
-                    setAiDockMinimapPinned(false)
-                    aiDockMinimapPinnedRef.current = false
-                  }
-                  return
-                }
-                if (minimapMode === 'shown' && !isMinimapHidden) {
-                  setMinimapMode('hidden')
-                  setIsMinimapHidden(true)
-                  setIsMinimapManuallyHidden(true)
-                  wasAutoHiddenRef.current = false
-                } else {
-                  setMinimapMode('shown')
-                  setIsMinimapHidden(false)
-                  setIsMinimapManuallyHidden(false)
-                  wasAutoHiddenRef.current = false
-                }
-              }}
-            >
-              {minimapCollapsed || isScrollingToBottom ? (
-                <Maximize2 className="h-2 w-2" />
-              ) : (
-                <Minimize2 className="h-2 w-2" />
-              )}
-            </Button>
-          </div>
+                return
+              }
+              // Closed → open and stay (shown). Open → hide.
+              if (minimapMode === 'shown' && !isMinimapHidden) {
+                setMinimapMode('hidden')
+                setIsMinimapHidden(true)
+                setIsMinimapManuallyHidden(true)
+                wasAutoHiddenRef.current = false
+              } else {
+                setMinimapMode('shown')
+                setIsMinimapHidden(false)
+                setIsMinimapManuallyHidden(false)
+                wasAutoHiddenRef.current = false
+              }
+            }}
+          >
+            {minimapCollapsed || isScrollingToBottom ? (
+              <Plus className="h-2.5 w-2.5" strokeWidth={2.5} />
+            ) : (
+              <Minus className="h-2.5 w-2.5" strokeWidth={2.5} />
+            )}
+          </Button>
           <div
             className={cn(
               // Board fill when chat closed or chat box (transcript) open; white only for input-only open
