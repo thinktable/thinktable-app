@@ -413,9 +413,9 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
         >
           <div
             ref={mapDockContentRef}
-            // Solid board fill when open; never steal taps while closed (brand / Free nav sit under z-30)
+            // Transparent stack: transcript / chrome / prompt are separate rounded cards with map showing in gaps
             className={cn(
-              'mx-auto w-full max-w-lg flex flex-col gap-1.5 bg-gray-50 dark:bg-[#0f0f0f]',
+              'mx-auto w-full max-w-lg flex flex-col gap-1.5 bg-transparent',
               isChatSidebarOpen ? 'pointer-events-auto' : 'pointer-events-none'
             )}
           >
@@ -435,8 +435,13 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
               </div>
             )}
             {isChatSidebarOpen && (
-              <div className="flex items-center gap-1 px-0.5 min-w-0 bg-transparent border-0 shadow-none">
-                {/* Title/filter + new/close float on the solid board-colored column */}
+              // Mid chrome: own rounded board-fill card — not fused to transcript or prompt
+              <div
+                className={cn(
+                  'flex items-center gap-1 px-1.5 py-0.5 min-w-0 rounded-xl',
+                  'bg-gray-50 dark:bg-[#0f0f0f]' // Board-fill card only — no border
+                )}
+              >
                 <div className="flex-1 min-w-0 bg-transparent">
                   <AiThreadPicker
                     boardId={conversationId}
