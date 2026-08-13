@@ -65,6 +65,7 @@ type TipTapBlockHandlesProps = {
   conversationId?: string // Page id — extract a block onto the page as its own frame
   boardInTargets?: BoardInTarget[]
   onPageTurnInto?: (blockType: 'board' | 'boardIn', boardInParentId?: string | null) => void
+  notionConnected?: boolean // Notion-connected frame → slimmer block ⋮⋮ menu
 }
 
 type DropLine = { top: number; left: number; width: number } // Viewport dashed insert marker
@@ -227,6 +228,7 @@ export function TipTapBlockHandles({
   conversationId,
   boardInTargets = [],
   onPageTurnInto,
+  notionConnected = false,
 }: TipTapBlockHandlesProps) {
   const { screenToFlowPosition } = useReactFlow() // Drop-on-page → flow coords for a new frame
   const rfZoom = useStore((s) => s.transform[2] || 1) // Live zoom — re-render on board zoom so grips can counter-scale to a constant screen size
@@ -1124,6 +1126,7 @@ export function TipTapBlockHandles({
             showAddChild={false}
             selectedCount={menuCount}
             canUngroup={false}
+            notionConnected={notionConnected} // Slimmer ⋮⋮ when the frame is Notion-linked
             onAction={onAction}
             onClose={closeMenu}
           />,

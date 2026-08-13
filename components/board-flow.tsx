@@ -91,6 +91,7 @@ import {
   migrateMessagesToBlockFlag,
   newBlockMetadata,
   persistBlockPlacement,
+  readNotionConnection,
   ungroupBlocks,
 } from '@/lib/blocks' // blocks, groups, page-body ensure
 import { absFlowPosition, nodeFlowSize, useBlockGroupDrag } from './use-block-group-drag' // Drag attach/detach between groups / page
@@ -5825,6 +5826,67 @@ function BoardFlowInner({
     [frameActionTargets, nodes, setNodes, takeSnapshot]
   )
 
+  // Connect / sync-mode / unlink Notion on the focused frame(s)
+  const handleNotionConnection = useCallback(
+    async (next: { connected: boolean; sync?: 'live' | 'manual' }) => {
+      const targets = frameActionTargets()
+      if (targets.length === 0) return
+      takeSnapshot?.()
+      const ids = new Set(targets.map((n) => n.id))
+      const patchMeta = (meta: Record<string, unknown>) => {
+        const out = { ...meta }
+        if (!next.connected) {
+          out.notionConnected = false // Explicit unlink (keeps imported notionPageId)
+          delete out.notionSync
+        } else {
+          out.notionConnected = true
+          out.notionSync = next.sync === 'manual' ? 'manual' : 'live'
+        }
+        return out
+      }
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (!ids.has(n.id)) return n
+          const pm = n.data?.promptMessage
+          if (!pm) return n
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              promptMessage: { ...pm, metadata: patchMeta({ ...((pm.metadata as Record<string, unknown>) || {}) }) },
+            },
+          }
+        })
+      )
+      setRightClickedNode((prev) => {
+        if (!prev || !ids.has(prev.id)) return prev
+        const pm = prev.data?.promptMessage
+        if (!pm) return prev
+        return {
+          ...prev,
+          data: {
+            ...prev.data,
+            promptMessage: { ...pm, metadata: patchMeta({ ...((pm.metadata as Record<string, unknown>) || {}) }) },
+          },
+        }
+      })
+      const supabase = createClient()
+      for (const n of targets) {
+        const msgId = n.data?.promptMessage?.id as string | undefined
+        if (!msgId) continue
+        const live = nodes.find((x) => x.id === n.id) || n
+        const pm = live.data?.promptMessage
+        const meta = patchMeta({ ...((pm?.metadata as Record<string, unknown>) || {}) })
+        try {
+          await supabase.from('messages').update({ metadata: meta }).eq('id', msgId)
+        } catch (err) {
+          console.error('Failed to save Notion connection:', err)
+        }
+      }
+    },
+    [frameActionTargets, nodes, setNodes, takeSnapshot]
+  )
+
   // Pin selected frames to the board (not draggable)
   const handleToggleBoardLock = useCallback(() => {
     const targets = frameActionTargets()
@@ -5972,6 +6034,18 @@ function BoardFlowInner({
         case 'lockFramesTogether':
           handleToggleFrameLock()
           break
+        case 'connectNotion':
+          void handleNotionConnection({ connected: true, sync: 'live' })
+          break
+        case 'setNotionSync':
+          void handleNotionConnection({
+            connected: true,
+            sync: payload?.notionSync === 'manual' ? 'manual' : 'live',
+          })
+          break
+        case 'removeNotionConnection':
+          void handleNotionConnection({ connected: false })
+          break
         // Baseline stubs — menu entries present; behavior later
         case 'color':
         case 'listFormat':
@@ -5998,6 +6072,7 @@ function BoardFlowInner({
       handleSetFrameColor,
       handleToggleBoardLock,
       handleToggleFrameLock,
+      handleNotionConnection,
       nodes,
       rightClickedNode,
       addChildNode,
@@ -8264,6 +8339,16 @@ function BoardFlowInner({
           boardLocked={
             (rightClickedNode.data?.promptMessage?.metadata as Record<string, unknown> | undefined)
               ?.boardLocked === true
+          }
+          notionConnected={
+            readNotionConnection(
+              rightClickedNode.data?.promptMessage?.metadata as Record<string, unknown> | undefined
+            ).connected
+          }
+          notionSync={
+            readNotionConnection(
+              rightClickedNode.data?.promptMessage?.metadata as Record<string, unknown> | undefined
+            ).sync
           }
           canLockFramesTogether={
             nodes.filter((n) => n.selected && n.type === 'chatPanel').length >= 2

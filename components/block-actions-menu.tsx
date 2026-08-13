@@ -3,7 +3,7 @@
 // Notion-style block actions menu — baseline options (Turn into / Color / etc.);
 // wired actions work now; submenu stubs are intentional until we flesh them out.
 
-import { useEffect, useMemo, useRef, useState } from 'react' // Search, submenu, focus
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react' // Search, submenu, focus
 import {
   Check,
   ChevronDown,
@@ -62,7 +62,12 @@ import {
   HelpCircle,
   Languages,
   AlignLeft,
-} from 'lucide-react' // Action + Turn into + Property icons
+  Cable,
+  Hand,
+  Unplug,
+} from 'lucide-react' // Action + Turn into + Property + Connections icons
+import { NotionMarkIcon } from '@/components/notion-mark-icon' // Notion row in Connections
+import type { NotionSyncMode } from '@/lib/blocks' // Live vs Manual sync
 import { Button } from '@/components/ui/button' // Row buttons
 import { cn } from '@/lib/utils' // Class merge
 import { LegoBrickIcon } from './lego-brick-icon' // Frame-group lock: two bricks, top one stud back
@@ -123,6 +128,9 @@ export type BlockActionId =
   | 'setBorderColor' // Frame border stroke
   | 'lockToBoard' // Pin selected frames so they cannot drag
   | 'lockFramesTogether' // Rigid-group lock for ≥2 selected frames
+  | 'connectNotion' // Connections → Notion (link this frame)
+  | 'setNotionSync' // Live Sync vs Manual
+  | 'removeNotionConnection' // Unlink Notion from this frame
 
 export type BlockActionPayload = {
   blockType?: BlockTypeId // Present when action === 'turnInto'
@@ -132,6 +140,7 @@ export type BlockActionPayload = {
   frameShape?: FrameShapeChoice // Present when action === 'setFrameShape'
   fillColor?: string // Empty string = transparent fill
   borderColor?: string // Empty string = transparent border
+  notionSync?: NotionSyncMode // Present when action === 'setNotionSync'
 }
 
 /** AI Autofill rows in the Property pane (stubs until wired). */
@@ -194,6 +203,12 @@ export type BlockActionsMenuProps = {
   framesLockedTogether?: boolean
   /** Enables “Lock frames to each other” (≥2 selected frames). */
   canLockFramesTogether?: boolean
+  /** Frame is Notion-connected — show Notion under Connections. */
+  notionConnected?: boolean
+  /** Current Notion sync mode (Live vs Manual). */
+  notionSync?: NotionSyncMode
+  /** Slim Live Sync / Manual / Remove menu (Notion footer ⋮⋮). */
+  variant?: 'default' | 'notionConnection'
   lastEditedLabel?: string // Footer metadata
   onAction: (action: BlockActionId, payload?: BlockActionPayload) => void
   onClose: () => void
@@ -267,7 +282,7 @@ type RowDef =
       shortcut?: string
       icon: React.ReactNode
       danger?: boolean
-      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape' | 'fillColor' | 'borderColor'
+      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape' | 'fillColor' | 'borderColor' | 'connections' | 'notionConnection'
       hidden?: boolean
       beta?: boolean
     }
@@ -408,6 +423,9 @@ export function BlockActionsMenu({
   boardLocked = false,
   framesLockedTogether = false,
   canLockFramesTogether = false,
+  notionConnected = false,
+  notionSync = 'live',
+  variant = 'default',
   lastEditedLabel,
   onAction,
   onClose,
@@ -419,11 +437,21 @@ export function BlockActionsMenu({
   const [propertyQuery, setPropertyQuery] = useState('') // Filter inside the Property pane
   const [showPropertySearch, setShowPropertySearch] = useState(false) // Magnifier next to Property
   const [openSubmenu, setOpenSubmenu] = useState<
-    'turnInto' | 'boardIn' | 'frameShape' | 'fillColor' | 'borderColor' | null
+    | 'turnInto'
+    | 'boardIn'
+    | 'frameShape'
+    | 'fillColor'
+    | 'borderColor'
+    | 'connections'
+    | 'notionConnection'
+    | null
   >(null) // Flyout
   const inputRef = useRef<HTMLInputElement>(null) // Autofocus search
   const propertySearchRef = useRef<HTMLInputElement>(null) // Focus when Property search opens
   const rootRef = useRef<HTMLDivElement>(null) // Position flyout
+  const connectionsRowRef = useRef<HTMLButtonElement>(null) // Align Connections picker to that row
+  const notionRowRef = useRef<HTMLButtonElement>(null) // Align Notion sync menu to that row
+  const [rowFlyoutTop, setRowFlyoutTop] = useState(0) // px from menu top → Connections / Notion row
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -432,6 +460,19 @@ export function BlockActionsMenu({
   useEffect(() => {
     if (showPropertySearch) propertySearchRef.current?.focus() // Caret in Property search
   }, [showPropertySearch])
+
+  // Park Connections / Notion flyouts beside their row (not at the menu top)
+  useLayoutEffect(() => {
+    const row =
+      openSubmenu === 'connections'
+        ? connectionsRowRef.current
+        : openSubmenu === 'notionConnection'
+          ? notionRowRef.current
+          : null
+    const root = rootRef.current
+    if (!row || !root) return
+    setRowFlyoutTop(row.getBoundingClientRect().top - root.getBoundingClientRect().top)
+  }, [openSubmenu, notionConnected])
 
   const rows = useMemo((): RowDef[] => {
     const list: RowDef[] = [
@@ -494,13 +535,14 @@ export function BlockActionsMenu({
         id: 'addChild',
         label: 'Add child',
         icon: <Plus className="h-4 w-4" />,
-        hidden: !showAddChild,
+        hidden: !showAddChild || (notionConnected && !showFrameShape), // Notion block ⋮⋮ skips Add child
       },
       {
         kind: 'action',
         id: 'condense',
         label: isCollapsed ? 'Expand' : 'Condense',
         icon: isCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />,
+        hidden: notionConnected && !showFrameShape, // Notion block ⋮⋮ skips Condense
       },
       {
         kind: 'action',
@@ -542,17 +584,37 @@ export function BlockActionsMenu({
       },
       {
         kind: 'action',
+        id: 'connectNotion',
+        label: 'Connections',
+        icon: <Cable className="h-4 w-4" />,
+        submenu: 'connections', // Click → Notion picker
+        hidden: !showFrameShape, // Frame menu only
+      },
+      {
+        kind: 'action',
+        id: 'setNotionSync',
+        label: 'Notion',
+        icon: (
+          <NotionMarkIcon
+            className={cn('h-4 w-4', notionSync === 'live' ? 'text-[#2383e2]' : 'text-gray-500')}
+          />
+        ),
+        submenu: 'notionConnection', // Hover → Live Sync / Manual / Remove
+        hidden: !showFrameShape || !notionConnected, // Only after Notion is selected
+      },
+      {
+        kind: 'action',
         id: 'group',
         label: 'Group',
         icon: <Group className="h-4 w-4" />,
-        hidden: selectedCount < 2,
+        hidden: selectedCount < 2 || (notionConnected && !showFrameShape),
       },
       {
         kind: 'action',
         id: 'ungroup',
         label: 'Ungroup', // Legacy wrapper around frames — not a product “block group”
         icon: <Ungroup className="h-4 w-4" />,
-        hidden: !canUngroup,
+        hidden: !canUngroup || (notionConnected && !showFrameShape),
       },
       { kind: 'separator' },
       {
@@ -612,7 +674,7 @@ export function BlockActionsMenu({
                 .includes(q)
             )))
     )
-  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape, boardLocked, framesLockedTogether, canLockFramesTogether])
+  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape, boardLocked, framesLockedTogether, canLockFramesTogether, notionConnected, notionSync])
 
   // When searching, also surface matching Turn into types as flat picks
   const turnIntoMatches = useMemo(() => {
@@ -649,6 +711,95 @@ export function BlockActionsMenu({
       items: section.items.filter((t) => t.label.toLowerCase().includes(propertyFilterQ)),
     })).filter((section) => section.items.length > 0)
   }, [propertyFilterQ])
+
+  const menuShellStyle = {
+    left: `${x}px`,
+    top: `${y}px`,
+    transform:
+      positionMode === 'fixed'
+        ? openLeft
+          ? 'translate(calc(-100% - 8px), 4px)'
+          : 'translate(8px, 4px)'
+        : 'translate(-50%, -100%)',
+    transformOrigin:
+      (positionMode === 'fixed' ? (openLeft ? 'top right' : 'top left') : 'center bottom') as const,
+    marginTop: positionMode === 'fixed' ? 0 : '-8px',
+  }
+
+  // Slim menu for the Notion footer ⋮⋮ (Live Sync / Manual / Remove)
+  if (variant === 'notionConnection') {
+    return (
+      <div
+        ref={rootRef}
+        className={cn(
+          'block-actions-menu node-popup z-[1000] overflow-visible bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[200px]',
+          positionMode === 'fixed' ? 'fixed' : 'absolute',
+          className
+        )}
+        style={menuShellStyle}
+        onClick={(e) => {
+          e.stopPropagation()
+          e.preventDefault()
+        }}
+        onMouseDown={(e) => {
+          e.stopPropagation()
+          e.preventDefault()
+        }}
+      >
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            'justify-start text-sm h-8 px-2 font-normal w-full',
+            notionSync === 'live' && 'bg-blue-50 dark:bg-blue-950/40'
+          )}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onAction('setNotionSync', { notionSync: 'live' })
+            onClose()
+          }}
+        >
+          <RefreshCw className="h-4 w-4 mr-2 text-gray-500" />
+          <span className="flex-1 text-left">Live Sync</span>
+          {notionSync === 'live' && <Check className="h-3.5 w-3.5 text-gray-500" />}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            'justify-start text-sm h-8 px-2 font-normal w-full',
+            notionSync === 'manual' && 'bg-blue-50 dark:bg-blue-950/40'
+          )}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onAction('setNotionSync', { notionSync: 'manual' })
+            onClose()
+          }}
+        >
+          <Hand className="h-4 w-4 mr-2 text-gray-500" />
+          <span className="flex-1 text-left">Manual</span>
+          {notionSync === 'manual' && <Check className="h-3.5 w-3.5 text-gray-500" />}
+        </Button>
+        <div className="my-1 h-px bg-gray-100 dark:bg-[#2f2f2f] mx-1" />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="justify-start text-sm h-8 px-2 font-normal w-full text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onAction('removeNotionConnection')
+            onClose()
+          }}
+        >
+          <Unplug className="h-4 w-4 mr-2" />
+          <span className="flex-1 text-left">Remove Connection</span>
+        </Button>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -721,9 +872,19 @@ export function BlockActionsMenu({
           const isShapeOpen = row.submenu === 'frameShape' && openSubmenu === 'frameShape'
           const isFillOpen = row.submenu === 'fillColor' && openSubmenu === 'fillColor'
           const isBorderOpen = row.submenu === 'borderColor' && openSubmenu === 'borderColor'
+          const isConnectionsOpen = row.submenu === 'connections' && openSubmenu === 'connections'
+          const isNotionConnOpen =
+            row.submenu === 'notionConnection' && openSubmenu === 'notionConnection'
           return (
             <Button
               key={row.id}
+              ref={
+                row.submenu === 'connections'
+                  ? connectionsRowRef
+                  : row.submenu === 'notionConnection'
+                    ? notionRowRef
+                    : undefined
+              }
               variant="ghost"
               size="sm"
               onMouseEnter={() => {
@@ -731,6 +892,8 @@ export function BlockActionsMenu({
                 else if (row.submenu === 'frameShape') setOpenSubmenu('frameShape')
                 else if (row.submenu === 'fillColor') setOpenSubmenu('fillColor')
                 else if (row.submenu === 'borderColor') setOpenSubmenu('borderColor')
+                else if (row.submenu === 'notionConnection') setOpenSubmenu('notionConnection') // Hover → sync menu
+                else if (row.submenu === 'connections') return // Click-only picker
                 else setOpenSubmenu(null)
               }}
               onClick={(e) => {
@@ -752,6 +915,14 @@ export function BlockActionsMenu({
                   setOpenSubmenu((s) => (s === 'borderColor' ? null : 'borderColor'))
                   return
                 }
+                if (row.submenu === 'connections') {
+                  setOpenSubmenu((s) => (s === 'connections' ? null : 'connections')) // Click → Notion
+                  return
+                }
+                if (row.submenu === 'notionConnection') {
+                  setOpenSubmenu((s) => (s === 'notionConnection' ? null : 'notionConnection'))
+                  return
+                }
                 // Submenus without UI yet — fire stub action and close
                 if (row.submenu) {
                   onAction(row.id)
@@ -763,7 +934,7 @@ export function BlockActionsMenu({
               className={cn(
                 'justify-start text-sm h-8 px-2 font-normal',
                 row.danger && 'text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950',
-                (isTurnIntoOpen || isShapeOpen || isFillOpen || isBorderOpen) && 'bg-gray-100 dark:bg-[#2a2a2a]'
+                (isTurnIntoOpen || isShapeOpen || isFillOpen || isBorderOpen || isConnectionsOpen || isNotionConnOpen) && 'bg-gray-100 dark:bg-[#2a2a2a]'
               )}
             >
               <span className="mr-2 text-gray-500 dark:text-gray-400">{row.icon}</span>
@@ -1122,6 +1293,91 @@ export function BlockActionsMenu({
             }}
           >
             Transparent
+          </Button>
+        </div>
+      )}
+
+      {/* Connections — click picker (Notion) */}
+      {openSubmenu === 'connections' && (
+        <div
+          className="absolute left-full ml-1 z-[1001] min-w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+          style={{ top: rowFlyoutTop }} // Beside the Connections row
+          onMouseEnter={() => setOpenSubmenu('connections')}
+        >
+          <Button
+            variant="ghost"
+            size="sm"
+            className="justify-start text-sm h-8 px-2 font-normal w-full"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onAction('connectNotion') // Select Notion → logo + handle on the frame
+              onClose()
+            }}
+          >
+            <NotionMarkIcon className="h-4 w-4 mr-2" />
+            <span className="flex-1 text-left">Notion</span>
+          </Button>
+        </div>
+      )}
+
+      {/* Notion — hover menu: Live Sync / Manual / Remove */}
+      {openSubmenu === 'notionConnection' && (
+        <div
+          className="absolute left-full ml-1 z-[1001] min-w-[200px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+          style={{ top: rowFlyoutTop }} // Beside the Notion row
+          onMouseEnter={() => setOpenSubmenu('notionConnection')}
+        >
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn(
+              'justify-start text-sm h-8 px-2 font-normal w-full',
+              notionSync === 'live' && 'bg-blue-50 dark:bg-blue-950/40'
+            )}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onAction('setNotionSync', { notionSync: 'live' })
+              onClose()
+            }}
+          >
+            <RefreshCw className="h-4 w-4 mr-2 text-gray-500" />
+            <span className="flex-1 text-left">Live Sync</span>
+            {notionSync === 'live' && <Check className="h-3.5 w-3.5 text-gray-500" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn(
+              'justify-start text-sm h-8 px-2 font-normal w-full',
+              notionSync === 'manual' && 'bg-blue-50 dark:bg-blue-950/40'
+            )}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onAction('setNotionSync', { notionSync: 'manual' })
+              onClose()
+            }}
+          >
+            <Hand className="h-4 w-4 mr-2 text-gray-500" />
+            <span className="flex-1 text-left">Manual</span>
+            {notionSync === 'manual' && <Check className="h-3.5 w-3.5 text-gray-500" />}
+          </Button>
+          <div className="my-1 h-px bg-gray-100 dark:bg-[#2f2f2f] mx-1" />
+          <Button
+            variant="ghost"
+            size="sm"
+            className="justify-start text-sm h-8 px-2 font-normal w-full text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onAction('removeNotionConnection')
+              onClose()
+            }}
+          >
+            <Unplug className="h-4 w-4 mr-2" />
+            <span className="flex-1 text-left">Remove Connection</span>
           </Button>
         </div>
       )}

@@ -36,11 +36,14 @@ import {
   readSideStacks,
 } from '@/lib/frame-side-stacks' // Per adjust-box side stack trees
 import { findEditorBlockAtClientY } from '@/lib/tiptap/block-selection' // Click in frame padding → block at Y
+import { deleteLinkedBoardForBlock, getLinkedBoardId, isBlockContentEmpty, isBlockMeta, isBoardBodyMeta, readNotionConnection, type NotionSyncMode } from '@/lib/blocks' // Block detection + Notion connection
+import { NotionMarkIcon } from '@/components/notion-mark-icon' // Logo at bottom of a Notion-connected frame
+import { createPortal } from 'react-dom'
 import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Strip blank lines on frame deselect
 import { setAiTextSelection } from '@/lib/ai/selection-bridge' // Live highlighted-text pills in AI composer
-import type { BoardInTarget } from '@/components/block-actions-menu'
+import { BlockActionsMenu, type BoardInTarget } from '@/components/block-actions-menu'
 import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
-import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, ScanText, WrapText } from 'lucide-react' // Rotate + fit-to-text / wrap
+import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, ScanText, WrapText, GripVertical } from 'lucide-react' // Rotate + fit-to-text / wrap + Notion footer handle
 import { useAiEditSession } from '@/lib/ai/edit-session' // Pending rainbow / review focus
 
 // Helper to check if content is effectively empty (handling HTML tags)
@@ -262,7 +265,6 @@ import { BoardLinkProvider, type BoardLinkActions } from '@/lib/board-link-conte
 import { BoardOpenMenu } from '@/components/board-open-menu' // Preview/open chrome for page frames without a boardLink
 import { NestedBoardPreview, prefetchBoardEmbed } from './nested-board-preview' // Page-within-page board preview
 import { unwrapNestedFramesHtml } from '@/lib/tiptap/unwrap-nested-frames' // Flatten legacy nest wrappers
-import { deleteLinkedBoardForBlock, getLinkedBoardId, isBlockContentEmpty, isBlockMeta, isBoardBodyMeta } from '@/lib/blocks' // Block detection + empty check + delete sync
 import { applyTurnInto, bodyHtmlWithoutBoardTitle } from '@/lib/blocks/turn-into' // Page promote + strip title from board body
 import { migrateSoleDatabaseBlockToBoardLink, ensureNotionMapFrameIsBoardLink, isSoleDatabaseBlockContent, isSoleBoardLinkContent, repairBoardFrameToSoleLink } from '@/lib/notion/migrate-frame' // Notion DB map frames → boardLink; repair polluted board frames
 
@@ -409,6 +411,9 @@ function TipTapContent({
   onPageTurnInto,
   suspendContentSync = false, // True while RF frame-dragging — skip setContent remounts
   forceContentSyncKey = 0, // Bump to setContent even while editor is focused (AI eye / remove / save)
+  notionConnected = false, // Connections → Notion selected
+  notionSync = 'live', // Live Sync vs Manual
+  onNotionConnection,
 }: {
   content: string
   className?: string
@@ -437,8 +442,12 @@ function TipTapContent({
   onPageTurnInto?: (blockType: 'board' | 'boardIn', boardInParentId?: string | null) => void
   suspendContentSync?: boolean
   forceContentSyncKey?: number
+  notionConnected?: boolean
+  notionSync?: NotionSyncMode
+  onNotionConnection?: (next: { connected: boolean; sync?: NotionSyncMode }) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const [notionHandleMenu, setNotionHandleMenu] = useState<{ x: number; y: number } | null>(null) // Footer ⋮⋮
   const { setActiveEditor } = useEditorContext()
   const { canEdit } = useBoardAccess() // view/comment → read-only editors (RLS still enforces)
   // Live frame-selected flag for TipTap DOM handlers (useEditor config is not recreated each render)
@@ -461,6 +470,17 @@ function TipTapContent({
   onEditorActiveChangeRef.current = onEditorActiveChange
   const setActiveEditorRef = useRef(setActiveEditor)
   setActiveEditorRef.current = setActiveEditor
+
+  useEffect(() => {
+    if (!notionHandleMenu) return
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest?.('.block-actions-menu, [data-tt-notion-handle]')) return
+      setNotionHandleMenu(null)
+    }
+    document.addEventListener('mousedown', onDoc, true)
+    return () => document.removeEventListener('mousedown', onDoc, true)
+  }, [notionHandleMenu])
 
   const resolvedPlaceholder =
     placeholder !== undefined && placeholder !== ''
@@ -948,9 +968,59 @@ function TipTapContent({
           conversationId={conversationId}
           boardInTargets={boardInTargets}
           onPageTurnInto={onPageTurnInto}
+          notionConnected={notionConnected} // Notion-connected frames get a slimmer block ⋮⋮ menu
         />
         <EditorContent editor={editor} className="block w-full" />
+        {/* Notion connection mark: bottom of frame, left-aligned with block text; own ⋮⋮ */}
+        {notionConnected && enableBlockHandles && !isFlashcard && (
+          <div
+            className="relative mt-0.5 flex h-7 items-center"
+            data-tt-notion-footer
+          >
+            <button
+              type="button"
+              data-tt-notion-handle
+              className="nodrag nopan absolute left-0 top-1/2 z-10 flex h-5 w-5 -translate-x-[calc(100%+2px)] -translate-y-1/2 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-[#2a2a2a]"
+              title="Notion connection"
+              aria-label="Notion connection"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                setNotionHandleMenu({ x: r.left, y: r.bottom }) // Open distinct connection menu
+              }}
+            >
+              <GripVertical className="h-3.5 w-3.5" />
+            </button>
+            <NotionMarkIcon
+              className={cn('h-4 w-4', notionSync === 'live' ? 'text-[#2383e2]' : 'text-gray-500')}
+            />
+          </div>
+        )}
       </div>
+      {notionHandleMenu &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <BlockActionsMenu
+            variant="notionConnection"
+            x={notionHandleMenu.x}
+            y={notionHandleMenu.y}
+            positionMode="fixed"
+            openLeft
+            notionSync={notionSync}
+            onAction={(action, payload) => {
+              if (action === 'setNotionSync') {
+                onNotionConnection?.({ connected: true, sync: payload?.notionSync ?? 'live' })
+              } else if (action === 'removeNotionConnection') {
+                onNotionConnection?.({ connected: false })
+              }
+              setNotionHandleMenu(null)
+            }}
+            onClose={() => setNotionHandleMenu(null)}
+          />,
+          document.body
+        )}
     </div>
   )
 }
@@ -5557,6 +5627,37 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               singleLineUntilEnter={isBlock && !isFlashcard && !wrapActive} // nowrap until Enter; wrap mode (locked/unlocked) soft-wraps
               hostNodeId={id}
               conversationId={conversationId}
+              notionConnected={readNotionConnection(promptMessage?.metadata as Record<string, unknown> | undefined).connected}
+              notionSync={readNotionConnection(promptMessage?.metadata as Record<string, unknown> | undefined).sync}
+              onNotionConnection={async (next) => {
+                if (!promptMessage?.id) return
+                const existing = { ...((promptMessage.metadata as Record<string, unknown>) || {}) }
+                if (!next.connected) {
+                  existing.notionConnected = false
+                  delete existing.notionSync
+                } else {
+                  existing.notionConnected = true
+                  existing.notionSync = next.sync === 'manual' ? 'manual' : 'live'
+                }
+                setNodes((nds) =>
+                  nds.map((n) =>
+                    n.id === id
+                      ? {
+                          ...n,
+                          data: {
+                            ...n.data,
+                            promptMessage: { ...promptMessage, metadata: existing },
+                          },
+                        }
+                      : n
+                  )
+                )
+                try {
+                  await supabase.from('messages').update({ metadata: existing }).eq('id', promptMessage.id)
+                } catch (err) {
+                  console.error('Failed to save Notion connection:', err)
+                }
+              }}
               boardInTargets={(() => {
                 const convs =
                   (queryClient.getQueryData(['conversations']) as

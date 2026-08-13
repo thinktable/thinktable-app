@@ -96,6 +96,24 @@ export function isBlockContentEmpty(content: string | undefined | null): boolean
   return content.replace(/<[^>]*>/g, '').trim().length === 0
 }
 
+/** Notion connection sync mode on a frame (Connections menu). */
+export type NotionSyncMode = 'live' | 'manual'
+
+/** Read whether this frame is Notion-connected and which sync mode is on. */
+export function readNotionConnection(meta?: Record<string, unknown> | null): {
+  connected: boolean
+  sync: NotionSyncMode
+} {
+  if (!meta) return { connected: false, sync: 'live' }
+  if (meta.notionConnected === false) return { connected: false, sync: 'live' } // Explicit unlink
+  const sync: NotionSyncMode = meta.notionSync === 'manual' ? 'manual' : 'live'
+  if (meta.notionConnected === true) return { connected: true, sync }
+  // Imported Notion frames already have a page/url — treat as connected
+  const imported =
+    typeof meta.notionPageId === 'string' || typeof meta.notionUrl === 'string'
+  return { connected: imported, sync }
+}
+
 /** Dual-read linked child board id from message metadata (linkedBoardId || linkedPageId). */
 export function getLinkedBoardId(meta?: Record<string, unknown> | null): string | null {
   if (typeof meta?.linkedBoardId === 'string') return meta.linkedBoardId // Prefer new key
