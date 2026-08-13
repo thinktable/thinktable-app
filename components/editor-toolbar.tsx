@@ -1053,10 +1053,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 <Redo2 className="h-4 w-4" />
               </Button>
             </div>
-            {/* Pipe before locks; slash before every other following group */}
-            <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>
-              {editMenuPillMode === 'home' && !isItemHidden('lock') ? '|' : '/'}
-            </span>
+            {/* Slash before locks / Insert·Draw·View tools (same thin / as Actions) */}
+            <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
           </>
         )}
 
@@ -1111,10 +1109,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 <LegoBrickIcon className="h-4 w-4" /> {/* Frame-group lock: stacked bricks */}
               </Button>
             </div>
-            {/* Pipe before filter/sort/automations; slash if that group is hidden */}
-            <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>
-              {!isItemHidden('actions') ? '|' : '/'}
-            </span>
+            {/* Slash before filter/sort/automations (or when that group is hidden) */}
+            <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
           </>
         )}
 
@@ -1174,9 +1170,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-            {/* If search is hidden, still pipe before the layout arrow */}
-            {isItemHidden('search') && !isItemHidden('arrows') && (
-              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>|</span>
+            {/* If search is hidden, slash before layout arrow or More menu */}
+            {isItemHidden('search') && (!isItemHidden('arrows') || hiddenItems.size > 0) && (
+              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
             )}
           </>
         )}
@@ -1198,9 +1194,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 className="h-7 w-36 bg-transparent border-0 outline-none text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400"
               />
             </div>
-            {/* Pipe before the layout arrow */}
-            {!isItemHidden('arrows') && (
-              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>|</span>
+            {/* Slash before layout arrow or More menu when arrow is overflowed */}
+            {(!isItemHidden('arrows') || hiddenItems.size > 0) && (
+              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
             )}
           </>
         )}
@@ -1375,7 +1371,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       />
                     </Button>
                 </div>
-                <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-0.5 flex-shrink-0" />
+                <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
               </>
             )}
             {/* Group 2: Eraser (Not yet implemented) */}
@@ -1408,7 +1404,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <Eraser className="h-4 w-4" />
                   </Button>
                 </div>
-                <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-0.5 flex-shrink-0" />
+                <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
               </>
             )}
             {/* Group 3: Freehand Drawing Toggle (Pencil), Highlighter */}
@@ -1466,7 +1462,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <Highlighter className="h-4 w-4" />
                   </Button>
                 </div>
-                <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-0.5 flex-shrink-0" />
+                <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
               </>
             )}
             {/* Group 4: Colors - Black, Blue, Green, Red */}
@@ -1522,7 +1518,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <Circle className="h-4 w-4 fill-red-600 text-red-600" />
                   </Button>
                 </div>
-                <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-0.5 flex-shrink-0" />
+                <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
               </>
             )}
             {/* Group 5: Shapes */}
@@ -3038,11 +3034,10 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         </DropdownMenu>
       )}
 
-      {/* Divider between More menu and Layout dropdown - only show if More menu is visible */}
-      {hiddenItems.size > 0 && editMenuPillMode === 'home' && <div className="w-px h-6 bg-gray-300 mx-1" />}
-
-      {/* Divider before Layout when arrows are hidden (direction↔layout | already sits left of direction when arrows show) */}
-      {hiddenItems.size === 0 && isItemHidden('arrows') && !isItemHidden('panelControls') && !shouldHideFormattingOptions && <div className="w-px h-6 bg-gray-300 mx-1" />}
+      {/* Slash between More menu and Layout dropdown when items overflow */}
+      {hiddenItems.size > 0 && editMenuPillMode === 'home' && (
+        <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
+      )}
 
       {/* Layout Dropdown — Actions bar only */}
       {editMenuPillMode === 'home' && !isItemHidden('layout') && (

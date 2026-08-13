@@ -8024,14 +8024,14 @@ function BoardFlowInner({
                 <span>{isScrollMode ? 'Scroll' : 'Zoom'}</span>
               </Button>
             </div>
-            {/* Same thin pipe as the top bar and as zoom | pan/select */}
-            <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>|</span>
+            {/* Thin slash — slightly shorter than top-bar text-2xl */}
+            <span className="flex h-7 items-center text-xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
             <div className="flex-1 basis-0 flex items-center justify-center min-w-0">
               <NavZoomControl />
             </div>
             <div className="flex items-center shrink-0">
-              {/* Same thin pipe as Scroll|Zoom | zoom% and the top bar */}
-              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>|</span>
+              {/* Thin slash — slightly shorter than top-bar text-2xl */}
+              <span className="flex h-7 items-center text-xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
               <Button
                 type="button"
                 variant="ghost"
