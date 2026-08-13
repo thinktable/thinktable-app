@@ -399,9 +399,10 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
       >
         {/* Top bar content - hidden when isHidden is true */}
         <div
+          data-edit-top-bar // Full map-column bar; toolbar tools center against this, not leftover flex space
           className={cn(
             // Match React Flow board/main area background — no border, no shadow
-            'bg-gray-50 dark:bg-[#0f0f0f] flex items-center gap-1 w-full transition-all duration-200',
+            'relative bg-gray-50 dark:bg-[#0f0f0f] flex items-center gap-1 w-full transition-all duration-200',
             isHidden ? 'opacity-0 h-0 overflow-hidden' : 'overflow-visible'
           )}
           style={{
@@ -415,6 +416,8 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
             boxSizing: 'border-box', // Ensure padding is included in height
           }}
         >
+          {/* Left chrome — menu + board path; z-20 so title stays clickable if tools overlap */}
+          <div data-top-bar-left className="relative z-20 flex items-center min-w-0 shrink-0">
           {/* Menu icon — hover opens; click pins open until clicked again (survives page switch) */}
           <div
             data-nav-logo-trigger
@@ -474,8 +477,9 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
               </span>
             )}
           </div>
+          </div>
 
-          {/* Editor Toolbar - shows lock/undo controls always, editor controls when editor is active */}
+          {/* Editor Toolbar - tools center on the board; Notion/Share stay right */}
           <EditorToolbar editor={activeEditor} conversationId={conversationId} />
         </div>
 

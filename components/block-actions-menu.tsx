@@ -42,11 +42,11 @@ import {
   Type,
   PaintBucket,
   Pencil,
-  Lock,
-  Unlock,
+  Anchor,
 } from 'lucide-react' // Action + Turn into icons
 import { Button } from '@/components/ui/button' // Row buttons
 import { cn } from '@/lib/utils' // Class merge
+import { LegoBrickIcon } from './lego-brick-icon' // Frame-group lock: two bricks, top one stud back
 import Shape from '@/components/shapes/Shape' // Mini silhouette previews in the Shape flyout
 import {
   FRAME_SHAPE_NONE,
@@ -362,14 +362,14 @@ export function BlockActionsMenu({
         kind: 'action',
         id: 'lockToBoard',
         label: boardLocked ? 'Unlock from board' : 'Lock to board',
-        icon: boardLocked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />,
+        icon: <Anchor className="h-4 w-4" />, // Same anchor as Actions-bar board lock
         hidden: !showFrameShape, // Pin this frame (and selection) to the board
       },
       {
         kind: 'action',
         id: 'lockFramesTogether',
         label: framesLockedTogether ? 'Unlock frames from each other' : 'Lock frames to each other',
-        icon: framesLockedTogether ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />,
+        icon: <LegoBrickIcon className="h-4 w-4" />, // Same brick as Actions-bar frame lock
         hidden: !showFrameShape || !canLockFramesTogether, // Needs ≥2 selected frames
       },
       {

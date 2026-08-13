@@ -8,7 +8,6 @@ import { useReactFlowContext } from './react-flow-context'
 import { threadAlgorithmFromStyle, type ThreadStylePref } from '@/components/threads' // Smooth/Sharp/Linear
 import { usePreviewFocus } from '@/lib/preview-focus-context' // Nested preview View-style targeting
 import { useState, useEffect, useRef } from 'react'
-import { useRouter } from 'next/navigation'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,7 +28,6 @@ import {
   AlignRight,
   AlignJustify,
   Highlighter,
-  Plus,
   Minus,
   ChevronDown,
   List,
@@ -58,9 +56,11 @@ import {
   Table,
   File,
   Camera,
-  Link as LinkIcon,
-  Hash,
-  Calendar,
+  Anchor,
+  ListFilter,
+  ArrowUpDown,
+  Zap,
+  Search,
   Move,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -73,7 +73,7 @@ import { ShareBoardMenu } from './share-board-menu' // Share dropdown: Notion pe
 import { useBoardAccess } from '@/lib/share/board-access-context' // Owner-only share menu
 import { useAiEditSession } from '@/lib/ai/edit-session' // Top-bar AI content mask toggle
 import { htmlHasAiOrigin } from '@/lib/ai/wrap-ai-html' // Detect AI-origin spans in frame HTML
-import { newBlockMetadata } from '@/lib/blocks' // Canonical isBlock + isInlineBlock metadata
+import { LegoBrickIcon } from './lego-brick-icon' // Frame-group lock: two bricks, top one stud back
 
 interface EditorToolbarProps {
   editor: Editor | null
@@ -82,7 +82,7 @@ interface EditorToolbarProps {
 
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const { canShare, canEdit, role } = useBoardAccess() // Gate share + show view-only chrome
-  const { reactFlowInstance, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, drawShape: contextDrawShape, setDrawShape: setContextDrawShape, mapUndo, mapRedo, canMapUndo, canMapRedo, snapEnabled, setSnapEnabled } = useReactFlowContext()
+  const { reactFlowInstance, isLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, drawShape: contextDrawShape, setDrawShape: setContextDrawShape, mapUndo, mapRedo, canMapUndo, canMapRedo, snapEnabled, setSnapEnabled, getMapTakeSnapshot } = useReactFlowContext()
   const { showAiOrigin, setShowAiOrigin } = useAiEditSession() // Reddish AI content overlay toggle
   const queryClientForAi = useQueryClient() // Scan page frames for AI-origin content
   const [hasAiContent, setHasAiContent] = useState(false)
@@ -377,159 +377,24 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const setDrawShape = setContextDrawShape
   const [drawColor, setDrawColor] = useState<'black' | 'blue' | 'green' | 'red'>('black') // Current drawing color
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set())
+  const [boardSearch, setBoardSearch] = useState('') // Actions-bar live search over frame title + body
+  const didBoardSearchRef = useRef(false) // Skip setNodes on mount until the user actually searches
+  const [boardLockUi, setBoardLockUi] = useState<{ hasSelection: boolean; locked: boolean }>({
+    hasSelection: false,
+    locked: false,
+  })
+  const [frameLockUi, setFrameLockUi] = useState<{ hasMulti: boolean; locked: boolean }>({
+    hasMulti: false,
+    locked: false,
+  })
   const preferencesLoadedRef = useRef(false) // Track if preferences have been loaded
   const toolbarRef = useRef<HTMLDivElement>(null)
   const leftSectionRef = useRef<HTMLDivElement>(null)
   const supabase = createClient()
-  const queryClient = useQueryClient()
-  const router = useRouter()
-
-  // Handle creating a new block (component panel)
-  const handleCreateBlock = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-
-      let currentConversationId = conversationId
-
-      // If no conversation ID, create a new conversation first
-      if (!currentConversationId) {
-        // Set position to -1 to ensure it appears at the top of the sidebar list
-        const { data: newConversation, error: convError } = await supabase
-          .from('conversations')
-          .insert({
-            user_id: user.id,
-            title: 'New Conversation',
-            metadata: { position: -1 }, // Set position to -1 to appear at top
-          })
-          .select()
-          .single()
-
-        if (convError) {
-          throw new Error('Failed to create conversation: ' + convError.message)
-        }
-
-        currentConversationId = newConversation.id
-
-        // Update URL to include conversation ID (like ChatGPT)
-        router.replace(`/board/${currentConversationId}`)
-        // Dispatch event to notify board page of new conversation
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('conversation-created', { detail: { conversationId: currentConversationId } }))
-        }
-      }
-
-      // Create an empty block card (untitled until titled → linked page)
-      const { data: newMessage, error } = await supabase
-        .from('messages')
-        .insert({
-          conversation_id: currentConversationId,
-          user_id: user.id,
-          role: 'user',
-          content: '', // Empty content to start
-          metadata: newBlockMetadata(), // Map block card
-        })
-        .select()
-        .single()
-
-      if (error) {
-        throw new Error(error.message || 'Failed to create component')
-      }
-
-      // Invalidate queries to refresh the board
-      await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', currentConversationId] })
-
-      // Trigger refetch
-      setTimeout(() => {
-        queryClient.refetchQueries({ queryKey: ['messages-for-panels', currentConversationId] })
-      }, 200)
-    } catch (error) {
-      console.error('Failed to create note:', error)
-    }
-  }
-
-  // Handle creating a new flashcard (prompt + response panel)
-  const handleCreateFlashcard = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-
-      let currentConversationId = conversationId
-
-      // If no conversation ID, create a new conversation first
-      if (!currentConversationId) {
-        // Set position to -1 to ensure it appears at the top of the sidebar list
-        const { data: newConversation, error: convError } = await supabase
-          .from('conversations')
-          .insert({
-            user_id: user.id,
-            title: 'New Conversation',
-            metadata: { position: -1 }, // Set position to -1 to appear at top
-          })
-          .select()
-          .single()
-
-        if (convError) {
-          throw new Error('Failed to create conversation: ' + convError.message)
-        }
-
-        currentConversationId = newConversation.id
-
-        // Update URL to include conversation ID (like ChatGPT)
-        router.replace(`/board/${currentConversationId}`)
-        // Dispatch event to notify board page of new conversation
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('conversation-created', { detail: { conversationId: currentConversationId } }))
-        }
-      }
-
-      // Create user message (prompt) with flashcard metadata
-      const { data: promptMessage, error: promptError } = await supabase
-        .from('messages')
-        .insert({
-          conversation_id: currentConversationId,
-          user_id: user.id,
-          role: 'user',
-          content: '', // Empty content
-          metadata: { isFlashcard: true }, // Mark as flashcard
-        })
-        .select()
-        .single()
-
-      if (promptError) {
-        throw new Error('Failed to create flashcard prompt: ' + promptError.message)
-      }
-
-      // Create assistant message (response) with empty content
-      const { data: responseMessage, error: responseError } = await supabase
-        .from('messages')
-        .insert({
-          conversation_id: currentConversationId,
-          user_id: user.id,
-          role: 'assistant',
-          content: '', // Empty content
-        })
-        .select()
-        .single()
-
-      if (responseError) {
-        throw new Error('Failed to create flashcard response: ' + responseError.message)
-      }
-
-      // Invalidate queries to refresh the board
-      await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', currentConversationId] })
-
-      // Trigger refetch
-      setTimeout(() => {
-        queryClient.refetchQueries({ queryKey: ['messages-for-panels', currentConversationId] })
-      }, 200)
-    } catch (error) {
-      console.error('Failed to create flashcard:', error)
-    }
-  }
 
   // Load preferences from localStorage first (instant), then Supabase (sync)
   useEffect(() => {
+
     if (typeof window === 'undefined') return
 
     // STEP 1: Load from localStorage FIRST (synchronous, instant) - ensures UI shows saved prefs immediately
@@ -715,6 +580,188 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     saveToSupabase()
   }, [editMode, supabase])
 
+  // Selected isBlock frames on the board (chatPanel with promptMessage)
+  const getSelectedFrames = () => {
+    if (!reactFlowInstance) return []
+    return reactFlowInstance.getNodes().filter((n) => {
+      if (!n.selected) return false
+      const meta = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+      return meta.isBlock === true
+    })
+  }
+
+  // Persist metadata patches for selected frames (board pin / frame-group lock)
+  const persistFrameMetaPatches = async (
+    nodes: ReturnType<typeof getSelectedFrames>,
+    patch: (meta: Record<string, unknown>) => Record<string, unknown>
+  ) => {
+    const supabaseClient = createClient()
+    for (const n of nodes) {
+      const msgId = n.data?.promptMessage?.id as string | undefined
+      if (!msgId) continue
+      const { data: row } = await supabaseClient
+        .from('messages')
+        .select('metadata')
+        .eq('id', msgId)
+        .maybeSingle()
+      if (!row) continue
+      const next = patch({ ...((row.metadata as Record<string, unknown>) || {}) })
+      await supabaseClient.from('messages').update({ metadata: next }).eq('id', msgId)
+    }
+  }
+
+  // Re-read board pin + frame-group lock from RF selection metadata
+  const refreshLockUi = () => {
+    if (!reactFlowInstance) {
+      setBoardLockUi({ hasSelection: false, locked: false })
+      setFrameLockUi({ hasMulti: false, locked: false })
+      return
+    }
+    const selected = getSelectedFrames()
+    if (selected.length === 0) {
+      setBoardLockUi({ hasSelection: false, locked: false })
+      setFrameLockUi({ hasMulti: false, locked: false })
+      return
+    }
+    const allBoardLocked = selected.every((n) => {
+      const meta = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+      return meta.boardLocked === true
+    })
+    setBoardLockUi({ hasSelection: true, locked: allBoardLocked })
+    if (selected.length < 2) {
+      setFrameLockUi({ hasMulti: false, locked: false })
+      return
+    }
+    const groupIds = selected.map((n) => {
+      const meta = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+      return typeof meta.frameLockGroupId === 'string' ? meta.frameLockGroupId : null
+    })
+    const locked =
+      groupIds.every((id) => typeof id === 'string') && new Set(groupIds).size === 1
+    setFrameLockUi({ hasMulti: true, locked })
+  }
+
+  useEffect(() => {
+    refreshLockUi()
+    const onSel = () => refreshLockUi()
+    window.addEventListener('node-selected', onSel)
+    window.addEventListener('tt-selection-changed', onSel)
+    window.addEventListener('tt-frame-lock-changed', onSel)
+    return () => {
+      window.removeEventListener('node-selected', onSel)
+      window.removeEventListener('tt-selection-changed', onSel)
+      window.removeEventListener('tt-frame-lock-changed', onSel)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh closes over reactFlowInstance
+  }, [reactFlowInstance])
+
+  // Lock selected frames to the board (pin: not draggable)
+  const handleToggleBoardLock = () => {
+    if (!reactFlowInstance) return
+    const selected = getSelectedFrames()
+    if (selected.length === 0) return
+    getMapTakeSnapshot()?.()
+    const nextLocked = !selected.every((n) => {
+      const meta = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+      return meta.boardLocked === true
+    })
+    const ids = new Set(selected.map((n) => n.id))
+    reactFlowInstance.setNodes((nds) =>
+      nds.map((n) => {
+        if (!ids.has(n.id)) return n
+        const pm = n.data?.promptMessage
+        if (!pm) return n
+        const meta = { ...(pm.metadata || {}), boardLocked: nextLocked }
+        if (!nextLocked) delete (meta as Record<string, unknown>).boardLocked
+        return {
+          ...n,
+          draggable: nextLocked ? false : !isLocked,
+          data: {
+            ...n.data,
+            promptMessage: { ...pm, metadata: meta },
+          },
+        }
+      })
+    )
+    setBoardLockUi({ hasSelection: true, locked: nextLocked })
+    window.dispatchEvent(new Event('tt-frame-lock-changed'))
+    void persistFrameMetaPatches(selected, (meta) => {
+      const next = { ...meta }
+      if (nextLocked) next.boardLocked = true
+      else delete next.boardLocked
+      return next
+    }).catch((err) => console.error('Failed to persist board lock:', err))
+  }
+
+  // Lock selected frames to each other (shared frameLockGroupId → rigid drag)
+  const handleToggleFrameLock = () => {
+    if (!reactFlowInstance) return
+    const selected = getSelectedFrames()
+    if (selected.length < 2) return
+    getMapTakeSnapshot()?.()
+    const groupIds = selected.map((n) => {
+      const meta = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+      return typeof meta.frameLockGroupId === 'string' ? meta.frameLockGroupId : null
+    })
+    const alreadyLocked =
+      groupIds.every((id) => typeof id === 'string') && new Set(groupIds).size === 1
+    const nextGroupId = alreadyLocked ? null : crypto.randomUUID()
+    const ids = new Set(selected.map((n) => n.id))
+    reactFlowInstance.setNodes((nds) =>
+      nds.map((n) => {
+        if (!ids.has(n.id)) return n
+        const pm = n.data?.promptMessage
+        if (!pm) return n
+        const meta = { ...(pm.metadata || {}) } as Record<string, unknown>
+        if (nextGroupId) meta.frameLockGroupId = nextGroupId
+        else delete meta.frameLockGroupId
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            promptMessage: { ...pm, metadata: meta },
+          },
+        }
+      })
+    )
+    setFrameLockUi({ hasMulti: true, locked: !alreadyLocked })
+    window.dispatchEvent(new Event('tt-frame-lock-changed'))
+    void persistFrameMetaPatches(selected, (meta) => {
+      const next = { ...meta }
+      if (nextGroupId) next.frameLockGroupId = nextGroupId
+      else delete next.frameLockGroupId
+      return next
+    }).catch((err) => console.error('Failed to persist frame-group lock:', err))
+  }
+
+  // Dim frames that do not match the Actions-bar search query
+  useEffect(() => {
+    if (!reactFlowInstance) return
+    const q = boardSearch.trim().toLowerCase()
+    const searching = editMenuPillMode === 'home' && q.length > 0
+    if (!searching && !didBoardSearchRef.current) return // Nothing to clear yet
+    didBoardSearchRef.current = searching
+    reactFlowInstance.setNodes((nds) =>
+      nds.map((n) => {
+        if (n.type !== 'chatPanel') {
+          return searching ? { ...n, style: { ...n.style, opacity: 0.18 } } : n
+        }
+        if (!searching) {
+          if (n.style?.opacity === undefined) return n
+          const nextStyle = { ...n.style }
+          delete nextStyle.opacity
+          return { ...n, style: nextStyle }
+        }
+        const meta = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+        const title = String(meta.blockTitle || '')
+        const html = String(n.data?.promptMessage?.content || '')
+        const text = `${title} ${html.replace(/<[^>]+>/g, ' ')}`.toLowerCase()
+        const hit = text.includes(q)
+        return { ...n, style: { ...n.style, opacity: hit ? 1 : 0.18 } }
+      })
+    )
+  }, [boardSearch, editMenuPillMode, reactFlowInstance])
+
   // Update panel styling when fillColor, borderColor, borderStyle, or borderWeight changes
   // Apply to selected panels or panels connected to selected edge
   // Also save to database (message metadata)
@@ -828,46 +875,35 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       const toolbar = toolbarRef.current
       if (!toolbar) return
 
-      const toolbarRect = toolbar.getBoundingClientRect()
+      const bar = toolbar.closest('[data-edit-top-bar]') as HTMLElement | null // Full map-column bar
+      const leftChrome = bar?.querySelector('[data-top-bar-left]') as HTMLElement | null
+      const toolbarRect = (bar ?? toolbar).getBoundingClientRect()
       const rightSection = toolbar.querySelector('[data-right-section]') as HTMLElement
       const moreMenuButton = toolbar.querySelector('[data-more-menu]') as HTMLElement
-      const componentButton = toolbar.querySelector('[data-component-button]') as HTMLElement
 
       if (!rightSection) return
 
       const rightSectionRect = rightSection.getBoundingClientRect()
+      const leftW = leftChrome?.getBoundingClientRect().width ?? 0 // Menu + board path
+      const rightW = rightSectionRect.width // Notion / Share / AI
+      const sideInset = Math.max(leftW, rightW) // Symmetric inset so the cluster can sit on the board center
 
-      // Calculate widths of fixed elements (More menu, Layout dropdown, Component, right section)
+      // Calculate widths of fixed elements (More menu, Layout dropdown)
       // More menu appears when items are hidden, so we need to account for it in calculations
-      // Layout dropdown is always visible and positioned just before Component button
+      // Layout dropdown is always visible at the end of the centered cluster
       // We always reserve space for the more menu button (even when not visible) since it will appear when items are hidden
       const moreMenuWidth = 32 + 8 // More menu button width (h-7 w-7) + gap/separator - always reserve this space
-      const layoutDropdownWidth = 70 + 8 // Layout dropdown approximate width + gap/separator
-      const componentWidth = componentButton ? componentButton.getBoundingClientRect().width + 8 : 0 // +8 for gap/separator
+      const layoutDropdownWidth = editMenuPillMode === 'home' ? 70 + 8 : 0 // Layout (None/Suggest/…) only on Actions
 
-      // Available width = space from toolbar start to right section start, minus More menu, Layout dropdown, and Component
-      // This ensures More menu (when visible), Layout dropdown, and Component stay visible and get pushed right by the right section
-      const availableWidth = rightSectionRect.left - toolbarRect.left - moreMenuWidth - layoutDropdownWidth - componentWidth - 16
+      // Max cluster width that still fits on the true board center without covering title or Share
+      const availableWidth = toolbarRect.width - 2 * sideInset - moreMenuWidth - layoutDropdownWidth - 16
 
       // Define item groups with their approximate widths (right to left priority for hiding)
       // Note: 'layout' is excluded from this list as it's positioned outside the left section and should never be hidden
       // Use different item groups based on edit menu mode
       const itemGroups = editMenuPillMode === 'insert'
         ? [
-          // Insert mode buttons: grouped by divider sections
-          // Each button: px-2 (8px each side = 16px) + gap-1.5 (6px) + icon (16px) + text width + gap-1 (4px between buttons)
-          // Table: 16 + 6 + 16 + ~30 + 4 = ~72px
-          // File: 16 + 6 + 16 + ~25 + 4 = ~67px
-          // Camera: 16 + 6 + 16 + ~40 + 4 = ~82px
-          // Link: 16 + 6 + 16 + ~30 + 4 = ~72px
-          // Symbols: 16 + 6 + 16 + ~50 + 4 = ~92px
-          // Date: 16 + 6 + 16 + ~30 + 4 = ~72px
-          // Container padding: px-2 = 8px each side = 16px total
-          // Group 2 (Link, Symbols, Date): 72 + 92 + 72 + 16 = 252px
-          // Group 1 (Table, File, Camera): 72 + 67 + 82 + 16 = 237px
-          // Divider after group 1: w-px (1px) + mx-1 (8px each side) = 17px
-          { id: 'insertGroup2', width: 252 }, // Link, Symbols, Date (72 + 92 + 72 + container padding)
-          { id: 'insertGroup1', width: 237 + 17 }, // Table, File, Camera (72 + 67 + 82 + container padding) + divider after
+          { id: 'insertGroup1', width: 237 }, // Table, File, Camera
           { id: 'undoRedo', width: 70 },
         ]
         : editMenuPillMode === 'view'
@@ -900,9 +936,12 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               { id: 'undoRedo', width: 70 },
             ]
             : [
-              // Home mode — formatting / fill / thread / locks moved to text, frame, and thread menus
-              { id: 'arrows', width: 40 }, // Layout arrow direction only
+              // Actions mode: undo + locks + filter/sort/automations + search + layout arrow
+              { id: 'search', width: 180 }, // Magnifier + Type to search field
+              { id: 'actions', width: 120 }, // Filter + Sort + Automations
+              { id: 'arrows', width: 40 }, // Layout arrow direction
               { id: 'undoRedo', width: 70 },
+              { id: 'lock', width: 64 }, // Board lock + frame lock (no slash between)
             ]
 
       // Calculate total width needed
@@ -933,6 +972,10 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       requestAnimationFrame(checkVisibility)
     })
     resizeObserver.observe(toolbarRef.current)
+    const barEl = toolbarRef.current.closest('[data-edit-top-bar]') // Re-measure when the map column resizes
+    if (barEl) resizeObserver.observe(barEl)
+    const leftEl = barEl?.querySelector('[data-top-bar-left]') // Title path width changes the center inset
+    if (leftEl) resizeObserver.observe(leftEl)
 
     window.addEventListener('resize', checkVisibility)
 
@@ -949,11 +992,17 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     <div
       ref={toolbarRef}
       data-preview-style-chrome // Clicks here keep nested preview style-focus alive
-      className="flex items-center gap-1 h-full flex-1 overflow-hidden"
+      className="absolute inset-0 pointer-events-none" // Fill the map-column bar so tools can board-center
     >
+      {/* Tools — true center of the board bar, independent of title / Notion / Share */}
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <div
+          data-toolbar-center
+          className="pointer-events-auto relative z-10 flex items-center gap-1 h-full overflow-hidden"
+        >
       {/* Left Section - collapsible items */}
       <div ref={leftSectionRef} className="flex items-center gap-1 flex-shrink min-w-0">
-        {/* Undo/Redo Controls */}
+        {/* Undo/redo — first in the board-centered cluster */}
         {!isItemHidden('undoRedo') && (
           <>
             <div className="flex items-center gap-1 px-2 flex-shrink-0">
@@ -961,14 +1010,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  // Check if focus is in an editor (TipTap, contenteditable, input, textarea)
                   const activeElement = document.activeElement
                   const isInEditor = activeElement?.closest('.ProseMirror') !== null ||
                     activeElement?.closest('[contenteditable="true"]') !== null ||
                     activeElement?.tagName === 'INPUT' ||
                     activeElement?.tagName === 'TEXTAREA'
-                  
-                  // If in editor with undo history, use editor undo; otherwise use map undo
                   if (isInEditor && editor?.can().undo()) {
                     editor.chain().focus().undo().run()
                   } else if (canMapUndo) {
@@ -987,14 +1033,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  // Check if focus is in an editor (TipTap, contenteditable, input, textarea)
                   const activeElement = document.activeElement
                   const isInEditor = activeElement?.closest('.ProseMirror') !== null ||
                     activeElement?.closest('[contenteditable="true"]') !== null ||
                     activeElement?.tagName === 'INPUT' ||
                     activeElement?.tagName === 'TEXTAREA'
-                  
-                  // If in editor with redo history, use editor redo; otherwise use map redo
                   if (isInEditor && editor?.can().redo()) {
                     editor.chain().focus().redo().run()
                   } else if (canMapRedo) {
@@ -1010,12 +1053,159 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 <Redo2 className="h-4 w-4" />
               </Button>
             </div>
-            {/* Slash separator after undo/redo */}
-            <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
+            {/* Pipe before locks; slash before every other following group */}
+            <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>
+              {editMenuPillMode === 'home' && !isItemHidden('lock') ? '|' : '/'}
+            </span>
           </>
         )}
 
-        {/* Layout arrow direction — stays in Home; thread style moved to the thread click menu */}
+        {/* Board lock / frame lock — also on the frame right-click menu */}
+        {editMenuPillMode === 'home' && !isItemHidden('lock') && (
+          <>
+            <div className="flex items-center gap-0.5 px-1.5 flex-shrink-0">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleToggleBoardLock}
+                className={cn(
+                  'h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0',
+                  boardLockUi.hasSelection &&
+                    boardLockUi.locked &&
+                    'bg-gray-100 dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100'
+                )}
+                disabled={!reactFlowInstance || !boardLockUi.hasSelection}
+                title={
+                  !boardLockUi.hasSelection
+                    ? 'Select a frame to lock to the board'
+                    : boardLockUi.locked
+                      ? 'Unlock from board'
+                      : 'Lock to board'
+                }
+                aria-label={boardLockUi.locked ? 'Unlock from board' : 'Lock to board'}
+              >
+                <Anchor className="h-4 w-4" /> {/* Board lock: pin selected frames */}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleToggleFrameLock}
+                className={cn(
+                  'h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0',
+                  frameLockUi.hasMulti &&
+                    frameLockUi.locked &&
+                    'bg-gray-100 dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100'
+                )}
+                disabled={!reactFlowInstance || !frameLockUi.hasMulti}
+                title={
+                  !frameLockUi.hasMulti
+                    ? 'Select 2+ frames to lock together'
+                    : frameLockUi.locked
+                      ? 'Unlock frames from each other'
+                      : 'Lock frames to each other'
+                }
+                aria-label={
+                  frameLockUi.locked ? 'Unlock frames from each other' : 'Lock frames to each other'
+                }
+              >
+                <LegoBrickIcon className="h-4 w-4" /> {/* Frame-group lock: stacked bricks */}
+              </Button>
+            </div>
+            {/* Pipe before filter/sort/automations; slash if that group is hidden */}
+            <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>
+              {!isItemHidden('actions') ? '|' : '/'}
+            </span>
+          </>
+        )}
+
+        {/* Filter / Sort / Automations — Actions bar (Notion-style view chrome) */}
+        {editMenuPillMode === 'home' && !isItemHidden('actions') && (
+          <>
+            <div className="flex items-center gap-0.5 flex-shrink-0">
+              <DropdownMenu open={openDropdown === 'boardFilter'} onOpenChange={(open) => handleDropdownOpenChange('boardFilter', open)}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0 text-[#2383e2] hover:text-[#1a6fc9] hover:bg-blue-50 flex-shrink-0"
+                    title="Filter"
+                  >
+                    <ListFilter className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-48">
+                  <DropdownMenuLabel className="text-xs font-normal text-gray-500">Filter</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <div className="px-2 py-2 text-xs text-gray-400">No filters yet</div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <DropdownMenu open={openDropdown === 'boardSort'} onOpenChange={(open) => handleDropdownOpenChange('boardSort', open)}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0 text-[#2383e2] hover:text-[#1a6fc9] hover:bg-blue-50 flex-shrink-0"
+                    title="Sort"
+                  >
+                    <ArrowUpDown className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-48">
+                  <DropdownMenuLabel className="text-xs font-normal text-gray-500">Sort</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <div className="px-2 py-2 text-xs text-gray-400">No sorts yet</div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <DropdownMenu open={openDropdown === 'boardAutomations'} onOpenChange={(open) => handleDropdownOpenChange('boardAutomations', open)}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0 text-[#2383e2] hover:text-[#1a6fc9] hover:bg-blue-50 flex-shrink-0"
+                    title="Automations"
+                  >
+                    <Zap className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-52">
+                  <DropdownMenuLabel className="text-xs font-normal text-gray-500">Automations</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <div className="px-2 py-2 text-xs text-gray-400">No automations yet</div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            {/* If search is hidden, still pipe before the layout arrow */}
+            {isItemHidden('search') && !isItemHidden('arrows') && (
+              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>|</span>
+            )}
+          </>
+        )}
+
+        {/* Board search — Type to search frames by title or body */}
+        {editMenuPillMode === 'home' && !isItemHidden('search') && (
+          <>
+            <div className="flex items-center gap-1.5 h-7 px-1 flex-shrink-0 min-w-[10rem]">
+              <Search className="h-4 w-4 text-gray-400 flex-shrink-0" aria-hidden />
+              <input
+                type="search"
+                value={boardSearch}
+                onChange={(e) => setBoardSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setBoardSearch('') // Clear without leaving the bar
+                }}
+                placeholder="Type to search..."
+                aria-label="Search board"
+                className="h-7 w-36 bg-transparent border-0 outline-none text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400"
+              />
+            </div>
+            {/* Pipe before the layout arrow */}
+            {!isItemHidden('arrows') && (
+              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>|</span>
+            )}
+          </>
+        )}
+
+        {/* Layout arrow direction — stays in Actions; thread style moved to the thread click menu */}
         {editMenuPillMode === 'home' && !isItemHidden('arrows') && (
           <DropdownMenu open={openDropdown === 'arrowDirection'} onOpenChange={(open) => handleDropdownOpenChange('arrowDirection', open)}>
             <DropdownMenuTrigger asChild>
@@ -1059,13 +1249,12 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           </DropdownMenu>
         )}
 
-        {/* Insert Mode Buttons - Table, File, Camera, Link, Symbols, Date */}
+        {/* Insert Mode Buttons - Table, File, Camera */}
         {editMenuPillMode === 'insert' && (
           <>
             {/* Group 1: Table, File, Camera */}
             {!isItemHidden('insertGroup1') && (
-              <>
-                <div className="flex items-center gap-1 px-2 flex-shrink-0">
+              <div className="flex items-center gap-1 px-2 flex-shrink-0">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -1102,49 +1291,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <Camera className="h-4 w-4" />
                     <span className="text-sm">Camera</span>
                   </Button>
-                </div>
-                <div className="w-px h-6 bg-gray-300 dark:bg-gray-500 mx-1 flex-shrink-0" />
-              </>
-            )}
-            {/* Group 2: Link, Symbols, Date */}
-            {!isItemHidden('insertGroup2') && (
-              <div className="flex items-center gap-1 px-2 flex-shrink-0">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    // TODO: Implement link insertion
-                  }}
-                  className="h-7 px-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center gap-1.5"
-                  title="Link"
-                >
-                  <LinkIcon className="h-4 w-4" />
-                  <span className="text-sm">Link</span>
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    // TODO: Implement symbols insertion
-                  }}
-                  className="h-7 px-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center gap-1.5"
-                  title="Symbols"
-                >
-                  <Hash className="h-4 w-4" />
-                  <span className="text-sm">Symbols</span>
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    // TODO: Implement date insertion
-                  }}
-                  className="h-7 px-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center gap-1.5"
-                  title="Date"
-                >
-                  <Calendar className="h-4 w-4" />
-                  <span className="text-sm">Date</span>
-                </Button>
               </div>
             )}
           </>
@@ -2348,36 +2494,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <DropdownMenuSeparator />
                   </>
                 )}
-                {/* Second group: Link, Symbols, Date - all appear together when hidden */}
-                {isItemHidden('insertGroup2') && editor && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={() => {
-                        // TODO: Implement link insertion
-                      }}
-                    >
-                      <LinkIcon className="h-4 w-4 mr-2" />
-                      Link
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => {
-                        // TODO: Implement symbols insertion
-                      }}
-                    >
-                      <Hash className="h-4 w-4 mr-2" />
-                      Symbols
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => {
-                        // TODO: Implement date insertion
-                      }}
-                    >
-                      <Calendar className="h-4 w-4 mr-2" />
-                      Date
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
                 {/* Common items (undo/redo, lock) */}
                 {isItemHidden('undoRedo') && editor && (
                   <>
@@ -2602,7 +2718,28 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               </>
             ) : (
               <>
-                {/* Home mode items (formatting options) */}
+                {/* Actions mode overflow */}
+                {isItemHidden('lock') && reactFlowInstance && (
+                  <>
+                    <DropdownMenuItem
+                      onClick={handleToggleBoardLock}
+                      disabled={!boardLockUi.hasSelection}
+                    >
+                      <Anchor className="h-4 w-4 mr-2" /> {/* Overflow menu: same anchor as Actions bar */}
+                      {boardLockUi.locked ? 'Unlock from board' : 'Lock to board'}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={handleToggleFrameLock}
+                      disabled={!frameLockUi.hasMulti}
+                    >
+                      <LegoBrickIcon className="h-4 w-4 mr-2" /> {/* Overflow menu: same brick as Actions bar */}
+                      {frameLockUi.locked
+                        ? 'Unlock frames from each other'
+                        : 'Lock frames to each other'}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 {isItemHidden('undoRedo') && editor && (
                   <>
                     <DropdownMenuItem
@@ -2625,6 +2762,40 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       <Redo2 className="h-4 w-4 mr-2" />
                       Redo
                     </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                {isItemHidden('actions') && (
+                  <>
+                    <DropdownMenuItem onClick={() => handleDropdownOpenChange('boardFilter', true)}>
+                      <ListFilter className="h-4 w-4 mr-2 text-[#2383e2]" />
+                      Filter
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => handleDropdownOpenChange('boardSort', true)}>
+                      <ArrowUpDown className="h-4 w-4 mr-2 text-[#2383e2]" />
+                      Sort
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => handleDropdownOpenChange('boardAutomations', true)}>
+                      <Zap className="h-4 w-4 mr-2 text-[#2383e2]" />
+                      Automations
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                {isItemHidden('search') && (
+                  <>
+                    <div className="px-2 py-1.5">
+                      <div className="flex items-center gap-1.5 rounded-md border border-gray-200 dark:border-gray-700 px-2">
+                        <Search className="h-3.5 w-3.5 text-gray-400" />
+                        <input
+                          type="search"
+                          value={boardSearch}
+                          onChange={(e) => setBoardSearch(e.target.value)}
+                          placeholder="Type to search..."
+                          className="h-7 w-full bg-transparent border-0 outline-none text-sm"
+                        />
+                      </div>
+                    </div>
                     <DropdownMenuSeparator />
                   </>
                 )}
@@ -2868,13 +3039,13 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       )}
 
       {/* Divider between More menu and Layout dropdown - only show if More menu is visible */}
-      {hiddenItems.size > 0 && <div className="w-px h-6 bg-gray-300 mx-1" />}
+      {hiddenItems.size > 0 && editMenuPillMode === 'home' && <div className="w-px h-6 bg-gray-300 mx-1" />}
 
       {/* Divider before Layout when arrows are hidden (direction↔layout | already sits left of direction when arrows show) */}
       {hiddenItems.size === 0 && isItemHidden('arrows') && !isItemHidden('panelControls') && !shouldHideFormattingOptions && <div className="w-px h-6 bg-gray-300 mx-1" />}
 
-      {/* Layout Dropdown - positioned just before Component button */}
-      {!isItemHidden('layout') && (
+      {/* Layout Dropdown — Actions bar only */}
+      {editMenuPillMode === 'home' && !isItemHidden('layout') && (
         <DropdownMenu open={openDropdown === 'layoutMode'} onOpenChange={(open) => handleDropdownOpenChange('layoutMode', open)}>
           <DropdownMenuTrigger asChild>
             <Button
@@ -2916,35 +3087,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         </DropdownMenu>
       )}
 
-      {/* Divider between Layout dropdown and Component button */}
-      {!isItemHidden('layout') && <div className="w-px h-6 bg-gray-300 mx-1 flex-shrink-0" />}
+        </div>
+      </div>
 
-      {/* Component button - dropdown with Note and Flashcard options */}
-      <DropdownMenu open={openDropdown === 'component'} onOpenChange={(open) => handleDropdownOpenChange('component', open)}>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 flex-shrink-0"
-            data-component-button
-            type="button"
-            suppressHydrationWarning
-          >
-            <Plus className="h-4 w-4 flex-shrink-0" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
-          <DropdownMenuItem onClick={handleCreateBlock} className="rounded-sm">
-            Block
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={handleCreateFlashcard} className="rounded-sm">
-            Flashcard
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      {/* Right Section — AI origin + Notion + Share */}
-      <div className="flex items-center gap-1 flex-shrink-0 ml-auto mr-4" data-right-section>
+      {/* Right Section — AI origin + Notion + Share (pinned to the bar’s right, not in the centered cluster) */}
+      <div className="absolute right-2 inset-y-0 z-20 flex items-center gap-1 pointer-events-auto" data-right-section>
         {/* Reset to Default Button - only show when settings differ from defaults */}
         {hasNonDefaultSettings && (
           <div className="flex items-center pl-2 pr-0 -mr-1 flex-shrink-0">
