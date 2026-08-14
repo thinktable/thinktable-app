@@ -81,6 +81,7 @@ import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
 import { setAiSelectedFrames, setAiViewportCenter } from '@/lib/ai/selection-bridge' // Bridge RF selection + viewport → AI context
+import { takeBoardCapture } from '@/lib/captures' // Board-menu Capture view
 import { htmlToPlain } from '@/lib/ai/context-pack' // Frame hover previews from content
 import { AI_CHAT_BLOCK_MIME, type AiChatBlockDragPayload } from '@/lib/ai/types' // Drag chat turn onto page
 import { markHtmlWithAiOrigin } from '@/lib/ai/wrap-ai-html' // Persist AI provenance on chat-drop
@@ -6092,11 +6093,17 @@ function BoardFlowInner({
           void navigator.clipboard.writeText(url).catch(() => {})
           break
         }
+        case 'capture': {
+          if (!conversationId) return
+          const vp = reactFlowInstance?.getViewport() || { x: 0, y: 0, zoom: 1 }
+          void takeBoardCapture((key) => queryClient.getQueryData(key), conversationId, vp)
+          break
+        }
         default:
           break
       }
     },
-    [createBlockAtFlowPosition, mapUndo, mapRedo, reactFlowInstance, setNodes, conversationId]
+    [createBlockAtFlowPosition, mapUndo, mapRedo, reactFlowInstance, setNodes, conversationId, queryClient]
   )
 
   // Close popup when right-clicking on background or different node

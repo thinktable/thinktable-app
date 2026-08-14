@@ -13,6 +13,7 @@ export interface AiContextPack { // Sent as a system/user context block
   frames: FrameSummary[] // Page frame summaries
   selectedFrameIds: string[] // Client selection
   snapshots: Array<{ id: string; name: string; payload: Record<string, unknown> }> // Attached snapshots
+  boardCaptures?: Array<{ createdAt: string; boardPath: string; text: string }> // View captures from the Capture menu
 }
 
 const MAX_FRAMES = 40 // Cap context size
@@ -53,6 +54,7 @@ export async function buildContextPack(
     boardId?: string | null // Current board
     selectedFrameIds?: string[] // Selection
     snapshotIds?: string[] // Attached snapshot ids
+    boardCaptures?: Array<{ createdAt: string; boardPath: string; text: string }> // View captures (client-local)
   }
 ): Promise<AiContextPack> {
   const boardId = opts.boardId || null // Normalize
@@ -111,6 +113,7 @@ export async function buildContextPack(
     frames, // Summaries
     selectedFrameIds: opts.selectedFrameIds || [], // Selection
     snapshots, // Attached
+    boardCaptures: opts.boardCaptures || [], // View captures
   }
 }
 
@@ -137,6 +140,13 @@ export function formatContextPack(pack: AiContextPack): string {
     lines.push('### Attached context snapshots') // Subhead
     for (const s of pack.snapshots) { // Each
       lines.push(`- Snapshot "${s.name}" (${s.id}): ${JSON.stringify(s.payload).slice(0, 2000)}`) // Cap JSON
+    }
+  }
+  if (pack.boardCaptures?.length) { // View captures from Capture menu
+    lines.push('### Attached board captures') // Subhead
+    for (const c of pack.boardCaptures) { // Each region
+      const words = (c.text || '').slice(0, 2000) // Cap
+      lines.push(`- Capture ${c.createdAt} (${c.boardPath}): ${words || '(empty)'}`) // Timestamp + path + words
     }
   }
   return lines.join('\n') // Join

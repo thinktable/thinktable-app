@@ -1,7 +1,7 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-14T03:57:14Z
+# snapped_at=2026-08-14T06:37:18Z
 # postgres=17.6.1.052 gotrue=v2.195.0 rest=v13.0.5 storage=v1.68.1
 # Remote applied (via Supabase MCP / Management API on thinkable):
 # 20251124231547 create_saas_schema
@@ -102,3 +102,5 @@
 20260814012801_frame_color_menu_border_slider.sql
 20260814024128_view_presentation_icon.sql
 20260814035712_board_camera_rotation.sql
+20260814042452_top_bar_share_more_image_blocks.sql
+20260814063716_view_capture_presentation.sql

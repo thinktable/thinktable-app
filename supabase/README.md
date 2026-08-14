@@ -25,6 +25,8 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260814063716_view_capture_presentation` — View Capture + Presentation menus (local captures, add-to-chat)
+- `20260814042452_top_bar_share_more_image_blocks` — Share/More top-bar chrome + image blocks
 - `20260814035712_board_camera_rotation` — Board camera rotation (nav icon/slider, phone twist pinch-lock, Safari trackpad)
 - `20260814024128_view_presentation_icon` — View Presentation icon + Layout/View bar rework
 - `20260814012801_frame_color_menu_border_slider` — Frame Color menu border size slider

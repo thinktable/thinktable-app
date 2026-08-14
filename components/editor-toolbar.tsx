@@ -17,6 +17,9 @@ import {
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
 } from './ui/dropdown-menu'
 import {
   Bold,
@@ -54,6 +57,7 @@ import {
   Grid3x3,
   Boxes, // Layout Smart Align — multi-box glyph
   Presentation, // View presentation mode
+  Scan, // View capture — 4 disconnected rounded corners
   Table,
   Anchor,
   ListFilter,
@@ -68,6 +72,8 @@ import { useTheme } from './theme-provider'
 import { ShareBoardMenu } from './share-board-menu' // Share dropdown: Notion people + role links
 import { BoardTopBarShare } from './board-top-bar-share' // Copy link / favorite / More (Connections → Notion)
 import { AutomationsMenu } from './automations-menu' // Actions-bar Automations list popover
+import { CapturesMenu } from './captures-menu' // View-bar Capture list popover
+import { PresentationsMenu } from './presentations-menu' // View-bar Presentation list popover
 import { useBoardAccess } from '@/lib/share/board-access-context' // Owner-only share menu
 import { useAiEditSession } from '@/lib/ai/edit-session' // Top-bar AI content mask toggle
 import { htmlHasAiOrigin } from '@/lib/ai/wrap-ai-html' // Detect AI-origin spans in frame HTML
@@ -77,6 +83,15 @@ interface EditorToolbarProps {
   editor: Editor | null
   conversationId?: string
 }
+
+type DrawInk = 'black' | 'blue' | 'green' | 'red' // Freehand / highlighter ink ids (same four swatches as the old color row)
+
+const DRAW_INK: { id: DrawInk; label: string; swatch: string }[] = [ // Swatch class paints the Circle in each tool’s color dropdown
+  { id: 'black', label: 'Black', swatch: 'fill-black text-black' },
+  { id: 'blue', label: 'Blue', swatch: 'fill-blue-600 text-blue-600' },
+  { id: 'green', label: 'Green', swatch: 'fill-green-600 text-green-600' },
+  { id: 'red', label: 'Red', swatch: 'fill-red-600 text-red-600' },
+]
 
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const { canShare, canEdit, role } = useBoardAccess() // Gate share + show view-only chrome
@@ -371,7 +386,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   // Use context values for drawTool, with local state as fallback
   const drawTool = contextDrawTool ?? null
   const setDrawTool = setContextDrawTool
-  const [drawColor, setDrawColor] = useState<'black' | 'blue' | 'green' | 'red'>('black') // Current drawing color
+  const [pencilColor, setPencilColor] = useState<DrawInk>('black') // Freehand ink — remembered per tool, not shared with highlighter
+  const [highlighterColor, setHighlighterColor] = useState<DrawInk>('black') // Highlighter ink — independent of freehand so each dropdown keeps its last pick
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set())
   const [boardSearch, setBoardSearch] = useState('') // Actions-bar live search over frame title + body
   const [boardSearchOpen, setBoardSearchOpen] = useState(false) // Icon-only until click; then the field slides out
@@ -913,8 +929,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         ]
         : editMenuPillMode === 'view'
           ? [
-            // View: Board rule/style + presentation
+            // View: Board rule/style + capture/presentation cluster (no slash between those two)
             { id: 'presentation', width: 40 }, // Presentation icon (hides first — rightmost)
+            { id: 'capture', width: 40 }, // Capture icon
             { id: 'boardStyle', width: 118 }, // Board rule/style dropdown
             { id: 'undoRedo', width: 70 },
           ]
@@ -923,12 +940,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               // Draw mode buttons: grouped by divider sections
               // Each button: w-7 = 28px, gap-1 = 4px between buttons, px-2 = 8px each side = 16px total container padding
               // Slash divider ~ same budget as former w-px divider (5px)
-              // Group 4 (Colors - Black, Blue, Green, Red): 4 buttons (28 + 4 + 28 + 4 + 28 + 4 + 28) + 16px padding = 156px
-              // Group 3 (Pencil, Highlighter): 2 buttons (28 + 4 + 28) + 16px padding = 76px
-              // Group 2 (Eraser): 1 button (28) + 16px padding = 44px
+              // Colors live on freehand/highlighter dropdowns — no standalone color row
+              // Group 3 (Pencil, Highlighter): 2 buttons (28 + 4 + 28) + 16px padding = 76px (last cluster, no slash)
+              // Group 2 (Eraser): 1 button (28) — same cluster as pencil (no slash)
               // Group 1 (Lasso, Vertical, Horizontal): 3 buttons (28 + 4 + 28 + 4 + 28) + 16px padding = 108px
-              { id: 'drawGroup4', width: 156 }, // Colors (no trailing slash — last draw group)
-              { id: 'drawGroup3', width: 76 + 5 }, // Pencil, Highlighter + slash before colors
+              { id: 'drawGroup3', width: 76 }, // Pencil, Highlighter — last draw cluster
               { id: 'drawGroup2', width: 28 + 4 }, // Eraser — same cluster as pencil (no slash)
               { id: 'drawGroup1', width: 108 + 5 }, // Lasso, Vertical, Horizontal + slash
               { id: 'undoRedo', width: 70 },
@@ -1309,7 +1325,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
         )}
 
-        {/* Draw Mode Buttons - Lasso, Insert Spaces, Eraser, Pencil, Highlighter, Colors */}
+        {/* Draw Mode Buttons - Lasso, Insert Spaces, Eraser, Pencil, Highlighter (ink dropdowns on the tools) */}
         {editMenuPillMode === 'draw' && (
           <>
             {/* Group 1: Selection Mode Toggle (Lasso), Insert Vertical Space, Insert Horizontal Space */}
@@ -1424,114 +1440,86 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   )}
                   {!isItemHidden('drawGroup3') && (
                     <>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          // Toggle pencil tool - if already selected, deselect it
-                          if (drawTool === 'pencil') {
-                            setDrawTool(null)
-                            setIsDrawing(false) // Disable drawing mode
-                          } else {
+                      {/* Freehand: first click toggles on; click again while active opens ink dropdown */}
+                      <DropdownMenu
+                        open={openDropdown === 'pencilColor'}
+                        onOpenChange={(open) => {
+                          if (open && drawTool !== 'pencil') { // Inactive → arm freehand, keep the menu closed
                             setDrawTool('pencil')
-                            setIsDrawing(true) // Enable drawing mode when selecting pencil
+                            setIsDrawing(true) // Pencil is the drawing tool
+                            return
                           }
-                          // Blur the button to remove focus state
-                          e.currentTarget.blur()
+                          handleDropdownOpenChange('pencilColor', open) // Active → color dropdown; outside click closes
                         }}
-                        className={cn(
-                          "h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0",
-                          drawTool === 'pencil'
-                            ? 'bg-gray-100 dark:bg-gray-800'
-                            : 'hover:bg-gray-100 dark:hover:bg-gray-800'
-                        )}
-                        title={drawTool === 'pencil' ? 'Drawing Mode Active (Click to deselect)' : 'Freehand Drawing (Click to enable drawing mode)'}
                       >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          // Toggle highlighter tool - if already selected, deselect it
-                          if (drawTool === 'highlighter') {
-                            setDrawTool(null)
-                            setIsDrawing(false) // Disable drawing mode
-                          } else {
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className={cn(
+                              "h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0",
+                              drawTool === 'pencil'
+                                ? 'bg-gray-100 dark:bg-gray-800'
+                                : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                            )}
+                            title={drawTool === 'pencil' ? 'Freehand color' : 'Freehand Drawing'}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
+                          {DRAW_INK.map((ink) => (
+                            <DropdownMenuItem
+                              key={ink.id}
+                              onClick={() => setPencilColor(ink.id)} // Pick this tool’s ink; menu closes via Radix
+                              className={pencilColor === ink.id ? 'bg-gray-100 dark:bg-gray-800' : ''}
+                            >
+                              <Circle className={cn('h-4 w-4', ink.swatch)} />
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                      {/* Highlighter: same toggle-then-dropdown pattern as freehand */}
+                      <DropdownMenu
+                        open={openDropdown === 'highlighterColor'}
+                        onOpenChange={(open) => {
+                          if (open && drawTool !== 'highlighter') { // Inactive → arm highlighter, keep the menu closed
                             setDrawTool('highlighter')
-                            setIsDrawing(false) // Disable drawing mode when using highlighter (if implemented)
+                            setIsDrawing(false) // Highlighter is not freehand drawing (not yet implemented)
+                            return
                           }
-                          // Blur the button to remove focus state
-                          e.currentTarget.blur()
+                          handleDropdownOpenChange('highlighterColor', open) // Active → color dropdown
                         }}
-                        className={cn(
-                          "h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0",
-                          drawTool === 'highlighter'
-                            ? 'bg-gray-100 dark:bg-gray-800'
-                            : 'hover:bg-gray-100 dark:hover:bg-gray-800'
-                        )}
-                        title={drawTool === 'highlighter' ? 'Highlighter Active (Click to deselect)' : 'Highlighter (Not yet implemented)'}
                       >
-                        <Highlighter className="h-4 w-4" />
-                      </Button>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className={cn(
+                              "h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0",
+                              drawTool === 'highlighter'
+                                ? 'bg-gray-100 dark:bg-gray-800'
+                                : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                            )}
+                            title={drawTool === 'highlighter' ? 'Highlighter color' : 'Highlighter'}
+                          >
+                            <Highlighter className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
+                          {DRAW_INK.map((ink) => (
+                            <DropdownMenuItem
+                              key={ink.id}
+                              onClick={() => setHighlighterColor(ink.id)} // Pick highlighter ink independently of freehand
+                              className={highlighterColor === ink.id ? 'bg-gray-100 dark:bg-gray-800' : ''}
+                            >
+                              <Circle className={cn('h-4 w-4', ink.swatch)} />
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </>
                   )}
-                </div>
-                <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
-              </>
-            )}
-            {/* Group 4: Colors - Black, Blue, Green, Red */}
-            {!isItemHidden('drawGroup4') && (
-              <>
-                <div className="flex items-center gap-1 px-2 flex-shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setDrawColor('black')}
-                    className={cn(
-                      "h-7 w-7 p-0 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0",
-                      drawColor === 'black' && 'bg-gray-100 dark:bg-gray-800'
-                    )}
-                    title="Black"
-                  >
-                    <Circle className="h-4 w-4 fill-black text-black" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setDrawColor('blue')}
-                    className={cn(
-                      "h-7 w-7 p-0 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0",
-                      drawColor === 'blue' && 'bg-gray-100 dark:bg-gray-800'
-                    )}
-                    title="Blue"
-                  >
-                    <Circle className="h-4 w-4 fill-blue-600 text-blue-600" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setDrawColor('green')}
-                    className={cn(
-                      "h-7 w-7 p-0 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0",
-                      drawColor === 'green' && 'bg-gray-100 dark:bg-gray-800'
-                    )}
-                    title="Green"
-                  >
-                    <Circle className="h-4 w-4 fill-green-600 text-green-600" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setDrawColor('red')}
-                    className={cn(
-                      "h-7 w-7 p-0 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0",
-                      drawColor === 'red' && 'bg-gray-100 dark:bg-gray-800'
-                    )}
-                    title="Red"
-                  >
-                    <Circle className="h-4 w-4 fill-red-600 text-red-600" />
-                  </Button>
                 </div>
               </>
             )}
@@ -1589,27 +1577,31 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
-            {/* Slash before presentation or More menu */}
-            {(!isItemHidden('presentation') || hiddenItems.size > 0) && (
+            {/* Slash before capture/presentation cluster or More menu */}
+            {(!isItemHidden('presentation') || !isItemHidden('capture') || hiddenItems.size > 0) && (
               <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
             )}
           </>
         )}
 
-        {/* Presentation — View bar (UI until wired) */}
-        {editMenuPillMode === 'view' && !isItemHidden('presentation') && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0"
-            title="Presentation"
-            aria-label="Presentation"
-          >
-            <Presentation className="h-4 w-4" /> {/* Screen glyph: present the board */}
-          </Button>
+        {/* Capture + Presentation — View bar cluster, no slash between */}
+        {editMenuPillMode === 'view' && (
+          <div className="flex items-center gap-0.5 flex-shrink-0">
+            <CapturesMenu
+              open={openDropdown === 'capture'}
+              onOpenChange={(open) => handleDropdownOpenChange('capture', open)}
+              conversationId={conversationId}
+              triggerVisible={!isItemHidden('capture')}
+            />
+            <PresentationsMenu
+              open={openDropdown === 'presentation'}
+              onOpenChange={(open) => handleDropdownOpenChange('presentation', open)}
+              triggerVisible={!isItemHidden('presentation')}
+            />
+          </div>
         )}
-        {/* Slash before More menu when presentation stays visible but other View tools overflow */}
-        {editMenuPillMode === 'view' && !isItemHidden('presentation') && hiddenItems.size > 0 && (
+        {/* Slash before More menu when capture/presentation stay visible but other View tools overflow */}
+        {editMenuPillMode === 'view' && (!isItemHidden('presentation') || !isItemHidden('capture')) && hiddenItems.size > 0 && (
           <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
         )}
 
@@ -2497,12 +2489,20 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <DropdownMenuSeparator />
                   </>
                 )}
-                {isItemHidden('presentation') && (
+                {(isItemHidden('presentation') || isItemHidden('capture')) && (
                   <>
-                    <DropdownMenuItem>
-                      <Presentation className="h-4 w-4 mr-2" />
-                      Presentation
-                    </DropdownMenuItem>
+                    {isItemHidden('capture') && (
+                      <DropdownMenuItem onClick={() => handleDropdownOpenChange('capture', true)}>
+                        <Scan className="h-4 w-4 mr-2" />
+                        Capture
+                      </DropdownMenuItem>
+                    )}
+                    {isItemHidden('presentation') && (
+                      <DropdownMenuItem onClick={() => handleDropdownOpenChange('presentation', true)}>
+                        <Presentation className="h-4 w-4 mr-2" />
+                        Presentation
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuSeparator />
                   </>
                 )}
@@ -2536,55 +2536,77 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             ) : editMenuPillMode === 'draw' ? (
               <>
                 {/* Draw mode items - grouped by toolbar dividers */}
-                {/* Group 4: Colors - Black, Blue, Green, Red */}
-                {isItemHidden('drawGroup4') && (
-                  <>
-                    <DropdownMenuItem onClick={() => setDrawColor('black')}>
-                      <Circle className="h-4 w-4 mr-2 fill-black text-black" />
-                      Black
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setDrawColor('blue')}>
-                      <Circle className="h-4 w-4 mr-2 fill-blue-600 text-blue-600" />
-                      Blue
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setDrawColor('green')}>
-                      <Circle className="h-4 w-4 mr-2 fill-green-600 text-green-600" />
-                      Green
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setDrawColor('red')}>
-                      <Circle className="h-4 w-4 mr-2 fill-red-600 text-red-600" />
-                      Red
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                {/* Group 3: Pencil, Highlighter */}
+                {/* Group 3: Pencil, Highlighter — overflow keeps toggle + ink submenu */}
                 {isItemHidden('drawGroup3') && (
                   <>
-                    <DropdownMenuItem onClick={() => {
-                      if (drawTool === 'pencil') {
-                        setDrawTool(null)
-                        setIsDrawing(false)
-                      } else {
-                        setDrawTool('pencil')
-                        setIsDrawing(true)
-                      }
-                    }}>
-                      <Pencil className="h-4 w-4 mr-2" />
-                      Pencil
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => {
-                      if (drawTool === 'highlighter') {
-                        setDrawTool(null)
-                        setIsDrawing(false)
-                      } else {
-                        setDrawTool('highlighter')
-                        setIsDrawing(false)
-                      }
-                    }}>
-                      <Highlighter className="h-4 w-4 mr-2" />
-                      Highlighter
-                    </DropdownMenuItem>
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger>
+                        <Pencil className="h-4 w-4 mr-2" />
+                        Pencil
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent className="min-w-0 w-fit p-1">
+                        <DropdownMenuItem onClick={() => { // Overflow click still toggles freehand on/off
+                          if (drawTool === 'pencil') {
+                            setDrawTool(null)
+                            setIsDrawing(false)
+                          } else {
+                            setDrawTool('pencil')
+                            setIsDrawing(true)
+                          }
+                        }}>
+                          {drawTool === 'pencil' ? 'Deselect' : 'Select'}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        {DRAW_INK.map((ink) => (
+                          <DropdownMenuItem
+                            key={ink.id}
+                            onClick={() => { // Picking ink also arms freehand
+                              setPencilColor(ink.id)
+                              setDrawTool('pencil')
+                              setIsDrawing(true)
+                            }}
+                            className={pencilColor === ink.id ? 'bg-gray-100 dark:bg-gray-800' : ''}
+                          >
+                            <Circle className={cn('h-4 w-4 mr-2', ink.swatch)} />
+                            {ink.label}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger>
+                        <Highlighter className="h-4 w-4 mr-2" />
+                        Highlighter
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent className="min-w-0 w-fit p-1">
+                        <DropdownMenuItem onClick={() => { // Overflow click still toggles highlighter on/off
+                          if (drawTool === 'highlighter') {
+                            setDrawTool(null)
+                            setIsDrawing(false)
+                          } else {
+                            setDrawTool('highlighter')
+                            setIsDrawing(false)
+                          }
+                        }}>
+                          {drawTool === 'highlighter' ? 'Deselect' : 'Select'}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        {DRAW_INK.map((ink) => (
+                          <DropdownMenuItem
+                            key={ink.id}
+                            onClick={() => { // Picking ink also arms highlighter
+                              setHighlighterColor(ink.id)
+                              setDrawTool('highlighter')
+                              setIsDrawing(false)
+                            }}
+                            className={highlighterColor === ink.id ? 'bg-gray-100 dark:bg-gray-800' : ''}
+                          >
+                            <Circle className={cn('h-4 w-4 mr-2', ink.swatch)} />
+                            {ink.label}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
                   </>
                 )}
                 {/* Group 2: Eraser — same cluster as pencil (no separator) */}

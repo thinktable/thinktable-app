@@ -815,7 +815,7 @@ export function BlockActionsMenu({
     marginTop: positionMode === 'fixed' ? 0 : '-8px',
   }
 
-  // Slim menu for the Notion footer ⋮⋮ (Live Sync / Manual / Remove)
+  // Slim menu for the Notion connection mark (Live Sync / Manual / Remove)
   if (variant === 'notionConnection') {
     return (
       <div

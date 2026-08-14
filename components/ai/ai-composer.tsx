@@ -1,7 +1,7 @@
 'use client'
 
 // AI sidebar composer — Ask/Edit toggle in-box + Cursor-style + skills menu
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
@@ -19,6 +19,7 @@ import {
   FileText,
   Box,
   TextCursorInput,
+  Scan,
 } from 'lucide-react'
 import type { AiModeId } from '@/lib/ai/modes'
 import { AI_SKILLS, type AiSkill } from '@/lib/ai/skills'
@@ -31,6 +32,12 @@ import type {
 } from '@/lib/ai/types'
 import { AI_CHAT_BLOCK_MIME } from '@/lib/ai/types'
 import { consumeAiSse } from '@/lib/ai/stream'
+import {
+  detachCaptureFromChat,
+  formatCaptureTimestamp,
+  getChatCaptures,
+  subscribeChatCaptures,
+} from '@/lib/captures'
 import {
   getAiLiveContextPills,
   getAiSelectedFrameIds,
@@ -250,6 +257,7 @@ export function AiComposer({
   const [menuQuery, setMenuQuery] = useState('')
   const [menuPos, setMenuPos] = useState<{ left: number; bottom: number } | null>(null)
   const [attachedSkills, setAttachedSkills] = useState<AiSkill[]>([])
+  const chatCaptures = useSyncExternalStore(subscribeChatCaptures, getChatCaptures, getChatCaptures) // Capture-menu attachments
   // Live page/frame/block/text pills from the selection bridge (page on open + selection)
   const [livePills, setLivePills] = useState<AiLiveContextPill[]>(() => getAiLiveContextPills())
   // User-dismissed live pill ids (cleared when that pill leaves / returns with a new id)
@@ -455,6 +463,11 @@ export function AiComposer({
           selectedFrameIds: getAiSelectedFrameIds(),
           viewportCenter: getAiViewportCenter(),
           snapshotIds: attachedSnapshots.map((s) => s.id),
+          boardCaptures: chatCaptures.map((c) => ({
+            createdAt: c.createdAt,
+            boardPath: c.boardPath,
+            text: c.text,
+          })),
           skillIds: attachedSkills.map((s) => s.id),
           skipUserInsert: opts?.skipUserInsert === true,
         }),
@@ -590,7 +603,8 @@ export function AiComposer({
   const hasPills =
     visibleLivePills.length > 0 ||
     attachedSkills.length > 0 ||
-    attachedSnapshots.length > 0
+    attachedSnapshots.length > 0 ||
+    chatCaptures.length > 0
 
   return (
     <div
@@ -636,6 +650,24 @@ export function AiComposer({
                 className="w-4 h-4 rounded flex items-center justify-center hover:bg-black/10"
                 onClick={() => onRemoveSnapshot(s.id)}
                 aria-label={`Remove ${s.name}`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+          {chatCaptures.map((c) => (
+            <span
+              key={`capture-${c.id}`}
+              className="inline-flex items-center gap-1 max-w-full h-6 pl-1.5 pr-1 rounded-md text-[11px] bg-black/[0.06] dark:bg-white/[0.08] text-gray-700 dark:text-gray-200"
+              title={c.boardPath}
+            >
+              <Scan className="h-3 w-3 flex-shrink-0 opacity-70" />
+              {formatCaptureTimestamp(c.createdAt)}
+              <button
+                type="button"
+                className="w-4 h-4 rounded flex items-center justify-center hover:bg-black/10"
+                onClick={() => detachCaptureFromChat(c.id)}
+                aria-label="Remove capture"
               >
                 <X className="h-3 w-3" />
               </button>

@@ -4,6 +4,7 @@
 
 import { useEffect, useRef } from 'react' // Escape close + autofocus
 import {
+  Scan, // Capture — 4 disconnected rounded corners
   ClipboardPaste,
   Link2,
   Maximize2,
@@ -26,6 +27,7 @@ export type BoardActionId =
   | 'zoomToFit'
   | 'zoomTo100'
   | 'copyLink'
+  | 'capture' // Capture the current board view
 
 export type BoardActionsMenuProps = {
   x: number // Pane-relative screen x (click point)
@@ -127,6 +129,12 @@ export function BoardActionsMenu({
       id: 'copyLink',
       label: 'Copy link',
       icon: <Link2 className="h-4 w-4" />,
+    },
+    {
+      kind: 'action',
+      id: 'capture',
+      label: 'Capture',
+      icon: <Scan className="h-4 w-4" />,
     },
   ]
 

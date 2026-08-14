@@ -1,13 +1,25 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-14T03:57:14Z`
+- Snapped at: `2026-08-14T06:37:18Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.114.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260814063716_view_capture_presentation.sql`.
+- View bar: Capture + Presentation menus (local captures, presentation picker, add-to-chat); Draw highlighter color dropdown; board menu Capture; connections group on frames.
+- Schema unchanged.
+
+## Prior: top bar share more image blocks
+
+- No DDL. Marker `20260814042452_top_bar_share_more_image_blocks.sql`.
+- Top bar: lock+Share, copy link, favorites, More (Import/Export, Connections→Notion). TipTap imageBlock.
+- Schema unchanged.
+
+## Prior: board camera rotation
 
 - No DDL. Marker `20260814035712_board_camera_rotation.sql`.
 - Board camera rotation: Free nav rotate icon (drag snaps at 0°, slider does not) + Reset; phone two-finger twist with ~42° arm + pinch zoom-lock; Safari trackpad `GestureEvent` (Chromium does not expose trackpad rotate).

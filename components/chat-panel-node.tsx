@@ -48,7 +48,7 @@ import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Str
 import { setAiTextSelection } from '@/lib/ai/selection-bridge' // Live highlighted-text pills in AI composer
 import { BlockActionsMenu, type BoardInTarget } from '@/components/block-actions-menu'
 import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
-import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, ScanText, WrapText, GripVertical } from 'lucide-react' // Rotate + fit-to-text / wrap + Notion footer handle
+import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, ScanText, WrapText } from 'lucide-react' // Rotate + fit-to-text / wrap
 import { useAiEditSession } from '@/lib/ai/edit-session' // Pending rainbow / review focus
 
 // Helper to check if content is effectively empty (handling HTML tags)
@@ -65,6 +65,7 @@ const BOARD_LINK_ICON_W = 22 // Title emoji / page icon column
 const BOARD_OPEN_MENU_W = 52 // Open-menu pill ≈ preview + open (Notion adds a bit more)
 const BLOCK_THREE_CHARS_W = 28 // ~3ch of body text for plain frames
 const BLOCK_MIN_FRAME_H = 40 // Keep a usable box when shrinking
+const CONNECTIONS_GROUP_H = 28 // h-7 footer strip — hug spacer + pinned group when the free frame clips
 const DATABASE_BLOCK_HTML_RE = /data-type=["']databaseBlock["']/i // TipTap Notion DB atom in frame HTML
 const MIN_DATABASE_FRAME_W = 240 // Below this a DB frame is a collapsed stub (grip + title only)
 const MIN_DATABASE_FRAME_H = 120 // Title row alone is ~40; table needs more height than that
@@ -388,6 +389,77 @@ function formatResponseContent(content: string): string {
   return htmlParagraphs
 }
 
+/** Notion (and later connectors) at the bottom of a frame — icon only, no ⋮⋮. */
+function FrameConnectionsGroup({
+  notionSync,
+  onNotionConnection,
+  className,
+}: {
+  notionSync: NotionSyncMode
+  onNotionConnection?: (next: { connected: boolean; sync?: NotionSyncMode }) => void
+  className?: string
+}) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null) // Sync menu next to the mark
+  useEffect(() => {
+    if (!menu) return // Nothing to dismiss
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest?.('.block-actions-menu, [data-tt-notion-footer]')) return // Keep open on mark / menu
+      setMenu(null) // Click away closes
+    }
+    document.addEventListener('mousedown', onDoc, true) // Capture so frame clicks still dismiss
+    return () => document.removeEventListener('mousedown', onDoc, true)
+  }, [menu])
+  return (
+    <>
+      <div
+        data-tt-notion-footer
+        className={cn('flex h-7 items-center pl-6', className)} // Same left inset as block text (gutter)
+      >
+        <button
+          type="button"
+          className="nodrag nopan flex h-5 w-5 items-center justify-center rounded text-gray-500 hover:bg-gray-100 dark:hover:bg-[#2a2a2a]"
+          title="Notion connection"
+          aria-label="Notion connection"
+          onPointerDown={(e) => e.stopPropagation()} // Don't start frame drag
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+            setMenu({ x: r.left, y: r.bottom }) // Open Live Sync / Manual / Remove
+          }}
+        >
+          <NotionMarkIcon
+            className={cn('h-4 w-4', notionSync === 'live' ? 'text-[#2383e2]' : 'text-gray-500')}
+          />
+        </button>
+      </div>
+      {menu &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <BlockActionsMenu
+            variant="notionConnection"
+            x={menu.x}
+            y={menu.y}
+            positionMode="fixed"
+            openLeft
+            notionSync={notionSync}
+            onAction={(action, payload) => {
+              if (action === 'setNotionSync') {
+                onNotionConnection?.({ connected: true, sync: payload?.notionSync ?? 'live' })
+              } else if (action === 'removeNotionConnection') {
+                onNotionConnection?.({ connected: false })
+              }
+              setMenu(null)
+            }}
+            onClose={() => setMenu(null)}
+          />,
+          document.body
+        )}
+    </>
+  )
+}
+
 function TipTapContent({
   content,
   className,
@@ -419,6 +491,7 @@ function TipTapContent({
   notionConnected = false, // Connections → Notion selected
   notionSync = 'live', // Live Sync vs Manual
   onNotionConnection,
+  pinConnectionsToFrame = false, // Free-frame clip: hug spacer only; real group is pinned to the frame
 }: {
   content: string
   className?: string
@@ -450,9 +523,9 @@ function TipTapContent({
   notionConnected?: boolean
   notionSync?: NotionSyncMode
   onNotionConnection?: (next: { connected: boolean; sync?: NotionSyncMode }) => void
+  pinConnectionsToFrame?: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const [notionHandleMenu, setNotionHandleMenu] = useState<{ x: number; y: number } | null>(null) // Footer ⋮⋮
   const { setActiveEditor } = useEditorContext()
   const { canEdit } = useBoardAccess() // view/comment → read-only editors (RLS still enforces)
   // Live frame-selected flag for TipTap DOM handlers (useEditor config is not recreated each render)
@@ -475,17 +548,6 @@ function TipTapContent({
   onEditorActiveChangeRef.current = onEditorActiveChange
   const setActiveEditorRef = useRef(setActiveEditor)
   setActiveEditorRef.current = setActiveEditor
-
-  useEffect(() => {
-    if (!notionHandleMenu) return
-    const onDoc = (e: MouseEvent) => {
-      const t = e.target as HTMLElement
-      if (t.closest?.('.block-actions-menu, [data-tt-notion-handle]')) return
-      setNotionHandleMenu(null)
-    }
-    document.addEventListener('mousedown', onDoc, true)
-    return () => document.removeEventListener('mousedown', onDoc, true)
-  }, [notionHandleMenu])
 
   const resolvedPlaceholder =
     placeholder !== undefined && placeholder !== ''
@@ -1013,56 +1075,18 @@ function TipTapContent({
             <EditorContent editor={editor} className="block w-full" />
           </>
         ) : null}
-        {/* Notion connection mark: bottom of frame, left-aligned with block text; own ⋮⋮ */}
+        {/* Connections group: in-flow for hug; spacer only when pinned to the free-frame box */}
         {notionConnected && enableBlockHandles && !isFlashcard && !showFrameShimmer && (
-          <div
-            className="relative mt-0.5 flex h-7 items-center"
-            data-tt-notion-footer
-          >
-            <button
-              type="button"
-              data-tt-notion-handle
-              className="nodrag nopan absolute left-0 top-1/2 z-10 flex h-5 w-5 -translate-x-[calc(100%+2px)] -translate-y-1/2 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-[#2a2a2a]"
-              title="Notion connection"
-              aria-label="Notion connection"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                setNotionHandleMenu({ x: r.left, y: r.bottom }) // Open distinct connection menu
-              }}
-            >
-              <GripVertical className="h-3.5 w-3.5" />
-            </button>
-            <NotionMarkIcon
-              className={cn('h-4 w-4', notionSync === 'live' ? 'text-[#2383e2]' : 'text-gray-500')}
+          pinConnectionsToFrame ? (
+            <div className="h-7" aria-hidden data-tt-notion-hug /> // Keep lock-hug height while the visible group rides the frame
+          ) : (
+            <FrameConnectionsGroup
+              notionSync={notionSync}
+              onNotionConnection={onNotionConnection}
             />
-          </div>
+          )
         )}
       </div>
-      {notionHandleMenu &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <BlockActionsMenu
-            variant="notionConnection"
-            x={notionHandleMenu.x}
-            y={notionHandleMenu.y}
-            positionMode="fixed"
-            openLeft
-            notionSync={notionSync}
-            onAction={(action, payload) => {
-              if (action === 'setNotionSync') {
-                onNotionConnection?.({ connected: true, sync: payload?.notionSync ?? 'live' })
-              } else if (action === 'removeNotionConnection') {
-                onNotionConnection?.({ connected: false })
-              }
-              setNotionHandleMenu(null)
-            }}
-            onClose={() => setNotionHandleMenu(null)}
-          />,
-          document.body
-        )}
     </div>
   )
 }
@@ -1602,6 +1626,35 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const [aiForceSyncKey, setAiForceSyncKey] = useState(0) // Bump to setContent even while focused
   const { reactFlowInstance, panelWidth, getSetNodes, flashcardMode, setFlashcardMode, selectedTag } = useReactFlowContext() // Get zoom, panel width, setNodes function, flashcard study mode, and selected tag
   const { setNodes, getNodes } = useReactFlow() // Get setNodes and getNodes for NodeToolbar actions
+  const handleNotionConnection = useCallback(async (next: { connected: boolean; sync?: NotionSyncMode }) => {
+    if (!promptMessage?.id) return // No row to patch
+    const existing = { ...((promptMessage.metadata as Record<string, unknown>) || {}) } // Keep other frame meta
+    if (!next.connected) {
+      existing.notionConnected = false // Explicit unlink
+      delete existing.notionSync
+    } else {
+      existing.notionConnected = true
+      existing.notionSync = next.sync === 'manual' ? 'manual' : 'live'
+    }
+    setNodes((nds) =>
+      nds.map((n) =>
+        n.id === id
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                promptMessage: { ...promptMessage, metadata: existing },
+              },
+            }
+          : n
+      )
+    )
+    try {
+      await supabase.from('messages').update({ metadata: existing }).eq('id', promptMessage.id)
+    } catch (err) {
+      console.error('Failed to save Notion connection:', err)
+    }
+  }, [promptMessage, setNodes, id])
   const updateNodeInternals = useUpdateNodeInternals() // Remeasure auto-sized frames without setNodes (avoids RO→setNodes storms)
   const rfStoreApi = useStoreApi() // Unselect legacy wrapper before RF snapshots dragItems (frame-body drag)
   const rfZoom = useStore((s) => s.transform[2] || 1) // Live board zoom — re-render chrome on zoom (comfort scale)
@@ -2210,6 +2263,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     (promptMessage?.role === 'user' && 
      !responseMessage && 
      (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
+  const { connected: notionConnected, sync: notionSync } = readNotionConnection(
+    promptMessage?.metadata as Record<string, unknown> | undefined
+  ) // Frame Connections → Notion
 
   // Live silhouette from menu / optimistic node patch (not only first metadata load)
   useEffect(() => {
@@ -4017,6 +4073,15 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     contentOverflows && isFrameHovering && !dragging && !pagePreviewOpen && !isThreadConnecting
   // After ~500ms hover: temporarily unclip so the full blocks read (saved size unchanged)
   const showClipPreview = clipPreviewEligible && clipPreviewReady
+  // Free-frame clip: keep the connections group on the visible box (not inside overflow)
+  const pinConnectionsToFrame =
+    notionConnected && isBlock && !isFlashcard && overflowBottom && !showClipPreview
+  const clipBoxH =
+    unlockedInnerH != null
+      ? pinConnectionsToFrame
+        ? Math.max(1, unlockedInnerH - CONNECTIONS_GROUP_H) // Leave a strip for the pinned group
+        : unlockedInnerH
+      : undefined
   // Soften chopped edges while clipped (removed during hover preview)
   const clipFadeStyle =
     !showClipPreview && contentOverflows
@@ -5526,7 +5591,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           !isBlock && 'p-1',
           pagePreviewOpen && 'flex flex-col h-full min-h-0',
           unlockedResized && !showClipPreview && !isContentRotated
-            ? 'h-full overflow-hidden'
+            ? cn('h-full overflow-hidden', pinConnectionsToFrame && 'flex flex-col') // Clip content; connections strip stays
             : 'overflow-visible',
           promptMessage?.metadata?.fadeIn === true &&
             isBlockContentEmpty(promptContent) &&
@@ -5589,7 +5654,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         )}
         {/* Hide body while previewing — keeps page title (edge chip / preview chrome) from sitting under the map */}
         {!pagePreviewOpen && (
+          <>
           <div
+            className={pinConnectionsToFrame ? 'min-h-0 flex-1' : undefined} // Shrink so the connections group keeps the bottom strip
             style={
               applyFrameScale
                 ? {
@@ -5604,8 +5671,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                     height:
                       showClipPreview
                         ? Math.max(unlockedInnerH ?? 0, scaledLayoutH)
-                        : unlockedResized && unlockedInnerH != null
-                          ? unlockedInnerH
+                        : unlockedResized && clipBoxH != null
+                          ? clipBoxH
                           : scaledLayoutH,
                     overflow: unlockedResized && !showClipPreview ? 'hidden' : 'visible', // Unclip on hover preview
                     ...clipFadeStyle, // Soften half-cut glyphs at overflowing edges
@@ -5616,7 +5683,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                       overflow: showClipPreview ? 'visible' : 'hidden',
                       height: showClipPreview
                         ? Math.max(unlockedInnerH ?? 0, scaledLayoutH)
-                        : unlockedInnerH ?? undefined,
+                        : clipBoxH,
                       width: showClipPreview
                         ? Math.max(unlockedInnerW ?? 0, scaledLayoutW)
                         : unlockedInnerW ?? undefined,
@@ -5653,7 +5720,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               // Clicks in frame padding (right of short/empty lines) still place the I-bar
               if (!isBlock || !selected) return
               const t = e.target as HTMLElement
-              if (t.closest?.('.ProseMirror, [data-tt-block-handle], [data-tt-insert-line], .block-actions-menu')) {
+              if (t.closest?.('.ProseMirror, [data-tt-block-handle], [data-tt-insert-line], .block-actions-menu, [data-tt-notion-footer]')) {
                 return // Editor / grip / nest already handle these
               }
               const ed = promptEditorRef.current
@@ -5712,37 +5779,10 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               singleLineUntilEnter={isBlock && !isFlashcard && !wrapActive} // nowrap until Enter; wrap mode (locked/unlocked) soft-wraps
               hostNodeId={id}
               conversationId={conversationId}
-              notionConnected={readNotionConnection(promptMessage?.metadata as Record<string, unknown> | undefined).connected}
-              notionSync={readNotionConnection(promptMessage?.metadata as Record<string, unknown> | undefined).sync}
-              onNotionConnection={async (next) => {
-                if (!promptMessage?.id) return
-                const existing = { ...((promptMessage.metadata as Record<string, unknown>) || {}) }
-                if (!next.connected) {
-                  existing.notionConnected = false
-                  delete existing.notionSync
-                } else {
-                  existing.notionConnected = true
-                  existing.notionSync = next.sync === 'manual' ? 'manual' : 'live'
-                }
-                setNodes((nds) =>
-                  nds.map((n) =>
-                    n.id === id
-                      ? {
-                          ...n,
-                          data: {
-                            ...n.data,
-                            promptMessage: { ...promptMessage, metadata: existing },
-                          },
-                        }
-                      : n
-                  )
-                )
-                try {
-                  await supabase.from('messages').update({ metadata: existing }).eq('id', promptMessage.id)
-                } catch (err) {
-                  console.error('Failed to save Notion connection:', err)
-                }
-              }}
+              notionConnected={notionConnected}
+              notionSync={notionSync}
+              onNotionConnection={handleNotionConnection}
+              pinConnectionsToFrame={pinConnectionsToFrame}
               boardInTargets={(() => {
                 const convs =
                   (queryClient.getQueryData(['conversations']) as
@@ -5780,6 +5820,18 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             </BoardLinkProvider>
           </div>
           </div>
+          {pinConnectionsToFrame && (
+            <div
+              className="flex-shrink-0 pl-0.5" // Match contentFit left pad; group adds the ⋮⋮ gutter
+              style={{ backgroundColor: frameShape ? 'transparent' : responseAreaBackgroundColor }} // Cover clipped text in the reserved strip
+            >
+              <FrameConnectionsGroup
+                notionSync={notionSync}
+                onNotionConnection={handleNotionConnection}
+              />
+            </div>
+          )}
+          </>
         )}
 
         {/* Keep iframe mounted after warm/open; fills card while visible. Targets the active page

@@ -57,6 +57,21 @@ export async function POST(request: NextRequest) {
   const snapshotIds = Array.isArray(body.snapshotIds)
     ? body.snapshotIds.filter((id: unknown) => typeof id === 'string')
     : []
+  const boardCaptures = Array.isArray(body.boardCaptures)
+    ? body.boardCaptures
+        .filter(
+          (c: unknown) =>
+            c &&
+            typeof c === 'object' &&
+            typeof (c as { createdAt?: unknown }).createdAt === 'string' &&
+            typeof (c as { boardPath?: unknown }).boardPath === 'string'
+        )
+        .map((c: { createdAt: string; boardPath: string; text?: string }) => ({
+          createdAt: c.createdAt,
+          boardPath: c.boardPath,
+          text: typeof c.text === 'string' ? c.text.slice(0, 4000) : '',
+        }))
+    : []
   // Per-turn skill pills from the composer (merged with thread metadata below)
   const requestSkillIds = Array.isArray(body.skillIds)
     ? body.skillIds.filter((id: unknown) => typeof id === 'string')
@@ -172,6 +187,7 @@ export async function POST(request: NextRequest) {
     boardId,
     selectedFrameIds,
     snapshotIds,
+    boardCaptures,
   })
 
   const systemPrompt =
