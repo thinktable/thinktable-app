@@ -11,6 +11,7 @@ import { ThinktableBrandMark, PersonalizeAiModal } from './personalize-ai-modal'
 import { AiThreadPicker, type AiThreadFilter } from './ai/ai-thread-picker' // History
 import { AiTranscript } from './ai/ai-transcript' // Turns
 import { AiComposer, regenerateAfterEdit } from './ai/ai-composer' // Composer
+import { AiPromptBars } from './ai/ai-prompt-bars' // Compact prompt stack / phone list
 import type { AiContextSnapshot, AiMessage, AiThread } from '@/lib/ai/types' // Types
 import { isSelectableAiMode } from '@/lib/ai/modes'
 import { useAiEditSession, buildFramePendingEdit, buildCreateFramePendingEdit, buildCreateThreadPendingEdit } from '@/lib/ai/edit-session'
@@ -20,9 +21,6 @@ import { cn } from '@/lib/utils' // cn
 import {
   ChevronsRight,
   MessageSquarePlus,
-  Search,
-  ListTodo,
-  Sparkles,
   Pencil,
 } from 'lucide-react' // Icons
 
@@ -228,6 +226,15 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     setMode('ask')
   }, [])
 
+  /** Scroll the transcript to a user prompt picked from the compact bars. */
+  const handleJumpToMessage = useCallback((messageId: string) => {
+    const el = document.querySelector(`[data-ai-turn="${messageId}"]`) // Row stamped in AiTranscript
+    const root = document.querySelector('[data-ai-transcript-scroll]') // Phone card / sidebar scroller
+    if (!el || !root) return // Nothing to jump to
+    const delta = el.getBoundingClientRect().top - root.getBoundingClientRect().top // Align turn to the visible top
+    root.scrollTo({ top: root.scrollTop + delta, behavior: 'smooth' }) // Only the transcript, not the page
+  }, [])
+
   const handleEditUserMessage = useCallback(
     async (messageId: string, content: string) => {
       const res = await fetch(`/api/ai/messages/${messageId}`, {
@@ -335,6 +342,20 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
 
   const hasTranscript = messages.length > 0
 
+  const promptBarProps = {
+    boardId: conversationId, // This-board recents when the picker is filtered
+    filter, // Match the thread picker
+    thread, // Skip the open chat in the recent fallback
+    messages, // In-thread user prompts
+    refreshKey, // Refetch recents after send
+    onSeedPrompt: (prompt: string) => setSeedPrompt(prompt), // Starter → composer
+    onSelectThread: (t: AiThread) => {
+      setThread(t) // Open that chat
+      setMode(isSelectableAiMode(t.mode) ? t.mode : 'ask') // Match saved mode
+    },
+    onJumpToMessage: handleJumpToMessage, // Scroll to a user turn
+  }
+
   // Shared composer props (desktop column + phone map dock)
   const composer = (
     <AiComposer
@@ -419,19 +440,26 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
               isChatSidebarOpen ? 'pointer-events-auto' : 'pointer-events-none'
             )}
           >
-            {hasTranscript && isChatSidebarOpen && (
+            {isChatSidebarOpen && (
               <div
                 className={cn(
-                  'max-h-[32vh] overflow-y-auto rounded-xl px-3 py-2',
+                  'relative rounded-xl min-h-[40px]', // Response box — ticks pin here, not in the composer
                   'bg-white/95 dark:bg-[#202020]/95 backdrop-blur-md',
                   'border border-black/10 dark:border-white/10 shadow-sm'
                 )}
               >
-                <AiTranscript
-                  messages={messages}
-                  streamingId={streamingId}
-                  onEditUserMessage={handleEditUserMessage}
-                />
+                {hasTranscript && (
+                  <div data-ai-transcript-scroll className="max-h-[32vh] overflow-y-auto px-3 py-2 pr-12">
+                    <AiTranscript
+                      messages={messages}
+                      streamingId={streamingId}
+                      onEditUserMessage={handleEditUserMessage}
+                    />
+                  </div>
+                )}
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 z-10">
+                  <AiPromptBars orientation="horizontal" {...promptBarProps} />
+                </div>
               </div>
             )}
             {isChatSidebarOpen && (
@@ -498,7 +526,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
       <aside
         data-chat-sidebar
         className={cn(
-          'h-full flex flex-col',
+          'relative h-full flex flex-col', // relative so ticks pin to this column (site height)
           'bg-gray-50 dark:bg-[#0f0f0f]',
           'border-l border-black/10 dark:border-white/10'
         )}
@@ -540,7 +568,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
           </div>
         </header>
 
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-6">
+        <div data-ai-transcript-scroll className="flex-1 min-h-0 overflow-y-auto px-4 py-6 pr-8">
           {!hasTranscript ? (
             <div className="flex flex-col items-start gap-5 max-w-[280px] mx-auto mt-6">
               <div
@@ -586,37 +614,6 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                 </p>
               </div>
 
-              <ul className="w-full flex flex-col gap-0.5">
-                {[
-                  { icon: Sparkles, label: 'Summarize this board', prompt: 'Summarize this board.' },
-                  {
-                    icon: ListTodo,
-                    label: 'Turn notes into tasks',
-                    prompt: 'Turn the notes on this board into a task list.',
-                  },
-                  {
-                    icon: Search,
-                    label: 'Search connected pages',
-                    prompt: 'What stands out across the frames on this board?',
-                  },
-                ].map(({ icon: Icon, label, prompt }) => (
-                  <li key={label}>
-                    <button
-                      type="button"
-                      onClick={() => setSeedPrompt(prompt)}
-                      className={cn(
-                        'w-full flex items-center gap-2.5 rounded-md px-2 py-2 text-left text-sm',
-                        'text-gray-700 dark:text-gray-300',
-                        'hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors'
-                      )}
-                    >
-                      <Icon className="h-4 w-4 flex-shrink-0 text-gray-500 dark:text-gray-400" />
-                      <span className="truncate">{label}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-
               {savedSnapshots.length > 0 && (
                 <div className="w-full mt-2">
                   <div className="text-[11px] uppercase tracking-wide text-gray-400 mb-1 px-1">
@@ -654,6 +651,10 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
             data-chat-return-slot
             className="flex justify-center items-center min-h-[44px] mt-4"
           />
+        </div>
+
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 z-10 pointer-events-auto">
+          <AiPromptBars orientation="vertical" {...promptBarProps} />
         </div>
 
         <div className="flex-shrink-0 px-3 pb-3 pt-1 pointer-events-auto">

@@ -3,6 +3,7 @@
 import type { Edge, Node, NodeChange, EdgeChange } from 'reactflow' // RF store item types for select changes
 import { getConnectedEdges } from 'reactflow' // Same edge-select as RF Pane while the rect grows
 import { boardRotationRef, rotateVec } from '@/lib/board-rotation' // Marquee vs rotated frame AABB
+import { PANE_TAP_SLOP_PX } from '@/lib/pane-click-slop' // Finger jitter still counts as a tap (I-bar)
 
 const SKIP_SEL =
   '.react-flow__node, .react-flow__edge, .react-flow__connection, .react-flow__handle, [data-minimap-context], [data-minimap-toggle-context], [data-minimap-pill-context]' // Frames / threads / chrome — not empty-board marquee
@@ -22,7 +23,7 @@ type RfStore = {
     domNode: HTMLElement | null // Flow root for pane bounds
   }
   setState: (partial: {
-    userSelectionActive?: boolean // True once the finger has moved (draws the blue box)
+    userSelectionActive?: boolean // True once the finger has moved past tap slop (draws the blue box)
     userSelectionRect?: PaneRect | null // Box in pane pixels
     nodesSelectionActive?: boolean // RF keeps this after a non-empty marquee
   }) => void
@@ -123,6 +124,9 @@ export function attachPhoneSelectMarquee(root: HTMLElement, store: RfStore) {
     const start = state.userSelectionRect // Seeded on down
     if (!start) return
     const pos = panePoint(event, bounds) // Live finger
+    const dx = pos.x - start.startX // Pane-space drift from down
+    const dy = pos.y - start.startY
+    if (!state.userSelectionActive && dx * dx + dy * dy <= PANE_TAP_SLOP_PX * PANE_TAP_SLOP_PX) return // Still a tap — keep onPaneClick
     const next: PaneRect = {
       startX: start.startX,
       startY: start.startY,

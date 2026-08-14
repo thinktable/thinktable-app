@@ -2,7 +2,7 @@
 
 // Board right-click menu — empty pane context menu (same Notion chrome as frame/thread menus).
 
-import { useEffect, useRef } from 'react' // Escape close + autofocus
+import { useEffect, useLayoutEffect, useRef } from 'react' // Escape close + autofocus + in-window place
 import {
   Scan, // Capture — 4 disconnected rounded corners
   ClipboardPaste,
@@ -16,6 +16,7 @@ import {
 } from 'lucide-react' // Row icons
 import { Button } from '@/components/ui/button' // Ghost row buttons
 import { cn } from '@/lib/utils' // Class merge
+import { applyMenuPlacement, watchMenuSafeRect } from '@/lib/menu-placement' // Stay in-window, miss top bar / chat
 
 /** Actions the board menu can emit (wired + stubs). */
 export type BoardActionId =
@@ -67,6 +68,14 @@ export function BoardActionsMenu({
   useEffect(() => {
     rootRef.current?.focus() // Keyboard Escape works immediately
   }, [])
+
+  useLayoutEffect(() => {
+    const root = rootRef.current // Menu shell
+    if (!root) return // Not mounted
+    const place = () => applyMenuPlacement(root, { anchorX: x, anchorY: y, openLeft: false, fromExisting: true }) // Keep above-click, then clamp
+    place()
+    return watchMenuSafeRect(place)
+  }, [x, y])
 
   const rows: RowDef[] = [
     {
@@ -176,7 +185,7 @@ export function BoardActionsMenu({
     >
       <div className="px-2.5 pt-1.5 pb-1 text-xs text-gray-500 dark:text-gray-400">Board</div>
 
-      <div className="flex flex-col gap-0.5 max-h-[420px] overflow-y-auto px-0.5 pb-0.5">
+      <div data-tt-menu-body className="flex flex-col gap-0.5 overflow-y-auto px-0.5 pb-0.5">
         {rows.map((row, index) => {
           if (row.kind === 'separator') {
             return (

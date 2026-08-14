@@ -70,6 +70,7 @@ export function AiTranscript({
         return (
           <div
             key={m.id}
+            data-ai-turn={m.id} // Prompt-bar jump target
             className={cn(
               'group relative rounded-lg border border-transparent px-2 py-2',
               'hover:border-black/10 dark:hover:border-white/10 hover:bg-black/[0.02] dark:hover:bg-white/[0.03]',

@@ -2,7 +2,7 @@
 
 // Thread click menu — same Notion-style chrome as BlockActionsMenu / text-select popup.
 
-import { useEffect, useRef, useState } from 'react' // Escape close + arrange flyout
+import { useEffect, useLayoutEffect, useRef, useState } from 'react' // Escape close + arrange flyout + in-window place
 import {
   ChevronDown,
   ChevronRight,
@@ -22,6 +22,7 @@ import {
 } from 'lucide-react' // Row icons matching FigJam-style action list
 import { Button } from '@/components/ui/button' // Ghost row buttons
 import { cn } from '@/lib/utils' // Class merge
+import { applyMenuPlacement, watchMenuSafeRect } from '@/lib/menu-placement' // Stay in-window, miss top bar / chat
 
 /** Actions the thread menu can emit (wired + stubs). */
 export type ThreadActionId =
@@ -92,6 +93,14 @@ export function ThreadActionsMenu({
   useEffect(() => {
     rootRef.current?.focus() // Keyboard Escape works immediately
   }, [])
+
+  useLayoutEffect(() => {
+    const root = rootRef.current // Menu shell
+    if (!root) return // Not mounted
+    const place = () => applyMenuPlacement(root, { anchorX: x, anchorY: y, openLeft: false, fromExisting: true }) // Keep above-click, then clamp
+    place()
+    return watchMenuSafeRect(place)
+  }, [x, y, openSubmenu])
 
   // FigJam-shaped list, product terms (thread / frame), Thinktable row chrome
   const rows: RowDef[] = [
@@ -247,7 +256,7 @@ export function ThreadActionsMenu({
     >
       <div className="px-2.5 pt-1.5 pb-1 text-xs text-gray-500 dark:text-gray-400">Thread</div>
 
-      <div className="flex flex-col gap-0.5 max-h-[420px] overflow-y-auto px-0.5 pb-0.5">
+      <div data-tt-menu-body className="flex flex-col gap-0.5 overflow-y-auto px-0.5 pb-0.5">
         {rows.map((row, index) => {
           if (row.kind === 'separator') {
             return (
@@ -315,7 +324,8 @@ export function ThreadActionsMenu({
       {/* Style → path style (Smooth / Sharp / Linear) */}
       {openSubmenu === 'arrange' && (
         <div
-          className="absolute left-full top-0 ml-1 z-[1001] min-w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+          data-tt-menu-flyout="main"
+          className="absolute z-[1001] min-w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
           onMouseEnter={() => setOpenSubmenu('arrange')}
         >
           {(
@@ -353,7 +363,8 @@ export function ThreadActionsMenu({
       {/* Thickness → 1–4px stroke */}
       {openSubmenu === 'thickness' && (
         <div
-          className="absolute left-full top-0 ml-1 z-[1001] min-w-[140px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+          data-tt-menu-flyout="main"
+          className="absolute z-[1001] min-w-[140px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
           onMouseEnter={() => setOpenSubmenu('thickness')}
         >
           {(
@@ -387,7 +398,8 @@ export function ThreadActionsMenu({
       {/* Info stub flyout — placeholder until thread metadata UI exists */}
       {openSubmenu === 'info' && (
         <div
-          className="absolute left-full bottom-0 ml-1 z-[1001] min-w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2 text-xs text-gray-500"
+          data-tt-menu-flyout="main"
+          className="absolute z-[1001] min-w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2 text-xs text-gray-500"
           onMouseEnter={() => setOpenSubmenu('info')}
         >
           Thread info coming soon

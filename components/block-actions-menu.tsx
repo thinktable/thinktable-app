@@ -69,6 +69,7 @@ import { NotionMarkIcon } from '@/components/notion-mark-icon' // Notion row in 
 import type { NotionSyncMode } from '@/lib/blocks' // Live vs Manual sync
 import { Button } from '@/components/ui/button' // Row buttons
 import { cn } from '@/lib/utils' // Class merge
+import { applyMenuPlacement, watchMenuSafeRect } from '@/lib/menu-placement' // Stay in-window, miss top bar / chat / selection
 import { LegoBrickIcon } from './lego-brick-icon' // Frame-group lock: two bricks, top one stud back
 import Shape from '@/components/shapes/Shape' // Mini silhouette previews in the Shape flyout
 import {
@@ -514,7 +515,6 @@ export function BlockActionsMenu({
   const connectionsRowRef = useRef<HTMLButtonElement>(null) // Align Connections picker to that row
   const notionRowRef = useRef<HTMLButtonElement>(null) // Align Notion sync menu to that row
   const colorRowRef = useRef<HTMLButtonElement>(null) // Align frame Color flyout to Color row
-  const [rowFlyoutTop, setRowFlyoutTop] = useState(0) // px from menu top → Connections / Notion / Color row
   const [lastFrameColor, setLastFrameColor] = useState<FrameLastColor | null>(null) // Last used fill/border
   const [borderWeightDraft, setBorderWeightDraft] = useState<number | null>(null) // Live slider value while dragging
   const borderWeightDraggingRef = useRef(false) // Ignore prop sync mid-drag
@@ -536,8 +536,10 @@ export function BlockActionsMenu({
     if (showPropertySearch) propertySearchRef.current?.focus() // Caret in Property search
   }, [showPropertySearch])
 
-  // Park Connections / Notion / Color flyouts beside their row (not at the menu top)
+  // Park the card + any open flyout in the chrome-free window (below top bar, above chat)
   useLayoutEffect(() => {
+    const root = rootRef.current // Menu shell
+    if (!root) return // Not mounted yet
     const row =
       openSubmenu === 'connections'
         ? connectionsRowRef.current
@@ -545,28 +547,17 @@ export function BlockActionsMenu({
           ? notionRowRef.current
           : openSubmenu === 'frameColor'
             ? colorRowRef.current
-            : null
-    const root = rootRef.current
-    if (!row || !root) return
-    setRowFlyoutTop(row.getBoundingClientRect().top - root.getBoundingClientRect().top)
-  }, [openSubmenu, notionConnected])
-
-  // Keep a fixed menu on-screen (old absolute + translate(-50%,-100%) parked it above the click, often off-view)
-  useLayoutEffect(() => {
-    if (positionMode !== 'fixed' || !rootRef.current) return
-    const el = rootRef.current
-    const r = el.getBoundingClientRect()
-    const pad = 8
-    let left = r.left
-    let top = r.top
-    if (left + r.width > window.innerWidth - pad) left = window.innerWidth - pad - r.width
-    if (top + r.height > window.innerHeight - pad) top = window.innerHeight - pad - r.height
-    if (left < pad) left = pad
-    if (top < pad) top = pad
-    el.style.left = `${left}px`
-    el.style.top = `${top}px`
-    el.style.transform = 'none'
-  }, [x, y, positionMode, openLeft, openSubmenu])
+            : null // Turn into / Shape align to the cluster top
+    const place = () =>
+      applyMenuPlacement(root, {
+        anchorX: x, // Grip / click X
+        anchorY: y, // Grip / click Y
+        openLeft, // Prefer the side that misses the frame
+        preferredFlyoutTop: row?.getBoundingClientRect().top, // Color / Connections hug their row
+      })
+    place() // Before paint so the first frame is already in-bounds
+    return watchMenuSafeRect(place) // Window + phone keyboard move the chat dock
+  }, [x, y, positionMode, openLeft, openSubmenu, notionConnected, query, propertyQuery, showPropertySearch])
 
   /** Apply fill or border, remember as Last used, keep the flyout open. */
   const applyFrameColor = (kind: FrameColorKind, swatch: (typeof FRAME_COLOR_SWATCHES)[number]) => {
@@ -942,7 +933,7 @@ export function BlockActionsMenu({
         {blockTypeLabel(currentBlockType)}
       </div>
 
-      <div className="flex flex-col gap-0.5 max-h-[360px] overflow-y-auto px-0.5 pb-0.5">
+      <div data-tt-menu-body className="flex flex-col gap-0.5 overflow-y-auto px-0.5 pb-0.5">
         {rows.length === 0 && turnIntoMatches.length === 0 && propertyMatches.length === 0 && (
           <div className="px-2 py-2 text-xs text-gray-400">No matching actions</div>
         )}
@@ -1080,17 +1071,14 @@ export function BlockActionsMenu({
       {/* Turn into flyout: type list shrink-wraps; Property is a fixed second column */}
       {(openSubmenu === 'turnInto' || openSubmenu === 'boardIn') && (
         <div
-          className={cn(
-            'absolute top-0 z-[1001] inline-flex w-fit max-h-[420px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f]',
-            // Toward the frame so the Property column stays on-screen (not past the viewport)
-            openLeft ? 'left-full ml-1' : 'right-full left-auto mr-1'
-          )}
+          data-tt-menu-flyout="main"
+          className="absolute z-[1001] inline-flex w-fit bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f]"
           onMouseEnter={() => {
             if (openSubmenu !== 'boardIn') setOpenSubmenu('turnInto')
           }}
         >
           {/* Left: shrink-wrap to the longest type label; same row rhythm as the main menu */}
-          <div className="flex w-max min-w-max shrink-0 flex-col gap-1 max-h-[420px] overflow-y-auto p-1">
+          <div className="flex w-max min-w-max shrink-0 flex-col gap-1 overflow-y-auto p-1">
             {filteredTurnInto.map((t) => (
               <Button
                 key={t.id}
@@ -1129,7 +1117,7 @@ export function BlockActionsMenu({
           <div className="w-px shrink-0 self-stretch bg-gray-100 dark:bg-[#2f2f2f] my-1" />
 
           {/* Right: Property header + AI Autofill + type grids + connectors */}
-          <div className="w-[320px] shrink-0 max-h-[420px] overflow-y-auto p-1.5">
+          <div className="w-[320px] shrink-0 overflow-y-auto p-1.5">
             <div className="flex items-center gap-1 px-1.5 py-1">
               <span className="flex-1 text-[11px] text-gray-400">Property</span>
               <button
@@ -1227,7 +1215,8 @@ export function BlockActionsMenu({
           {/* Board in — nest under a parent; sits to the right of the combined flyout */}
           {openSubmenu === 'boardIn' && (
             <div
-              className="absolute left-full top-8 ml-1 z-[1002] min-w-[200px] max-h-[280px] overflow-y-auto bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+              data-tt-menu-flyout="nested"
+              className="absolute z-[1002] min-w-[200px] overflow-y-auto bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
               onMouseEnter={() => setOpenSubmenu('boardIn')}
             >
               <div className="px-2 py-1.5 text-[11px] text-gray-400">Nest board under…</div>
@@ -1261,7 +1250,8 @@ export function BlockActionsMenu({
       {/* Shape — frame silhouette picker (frames act as shapes) */}
       {openSubmenu === 'frameShape' && (
         <div
-          className="absolute left-full top-0 ml-1 z-[1001] w-[220px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2"
+          data-tt-menu-flyout="main"
+          className="absolute z-[1001] w-[220px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2"
           onMouseEnter={() => setOpenSubmenu('frameShape')}
         >
           <div className="px-1 pb-1.5 text-[11px] text-gray-400">Frame shape</div>
@@ -1325,8 +1315,8 @@ export function BlockActionsMenu({
       {/* Frame Color — Last used / Background color / Border color (Notion-style) */}
       {openSubmenu === 'frameColor' && (
         <div
-          className="absolute left-full ml-1 z-[1001] w-[240px] max-h-[min(420px,70vh)] overflow-y-auto bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] py-1.5"
-          style={{ top: rowFlyoutTop }} // Beside the Color row
+          data-tt-menu-flyout="main"
+          className="absolute z-[1001] w-[240px] overflow-y-auto bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] py-1.5"
           onMouseEnter={() => setOpenSubmenu('frameColor')}
         >
           {/* Last used */}
@@ -1478,8 +1468,8 @@ export function BlockActionsMenu({
       {/* Connections — click picker (Notion) */}
       {openSubmenu === 'connections' && (
         <div
-          className="absolute left-full ml-1 z-[1001] min-w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
-          style={{ top: rowFlyoutTop }} // Beside the Connections row
+          data-tt-menu-flyout="main"
+          className="absolute z-[1001] min-w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
           onMouseEnter={() => setOpenSubmenu('connections')}
         >
           <Button
@@ -1502,8 +1492,8 @@ export function BlockActionsMenu({
       {/* Notion — hover menu: Live Sync / Manual / Remove */}
       {openSubmenu === 'notionConnection' && (
         <div
-          className="absolute left-full ml-1 z-[1001] min-w-[200px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
-          style={{ top: rowFlyoutTop }} // Beside the Notion row
+          data-tt-menu-flyout="main"
+          className="absolute z-[1001] min-w-[200px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
           onMouseEnter={() => setOpenSubmenu('notionConnection')}
         >
           <Button

@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-14T06:59:47Z`
+- Snapped at: `2026-08-14T13:41:44Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
-- CLI: `supabase` `2.114.0` (marker via `migration new`)
+- CLI: `supabase` `2.90.0` (marker via `migration new`; latest available `2.114.0`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260814134144_prompt_bars_menu_placement_ibar.sql`.
+- AI prompt bars (sidebar ticks / phone dashes); chrome-free menu placement; I-bar pane-click slop.
+- Schema unchanged.
+
+## Prior: top bar tool titles
 
 - No DDL. Marker `20260814065945_top_bar_tool_titles.sql`.
 - Mode-bar icon+title (undo/redo stay icon-only); Filter/Sort/Automations/Search + eraser/pencil/highlighter collapse first; remaining titles next; Search title hides as the field slides out. Labels: Present, Tidy up, Anchor, Snap frames.

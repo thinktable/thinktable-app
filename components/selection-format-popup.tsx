@@ -32,6 +32,7 @@ import {
   AlignJustify, // Text align justify
 } from 'lucide-react'
 import { cn } from '@/lib/utils' // Conditional classes for active Hide text row
+import { getMenuSafeRect } from '@/lib/menu-placement' // Same chrome-free lane as action menus
 
 const EDGE_GAP = 8 // Gap between highlight edge and popup
 const VIEWPORT_PAD = 8 // Minimum inset from the visible viewport edges
@@ -358,11 +359,17 @@ function getSelectionClientRects(): DOMRect[] | null {
   return [fallback]
 }
 
-/** Viewport boundary used for edge fits (React Flow pane when present). */
+/** Viewport boundary used for edge fits (map pane ∩ chrome-free lane). */
 function getBoundaryRect(): DOMRect {
-  const pane = document.querySelector('.react-flow') as HTMLElement | null
-  if (pane) return pane.getBoundingClientRect()
-  return new DOMRect(0, 0, window.innerWidth, window.innerHeight)
+  const safe = getMenuSafeRect() // Below top bar, above chat, left of chat column
+  const pane = document.querySelector('.react-flow') as HTMLElement | null // Map column when present
+  if (!pane) return new DOMRect(safe.left, safe.top, safe.width, safe.height) // Window minus chrome
+  const p = pane.getBoundingClientRect() // Pane box
+  const left = Math.max(p.left, safe.left) // Don't leave the map or the safe lane
+  const top = Math.max(p.top, safe.top)
+  const right = Math.min(p.right, safe.right)
+  const bottom = Math.min(p.bottom, safe.bottom)
+  return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top)) // Intersection
 }
 
 /** Clamp popup top so the full card stays inside the boundary. */
