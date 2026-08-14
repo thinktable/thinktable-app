@@ -1844,7 +1844,14 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     !data.borderColor || data.borderColor === '' || data.borderColor === null
   const isBorderNone =
     isBorderColorTransparent || data.borderStyle === 'none' // Color alone is enough to show a border
-  const isMinimalPanel = isFillTransparent && isBorderNone
+  // Empty frames (no text / atoms) get a soft grey outline so the box is findable on the board
+  const showEmptyFrameBorder =
+    isBlockContentEmpty(promptContent) && // Live TipTap HTML — flips off as soon as content lands
+    isBorderColorTransparent && // User-set borderColor wins over empty chrome
+    data.borderStyle !== 'none' && // Explicit "no border" stays invisible
+    !frameShape // Silhouette stroke is the outline when shaped
+  const emptyFrameBorderColor = resolvedTheme === 'dark' ? '#4b5563' : '#d1d5db' // Thin grey (gray-600 / gray-300)
+  const isMinimalPanel = isFillTransparent && isBorderNone // Empty grey chrome does not count as styled
   const shouldHideHandles = isMinimalPanel && !selected
 
   // Handle click away from comment panels to deselect
@@ -5107,14 +5114,14 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           // Always show blue border when selected, otherwise use custom border color or default theme-based color
           // Selection uses the connected resize rectangle (not a rounded card border)
           selected && isBlock
-            ? (data.borderColor ? '' : 'border-transparent') // Selection chrome is the resize rect, not the frame border
+            ? (data.borderColor || showEmptyFrameBorder ? '' : 'border-transparent') // Style owns empty/custom border; else transparent under resize rect
             : selected
               ? 'border-blue-500 dark:border-blue-400'
-              : (data.borderColor || frameShape ? '' : 'border-transparent'), // Default frame: no visible border until styled
+              : (data.borderColor || frameShape || showEmptyFrameBorder ? '' : 'border-transparent'), // Empty → grey via style; styled/shape → style; else transparent
           isBookmarked
             ? 'shadow-[0_0_8px_rgba(250,204,21,0.6)] dark:shadow-[0_0_8px_rgba(250,204,21,0.4)]'
-            : isBorderNone || frameShape || isContentRotated
-              ? 'shadow-none' // Transparent / none border / silhouette / rotated — no card shadow on outer
+            : isBorderNone || frameShape || isContentRotated || showEmptyFrameBorder
+              ? 'shadow-none' // Transparent / empty chrome / silhouette / rotated — no card shadow on outer
               : showClipPreview
                 ? 'shadow-md' // Soft lift while full clipped content is revealed
                 : 'shadow-sm',
@@ -5162,17 +5169,21 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         backgroundColor:
           frameShape || isContentRotated ? 'transparent' : panelBackgroundColor,
         borderColor:
-          frameShape || isBorderColorTransparent || isContentRotated
+          frameShape || isContentRotated
             ? 'transparent'
-            : data.borderColor, // Keep custom border visible while selected (Color menu feedback)
+            : data.borderColor
+              ? data.borderColor // Keep custom border visible while selected (Color menu feedback)
+              : showEmptyFrameBorder
+                ? emptyFrameBorderColor // Thin grey outline for blank frames
+                : 'transparent',
         borderStyle:
-          frameShape || isBorderNone || isContentRotated
+          frameShape || isContentRotated || (isBorderNone && !showEmptyFrameBorder)
             ? 'none'
-            : ((data.borderStyle as React.CSSProperties['borderStyle']) || 'solid'), // Color without style → solid
+            : ((data.borderStyle as React.CSSProperties['borderStyle']) || 'solid'), // Color / empty chrome → solid
         borderWidth:
-          frameShape || isBorderNone || isContentRotated
+          frameShape || isContentRotated || (isBorderNone && !showEmptyFrameBorder)
             ? 0
-            : (data.borderWeight || 1), // Default 1px when a border color is set
+            : (data.borderWeight || 1), // 1px for empty chrome or when a border color is set
         ['--tt-frame-ui-scale' as string]: frameUiScale,
         ['--tt-frame-line-w' as string]: `${frameLineW}px`,
         ['--tt-frame-line-hit' as string]: `${frameLineHit}px`,

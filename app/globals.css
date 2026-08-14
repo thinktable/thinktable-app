@@ -398,8 +398,8 @@ html:not(:has([data-toolbar-center][data-toolbar-ready])) [data-edit-menu-hover]
 
 /* Cookie-SSR may paint the desktop chat column; never steal map width on phone */
 @media (max-width: 899px) {
-  [data-chat-sidebar] {
-    display: none !important; /* Phone uses the map dock, not this column */
+  [data-chat-sidebar]:not([data-chat-map-dock]) {
+    display: none !important; /* Hide the desktop column only — phone map dock keeps data-chat-sidebar too */
   }
 }
 

@@ -17,8 +17,7 @@ import ReactFlow, {
   BaseEdge,
   getSmoothStepPath,
 } from 'reactflow'
-import type { Edge, EdgeProps } from 'reactflow' // No `Node` name — collides with DOM + isn’t a runtime export
-type RFNode<T = any> = import('reactflow').Node<T> // Type-only via import() — never emitted as a value bind
+import type { Node, Edge, EdgeProps } from 'reactflow' // Types only — value `Node` is undefined and shadows DOM Node
 import 'reactflow/dist/style.css'
 import { ChatPanelNode } from './chat-panel-node' // Eager: next/dynamic breaks RF nodeTypes + left frames blank forever
 import { BlockGroupNode } from './block-group-node' // Legacy dashed wrapper around frames
@@ -934,7 +933,7 @@ function BoardFlowInner({
       )
       return nds.map((n) => {
         if (n.type === 'blockGroup') {
-          const { dragHandle: _dh, parentId: _pid, parentNode: _pn, ...rest } = n as RFNode & {
+          const { dragHandle: _dh, parentId: _pid, parentNode: _pn, ...rest } = n as Node & {
             dragHandle?: string
             parentNode?: string
           }
@@ -947,7 +946,7 @@ function BoardFlowInner({
           }
         }
         const pid = n.parentId || (n as { parentNode?: string }).parentNode
-        const { parentId: _pid, parentNode: _pn, extent: _ex, ...rest } = n as RFNode & {
+        const { parentId: _pid, parentNode: _pn, extent: _ex, ...rest } = n as Node & {
           parentNode?: string
         }
         if (!pid) return { ...rest, zIndex: 1 } // Cards above the dashed frame
@@ -1007,21 +1006,21 @@ function BoardFlowInner({
   const { rebuildIndex, updateHelperLines, HelperLines } = useHelperLines(snapEnabled)
   
   // Helper function to check if a panel is a chat panel (has AI response and is not a flashcard)
-  const isChatPanel = useCallback((node: RFNode<ChatPanelNodeData>): boolean => {
+  const isChatPanel = useCallback((node: Node<ChatPanelNodeData>): boolean => {
     const hasResponse = !!node.data.responseMessage
     const isFlashcard = node.data.promptMessage?.metadata?.isFlashcard === true
     return hasResponse && !isFlashcard
   }, [])
   
   // Get chronological panels filtered by mode
-  const getChronologicalPanels = useCallback((filter: 'chat' | 'all'): RFNode<ChatPanelNodeData>[] => {
+  const getChronologicalPanels = useCallback((filter: 'chat' | 'all'): Node<ChatPanelNodeData>[] => {
     if (!nodes || !Array.isArray(nodes)) return []
     
     // Filter panels based on mode
     let filteredNodes = nodes.filter(n => n.data.promptMessage?.id) // Only panels with promptMessage (skip freehand)
     
     if (filter === 'chat') {
-      filteredNodes = filteredNodes.filter(n => isChatPanel(n as RFNode<ChatPanelNodeData>))
+      filteredNodes = filteredNodes.filter(n => isChatPanel(n as Node<ChatPanelNodeData>))
     }
     
     // Sort by created_at timestamp (most recent last)
@@ -1029,11 +1028,11 @@ function BoardFlowInner({
       const aTime = new Date(a.data.promptMessage?.created_at || 0).getTime()
       const bTime = new Date(b.data.promptMessage?.created_at || 0).getTime()
       return aTime - bTime // Oldest first, newest last
-    }) as RFNode<ChatPanelNodeData>[]
+    }) as Node<ChatPanelNodeData>[]
   }, [nodes, isChatPanel])
   
   // Get most recent panel based on filter
-  const getMostRecentPanel = useCallback((filter: 'chat' | 'all'): RFNode<ChatPanelNodeData> | null => {
+  const getMostRecentPanel = useCallback((filter: 'chat' | 'all'): Node<ChatPanelNodeData> | null => {
     const panels = getChronologicalPanels(filter)
     return panels.length > 0 ? panels[panels.length - 1] : null
   }, [getChronologicalPanels])
@@ -1378,6 +1377,11 @@ function BoardFlowInner({
   // Phone AI open: align Free nav (+ minimap chrome) to the chat card’s left edge
   const mapChromeLeft =
     isMobileMode && isChatSidebarOpen && aiMapDockLeftPx != null ? aiMapDockLeftPx : MINIMAP_LEFT
+  // Desktop: always board fill (incl. chat open). Phone: white only for input-only chat.
+  const freeNavBoardFill =
+    isMobileMode && isChatSidebarOpen && !aiChatHasTranscript
+      ? 'bg-white dark:bg-[#0f0f0f]'
+      : 'bg-gray-50 dark:bg-[#0f0f0f]'
   const originalPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map()) // Store original positions for Linear mode
   const isLinearModeRef = useRef(false) // Track if we're currently in Linear mode
 
@@ -1620,7 +1624,7 @@ function BoardFlowInner({
     }
   }, [clickedEdge, setContextClickedEdge])
   const [edgePopupPosition, setEdgePopupPosition] = useState({ x: 0, y: 0 }) // Position for edge popup
-  const [rightClickedNode, setRightClickedNode] = useState<RFNode<ChatPanelNodeData> | null>(null) // Track right-clicked node for popup
+  const [rightClickedNode, setRightClickedNode] = useState<Node<ChatPanelNodeData> | null>(null) // Track right-clicked node for popup
   const [nodePopupPosition, setNodePopupPosition] = useState({ x: 0, y: 0 }) // Position for node popup
   const [boardMenuPosition, setBoardMenuPosition] = useState<{ x: number; y: number } | null>(null) // Empty-board right-click menu
   const boardClickFlowRef = useRef<{ x: number; y: number } | null>(null) // Flow coords for Add frame / zoom-to-100%
@@ -2813,7 +2817,7 @@ function BoardFlowInner({
     console.log(`🎨 BoardFlow: Loading ${savedCanvasNodes.length} saved canvas nodes from database`)
 
     // Convert saved canvas nodes to React Flow nodes
-    const canvasReactFlowNodes: RFNode[] = savedCanvasNodes.map((savedNode) => {
+    const canvasReactFlowNodes: Node[] = savedCanvasNodes.map((savedNode) => {
       // Create React Flow node from saved canvas node
       // Note: reactflow v11 requires width/height in style, not as direct properties
       const reactFlowNode: Node = {
@@ -2833,7 +2837,7 @@ function BoardFlowInner({
         // resizable: true, // Enable resizing (removed - not a valid Node property)
         selectable: true, // Enable selection
         draggable: true, // Enable dragging
-      } as RFNode
+      } as Node
 
       return reactFlowNode
     })
@@ -3545,7 +3549,7 @@ function BoardFlowInner({
   // Recalculate edge handles based on current node positions
   // Previously remapped every connected edge to the nearest sides while dragging.
   // Disabled — keep the sides the user snapped to; a future cleanup action will re-route.
-  const recalculateEdgeHandles = useCallback((_nodeId: string, _currentNodes: RFNode[]) => {
+  const recalculateEdgeHandles = useCallback((_nodeId: string, _currentNodes: Node[]) => {
     return
   }, [])
 
@@ -4106,8 +4110,8 @@ function BoardFlowInner({
       return
     }
 
-    const newNodes: RFNode<ChatPanelNodeData>[] = []
-    const blockGroupNodes: RFNode[] = [] // Visual group frames (not chat panels)
+    const newNodes: Node<ChatPanelNodeData>[] = []
+    const blockGroupNodes: Node[] = [] // Visual group frames (not chat panels)
     const gapBetweenPanels = 50 // Fixed gap between panels (size-aware spacing)
     let panelIndex = 0 // Track panel index for consistent spacing
 
@@ -4219,7 +4223,7 @@ function BoardFlowInner({
             })
           } else {
             // Find reference panel: use selected panel if one is selected, otherwise use most recent panel
-            let referenceNode: RFNode<ChatPanelNodeData> | null = null
+            let referenceNode: Node<ChatPanelNodeData> | null = null
 
             if (existingNodes.length > 0) {
               // First, check if there's a selected panel (this overrides most recent)
@@ -4361,7 +4365,7 @@ function BoardFlowInner({
             // Load panel styling from message metadata (fillColor, borderColor, borderStyle, borderWeight)
             const messageMetadata = message.metadata || {}
             const stackIndex = minStackIndex(messageMetadata as Record<string, unknown>)
-            const panelNode: RFNode<ChatPanelNodeData> = {
+            const panelNode: Node<ChatPanelNodeData> = {
               id: nodeId,
               type: 'chatPanel',
               position: panelPosition,
@@ -4406,7 +4410,7 @@ function BoardFlowInner({
           // Load panel styling from message metadata (fillColor, borderColor, borderStyle, borderWeight)
           const messageMetadata = message.metadata || {}
           const stackIndex = minStackIndex(messageMetadata as Record<string, unknown>)
-          const panelNode: RFNode<ChatPanelNodeData> = {
+          const panelNode: Node<ChatPanelNodeData> = {
             id: baseNodeId,
             type: 'chatPanel',
             position: currentPos,
@@ -4487,7 +4491,7 @@ function BoardFlowInner({
     }
 
     // Deduplicate nodes by ID to prevent duplicate key errors
-    const nodeMap = new Map<string, RFNode<ChatPanelNodeData>>()
+    const nodeMap = new Map<string, Node<ChatPanelNodeData>>()
     newNodes.forEach(node => {
       // If duplicate ID found, keep the one with response message (more complete)
       if (nodeMap.has(node.id)) {
@@ -4500,7 +4504,7 @@ function BoardFlowInner({
         nodeMap.set(node.id, node)
       }
     })
-    const deduplicatedNodes = [...Array.from(nodeMap.values()), ...blockGroupNodes] as RFNode[]
+    const deduplicatedNodes = [...Array.from(nodeMap.values()), ...blockGroupNodes] as Node[]
 
     console.log('🔄 BoardFlow: Created', deduplicatedNodes.length, 'panels from', messagesToUse.length, 'messages (after deduplication)')
     console.log('🔄 BoardFlow: Messages order:', messagesToUse.map(m => ({ id: m.id, role: m.role, content: m.content.substring(0, 30) })))
@@ -4772,16 +4776,16 @@ function BoardFlowInner({
 
     // Helper function to animate panels below a collapsed/expanded panel
     const animatePanelsBelow = (
-      collapsedNode: RFNode<ChatPanelNodeData>,
+      collapsedNode: Node<ChatPanelNodeData>,
       heightDiff: number,
-      allNodes: RFNode<ChatPanelNodeData>[],
+      allNodes: Node<ChatPanelNodeData>[],
       reactFlowInstance: any,
       reactFlowElement: HTMLElement,
       viewport: { zoom: number },
       isCollapsed: boolean
     ) => {
       // Find all nodes below this one (higher Y position)
-      const nodesBelow: RFNode<ChatPanelNodeData>[] = allNodes.filter((n) => n.position.y > collapsedNode.position.y)
+      const nodesBelow: Node<ChatPanelNodeData>[] = allNodes.filter((n) => n.position.y > collapsedNode.position.y)
 
       if (nodesBelow.length === 0) return
 
@@ -4816,7 +4820,7 @@ function BoardFlowInner({
         } else {
           // Animation complete - update stored heights and positions
           const finalNodes = reactFlowInstance.getNodes()
-          finalNodes.forEach((n: RFNode<ChatPanelNodeData>) => {
+          finalNodes.forEach((n: Node<ChatPanelNodeData>) => {
             const el = reactFlowElement.querySelector(`[data-id="${n.id}"]`) as HTMLElement
             if (el) {
               const height = el.getBoundingClientRect().height / viewport.zoom
@@ -4861,7 +4865,7 @@ function BoardFlowInner({
 
         if (Math.abs(heightDiff) >= 10) {
           // Find all nodes below this one (higher Y position)
-          const nodesBelow = nodes.filter((n: RFNode<ChatPanelNodeData>) => n.position.y > node.position.y)
+          const nodesBelow = nodes.filter((n: Node<ChatPanelNodeData>) => n.position.y > node.position.y)
 
           if (nodesBelow.length > 0) {
             // Animate smoothly using requestAnimationFrame
@@ -4895,7 +4899,7 @@ function BoardFlowInner({
               } else {
                 // Animation complete - update stored heights and positions
                 const finalNodes = reactFlowInstance.getNodes()
-                finalNodes.forEach((n: RFNode<ChatPanelNodeData>) => {
+                finalNodes.forEach((n: Node<ChatPanelNodeData>) => {
                   const el = reactFlowElement.querySelector(`[data-id="${n.id}"]`) as HTMLElement
                   if (el) {
                     const height = el.getBoundingClientRect().height / viewport.zoom
@@ -5383,7 +5387,7 @@ function BoardFlowInner({
 
   // Open frame menu at a screen point (right-click or long-press)
   const openFrameMenuAt = useCallback(
-    (clientX: number, clientY: number, node: RFNode<ChatPanelNodeData>) => {
+    (clientX: number, clientY: number, node: Node<ChatPanelNodeData>) => {
       setBoardMenuPosition(null)
       boardClickFlowRef.current = null
       setMinimapContextMenuPosition(null)
@@ -5481,7 +5485,7 @@ function BoardFlowInner({
         setBoardMenuPosition(null)
         boardClickFlowRef.current = null
         setNodePopupPosition({ x: screenX, y: screenY })
-        setRightClickedNode(selectedNodes[0] as RFNode<ChatPanelNodeData>)
+        setRightClickedNode(selectedNodes[0] as Node<ChatPanelNodeData>)
         return
       }
 
@@ -5494,7 +5498,7 @@ function BoardFlowInner({
 
   // Handle node right-click to show popup (select node if not selected, then show popup)
   const handleNodeContextMenu = useCallback(
-    (event: React.MouseEvent, node: RFNode<ChatPanelNodeData>) => {
+    (event: React.MouseEvent, node: Node<ChatPanelNodeData>) => {
       if (event.button !== 2) return // Phone pinch/hold uses long-press; iOS contextmenu is button 0
       event.preventDefault()
       event.stopPropagation()
@@ -5593,7 +5597,7 @@ function BoardFlowInner({
         if (nodeEl) {
           const id = nodeEl.getAttribute('data-id')
           const node = id
-            ? (nodesRef.current.find((n) => n.id === id) as RFNode<ChatPanelNodeData> | undefined)
+            ? (nodesRef.current.find((n) => n.id === id) as Node<ChatPanelNodeData> | undefined)
             : undefined
           if (node && (node.type === 'chatPanel' || node.type === 'blockGroup')) {
             openFrameMenuAt(point.clientX, point.clientY, node)
@@ -5624,7 +5628,7 @@ function BoardFlowInner({
     })
     longPressRef.current = controller
 
-    const frameNodeFromEvent = (e: Event): RFNode<ChatPanelNodeData> | null => {
+    const frameNodeFromEvent = (e: Event): Node<ChatPanelNodeData> | null => {
       const el = eventElement(e.target) // Text-node clicks have no .closest
       if (!el) return null
       if (el.closest('input, textarea')) return null
@@ -5635,7 +5639,7 @@ function BoardFlowInner({
       if (!nodeEl) return null
       const id = nodeEl.getAttribute('data-id')
       const node = id
-        ? (nodesRef.current.find((n) => n.id === id) as RFNode<ChatPanelNodeData> | undefined)
+        ? (nodesRef.current.find((n) => n.id === id) as Node<ChatPanelNodeData> | undefined)
         : undefined
       if (node && (node.type === 'chatPanel' || node.type === 'blockGroup')) return node
       return null
@@ -5801,7 +5805,7 @@ function BoardFlowInner({
       if (!nodeEl) return
       const id = nodeEl.getAttribute('data-id')
       const node = id
-        ? (nodesRef.current.find((n) => n.id === id) as RFNode<ChatPanelNodeData> | undefined)
+        ? (nodesRef.current.find((n) => n.id === id) as Node<ChatPanelNodeData> | undefined)
         : undefined
       if (!node || (node.type !== 'chatPanel' && node.type !== 'blockGroup')) return
       e.preventDefault()
@@ -7007,7 +7011,7 @@ function BoardFlowInner({
         setNodePopupPosition({ x: screenX, y: screenY })
         nodePopupZoomRef.current = viewport.zoom
       }
-      setRightClickedNode(node as RFNode<ChatPanelNodeData>)
+      setRightClickedNode(node as Node<ChatPanelNodeData>)
     }
     window.addEventListener('open-block-actions', onOpen as EventListener)
     return () => window.removeEventListener('open-block-actions', onOpen as EventListener)
@@ -8224,6 +8228,7 @@ function BoardFlowInner({
   return (
     <div
       ref={boardRootRef}
+      data-board-root // Phone AI dock portals here (escapes main overflow-hidden)
       // absolute inset-0 fills the map column (chrome uses getBoundingClientRect of this box)
       className="absolute inset-0"
       style={{ WebkitTouchCallout: 'none' }} // Prefer our long-press menus over iOS callout
@@ -8339,7 +8344,7 @@ function BoardFlowInner({
         connectionLineType={ConnectionLineType.SmoothStep}
         connectionLineComponent={ThreadConnectionLine} // Thread free end tracks the cursor
         connectionRadius={36} // Snap only when close to a connection point (not the whole frame)
-        edgesUpdatable={!isLocked} // Drag either end to detach / reconnect
+        edgesUpdatable={canEdit && !isLocked} // Drag either end to detach / reconnect (view-only off)
         edgeUpdaterRadius={20} // Hit area for grabbing a thread endpoint
         onEdgeUpdate={handleThreadReconnect}
         onSelectionChange={() => {
@@ -8732,7 +8737,6 @@ function BoardFlowInner({
         deleteKeyCode={canEdit ? DELETE_KEYS : null}
         nodesDraggable={canEdit}
         nodesConnectable={canEdit}
-        edgesUpdatable={canEdit}
         onMove={(event, viewport) => {
           // Publish flow-space center of the visible pane for AI Edit frame placement
           const pane = document.querySelector('.react-flow')
@@ -8978,10 +8982,7 @@ function BoardFlowInner({
             data-minimap-pill-context
             className={cn(
               'absolute -top-1 -left-1 z-20 h-5 w-5 p-0 rounded-full border-0 shadow-sm focus-visible:ring-0 focus-visible:ring-offset-0',
-              // Board fill on desktop (incl. chat open). Phone: white only for input-only chat
-              isMobileMode && isChatSidebarOpen && !aiChatHasTranscript
-                ? 'bg-white dark:bg-[#0f0f0f]'
-                : 'bg-gray-50 dark:bg-[#0f0f0f]',
+              freeNavBoardFill, // Same fill as Free nav bar
               !minimapExpanded
                 ? 'text-gray-500 dark:text-gray-400 hover:opacity-90'
                 : 'text-gray-900 dark:text-gray-100 hover:opacity-90'
@@ -9031,12 +9032,9 @@ function BoardFlowInner({
           </Button>
           <div
             className={cn(
-              // Board fill on desktop (incl. chat open). Phone: white only for input-only chat
               // w-full = column width (minimap); gap-0 — slashes carry the visual gap so 179px fits
               'px-0.5 py-1 flex items-center gap-0 relative w-full border-0 shadow-sm rounded-lg',
-              isMobileMode && isChatSidebarOpen && !aiChatHasTranscript
-                ? 'bg-white dark:bg-[#0f0f0f]'
-                : 'bg-gray-50 dark:bg-[#0f0f0f]'
+              freeNavBoardFill // Board fill on desktop even with chat open; phone keeps input-only white
             )}
           >
             <div className="flex-[1.25] basis-0 min-w-0 flex items-center justify-center">
@@ -9598,7 +9596,7 @@ function BoardFlowInner({
                 if (viewMode === 'linear') {
                   const panels = getChronologicalPanels(linearNavMode)
                   if (panels.length > 0) {
-                    const index = panels.findIndex((p: RFNode<ChatPanelNodeData>) => p.id === mostRecentPanel.id)
+                    const index = panels.findIndex((p: Node<ChatPanelNodeData>) => p.id === mostRecentPanel.id)
                     setFocusedPanelIndex(index >= 0 ? index : panels.length - 1)
                     scrollAccumulatorRef.current = 0
                     lastScrollDirectionRef.current = null

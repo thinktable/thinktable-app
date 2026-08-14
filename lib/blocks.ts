@@ -87,13 +87,21 @@ export function newBlockMetadata(extra: Record<string, unknown> = {}): Record<st
   }
 }
 
-/** True when HTML/plain content has no visible text. */
+/** True when HTML/plain content has no visible text (spaces / &nbsp; / empty tags only). */
 export function isBlockContentEmpty(content: string | undefined | null): boolean {
   if (!content) return true
   if (content === '<p></p>' || content === '<p><br></p>') return true
   // boardLink / legacy pageLink / databaseBlock / imageBlock store payload in attrs — stripping tags looks empty
   if (/data-type=["'](?:boardLink|pageLink|databaseBlock|imageBlock)["']/i.test(content)) return false
-  return content.replace(/<[^>]*>/g, '').trim().length === 0
+  // TipTap often stores spaces as &nbsp; / &#160; / U+00A0 — treat those as empty too
+  const plain = content
+    .replace(/<[^>]*>/g, ' ') // Drop tags; leftover is typed text only
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&#160;/g, ' ')
+    .replace(/\u00a0/g, ' ') // Literal non-breaking space from the editor DOM
+    .replace(/\s+/g, ' ')
+    .trim()
+  return plain.length === 0
 }
 
 /** Notion connection sync mode on a frame (Connections menu). */

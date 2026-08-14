@@ -1033,8 +1033,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
   const projectsExpandedInitializedRef = useRef(false) // Track if we've initialized project expansion
   const supabase = createClient()
   const queryClient = useQueryClient()
-  const { isMobileMode, isSidebarOpen, isSidebarPinned, closeSidebar, openSidebar, scheduleCloseSidebar, cancelCloseSidebar, aiMapDockLiftPx, isChatSidebarOpen } = useSidebarContext() // Chat-open fill matches the board on desktop only
-  const navMenuMatchBoard = isChatSidebarOpen && !isMobileMode // Desktop chat column: same fill as the map
+  const { isMobileMode, isSidebarOpen, isSidebarPinned, closeSidebar, openSidebar, scheduleCloseSidebar, cancelCloseSidebar, aiMapDockLiftPx } = useSidebarContext()
   const [navPopupMaxHeight, setNavPopupMaxHeight] = useState<number>(() =>
     typeof window === 'undefined' ? NAV_POPUP_MAX_CAP : measureNavPopupMaxHeight(NAV_POPUP_TOP) // SSR: cap; client: already miss chrome
   )
@@ -2280,11 +2279,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
         data-app-sidebar
         data-nav-menu-popup
         className={cn(
-          'fixed z-50 flex flex-col border border-gray-200 dark:border-[#2f2f2f] shadow-xl rounded-2xl overflow-hidden',
-          // Desktop chat column open: board fill so the popup matches the map; phone keeps the white card on the scrim
-          navMenuMatchBoard
-            ? 'bg-gray-50 dark:bg-[#0f0f0f]'
-            : 'bg-white dark:bg-[#171717]',
+          'fixed z-50 flex flex-col bg-white dark:bg-[#171717] border border-gray-200 dark:border-[#2f2f2f] shadow-xl rounded-2xl overflow-hidden',
           'w-72 min-h-0' // min-h-0 so the board list can shrink and scroll under maxHeight
         )}
         style={{
@@ -2321,7 +2316,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                   placeholder="Search anything..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-7 h-8 text-sm rounded-lg border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
+                  className="pl-7 h-8 text-sm rounded-lg border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
                   suppressHydrationWarning
                 />
               </div>

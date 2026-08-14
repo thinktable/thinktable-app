@@ -2,6 +2,7 @@
 
 // Full-height right chat column — Thinktable AI copilot (Ask in sidebar; drag blocks onto page)
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react' // Hooks
+import { createPortal } from 'react-dom' // Phone dock must paint on the map, not inside clipped main
 import {
   useSidebarContext,
   CHAT_SIDEBAR_WIDTH,
@@ -52,6 +53,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     setAiMapDockLiftPx,
     setAiMapDockLeftPx,
     setAiChatHasTranscript,
+    closeSidebar,
   } = useSidebarContext()
   const { addPendingEdits } = useAiEditSession()
   const [personalizeOpen, setPersonalizeOpen] = useState(false) // Logo modal
@@ -67,8 +69,9 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   const [savedSnapshots, setSavedSnapshots] = useState<AiContextSnapshot[]>([]) // Library
   // Phone: lift dock above the soft keyboard via visualViewport inset
   const [keyboardInset, setKeyboardInset] = useState(0)
-  const mapDockRef = useRef<HTMLDivElement>(null) // Outer fixed shell (keyboard inset)
+  const mapDockRef = useRef<HTMLDivElement>(null) // Outer shell (keyboard inset)
   const mapDockContentRef = useRef<HTMLDivElement>(null) // Inner max-w-lg — left edge Free nav aligns to
+  const [mapRoot, setMapRoot] = useState<HTMLElement | null>(null) // BoardFlow root — phone dock host
 
   const [threadHydrated, setThreadHydrated] = useState(false) // False until restore finishes (SSR + client match)
   const [loadedThreadId, setLoadedThreadId] = useState<string | null>(null) // Thread whose messages are in state
@@ -166,6 +169,33 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
       cancelled = true
     }
   }, [isChatSidebarOpen, refreshKey])
+
+  // Phone dock host: BoardFlow root (absolute inset-0) — escapes main overflow-hidden clipping
+  useLayoutEffect(() => {
+    if (!isMobileMode) {
+      setMapRoot(null) // Desktop uses the column, not the map portal
+      return
+    }
+    let cancelled = false // Strict Mode / unmount
+    const sync = () => {
+      const el = document.querySelector('[data-board-root]') as HTMLElement | null
+      if (!cancelled) setMapRoot(el)
+      return !!el
+    }
+    if (sync()) return // Board already mounted (sibling under the same page)
+    const id = requestAnimationFrame(() => {
+      sync() // One frame retry if BoardFlow paints after this layout
+    })
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(id)
+    }
+  }, [isMobileMode, conversationId]) // Board remounts when the route id changes
+
+  // Phone: boards-nav scrim (z-40) would cover the dock — close nav when chat is open
+  useEffect(() => {
+    if (isMobileMode && isChatSidebarOpen) closeSidebar()
+  }, [isMobileMode, isChatSidebarOpen, closeSidebar])
 
   // Phone dock: track how much of the layout viewport the keyboard covers
   useEffect(() => {
@@ -447,14 +477,25 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
 
   // Phone: composer docks on the map above the keyboard — no sidebar column
   // Stay mounted while closed (invisible) so brand tap can focus() in the same gesture
+  // Portal onto [data-board-root]: flex-sibling fixed inside main overflow-hidden is clipped
   if (isMobileMode) {
-    return (
+    // Prefer state; fall back to live query so the first phone frame after shrink still paints
+    const host =
+      mapRoot ??
+      (typeof document !== 'undefined'
+        ? (document.querySelector('[data-board-root]') as HTMLElement | null)
+        : null)
+    if (!host) return null // Board not in the DOM yet (rare — sibling under the same page)
+    const dock = (
       <>
         <div
           ref={mapDockRef}
           data-chat-sidebar
           data-chat-map-dock
-          className="fixed inset-x-0 z-30 px-2"
+          className={cn(
+            'absolute inset-x-0 px-2', // Absolute on the map (not fixed — board root is the box)
+            isChatSidebarOpen ? 'z-[45]' : 'z-20' // Open above Free nav / scrim; closed below brand (z-40)
+          )}
           aria-hidden={!isChatSidebarOpen}
           style={{
             bottom: isChatSidebarOpen ? keyboardInset : 0, // Sit just above the soft keyboard when open
@@ -551,6 +592,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
         />
       </>
     )
+    return createPortal(dock, host) // Paint on the map — not as a clipped main flex sibling
   }
 
   if (!isChatSidebarOpen) return null // Desktop closed (belt-and-suspenders after early return)
