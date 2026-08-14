@@ -35,12 +35,14 @@ import {
   takeBoardCapture,
 } from '@/lib/captures' // Local capture/presentation store
 import { cn } from '@/lib/utils' // Class merge
+import { ToolbarTitle } from './toolbar-title' // Animated icon-adjacent title
 
 type CapturesMenuProps = {
   open: boolean // Controlled by editor-toolbar openDropdown
   onOpenChange: (open: boolean) => void // Keep only one toolbar dropdown open
   conversationId?: string // Current board — Capture view + this-board filter
   triggerVisible?: boolean // false when overflowed into More (still mount for controlled open)
+  showLabel?: boolean // false when the top bar has condensed titles to icons
 }
 
 export function CapturesMenu({
@@ -48,6 +50,7 @@ export function CapturesMenu({
   onOpenChange,
   conversationId,
   triggerVisible = true,
+  showLabel = true, // Icon+title until the top bar condenses
 }: CapturesMenuProps) {
   const queryClient = useQueryClient() // Path + messages cache
   const { reactFlowInstance } = useReactFlowContext() // Viewport at Capture view
@@ -129,13 +132,16 @@ export function CapturesMenu({
           variant="ghost"
           size="sm"
           className={cn(
-            'h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0',
+            'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
+            'transition-[padding,gap] duration-200 ease-out', // Pad/gap tween with the title width
+            showLabel ? 'px-2 gap-1.5' : 'px-1.5 gap-0', // Title condenses to icon on shrink
             !triggerVisible && 'hidden' // Overflow: keep mounted, hide the glyph
           )}
           title="Capture"
           aria-label="Capture"
         >
-          <Scan className="h-4 w-4" /> {/* Four disconnected rounded corners */}
+          <Scan className="h-4 w-4 flex-shrink-0" /> {/* Four disconnected rounded corners */}
+          <ToolbarTitle show={showLabel}>Capture</ToolbarTitle>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent

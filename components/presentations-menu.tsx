@@ -35,11 +35,13 @@ import {
   type BoardCapture,
 } from '@/lib/captures' // Local store
 import { cn } from '@/lib/utils' // Class merge
+import { ToolbarTitle } from './toolbar-title' // Animated icon-adjacent title
 
 type PresentationsMenuProps = {
   open: boolean // Controlled by editor-toolbar openDropdown
   onOpenChange: (open: boolean) => void // Keep only one toolbar dropdown open
   triggerVisible?: boolean // false when overflowed into More (still mount for controlled open)
+  showLabel?: boolean // false when the top bar has condensed titles to icons
 }
 
 /** Hairline between captures: + inserts at this index. */
@@ -138,6 +140,7 @@ export function PresentationsMenu({
   open,
   onOpenChange,
   triggerVisible = true,
+  showLabel = true, // Icon+title until the top bar condenses
 }: PresentationsMenuProps) {
   const presentations = useSyncExternalStore(subscribeCaptures, getPresentations, getPresentations)
   const captures = useSyncExternalStore(subscribeCaptures, getCaptures, getCaptures)
@@ -208,13 +211,16 @@ export function PresentationsMenu({
           variant="ghost"
           size="sm"
           className={cn(
-            'h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0',
+            'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
+            'transition-[padding,gap] duration-200 ease-out', // Pad/gap tween with the title width
+            showLabel ? 'px-2 gap-1.5' : 'px-1.5 gap-0', // Title condenses to icon on shrink
             !triggerVisible && 'hidden'
           )}
-          title="Presentation"
-          aria-label="Presentation"
+          title="Present"
+          aria-label="Present"
         >
-          <Presentation className="h-4 w-4" />
+          <Presentation className="h-4 w-4 flex-shrink-0" />
+          <ToolbarTitle show={showLabel}>Present</ToolbarTitle>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent

@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-14T06:37:18Z`
+- Snapped at: `2026-08-14T06:59:47Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.114.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260814065945_top_bar_tool_titles.sql`.
+- Mode-bar icon+title (undo/redo stay icon-only); Filter/Sort/Automations/Search + eraser/pencil/highlighter collapse first; remaining titles next; Search title hides as the field slides out. Labels: Present, Tidy up, Anchor, Snap frames.
+- Schema unchanged.
+
+## Prior: view capture presentation
 
 - No DDL. Marker `20260814063716_view_capture_presentation.sql`.
 - View bar: Capture + Presentation menus (local captures, presentation picker, add-to-chat); Draw highlighter color dropdown; board menu Capture; connections group on frames.

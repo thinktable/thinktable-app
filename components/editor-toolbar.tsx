@@ -73,6 +73,7 @@ import { ShareBoardMenu } from './share-board-menu' // Share dropdown: Notion pe
 import { BoardTopBarShare } from './board-top-bar-share' // Copy link / favorite / More (Connections → Notion)
 import { AutomationsMenu } from './automations-menu' // Actions-bar Automations list popover
 import { CapturesMenu } from './captures-menu' // View-bar Capture list popover
+import { ToolbarTitle } from './toolbar-title' // Animated icon-adjacent titles
 import { PresentationsMenu } from './presentations-menu' // View-bar Presentation list popover
 import { useBoardAccess } from '@/lib/share/board-access-context' // Owner-only share menu
 import { useAiEditSession } from '@/lib/ai/edit-session' // Top-bar AI content mask toggle
@@ -92,6 +93,11 @@ const DRAW_INK: { id: DrawInk; label: string; swatch: string }[] = [ // Swatch c
   { id: 'green', label: 'Green', swatch: 'fill-green-600 text-green-600' },
   { id: 'red', label: 'Red', swatch: 'fill-red-600 text-red-600' },
 ]
+
+/** Approx icon+title button width (text-sm) so overflow can hide titles before hiding tools. */
+function titledToolWidth(label: string) {
+  return 16 + 6 + Math.ceil(label.length * 7.5) + 16 // icon + gap-1.5 + glyph estimate + px-2
+}
 
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const { canShare, canEdit, role } = useBoardAccess() // Gate share + show view-only chrome
@@ -389,6 +395,10 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const [pencilColor, setPencilColor] = useState<DrawInk>('black') // Freehand ink — remembered per tool, not shared with highlighter
   const [highlighterColor, setHighlighterColor] = useState<DrawInk>('black') // Highlighter ink — independent of freehand so each dropdown keeps its last pick
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set())
+  const [compactEarlyLabels, setCompactEarlyLabels] = useState(false) // Filter/sort/automations/eraser cluster — collapses first
+  const compactEarlyLabelsRef = useRef(false) // Hysteresis for the first title-collapse stage
+  const [compactLabels, setCompactLabels] = useState(false) // Remaining titles after the early cluster
+  const compactLabelsRef = useRef(false) // Hysteresis so the title animation does not thrash at the threshold
   const [boardSearch, setBoardSearch] = useState('') // Actions-bar live search over frame title + body
   const [boardSearchOpen, setBoardSearchOpen] = useState(false) // Icon-only until click; then the field slides out
   const boardSearchInputRef = useRef<HTMLInputElement>(null) // Place the I-bar in the sliding field
@@ -918,64 +928,120 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       // Max cluster width that still fits on the true board center without covering title or Share
       const availableWidth = toolbarRect.width - 2 * sideInset - moreMenuWidth - 16
 
-      // Define item groups with their approximate widths (right to left priority for hiding)
-      // Use different item groups based on edit menu mode
-      const itemGroups = editMenuPillMode === 'insert'
+      // Icon-only widths (after all titles have condensed)
+      const iconGroups = editMenuPillMode === 'insert'
         ? [
-          { id: 'insertGroup1', width: 96 }, // Table — right of Layout; hides first
-          { id: 'arrows', width: 40 }, // Layout arrow direction
-          { id: 'smartAlign', width: 40 }, // Smart Align (Boxes) — Layout bar
+          { id: 'insertGroup1', width: 40 }, // Table icon
+          { id: 'arrows', width: 40 }, // Layout arrow
+          { id: 'smartAlign', width: 40 }, // Tidy up
           { id: 'undoRedo', width: 70 },
         ]
         : editMenuPillMode === 'view'
           ? [
-            // View: Board rule/style + capture/presentation cluster (no slash between those two)
-            { id: 'presentation', width: 40 }, // Presentation icon (hides first — rightmost)
+            { id: 'presentation', width: 40 }, // Present icon (hides first — rightmost)
             { id: 'capture', width: 40 }, // Capture icon
-            { id: 'boardStyle', width: 118 }, // Board rule/style dropdown
+            { id: 'boardStyle', width: 40 }, // Board icon
             { id: 'undoRedo', width: 70 },
           ]
           : editMenuPillMode === 'draw'
             ? [
-              // Draw mode buttons: grouped by divider sections
-              // Each button: w-7 = 28px, gap-1 = 4px between buttons, px-2 = 8px each side = 16px total container padding
-              // Slash divider ~ same budget as former w-px divider (5px)
-              // Colors live on freehand/highlighter dropdowns — no standalone color row
-              // Group 3 (Pencil, Highlighter): 2 buttons (28 + 4 + 28) + 16px padding = 76px (last cluster, no slash)
-              // Group 2 (Eraser): 1 button (28) — same cluster as pencil (no slash)
-              // Group 1 (Lasso, Vertical, Horizontal): 3 buttons (28 + 4 + 28 + 4 + 28) + 16px padding = 108px
-              { id: 'drawGroup3', width: 76 }, // Pencil, Highlighter — last draw cluster
-              { id: 'drawGroup2', width: 28 + 4 }, // Eraser — same cluster as pencil (no slash)
-              { id: 'drawGroup1', width: 108 + 5 }, // Lasso, Vertical, Horizontal + slash
+              { id: 'drawGroup3', width: 76 }, // Pencil, Highlighter icons
+              { id: 'drawGroup2', width: 28 + 4 }, // Eraser icon
+              { id: 'drawGroup1', width: 108 + 5 }, // Lasso + insert-space icons + slash
               { id: 'undoRedo', width: 70 },
             ]
             : [
-              // Actions mode: undo + locks + filter/sort/automations + search
-              { id: 'search', width: boardSearchOpen ? 180 : 40 }, // Icon-only until the field slides out
-              { id: 'actions', width: 120 }, // Filter + Sort + Automations
+              { id: 'search', width: boardSearchOpen ? 180 : 40 }, // Icon + field when open; icon when early-collapsed
+              { id: 'actions', width: 120 }, // Filter / Sort / Automations icons
               { id: 'undoRedo', width: 70 },
-              { id: 'lock', width: 64 }, // Board lock + frame lock (no slash between)
+              { id: 'lock', width: 64 }, // Two lock icons
             ]
 
-      // Calculate total width needed
-      let totalWidth = 0
-      const newHiddenItems = new Set<string>()
+      // Early cluster icon-only; remaining titles still shown (Filter/ink collapse first)
+      const midGroups = editMenuPillMode === 'insert'
+        ? [
+          { id: 'insertGroup1', width: titledToolWidth('Table') + 16 },
+          { id: 'arrows', width: titledToolWidth('Layout') },
+          { id: 'smartAlign', width: titledToolWidth('Tidy up') },
+          { id: 'undoRedo', width: 70 },
+        ]
+        : editMenuPillMode === 'view'
+          ? [
+            { id: 'presentation', width: titledToolWidth('Present') },
+            { id: 'capture', width: titledToolWidth('Capture') },
+            { id: 'boardStyle', width: titledToolWidth('Board') },
+            { id: 'undoRedo', width: 70 },
+          ]
+          : editMenuPillMode === 'draw'
+            ? [
+              { id: 'drawGroup3', width: 76 }, // Ink titles already collapsed
+              { id: 'drawGroup2', width: 28 + 4 },
+              { id: 'drawGroup1', width: titledToolWidth('Lasso') + 4 + titledToolWidth('Vertical space') + 4 + titledToolWidth('Horizontal space') + 16 + 5 },
+              { id: 'undoRedo', width: 70 },
+            ]
+            : [
+              { id: 'search', width: boardSearchOpen ? 180 : 40 }, // Search title already collapsed
+              { id: 'actions', width: 120 }, // Filter cluster already collapsed
+              { id: 'undoRedo', width: 70 },
+              { id: 'lock', width: titledToolWidth('Anchor') + 2 + titledToolWidth('Snap frames') + 12 },
+            ]
 
-      // Start from leftmost (lock) and work right, hiding from right side first
-      for (const item of itemGroups) {
-        totalWidth += item.width + 8 // +8 for gap/separator
+      // All titles shown
+      const fullGroups = editMenuPillMode === 'insert'
+        ? midGroups // Layout has no early cluster
+        : editMenuPillMode === 'view'
+          ? midGroups // View has no early cluster
+          : editMenuPillMode === 'draw'
+            ? [
+              { id: 'drawGroup3', width: titledToolWidth('Pencil') + 4 + titledToolWidth('Highlighter') + 16 }, // Ink titles
+              { id: 'drawGroup2', width: titledToolWidth('Eraser') + 4 },
+              { id: 'drawGroup1', width: titledToolWidth('Lasso') + 4 + titledToolWidth('Vertical space') + 4 + titledToolWidth('Horizontal space') + 16 + 5 },
+              { id: 'undoRedo', width: 70 },
+            ]
+            : [
+              { id: 'search', width: boardSearchOpen ? 180 : titledToolWidth('Search') }, // Title hides when the field slides out
+              { id: 'actions', width: titledToolWidth('Filter') + 2 + titledToolWidth('Sort') + 2 + titledToolWidth('Automations') },
+              { id: 'undoRedo', width: 70 },
+              { id: 'lock', width: titledToolWidth('Anchor') + 2 + titledToolWidth('Snap frames') + 12 },
+            ]
+
+      const sumGroups = (groups: { width: number }[]) => groups.reduce((sum, item) => sum + item.width + 8, 0) // +8 gap/slash
+      const fullTotal = sumGroups(fullGroups) // Filter/ink + remaining titles
+      const midTotal = sumGroups(midGroups) // Filter/ink icons; remaining titles
+      const expandSlop = 24 // Extra room before titles expand again — keeps the animation from flickering
+      const wasEarly = compactEarlyLabelsRef.current // Last early-collapse decision
+      const wasRest = compactLabelsRef.current // Last remaining-title collapse
+      let nextEarly = wasEarly
+      let nextRest = wasRest
+      if (fullTotal <= availableWidth - ((wasEarly || wasRest) ? expandSlop : 0)) { // Room for every title
+        nextEarly = false
+        nextRest = false
+      } else if (midTotal <= availableWidth - (wasRest ? expandSlop : 0)) { // Collapse Filter/ink first
+        nextEarly = true
+        nextRest = false
+      } else { // Then collapse remaining titles
+        nextEarly = true
+        nextRest = true
       }
+      compactEarlyLabelsRef.current = nextEarly // Keep hysteresis in sync
+      compactLabelsRef.current = nextRest
+      const itemGroups = nextRest ? iconGroups : nextEarly ? midGroups : fullGroups // Measure the chrome we will actually render
 
-      // Hide items from right to left if we don't have enough space
-      let currentWidth = totalWidth
-      for (const item of itemGroups) {
+      const newHiddenItems = new Set<string>()
+      let currentWidth = sumGroups(itemGroups)
+      for (const item of itemGroups) { // Array is right-to-left; hide rightmost first
         if (currentWidth > availableWidth) {
           newHiddenItems.add(item.id)
           currentWidth -= item.width + 8
         }
       }
 
-      setHiddenItems(newHiddenItems)
+      setCompactEarlyLabels((prev) => (prev === nextEarly ? prev : nextEarly)) // Skip render if unchanged
+      setCompactLabels((prev) => (prev === nextRest ? prev : nextRest))
+      setHiddenItems((prev) => { // Skip render if the hidden set is unchanged
+        if (prev.size === newHiddenItems.size && [...newHiddenItems].every((id) => prev.has(id))) return prev
+        return newHiddenItems
+      })
     }
 
     // Initial check with delay to ensure DOM is ready
@@ -1080,7 +1146,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 size="sm"
                 onClick={handleToggleBoardLock}
                 className={cn(
-                  'h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0',
+                  'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
+                  'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5', // Title condenses to icon on shrink
                   boardLockUi.hasSelection &&
                     boardLockUi.locked &&
                     'bg-gray-100 dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100'
@@ -1088,21 +1155,23 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 disabled={!reactFlowInstance || !boardLockUi.hasSelection}
                 title={
                   !boardLockUi.hasSelection
-                    ? 'Select a frame to lock to the board'
+                    ? 'Select a frame to anchor to the board'
                     : boardLockUi.locked
-                      ? 'Unlock from board'
-                      : 'Lock to board'
+                      ? 'Unanchor from board'
+                      : 'Anchor'
                 }
-                aria-label={boardLockUi.locked ? 'Unlock from board' : 'Lock to board'}
+                aria-label={boardLockUi.locked ? 'Unanchor from board' : 'Anchor'}
               >
-                <Anchor className="h-4 w-4" /> {/* Board lock: pin selected frames */}
+                <Anchor className="h-4 w-4 flex-shrink-0" /> {/* Board lock: pin selected frames */}
+                <ToolbarTitle show={!compactLabels}>Anchor</ToolbarTitle>
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={handleToggleFrameLock}
                 className={cn(
-                  'h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0',
+                  'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
+                  'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5', // Title condenses to icon on shrink
                   frameLockUi.hasMulti &&
                     frameLockUi.locked &&
                     'bg-gray-100 dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100'
@@ -1110,16 +1179,17 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 disabled={!reactFlowInstance || !frameLockUi.hasMulti}
                 title={
                   !frameLockUi.hasMulti
-                    ? 'Select 2+ frames to lock together'
+                    ? 'Select 2+ frames to snap together'
                     : frameLockUi.locked
-                      ? 'Unlock frames from each other'
-                      : 'Lock frames to each other'
+                      ? 'Unsnap frames'
+                      : 'Snap frames'
                 }
                 aria-label={
-                  frameLockUi.locked ? 'Unlock frames from each other' : 'Lock frames to each other'
+                  frameLockUi.locked ? 'Unsnap frames' : 'Snap frames'
                 }
               >
-                <LegoBrickIcon className="h-4 w-4" /> {/* Frame-group lock: stacked bricks */}
+                <LegoBrickIcon className="h-4 w-4 flex-shrink-0" /> {/* Frame-group lock: stacked bricks */}
+                <ToolbarTitle show={!compactLabels}>Snap frames</ToolbarTitle>
               </Button>
             </div>
             {/* Slash before filter/sort/automations (or when that group is hidden) */}
@@ -1136,10 +1206,14 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0"
+                    className={cn(
+                      'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
+                      'transition-[padding,gap] duration-200 ease-out', compactEarlyLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Filter cluster collapses first
+                    )}
                     title="Filter"
                   >
-                    <ListFilter className="h-4 w-4" />
+                    <ListFilter className="h-4 w-4 flex-shrink-0" />
+                    <ToolbarTitle show={!compactEarlyLabels}>Filter</ToolbarTitle>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-48">
@@ -1153,10 +1227,14 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0"
+                    className={cn(
+                      'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
+                      'transition-[padding,gap] duration-200 ease-out', compactEarlyLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Filter cluster collapses first
+                    )}
                     title="Sort"
                   >
-                    <ArrowUpDown className="h-4 w-4" />
+                    <ArrowUpDown className="h-4 w-4 flex-shrink-0" />
+                    <ToolbarTitle show={!compactEarlyLabels}>Sort</ToolbarTitle>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-48">
@@ -1169,6 +1247,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 open={openDropdown === 'boardAutomations'}
                 onOpenChange={(open) => handleDropdownOpenChange('boardAutomations', open)}
                 conversationId={conversationId}
+                showLabel={!compactEarlyLabels} // Filter cluster titles collapse first
               />
             </div>
             {/* If search is hidden, slash before More menu */}
@@ -1188,7 +1267,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 variant="ghost"
                 size="sm"
                 className={cn(
-                  'h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0',
+                  'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
+                  'transition-[padding,gap] duration-200 ease-out', // Title collapses as the field slides out
+                  compactEarlyLabels || boardSearchOpen ? 'px-1.5 gap-0' : 'px-2 gap-1.5', // Hide title on shrink or when searching
                   boardSearchOpen && 'bg-gray-100 dark:bg-[#1f1f1f] text-gray-900 dark:text-gray-100' // Stay pressed while the field is out
                 )}
                 title="Search"
@@ -1202,7 +1283,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   })
                 }}
               >
-                <Search className="h-4 w-4" />
+                <Search className="h-4 w-4 flex-shrink-0" />
+                <ToolbarTitle show={!compactEarlyLabels && !boardSearchOpen}>Search</ToolbarTitle>
               </Button>
               <div
                 className={cn(
@@ -1245,11 +1327,15 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0"
-                title="Smart Align"
-                aria-label="Smart Align"
+                className={cn(
+                  'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
+                  'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
+                )}
+                title="Tidy up"
+                aria-label="Tidy up"
               >
-                <Boxes className="h-4 w-4" /> {/* Multi-box: Smart Align (UI until wired) */}
+                <Boxes className="h-4 w-4 flex-shrink-0" /> {/* Multi-box: Tidy up (UI until wired) */}
+                <ToolbarTitle show={!compactLabels}>Tidy up</ToolbarTitle>
               </Button>
             )}
             {!isItemHidden('arrows') && (
@@ -1258,14 +1344,18 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0"
+                    className={cn(
+                      'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
+                      'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
+                    )}
                     title="Layout direction"
                     aria-label="Layout direction"
                   >
-                    {arrowDirection === 'down' && <ArrowDown className="h-4 w-4" />}
-                    {arrowDirection === 'up' && <ArrowUp className="h-4 w-4" />}
-                    {arrowDirection === 'left' && <ArrowLeft className="h-4 w-4" />}
-                    {arrowDirection === 'right' && <ArrowRight className="h-4 w-4" />}
+                    {arrowDirection === 'down' && <ArrowDown className="h-4 w-4 flex-shrink-0" />}
+                    {arrowDirection === 'up' && <ArrowUp className="h-4 w-4 flex-shrink-0" />}
+                    {arrowDirection === 'left' && <ArrowLeft className="h-4 w-4 flex-shrink-0" />}
+                    {arrowDirection === 'right' && <ArrowRight className="h-4 w-4 flex-shrink-0" />}
+                    <ToolbarTitle show={!compactLabels}>Layout</ToolbarTitle>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
@@ -1312,11 +1402,14 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               onClick={() => {
                 // TODO: Implement table insertion
               }}
-              className="h-7 px-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center gap-1.5"
+              className={cn(
+                'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center',
+                'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
+              )}
               title="Table"
             >
-              <Table className="h-4 w-4" />
-              <span className="text-sm">Table</span>
+              <Table className="h-4 w-4 flex-shrink-0" />
+              <ToolbarTitle show={!compactLabels}>Table</ToolbarTitle>
             </Button>
           </div>
         )}
@@ -1348,14 +1441,16 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       e.currentTarget.blur()
                     }}
                     className={cn(
-                      "h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0",
-                      drawTool === 'lasso' 
-                        ? 'bg-gray-100 dark:bg-gray-800' 
+                      'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center',
+                      'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5', // Title condenses to icon on shrink
+                      drawTool === 'lasso'
+                        ? 'bg-gray-100 dark:bg-gray-800'
                         : 'hover:bg-gray-100 dark:hover:bg-gray-800'
                     )}
                     title={drawTool === 'lasso' ? 'Selection Mode Active (Click to deselect)' : 'Selection Mode (Click to enable)'}
                   >
-                    <LassoSelect className="h-4 w-4" />
+                    <LassoSelect className="h-4 w-4 flex-shrink-0" />
+                    <ToolbarTitle show={!compactLabels}>Lasso</ToolbarTitle>
                   </Button>
                     <Button
                       ref={insertVerticalSpaceButtonRef}
@@ -1366,19 +1461,23 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       }}
                       onMouseEnter={handleInsertVerticalSpaceMouseEnter}
                       onMouseLeave={handleInsertVerticalSpaceMouseLeave}
-                      className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0"
+                      className={cn(
+                        'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center',
+                        'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
+                      )}
                       title="Insert Vertical Space"
                     >
                       <img 
                         ref={insertVerticalSpaceIconRef}
                         src="/insert%20space%20v%20icon%202.svg" 
                         alt="Insert Vertical Space" 
-                        className="w-4 h-4 transition-all duration-200"
+                        className="w-4 h-4 flex-shrink-0 transition-all duration-200"
                         style={{ 
                           filter: 'brightness(0) saturate(100%) invert(38%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(98%) contrast(100%)',
                           opacity: 0.8
                         }}
                       />
+                      <ToolbarTitle show={!compactLabels}>Vertical space</ToolbarTitle>
                     </Button>
                     <Button
                       ref={insertHorizontalSpaceButtonRef}
@@ -1389,19 +1488,23 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       }}
                       onMouseEnter={handleInsertHorizontalSpaceMouseEnter}
                       onMouseLeave={handleInsertHorizontalSpaceMouseLeave}
-                      className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0"
+                      className={cn(
+                        'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center',
+                        'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
+                      )}
                       title="Insert Horizontal Space"
                     >
                       <img 
                         ref={insertHorizontalSpaceIconRef}
                         src="/insert%20space%20h%20icon%201.svg" 
                         alt="Insert Horizontal Space" 
-                        className="w-4 h-4 transition-all duration-200"
+                        className="w-4 h-4 flex-shrink-0 transition-all duration-200"
                         style={{ 
                           filter: 'brightness(0) saturate(100%) invert(38%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(98%) contrast(100%)',
                           opacity: 0.8
                         }}
                       />
+                      <ToolbarTitle show={!compactLabels}>Horizontal space</ToolbarTitle>
                     </Button>
                 </div>
                 <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
@@ -1428,14 +1531,16 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                         e.currentTarget.blur()
                       }}
                       className={cn(
-                        "h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0",
+                        'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center',
+                        'transition-[padding,gap] duration-200 ease-out', compactEarlyLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5', // Ink cluster collapses first
                         drawTool === 'eraser'
                           ? 'bg-gray-100 dark:bg-gray-800'
                           : 'hover:bg-gray-100 dark:hover:bg-gray-800'
                       )}
                       title={drawTool === 'eraser' ? 'Eraser Active (Click to deselect)' : 'Eraser (Not yet implemented)'}
                     >
-                      <Eraser className="h-4 w-4" />
+                      <Eraser className="h-4 w-4 flex-shrink-0" />
+                      <ToolbarTitle show={!compactEarlyLabels}>Eraser</ToolbarTitle>
                     </Button>
                   )}
                   {!isItemHidden('drawGroup3') && (
@@ -1457,14 +1562,16 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                             variant="ghost"
                             size="sm"
                             className={cn(
-                              "h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0",
+                              'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center',
+                              'transition-[padding,gap] duration-200 ease-out', compactEarlyLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5', // Ink cluster collapses first
                               drawTool === 'pencil'
                                 ? 'bg-gray-100 dark:bg-gray-800'
                                 : 'hover:bg-gray-100 dark:hover:bg-gray-800'
                             )}
                             title={drawTool === 'pencil' ? 'Freehand color' : 'Freehand Drawing'}
                           >
-                            <Pencil className="h-4 w-4" />
+                            <Pencil className="h-4 w-4 flex-shrink-0" />
+                            <ToolbarTitle show={!compactEarlyLabels}>Pencil</ToolbarTitle>
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
@@ -1496,14 +1603,16 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                             variant="ghost"
                             size="sm"
                             className={cn(
-                              "h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0",
+                              'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center',
+                              'transition-[padding,gap] duration-200 ease-out', compactEarlyLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5', // Ink cluster collapses first
                               drawTool === 'highlighter'
                                 ? 'bg-gray-100 dark:bg-gray-800'
                                 : 'hover:bg-gray-100 dark:hover:bg-gray-800'
                             )}
                             title={drawTool === 'highlighter' ? 'Highlighter color' : 'Highlighter'}
                           >
-                            <Highlighter className="h-4 w-4" />
+                            <Highlighter className="h-4 w-4 flex-shrink-0" />
+                            <ToolbarTitle show={!compactEarlyLabels}>Highlighter</ToolbarTitle>
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
@@ -1534,10 +1643,14 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-7 px-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center gap-1.5"
+                  className={cn(
+                    'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center',
+                    'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
+                  )}
+                  title="Board"
                 >
-                  <Grid3x3 className="h-4 w-4" />
-                  <span className="text-sm">Board</span>
+                  <Grid3x3 className="h-4 w-4 flex-shrink-0" />
+                  <ToolbarTitle show={!compactLabels}>Board</ToolbarTitle>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-40">
@@ -1592,11 +1705,13 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               onOpenChange={(open) => handleDropdownOpenChange('capture', open)}
               conversationId={conversationId}
               triggerVisible={!isItemHidden('capture')}
+              showLabel={!compactLabels} // Title condenses to icon on shrink
             />
             <PresentationsMenu
               open={openDropdown === 'presentation'}
               onOpenChange={(open) => handleDropdownOpenChange('presentation', open)}
               triggerVisible={!isItemHidden('presentation')}
+              showLabel={!compactLabels} // Title condenses to icon on shrink
             />
           </div>
         )}
@@ -2407,7 +2522,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   <>
                     <DropdownMenuItem>
                       <Boxes className="h-4 w-4 mr-2" />
-                      Smart Align
+                      Tidy up
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>
@@ -2500,7 +2615,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     {isItemHidden('presentation') && (
                       <DropdownMenuItem onClick={() => handleDropdownOpenChange('presentation', true)}>
                         <Presentation className="h-4 w-4 mr-2" />
-                        Presentation
+                        Present
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuSeparator />
@@ -2706,16 +2821,14 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       disabled={!boardLockUi.hasSelection}
                     >
                       <Anchor className="h-4 w-4 mr-2" /> {/* Overflow menu: same anchor as Actions bar */}
-                      {boardLockUi.locked ? 'Unlock from board' : 'Lock to board'}
+                      Anchor
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={handleToggleFrameLock}
                       disabled={!frameLockUi.hasMulti}
                     >
                       <LegoBrickIcon className="h-4 w-4 mr-2" /> {/* Overflow menu: same brick as Actions bar */}
-                      {frameLockUi.locked
-                        ? 'Unlock frames from each other'
-                        : 'Lock frames to each other'}
+                      Snap frames
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>

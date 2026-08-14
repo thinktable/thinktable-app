@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dropdown-menu' // Anchored panel under the Zap control
 import { AutomationEditorModal } from './automation-editor-modal' // + New automation window
 import { cn } from '@/lib/utils' // Class merge
+import { ToolbarTitle } from './toolbar-title' // Animated icon-adjacent title
 
 // One listed automation: trigger glyph → action glyph + title/body
 type AutomationItem = {
@@ -62,6 +63,7 @@ type AutomationsMenuProps = {
   open: boolean // Controlled by editor-toolbar openDropdown
   onOpenChange: (open: boolean) => void // Keep only one toolbar dropdown open
   conversationId?: string // Current board — passed into the editor modal
+  showLabel?: boolean // false when the early title cluster has condensed to icons
 }
 
 // 16px glyph inside a 24px rounded square (trigger = blue, action = gray)
@@ -85,7 +87,12 @@ function AutomationGlyph({
   )
 }
 
-export function AutomationsMenu({ open, onOpenChange, conversationId }: AutomationsMenuProps) {
+export function AutomationsMenu({
+  open,
+  onOpenChange,
+  conversationId,
+  showLabel = true, // Icon+title until the early cluster condenses
+}: AutomationsMenuProps) {
   const [query, setQuery] = useState('') // Filters titles + descriptions
   const [editorOpen, setEditorOpen] = useState(false) // New-automation window
 
@@ -110,10 +117,15 @@ export function AutomationsMenu({ open, onOpenChange, conversationId }: Automati
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0" // Same gray as other top-bar icons
+          className={cn(
+            'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
+            'transition-[padding,gap] duration-200 ease-out', // Pad/gap tween with the title width
+            showLabel ? 'px-2 gap-1.5' : 'px-1.5 gap-0' // Title condenses first on shrink
+          )}
           title="Automations"
         >
-          <Zap className="h-4 w-4" /> {/* Actions-bar automations control */}
+          <Zap className="h-4 w-4 flex-shrink-0" /> {/* Actions-bar automations control */}
+          <ToolbarTitle show={showLabel}>Automations</ToolbarTitle>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
