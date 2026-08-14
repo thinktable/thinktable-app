@@ -5,7 +5,9 @@
 // Manages past/future state stacks for nodes and edges, enabling undo/redo of map changes
 
 import { useCallback, useEffect, useState, useRef } from 'react'
-import { Edge, Node, useReactFlow } from 'reactflow'
+import { useReactFlow } from 'reactflow'
+import type { Edge, Node } from 'reactflow' // Types only — Node is not a runtime export
+
 
 // Configuration options for the undo/redo hook
 type UseUndoRedoOptions = {

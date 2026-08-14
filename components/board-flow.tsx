@@ -3,8 +3,6 @@
 
 // React Flow board component - displays chat panels behind input
 import ReactFlow, {
-  Node,
-  Edge,
   Background,
   MiniMap,
   useNodesState,
@@ -18,11 +16,11 @@ import ReactFlow, {
   ConnectionLineType,
   BaseEdge,
   getSmoothStepPath,
-  EdgeProps,
 } from 'reactflow'
+import type { Edge, EdgeProps } from 'reactflow' // No `Node` name — collides with DOM + isn’t a runtime export
+type RFNode<T = any> = import('reactflow').Node<T> // Type-only via import() — never emitted as a value bind
 import 'reactflow/dist/style.css'
-import ELK from 'elkjs/lib/elk.bundled.js'
-import { ChatPanelNode } from './chat-panel-node'
+import { ChatPanelNode } from './chat-panel-node' // Eager: next/dynamic breaks RF nodeTypes + left frames blank forever
 import { BlockGroupNode } from './block-group-node' // Legacy dashed wrapper around frames
 import {
   EditableThread,
@@ -94,14 +92,13 @@ import {
   createBlockGroup,
   deleteLinkedBoardForBlock,
   duplicateBlockMetadata,
-  ensureBoardBodyBlock,
   isBlockGroupMeta,
   migrateMessagesToBlockFlag,
   newBlockMetadata,
   persistBlockPlacement,
   readNotionConnection,
   ungroupBlocks,
-} from '@/lib/blocks' // blocks, groups, page-body ensure
+} from '@/lib/blocks' // blocks, groups (page-body ensure is promote-only — not cold load)
 import { transformHtmlToBlockType } from '@/lib/blocks/turn-into' // Seed empty-frame HTML for I-bar Turn into
 import { absFlowPosition, nodeFlowSize, useBlockGroupDrag } from './use-block-group-drag' // Drag attach/detach between groups / page
 import { useFrameNestStackDrag, isStackCollapsedMeta } from './use-frame-nest-stack-drag' // Edge-snap → stack reveal
@@ -159,6 +156,14 @@ interface Message {
   metadata?: Record<string, any> // Optional metadata field (e.g., isFlashcard)
 }
 
+/** Public homepage board id from env — only that board may use /api/homepage-board. */
+const HOMEPAGE_BOARD_ID = process.env.NEXT_PUBLIC_HOMEPAGE_BOARD_ID || ''
+
+/** True when this conversation is the configured public homepage map. */
+function isHomepageBoardId(conversationId: string): boolean {
+  return Boolean(HOMEPAGE_BOARD_ID && conversationId === HOMEPAGE_BOARD_ID)
+}
+
 interface ChatPanelNodeData {
   promptMessage: Message
   responseMessage?: Message
@@ -187,7 +192,7 @@ const DELETE_KEYS = ['Backspace', 'Delete'] // Stable — inline arrays loop RF 
 /** Right-click over text often targets a Text node, which has no `.closest`. */
 function eventElement(target: EventTarget | null): Element | null {
   if (target instanceof Element) return target // Already an element
-  if (target instanceof Node) return target.parentElement // Text → parent element
+  if (target instanceof globalThis.Node) return target.parentElement // DOM Text → parent (not RF Node type)
   return null
 }
 
@@ -196,20 +201,20 @@ function eventElement(target: EventTarget | null): Element | null {
 // For regular boards, requires authentication and ownership
 async function fetchMessagesForPanels(
   conversationId: string,
-  options?: { embed?: boolean } // Embed previews skip homepage probe + page-body ensure for speed
+  options?: { embed?: boolean } // Embed previews skip homepage probe for speed
 ): Promise<Message[]> {
   const supabase = createClient()
   const isEmbed = options?.embed === true
 
-  // Full boards may be the public homepage; embeds are always the user’s own child pages
-  if (!isEmbed) {
+  // Only hit the public homepage API when this id is the configured homepage board
+  if (!isEmbed && isHomepageBoardId(conversationId)) {
     try {
       const response = await fetch('/api/homepage-board')
       if (response.ok) {
         const data = await response.json()
         if (data.conversation?.id === conversationId) {
           const homepageMessages = (data.messages || []) as Message[]
-          await migrateMessagesToBlockFlag(supabase, homepageMessages)
+          await migrateMessagesToBlockFlag(supabase, homepageMessages) // In-memory fast; DB persist async
           return homepageMessages
         }
       }
@@ -233,25 +238,10 @@ async function fetchMessagesForPanels(
     console.error('Error fetching messages:', error)
     return []
   }
-  let messages = (data || []) as Message[]
+  const messages = (data || []) as Message[]
+  // Legacy flag migrate: apply in memory now; do not await serial UPDATEs on first paint
   await migrateMessagesToBlockFlag(supabase, messages)
-
-  // Page-body materialization belongs to full open/promote — not every preview boot
-  if (!isEmbed) {
-    const { created } = await ensureBoardBodyBlock(supabase, {
-      boardId: conversationId,
-      userId: user.id,
-    })
-    if (created) {
-      const { data: refreshed } = await supabase
-        .from('messages')
-        .select('id, role, content, created_at, metadata')
-        .eq('conversation_id', conversationId)
-        .order('created_at', { ascending: true })
-      messages = (refreshed || []) as Message[]
-      await migrateMessagesToBlockFlag(supabase, messages)
-    }
-  }
+  // Page-body creation needs explicit bodyHtml (Turn into / promote) — never on cold load
   return messages
 }
 
@@ -298,26 +288,25 @@ async function fetchEdgesForConversation(conversationId: string): Promise<
 > {
   const supabase = createClient()
   
-  // Always check if this is the homepage board first (system user's board)
-  // Homepage board should be accessible to everyone (authenticated or not)
-  try {
-    const response = await fetch('/api/homepage-board')
-    if (response.ok) {
-      const data = await response.json()
-      // Check if this is the homepage board
-      if (data.conversation?.id === conversationId) {
-        return (data.edges || []) as Array<{
-          source_message_id: string
-          target_message_id: string
-          metadata?: ThreadEdgeData | null
-        }>
+  // Public homepage edges only when id matches env — skip probe on every normal board
+  if (isHomepageBoardId(conversationId)) {
+    try {
+      const response = await fetch('/api/homepage-board')
+      if (response.ok) {
+        const data = await response.json()
+        if (data.conversation?.id === conversationId) {
+          return (data.edges || []) as Array<{
+            source_message_id: string
+            target_message_id: string
+            metadata?: ThreadEdgeData | null
+          }>
+        }
       }
+    } catch (error) {
+      console.error('Error fetching homepage edges from API:', error)
     }
-  } catch (error) {
-    // If API route fails, continue to normal fetch (might be a regular board)
-    console.error('Error fetching homepage edges from API:', error)
   }
-  
+
   // For non-homepage boards, require authentication
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) {
@@ -362,30 +351,29 @@ async function fetchCanvasNodesForConversation(conversationId: string): Promise<
 }>> {
   const supabase = createClient()
   
-  // Always check if this is the homepage board first (system user's board)
-  // Homepage board should be accessible to everyone (authenticated or not)
-  try {
-    const response = await fetch('/api/homepage-board')
-    if (response.ok) {
-      const data = await response.json()
-      // Check if this is the homepage board
-      if (data.conversation?.id === conversationId) {
-        return (data.canvasNodes || []) as Array<{
-          id: string
-          node_type: string
-          position_x: number
-          position_y: number
-          width: number
-          height: number
-          data: any
-        }>
+  // Public homepage canvas only when id matches env — skip probe on every normal board
+  if (isHomepageBoardId(conversationId)) {
+    try {
+      const response = await fetch('/api/homepage-board')
+      if (response.ok) {
+        const data = await response.json()
+        if (data.conversation?.id === conversationId) {
+          return (data.canvasNodes || []) as Array<{
+            id: string
+            node_type: string
+            position_x: number
+            position_y: number
+            width: number
+            height: number
+            data: any
+          }>
+        }
       }
+    } catch (error) {
+      console.error('Error fetching homepage canvas nodes from API:', error)
     }
-  } catch (error) {
-    // If API route fails, continue to normal fetch (might be a regular board)
-    console.error('Error fetching homepage canvas nodes from API:', error)
   }
-  
+
   // For non-homepage boards, require authentication
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) {
@@ -946,7 +934,7 @@ function BoardFlowInner({
       )
       return nds.map((n) => {
         if (n.type === 'blockGroup') {
-          const { dragHandle: _dh, parentId: _pid, parentNode: _pn, ...rest } = n as Node & {
+          const { dragHandle: _dh, parentId: _pid, parentNode: _pn, ...rest } = n as RFNode & {
             dragHandle?: string
             parentNode?: string
           }
@@ -959,7 +947,7 @@ function BoardFlowInner({
           }
         }
         const pid = n.parentId || (n as { parentNode?: string }).parentNode
-        const { parentId: _pid, parentNode: _pn, extent: _ex, ...rest } = n as Node & {
+        const { parentId: _pid, parentNode: _pn, extent: _ex, ...rest } = n as RFNode & {
           parentNode?: string
         }
         if (!pid) return { ...rest, zIndex: 1 } // Cards above the dashed frame
@@ -1019,21 +1007,21 @@ function BoardFlowInner({
   const { rebuildIndex, updateHelperLines, HelperLines } = useHelperLines(snapEnabled)
   
   // Helper function to check if a panel is a chat panel (has AI response and is not a flashcard)
-  const isChatPanel = useCallback((node: Node<ChatPanelNodeData>): boolean => {
+  const isChatPanel = useCallback((node: RFNode<ChatPanelNodeData>): boolean => {
     const hasResponse = !!node.data.responseMessage
     const isFlashcard = node.data.promptMessage?.metadata?.isFlashcard === true
     return hasResponse && !isFlashcard
   }, [])
   
   // Get chronological panels filtered by mode
-  const getChronologicalPanels = useCallback((filter: 'chat' | 'all'): Node<ChatPanelNodeData>[] => {
+  const getChronologicalPanels = useCallback((filter: 'chat' | 'all'): RFNode<ChatPanelNodeData>[] => {
     if (!nodes || !Array.isArray(nodes)) return []
     
     // Filter panels based on mode
     let filteredNodes = nodes.filter(n => n.data.promptMessage?.id) // Only panels with promptMessage (skip freehand)
     
     if (filter === 'chat') {
-      filteredNodes = filteredNodes.filter(n => isChatPanel(n as Node<ChatPanelNodeData>))
+      filteredNodes = filteredNodes.filter(n => isChatPanel(n as RFNode<ChatPanelNodeData>))
     }
     
     // Sort by created_at timestamp (most recent last)
@@ -1041,11 +1029,11 @@ function BoardFlowInner({
       const aTime = new Date(a.data.promptMessage?.created_at || 0).getTime()
       const bTime = new Date(b.data.promptMessage?.created_at || 0).getTime()
       return aTime - bTime // Oldest first, newest last
-    }) as Node<ChatPanelNodeData>[]
+    }) as RFNode<ChatPanelNodeData>[]
   }, [nodes, isChatPanel])
   
   // Get most recent panel based on filter
-  const getMostRecentPanel = useCallback((filter: 'chat' | 'all'): Node<ChatPanelNodeData> | null => {
+  const getMostRecentPanel = useCallback((filter: 'chat' | 'all'): RFNode<ChatPanelNodeData> | null => {
     const panels = getChronologicalPanels(filter)
     return panels.length > 0 ? panels[panels.length - 1] : null
   }, [getChronologicalPanels])
@@ -1632,7 +1620,7 @@ function BoardFlowInner({
     }
   }, [clickedEdge, setContextClickedEdge])
   const [edgePopupPosition, setEdgePopupPosition] = useState({ x: 0, y: 0 }) // Position for edge popup
-  const [rightClickedNode, setRightClickedNode] = useState<Node<ChatPanelNodeData> | null>(null) // Track right-clicked node for popup
+  const [rightClickedNode, setRightClickedNode] = useState<RFNode<ChatPanelNodeData> | null>(null) // Track right-clicked node for popup
   const [nodePopupPosition, setNodePopupPosition] = useState({ x: 0, y: 0 }) // Position for node popup
   const [boardMenuPosition, setBoardMenuPosition] = useState<{ x: number; y: number } | null>(null) // Empty-board right-click menu
   const boardClickFlowRef = useRef<{ x: number; y: number } | null>(null) // Flow coords for Add frame / zoom-to-100%
@@ -1976,7 +1964,8 @@ function BoardFlowInner({
         ? fetchMessagesForPanels(conversationId, { embed: embedded })
         : Promise.resolve([]),
     enabled: !!conversationId,
-    refetchInterval: embedded ? false : 500, // Previews: one-shot load (polling fights first-paint nav)
+    // No interval poll — Realtime + explicit invalidate/refetch keep frames fresh without re-downloading HTML 2×/s
+    refetchInterval: false,
     refetchOnWindowFocus: !embedded,
     refetchOnMount: !embedded, // Embed: avoid remount refetch if keep-alive already loaded
     refetchOnReconnect: !embedded,
@@ -2824,7 +2813,7 @@ function BoardFlowInner({
     console.log(`🎨 BoardFlow: Loading ${savedCanvasNodes.length} saved canvas nodes from database`)
 
     // Convert saved canvas nodes to React Flow nodes
-    const canvasReactFlowNodes: Node[] = savedCanvasNodes.map((savedNode) => {
+    const canvasReactFlowNodes: RFNode[] = savedCanvasNodes.map((savedNode) => {
       // Create React Flow node from saved canvas node
       // Note: reactflow v11 requires width/height in style, not as direct properties
       const reactFlowNode: Node = {
@@ -2844,7 +2833,7 @@ function BoardFlowInner({
         // resizable: true, // Enable resizing (removed - not a valid Node property)
         selectable: true, // Enable selection
         draggable: true, // Enable dragging
-      } as Node
+      } as RFNode
 
       return reactFlowNode
     })
@@ -3556,7 +3545,7 @@ function BoardFlowInner({
   // Recalculate edge handles based on current node positions
   // Previously remapped every connected edge to the nearest sides while dragging.
   // Disabled — keep the sides the user snapped to; a future cleanup action will re-route.
-  const recalculateEdgeHandles = useCallback((_nodeId: string, _currentNodes: Node[]) => {
+  const recalculateEdgeHandles = useCallback((_nodeId: string, _currentNodes: RFNode[]) => {
     return
   }, [])
 
@@ -4117,8 +4106,8 @@ function BoardFlowInner({
       return
     }
 
-    const newNodes: Node<ChatPanelNodeData>[] = []
-    const blockGroupNodes: Node[] = [] // Visual group frames (not chat panels)
+    const newNodes: RFNode<ChatPanelNodeData>[] = []
+    const blockGroupNodes: RFNode[] = [] // Visual group frames (not chat panels)
     const gapBetweenPanels = 50 // Fixed gap between panels (size-aware spacing)
     let panelIndex = 0 // Track panel index for consistent spacing
 
@@ -4230,7 +4219,7 @@ function BoardFlowInner({
             })
           } else {
             // Find reference panel: use selected panel if one is selected, otherwise use most recent panel
-            let referenceNode: Node<ChatPanelNodeData> | null = null
+            let referenceNode: RFNode<ChatPanelNodeData> | null = null
 
             if (existingNodes.length > 0) {
               // First, check if there's a selected panel (this overrides most recent)
@@ -4372,7 +4361,7 @@ function BoardFlowInner({
             // Load panel styling from message metadata (fillColor, borderColor, borderStyle, borderWeight)
             const messageMetadata = message.metadata || {}
             const stackIndex = minStackIndex(messageMetadata as Record<string, unknown>)
-            const panelNode: Node<ChatPanelNodeData> = {
+            const panelNode: RFNode<ChatPanelNodeData> = {
               id: nodeId,
               type: 'chatPanel',
               position: panelPosition,
@@ -4417,7 +4406,7 @@ function BoardFlowInner({
           // Load panel styling from message metadata (fillColor, borderColor, borderStyle, borderWeight)
           const messageMetadata = message.metadata || {}
           const stackIndex = minStackIndex(messageMetadata as Record<string, unknown>)
-          const panelNode: Node<ChatPanelNodeData> = {
+          const panelNode: RFNode<ChatPanelNodeData> = {
             id: baseNodeId,
             type: 'chatPanel',
             position: currentPos,
@@ -4498,7 +4487,7 @@ function BoardFlowInner({
     }
 
     // Deduplicate nodes by ID to prevent duplicate key errors
-    const nodeMap = new Map<string, Node<ChatPanelNodeData>>()
+    const nodeMap = new Map<string, RFNode<ChatPanelNodeData>>()
     newNodes.forEach(node => {
       // If duplicate ID found, keep the one with response message (more complete)
       if (nodeMap.has(node.id)) {
@@ -4511,7 +4500,7 @@ function BoardFlowInner({
         nodeMap.set(node.id, node)
       }
     })
-    const deduplicatedNodes = [...Array.from(nodeMap.values()), ...blockGroupNodes] as Node[]
+    const deduplicatedNodes = [...Array.from(nodeMap.values()), ...blockGroupNodes] as RFNode[]
 
     console.log('🔄 BoardFlow: Created', deduplicatedNodes.length, 'panels from', messagesToUse.length, 'messages (after deduplication)')
     console.log('🔄 BoardFlow: Messages order:', messagesToUse.map(m => ({ id: m.id, role: m.role, content: m.content.substring(0, 30) })))
@@ -4783,16 +4772,16 @@ function BoardFlowInner({
 
     // Helper function to animate panels below a collapsed/expanded panel
     const animatePanelsBelow = (
-      collapsedNode: Node<ChatPanelNodeData>,
+      collapsedNode: RFNode<ChatPanelNodeData>,
       heightDiff: number,
-      allNodes: Node<ChatPanelNodeData>[],
+      allNodes: RFNode<ChatPanelNodeData>[],
       reactFlowInstance: any,
       reactFlowElement: HTMLElement,
       viewport: { zoom: number },
       isCollapsed: boolean
     ) => {
       // Find all nodes below this one (higher Y position)
-      const nodesBelow: Node<ChatPanelNodeData>[] = allNodes.filter((n) => n.position.y > collapsedNode.position.y)
+      const nodesBelow: RFNode<ChatPanelNodeData>[] = allNodes.filter((n) => n.position.y > collapsedNode.position.y)
 
       if (nodesBelow.length === 0) return
 
@@ -4827,7 +4816,7 @@ function BoardFlowInner({
         } else {
           // Animation complete - update stored heights and positions
           const finalNodes = reactFlowInstance.getNodes()
-          finalNodes.forEach((n: Node<ChatPanelNodeData>) => {
+          finalNodes.forEach((n: RFNode<ChatPanelNodeData>) => {
             const el = reactFlowElement.querySelector(`[data-id="${n.id}"]`) as HTMLElement
             if (el) {
               const height = el.getBoundingClientRect().height / viewport.zoom
@@ -4872,7 +4861,7 @@ function BoardFlowInner({
 
         if (Math.abs(heightDiff) >= 10) {
           // Find all nodes below this one (higher Y position)
-          const nodesBelow = nodes.filter((n: Node<ChatPanelNodeData>) => n.position.y > node.position.y)
+          const nodesBelow = nodes.filter((n: RFNode<ChatPanelNodeData>) => n.position.y > node.position.y)
 
           if (nodesBelow.length > 0) {
             // Animate smoothly using requestAnimationFrame
@@ -4906,7 +4895,7 @@ function BoardFlowInner({
               } else {
                 // Animation complete - update stored heights and positions
                 const finalNodes = reactFlowInstance.getNodes()
-                finalNodes.forEach((n: Node<ChatPanelNodeData>) => {
+                finalNodes.forEach((n: RFNode<ChatPanelNodeData>) => {
                   const el = reactFlowElement.querySelector(`[data-id="${n.id}"]`) as HTMLElement
                   if (el) {
                     const height = el.getBoundingClientRect().height / viewport.zoom
@@ -5394,7 +5383,7 @@ function BoardFlowInner({
 
   // Open frame menu at a screen point (right-click or long-press)
   const openFrameMenuAt = useCallback(
-    (clientX: number, clientY: number, node: Node<ChatPanelNodeData>) => {
+    (clientX: number, clientY: number, node: RFNode<ChatPanelNodeData>) => {
       setBoardMenuPosition(null)
       boardClickFlowRef.current = null
       setMinimapContextMenuPosition(null)
@@ -5492,7 +5481,7 @@ function BoardFlowInner({
         setBoardMenuPosition(null)
         boardClickFlowRef.current = null
         setNodePopupPosition({ x: screenX, y: screenY })
-        setRightClickedNode(selectedNodes[0] as Node<ChatPanelNodeData>)
+        setRightClickedNode(selectedNodes[0] as RFNode<ChatPanelNodeData>)
         return
       }
 
@@ -5505,7 +5494,7 @@ function BoardFlowInner({
 
   // Handle node right-click to show popup (select node if not selected, then show popup)
   const handleNodeContextMenu = useCallback(
-    (event: React.MouseEvent, node: Node<ChatPanelNodeData>) => {
+    (event: React.MouseEvent, node: RFNode<ChatPanelNodeData>) => {
       if (event.button !== 2) return // Phone pinch/hold uses long-press; iOS contextmenu is button 0
       event.preventDefault()
       event.stopPropagation()
@@ -5604,7 +5593,7 @@ function BoardFlowInner({
         if (nodeEl) {
           const id = nodeEl.getAttribute('data-id')
           const node = id
-            ? (nodesRef.current.find((n) => n.id === id) as Node<ChatPanelNodeData> | undefined)
+            ? (nodesRef.current.find((n) => n.id === id) as RFNode<ChatPanelNodeData> | undefined)
             : undefined
           if (node && (node.type === 'chatPanel' || node.type === 'blockGroup')) {
             openFrameMenuAt(point.clientX, point.clientY, node)
@@ -5635,7 +5624,7 @@ function BoardFlowInner({
     })
     longPressRef.current = controller
 
-    const frameNodeFromEvent = (e: Event): Node<ChatPanelNodeData> | null => {
+    const frameNodeFromEvent = (e: Event): RFNode<ChatPanelNodeData> | null => {
       const el = eventElement(e.target) // Text-node clicks have no .closest
       if (!el) return null
       if (el.closest('input, textarea')) return null
@@ -5646,7 +5635,7 @@ function BoardFlowInner({
       if (!nodeEl) return null
       const id = nodeEl.getAttribute('data-id')
       const node = id
-        ? (nodesRef.current.find((n) => n.id === id) as Node<ChatPanelNodeData> | undefined)
+        ? (nodesRef.current.find((n) => n.id === id) as RFNode<ChatPanelNodeData> | undefined)
         : undefined
       if (node && (node.type === 'chatPanel' || node.type === 'blockGroup')) return node
       return null
@@ -5812,7 +5801,7 @@ function BoardFlowInner({
       if (!nodeEl) return
       const id = nodeEl.getAttribute('data-id')
       const node = id
-        ? (nodesRef.current.find((n) => n.id === id) as Node<ChatPanelNodeData> | undefined)
+        ? (nodesRef.current.find((n) => n.id === id) as RFNode<ChatPanelNodeData> | undefined)
         : undefined
       if (!node || (node.type !== 'chatPanel' && node.type !== 'blockGroup')) return
       e.preventDefault()
@@ -7018,7 +7007,7 @@ function BoardFlowInner({
         setNodePopupPosition({ x: screenX, y: screenY })
         nodePopupZoomRef.current = viewport.zoom
       }
-      setRightClickedNode(node as Node<ChatPanelNodeData>)
+      setRightClickedNode(node as RFNode<ChatPanelNodeData>)
     }
     window.addEventListener('open-block-actions', onOpen as EventListener)
     return () => window.removeEventListener('open-block-actions', onOpen as EventListener)
@@ -8989,8 +8978,8 @@ function BoardFlowInner({
             data-minimap-pill-context
             className={cn(
               'absolute -top-1 -left-1 z-20 h-5 w-5 p-0 rounded-full border-0 shadow-sm focus-visible:ring-0 focus-visible:ring-offset-0',
-              // Same fill as Free nav (board vs white input-only)
-              isChatSidebarOpen && !aiChatHasTranscript
+              // Board fill on desktop (incl. chat open). Phone: white only for input-only chat
+              isMobileMode && isChatSidebarOpen && !aiChatHasTranscript
                 ? 'bg-white dark:bg-[#0f0f0f]'
                 : 'bg-gray-50 dark:bg-[#0f0f0f]',
               !minimapExpanded
@@ -9042,10 +9031,10 @@ function BoardFlowInner({
           </Button>
           <div
             className={cn(
-              // Board fill when chat closed or chat box (transcript) open; white only for input-only open
+              // Board fill on desktop (incl. chat open). Phone: white only for input-only chat
               // w-full = column width (minimap); gap-0 — slashes carry the visual gap so 179px fits
               'px-0.5 py-1 flex items-center gap-0 relative w-full border-0 shadow-sm rounded-lg',
-              isChatSidebarOpen && !aiChatHasTranscript
+              isMobileMode && isChatSidebarOpen && !aiChatHasTranscript
                 ? 'bg-white dark:bg-[#0f0f0f]'
                 : 'bg-gray-50 dark:bg-[#0f0f0f]'
             )}
@@ -9609,7 +9598,7 @@ function BoardFlowInner({
                 if (viewMode === 'linear') {
                   const panels = getChronologicalPanels(linearNavMode)
                   if (panels.length > 0) {
-                    const index = panels.findIndex((p: Node<ChatPanelNodeData>) => p.id === mostRecentPanel.id)
+                    const index = panels.findIndex((p: RFNode<ChatPanelNodeData>) => p.id === mostRecentPanel.id)
                     setFocusedPanelIndex(index >= 0 ? index : panels.length - 1)
                     scrollAccumulatorRef.current = 0
                     lastScrollDirectionRef.current = null

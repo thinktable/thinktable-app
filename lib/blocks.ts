@@ -234,13 +234,23 @@ export async function migrateMessagesToBlockFlag(
   supabase: SupabaseClient,
   messages: Array<{ id: string; metadata?: Record<string, unknown> | null }>
 ): Promise<void> {
+  const toPersist: Array<{ id: string; meta: Record<string, unknown> }> = [] // Rows that still need DB write
   for (const msg of messages) {
     if (!msg.metadata) continue
     const { meta, changed } = migrateLegacyBlockFlags(msg.metadata as Record<string, unknown>)
     if (!changed) continue
-    await supabase.from('messages').update({ metadata: meta }).eq('id', msg.id)
-    msg.metadata = meta // Keep in-memory rows consistent with DB
+    msg.metadata = meta // Apply in memory immediately so first paint uses canonical flags
+    toPersist.push({ id: msg.id, meta }) // Queue DB write — do not block on serial UPDATEs
   }
+  if (toPersist.length === 0) return
+  // Fire-and-forget parallel persists so cold load returns after one messages select
+  void Promise.all(
+    toPersist.map(({ id, meta }) =>
+      supabase.from('messages').update({ metadata: meta }).eq('id', id)
+    )
+  ).catch((err) => {
+    console.error('migrateMessagesToBlockFlag persist failed:', err)
+  })
 }
 
 /** Push a title to both the block message and its linked page (keeps them in sync). */

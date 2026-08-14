@@ -70,7 +70,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useQueryClient } from '@tanstack/react-query'
 import { useTheme } from './theme-provider'
 import { ShareBoardMenu } from './share-board-menu' // Share dropdown: Notion people + role links
-import { BoardTopBarShare } from './board-top-bar-share' // Copy link / favorite / More (Connections → Notion)
+import { BoardTopBarShare } from './board-top-bar-share' // Copy link / favorite / More (board actions + Connections)
 import { AutomationsMenu } from './automations-menu' // Actions-bar Automations list popover
 import { CapturesMenu } from './captures-menu' // View-bar Capture list popover
 import { ToolbarTitle } from './toolbar-title' // Animated icon-adjacent titles
@@ -3179,7 +3179,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           </div>
         )}
 
-        {/* Share + copy link / favorite / More (Connections → Notion) */}
+        {/* Share + copy link / favorite / More (board actions + Connections → Notion) */}
         <div className="flex items-center px-2 flex-shrink-0 gap-1">
           {!canEdit && (
             <span className="hidden sm:inline text-[11px] text-gray-500 px-1.5 py-0.5 rounded bg-gray-100">

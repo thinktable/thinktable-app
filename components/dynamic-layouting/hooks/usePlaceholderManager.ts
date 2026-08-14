@@ -1,6 +1,6 @@
 import { useEffect, useCallback } from 'react';
-// React Flow imports for graph cleanup
-import { Node, Edge, useReactFlow } from 'reactflow';
+import { useReactFlow } from 'reactflow';
+import type { Node, Edge } from 'reactflow'; // Types only — Node is not a runtime export
 
 // usePlaceholderManager: Ghost “+” placeholders are disabled.
 // This hook only strips any leftover placeholder nodes/edges from older sessions.

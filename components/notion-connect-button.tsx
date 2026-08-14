@@ -5,9 +5,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { useQueryClient } from '@tanstack/react-query'
+import { LayoutGrid } from 'lucide-react' // Connections row icon (2×2 grid)
 import {
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -172,48 +172,59 @@ export function NotionConnectProvider({ children }: { children: React.ReactNode 
   )
 }
 
-/** Connections header + Notion row for the top-bar More menu. */
-export function NotionConnectMenuItems() {
+/** More → Connections row; right label is None or the connected workspace. */
+export function NotionConnectMenuItems({ filterQuery = '' }: { filterQuery?: string }) {
   const api = useContext(NotionConnectContext) // Provider owns status / OAuth
   if (!api) return null
   const { status, loading, startConnect, disconnect, openPicker } = api
+  const q = filterQuery.trim().toLowerCase() // Search actions… filter
+  const hay = `connections notion ${status?.workspaceName || ''}` // Match row or Notion workspace
+  if (q && !hay.toLowerCase().includes(q)) return null // Hide when search misses
+  const rightLabel = status?.connected ? status.workspaceName || 'Notion' : 'None' // Screenshot-style status
 
   return (
-    <>
-      <DropdownMenuLabel className="px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide text-gray-400">
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger
+        disabled={loading}
+        className={cn('text-sm', loading && 'opacity-50')}
+        title={status?.connected ? `Connections · ${rightLabel}` : 'Connections'}
+      >
+        <LayoutGrid className="h-4 w-4 mr-2" />
         Connections
-      </DropdownMenuLabel>
-      {status?.connected ? (
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger
+        <span className="ml-auto mr-1 text-xs text-gray-400">{rightLabel}</span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="w-56">
+        {status?.connected ? (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger
+              className="text-sm"
+              title={status.workspaceName ? `Notion · ${status.workspaceName}` : 'Notion connected'}
+            >
+              <NotionMarkIcon className="h-4 w-4 mr-2" />
+              Notion
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="w-56">
+              <DropdownMenuItem disabled className="text-xs text-gray-500">
+                Connected{status.workspaceName ? ` · ${status.workspaceName}` : ''}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={openPicker}>Import pages</DropdownMenuItem>
+              <DropdownMenuItem onClick={startConnect}>Reconnect / change pages</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void disconnect()} className="text-red-600 focus:text-red-600">
+                Disconnect Notion
+              </DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ) : (
+          <DropdownMenuItem
             disabled={loading}
-            className={cn('text-sm', loading && 'opacity-50')}
-            title={status.workspaceName ? `Notion · ${status.workspaceName}` : 'Notion connected'}
+            title={status?.configured === false ? 'Notion OAuth credentials missing — click for setup steps' : 'Connect Notion'}
+            onClick={startConnect}
           >
             <NotionMarkIcon className="h-4 w-4 mr-2" />
             Notion
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-56">
-            <DropdownMenuItem disabled className="text-xs text-gray-500">
-              Connected{status.workspaceName ? ` · ${status.workspaceName}` : ''}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={openPicker}>Import pages</DropdownMenuItem>
-            <DropdownMenuItem onClick={startConnect}>Reconnect / change pages</DropdownMenuItem>
-            <DropdownMenuItem onClick={() => void disconnect()} className="text-red-600 focus:text-red-600">
-              Disconnect Notion
-            </DropdownMenuItem>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-      ) : (
-        <DropdownMenuItem
-          disabled={loading}
-          title={status?.configured === false ? 'Notion OAuth credentials missing — click for setup steps' : 'Connect Notion'}
-          onClick={startConnect}
-        >
-          <NotionMarkIcon className="h-4 w-4 mr-2" />
-          Notion
-        </DropdownMenuItem>
-      )}
-    </>
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   )
 }

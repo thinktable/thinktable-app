@@ -1,6 +1,6 @@
 'use client'
 
-// Personalize Thinktable AI — draw white on a solid logo circle; saved PNG stays editable
+// Personalize Thinktable AI — default mark is a hand-drawn T; saved PNG stays editable
 import {
   useCallback,
   useEffect,
@@ -8,7 +8,6 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
-import Image from 'next/image'
 import { Eraser, Pencil, RotateCcw, X } from 'lucide-react'
 import {
   Dialog,
@@ -39,6 +38,72 @@ const CANVAS_SIZE = 256
 /** Pen width presets in canvas pixels */
 const THICKNESSES = [4, 8, 14, 22] as const
 
+/** Marker weight for the default T — matches the filled logo bar at 256px */
+const DRAWN_T_WIDTH = 26
+
+/** Crossbar: left → stem, slight sag so it reads as a pen stroke */
+const DRAWN_T_BAR = 'M 48 64 C 72 56, 94 72, 124 61'
+
+/** Stem: overlaps the bar, wobbles down the left-of-center column */
+const DRAWN_T_STEM = 'M 110 48 C 104 102, 118 152, 108 198'
+
+/** Small right hook at the stem foot (logo’s table-leg serif) */
+const DRAWN_T_FOOT = 'M 108 186 C 118 192, 134 194, 150 188'
+
+/** Lumpy table-dot to the right of the stem (filled, not a perfect circle) */
+const DRAWN_DOT =
+  'M 206 104 C 208 85, 194 69, 176 70 C 156 71, 144 90, 147 108 C 150 128, 168 140, 186 136 C 202 132, 206 118, 206 104 Z'
+
+/** Clip strokes to the logo disc so round caps never paint the corners */
+function clipLogoDisc(ctx: CanvasRenderingContext2D) {
+  ctx.beginPath() // Disc path
+  ctx.arc(CANVAS_SIZE / 2, CANVAS_SIZE / 2, CANVAS_SIZE / 2 - 0.5, 0, Math.PI * 2) // Same radius as the fill
+  ctx.clip() // Keep marker inside the circle
+}
+
+/** Paint the default hand-drawn T + table-dot in white (disc already filled) */
+function strokeDefaultDrawnMark(ctx: CanvasRenderingContext2D) {
+  ctx.save() // Restore clip + style after
+  clipLogoDisc(ctx) // Stay inside the grey disc
+  ctx.strokeStyle = DRAW_WHITE // Same white as the pen tool
+  ctx.fillStyle = DRAW_WHITE // Dot is a filled blob
+  ctx.lineCap = 'round' // Marker ends
+  ctx.lineJoin = 'round' // Marker corners
+  ctx.lineWidth = DRAWN_T_WIDTH // T bar/stem weight
+  ctx.stroke(new Path2D(DRAWN_T_BAR)) // Crossbar
+  ctx.stroke(new Path2D(DRAWN_T_STEM)) // Vertical stem
+  ctx.stroke(new Path2D(DRAWN_T_FOOT)) // Foot hook
+  ctx.fill(new Path2D(DRAWN_DOT)) // Table-dot
+  ctx.restore() // Drop clip
+}
+
+/** Default AI mark — same marker strokes the canvas seeds with */
+function DefaultDrawnLogoSvg({ size, className }: { size: number; className?: string }) {
+  return (
+    <svg
+      viewBox={`0 0 ${CANVAS_SIZE} ${CANVAS_SIZE}`}
+      width={size}
+      height={size}
+      className={className}
+      role="img"
+      aria-label="Thinktable"
+    >
+      <g
+        fill="none"
+        stroke={DRAW_WHITE}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={DRAWN_T_WIDTH}
+      >
+        <path d={DRAWN_T_BAR} />
+        <path d={DRAWN_T_STEM} />
+        <path d={DRAWN_T_FOOT} />
+      </g>
+      <path d={DRAWN_DOT} fill={DRAW_WHITE} />
+    </svg>
+  )
+}
+
 /** Read persisted logo drawing data URL (client-only) */
 export function getStoredLogoDrawing(): string | null {
   if (typeof window === 'undefined') return null
@@ -57,8 +122,8 @@ type ThinktableBrandMarkProps = {
 }
 
 /**
- * Brand mark — default SVG, or the generated circle image.
- * Solid circle behind the PNG so any transparency still reads as the logo disc.
+ * Brand mark — default hand-drawn T + table-dot, or a saved circle PNG.
+ * Solid circle behind the mark so any transparency still reads as the logo disc.
  * AI sparkles badge sits top-left with a white border (outside the disc clip).
  */
 export function ThinktableBrandMark({
@@ -89,13 +154,9 @@ export function ThinktableBrandMark({
             draggable={false}
           />
         ) : (
-          <Image
-            src="/thinktable-logo.svg"
-            alt="Thinktable"
-            width={size}
-            height={size}
-            className="h-full w-full object-contain"
-            priority
+          <DefaultDrawnLogoSvg
+            size={size}
+            className="h-full w-full"
           />
         )}
       </div>
@@ -149,13 +210,13 @@ export function PersonalizeAiModal({
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const drawingRef = useRef(false)
   const lastPtRef = useRef<{ x: number; y: number } | null>(null)
-  const resetRef = useRef(false) // Reset → Done clears to default SVG
+  const resetRef = useRef(false) // Reset → Done restores the default drawn mark
   const [tool, setTool] = useState<Tool>('pen')
   const [thickness, setThickness] = useState<(typeof THICKNESSES)[number]>(8)
   const [dirty, setDirty] = useState(false)
   const [ready, setReady] = useState(false) // Canvas seeded for this open
 
-  /** Fill the full logo disc with solid gray (blank draw surface) */
+  /** Fill the full logo disc with solid gray (draw surface under the mark) */
   const paintSolidCircle = useCallback((ctx: CanvasRenderingContext2D) => {
     const s = CANVAS_SIZE
     ctx.clearRect(0, 0, s, s)
@@ -192,7 +253,13 @@ export function PersonalizeAiModal({
     [paintSolidCircle]
   )
 
-  /** Seed editor: saved PNG if any, else blank solid circle */
+  /** Grey disc + default marker T (reset / first open) */
+  const paintDefaultDrawnLogo = useCallback((ctx: CanvasRenderingContext2D) => {
+    paintSolidCircle(ctx) // Solid disc first
+    strokeDefaultDrawnMark(ctx) // Hand-drawn T + table-dot on top
+  }, [paintSolidCircle])
+
+  /** Seed editor: saved PNG if any, else the default drawn mark */
   const seedCanvas = useCallback(async () => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -201,10 +268,10 @@ export function PersonalizeAiModal({
     if (drawingUrl && !resetRef.current) {
       await paintSavedImage(ctx, drawingUrl) // Continue editing prior image
     } else {
-      paintSolidCircle(ctx) // Fresh solid disc to draw on
+      paintDefaultDrawnLogo(ctx) // Start from the drawn character, not a blank disc
     }
     setReady(true)
-  }, [drawingUrl, paintSavedImage, paintSolidCircle])
+  }, [drawingUrl, paintSavedImage, paintDefaultDrawnLogo])
 
   // Dialog mounts canvas after open — seed when open flips true
   useEffect(() => {
@@ -296,7 +363,7 @@ export function PersonalizeAiModal({
     const ctx = canvas?.getContext('2d')
     if (!ctx) return
     resetRef.current = true
-    paintSolidCircle(ctx) // Clear back to solid disc (Done restores default SVG)
+    paintDefaultDrawnLogo(ctx) // Back to the default drawn character
     setDirty(false)
     setTool('pen')
   }
@@ -310,7 +377,7 @@ export function PersonalizeAiModal({
 
   const handleDone = () => {
     if (resetRef.current && !dirty) {
-      onDrawingChange(null) // Default Thinktable SVG everywhere
+      onDrawingChange(null) // Default drawn mark everywhere
     } else if (dirty) {
       onDrawingChange(exportDrawing()) // Generated image shown + editable next open
     }
@@ -369,8 +436,8 @@ export function PersonalizeAiModal({
             />
           </div>
           <p className="text-xs text-gray-500 text-center max-w-[260px]">
-            Draw white on the solid circle. Done saves the image to your logo — open again to keep
-            editing.
+            The logo starts as a drawing — edit it, or reset to the default mark. Done saves the
+            image; open again to keep editing.
           </p>
         </div>
 

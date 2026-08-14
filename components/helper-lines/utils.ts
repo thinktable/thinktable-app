@@ -1,10 +1,10 @@
-import {
+import type {
   Box,
   InternalNode,
   Node,
   NodeDimensionChange,
   NodePositionChange,
-} from 'reactflow';
+} from 'reactflow'; // Types only — not runtime exports
 import { ANCHORS, SNAP_RADIUS } from './config';
 import {
   Anchor,

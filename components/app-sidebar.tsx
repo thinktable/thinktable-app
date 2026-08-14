@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import React, { useState, useEffect, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -977,6 +977,24 @@ async function fetchProjects(): Promise<Project[]> {
   })
 }
 
+const NAV_POPUP_TOP = 52 // Flush under top bar so hover can bridge from the menu icon
+const NAV_POPUP_MAX_CAP = 720 // Don't grow endlessly on tall screens
+const NAV_POPUP_CHROME_GAP = 8 // Air between the popup bottom and Free nav / minimap
+const NAV_POPUP_MIN_H = 160 // Search + a few boards still usable if chrome is tall
+
+/** Cap the board nav popup so it never covers Free nav or an open minimap. */
+function measureNavPopupMaxHeight(popupTop: number): number {
+  const vh = window.innerHeight // Fallback when map chrome isn't on this page
+  let chromeTop = vh - NAV_POPUP_CHROME_GAP // Default: inset from the window bottom
+  document.querySelectorAll('[data-minimap-toggle-context], [data-minimap-context], [data-minimap-pill-context]').forEach((el) => {
+    const r = (el as HTMLElement).getBoundingClientRect() // Screen box of Free nav / minimap / +/-
+    if (r.height < 1 || r.width < 1) return // Skip clipped (closed) minimap
+    chromeTop = Math.min(chromeTop, r.top) // Highest chrome edge in the bottom-left stack
+  })
+  const available = chromeTop - popupTop - NAV_POPUP_CHROME_GAP // Room between the top bar and that chrome
+  return Math.max(NAV_POPUP_MIN_H, Math.min(NAV_POPUP_MAX_CAP, available)) // Clamp to a usable range
+}
+
 export default function AppSidebar({ user }: AppSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
@@ -1015,13 +1033,33 @@ export default function AppSidebar({ user }: AppSidebarProps) {
   const projectsExpandedInitializedRef = useRef(false) // Track if we've initialized project expansion
   const supabase = createClient()
   const queryClient = useQueryClient()
-  const { isMobileMode, isSidebarOpen, isSidebarPinned, closeSidebar, openSidebar, scheduleCloseSidebar, cancelCloseSidebar } = useSidebarContext()
+  const { isMobileMode, isSidebarOpen, isSidebarPinned, closeSidebar, openSidebar, scheduleCloseSidebar, cancelCloseSidebar, aiMapDockLiftPx, isChatSidebarOpen } = useSidebarContext() // Chat-open fill matches the board on desktop only
+  const navMenuMatchBoard = isChatSidebarOpen && !isMobileMode // Desktop chat column: same fill as the map
+  const [navPopupMaxHeight, setNavPopupMaxHeight] = useState<number>(() =>
+    typeof window === 'undefined' ? NAV_POPUP_MAX_CAP : measureNavPopupMaxHeight(NAV_POPUP_TOP) // SSR: cap; client: already miss chrome
+  )
 
   // Close hover-only nav on route change; click-pinned stays open across page switches
   useEffect(() => {
     if (isSidebarPinned) return // Keep open until menu button clicked again
     closeSidebar()
   }, [pathname, closeSidebar, isSidebarPinned])
+
+  // Keep the popup above Free nav / open minimap (height tween, phone dock lift, window resize)
+  useLayoutEffect(() => {
+    if (!isSidebarOpen) return // Closed — nothing to size
+    const update = () => setNavPopupMaxHeight(measureNavPopupMaxHeight(NAV_POPUP_TOP)) // Re-read chrome boxes
+    update() // Before paint so the first open frame already misses the stack
+    const ro = new ResizeObserver(update) // Minimap clip height 0→120 and Free nav size
+    document.querySelectorAll('[data-minimap-toggle-context], [data-minimap-context]').forEach((el) => ro.observe(el))
+    window.addEventListener('resize', update) // Desktop window / top-bar wrap
+    window.visualViewport?.addEventListener('resize', update) // iOS keyboard inset
+    return () => {
+      ro.disconnect() // Drop chrome observers
+      window.removeEventListener('resize', update)
+      window.visualViewport?.removeEventListener('resize', update)
+    }
+  }, [isSidebarOpen, pathname, aiMapDockLiftPx, isMobileMode]) // Rebind when chrome mounts or the dock jumps
 
   // Fetch user profile for name/username and subscription tier
   const { data: profile } = useQuery({
@@ -2242,12 +2280,17 @@ export default function AppSidebar({ user }: AppSidebarProps) {
         data-app-sidebar
         data-nav-menu-popup
         className={cn(
-          'fixed z-50 flex flex-col bg-white dark:bg-[#171717] border border-gray-200 dark:border-[#2f2f2f] shadow-xl rounded-2xl overflow-hidden',
-          'w-72 max-h-[min(720px,calc(100vh-4.5rem))]'
+          'fixed z-50 flex flex-col border border-gray-200 dark:border-[#2f2f2f] shadow-xl rounded-2xl overflow-hidden',
+          // Desktop chat column open: board fill so the popup matches the map; phone keeps the white card on the scrim
+          navMenuMatchBoard
+            ? 'bg-gray-50 dark:bg-[#0f0f0f]'
+            : 'bg-white dark:bg-[#171717]',
+          'w-72 min-h-0' // min-h-0 so the board list can shrink and scroll under maxHeight
         )}
         style={{
-          top: '52px', // Flush under top bar so hover can bridge from logo
+          top: NAV_POPUP_TOP, // Flush under top bar so hover can bridge from logo
           left: '0.5rem',
+          maxHeight: navPopupMaxHeight, // Stops above Free nav / open minimap (measured)
         }}
         onMouseEnter={() => {
           cancelCloseSidebar() // Keep open while pointer is in menu
@@ -2278,7 +2321,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                   placeholder="Search anything..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-7 h-8 text-sm rounded-lg border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+                  className="pl-7 h-8 text-sm rounded-lg border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
                   suppressHydrationWarning
                 />
               </div>
@@ -2354,7 +2397,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
 
         {/* Boards/Conversations List - hidden when collapsed */}
         {!isCollapsed && (
-          <nav className="flex-1 px-4 pb-4 overflow-y-auto [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-gray-400/50 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:hover:bg-gray-400/70 dark:[&::-webkit-scrollbar-thumb]:bg-gray-500/50 dark:[&::-webkit-scrollbar-thumb]:hover:bg-gray-500/70 [&::-webkit-scrollbar]:bg-transparent">
+          <nav className="flex-1 min-h-0 px-4 pb-4 overflow-y-auto [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-gray-400/50 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:hover:bg-gray-400/70 dark:[&::-webkit-scrollbar-thumb]:bg-gray-500/50 dark:[&::-webkit-scrollbar-thumb]:hover:bg-gray-500/70 [&::-webkit-scrollbar]:bg-transparent">
             <DndContext
               sensors={sensors}
               collisionDetection={(args) => {

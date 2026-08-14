@@ -1,15 +1,12 @@
-import {
+import { useReactFlow, useStore } from 'reactflow';
+import type {
   Box,
   Node,
-  useReactFlow,
-  useStore,
   InternalNode,
-} from 'reactflow';
-import {
   NodeChange,
   NodeDimensionChange,
   NodePositionChange,
-} from 'reactflow';
+} from 'reactflow'; // Types only — Node/Box are not runtime exports
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import HelperLinesRenderer from './HelperLinesRenderer';

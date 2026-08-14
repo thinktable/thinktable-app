@@ -1,6 +1,6 @@
 // Helper lines can either be 'horizontal' or 'vertical'.
 
-import { Box, Node } from 'reactflow';
+import type { Box, Node } from 'reactflow'; // Types only — Node/Box are not runtime exports
 
 export type Orientation = 'horizontal' | 'vertical';
 
