@@ -3,7 +3,7 @@
 // Top-bar Share dropdown: Notion people + email invites + copy link with view/comment/edit
 
 import { useCallback, useEffect, useRef, useState } from 'react' // Local UI state
-import { Check, ChevronDown, Copy, Link as LinkIcon, Loader2, Share2, X } from 'lucide-react' // Icons
+import { Check, ChevronDown, Copy, Link as LinkIcon, Loader2, Lock, X } from 'lucide-react' // Lock+Share trigger; copy/link in panel
 import { Button } from '@/components/ui/button' // Shared button chrome
 import {
   DropdownMenu,
@@ -287,11 +287,12 @@ export function ShareBoardMenu({ boardId }: ShareBoardMenuProps) {
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 w-7 p-0 text-gray-600 hover:text-gray-900 hover:bg-gray-100 flex-shrink-0"
+          className="h-7 px-2 gap-1.5 text-gray-700 hover:text-gray-900 hover:bg-gray-100 flex-shrink-0"
           title="Share"
           type="button"
         >
-          <Share2 className="h-4 w-4" />
+          <Lock className="h-4 w-4" />
+          <span className="text-sm font-medium">Share</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent

@@ -4751,20 +4751,35 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       return !!el?.classList?.contains('tt-ibar-capture')
     }
 
+    // iOS Safari zooms if we autofocus a sub-16px editor near the edge. Desktop must take the caret
+    // after spawn or the I-bar never appears (capture stays focused and ProseMirror hides its caret).
+    const keepCaptureForPhone = () => {
+      if (!captureOwnsKeyboard()) return false
+      if (typeof window === 'undefined') return false
+      return (
+        window.matchMedia('(hover: none)').matches ||
+        window.matchMedia('(pointer: coarse)').matches
+      )
+    }
+
     const applySeed = (html: string, text: string) => {
       const ed = promptEditorRef.current
       if (!ed || ed.isDestroyed) return false
       const current = ed.getText()
-      // Only replace when seed is ahead — avoid setContent flicker when already in sync
-      if (text.length > current.length || (text.length === current.length && text !== current)) {
-        ed.commands.setContent(html || '<p></p>')
-        if (!captureOwnsKeyboard()) focusFrameEditor(ed) // Desktop / grip path — capture already released
+      const captureOwns = captureOwnsKeyboard() // Capture field still has the I-bar keyboard
+      // Capture is source of truth until TipTap focuses — apply Backspace (shorter) as well as new chars.
+      // After handoff, only accept equal-or-longer seeds so a stale buffer cannot rewind typed text.
+      const seedChanged = text !== current
+      const seedAhead = text.length >= current.length
+      if (seedChanged && (captureOwns || seedAhead)) {
+        ed.commands.setContent(html || '<p></p>') // Paint the capture buffer, including deletions
+        if (!keepCaptureForPhone()) focusFrameEditor(ed) // Desktop: show I-bar even while capture still focused
         setPromptContent(html || '<p></p>')
         setPromptHasChanges(true) // Persist the buffered typing; block remote wipe
         hasAutoFocusedRef.current = true
         return true
       }
-      if (!ed.isFocused && !captureOwnsKeyboard()) focusFrameEditor(ed)
+      if (!ed.isFocused && !keepCaptureForPhone()) focusFrameEditor(ed)
       hasAutoFocusedRef.current = true
       setPromptHasChanges(true)
       return true
@@ -4775,8 +4790,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       if (!detail?.messageId || detail.messageId !== promptMessage?.id) return
       const ok = applySeed(detail.html || '<p></p>', detail.text || '')
       const ed = promptEditorRef.current
-      // Capture still owns the keyboard on phone — don’t release it (would drop the soft keyboard / hand edge TipTap)
-      if (captureOwnsKeyboard()) return
+      // Phone: capture still owns the keyboard — don’t release it (would drop the soft keyboard)
+      if (keepCaptureForPhone()) return
       // Only release map capture once TipTap actually has focus (otherwise more keys would drop)
       if (ok && ed && !ed.isDestroyed && ed.isFocused) {
         window.dispatchEvent(
@@ -4799,7 +4814,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         const t = window.setTimeout(() => {
           if (!promptEditorRef.current || promptEditorRef.current.isDestroyed) return
           // Phone: I-bar capture already focused — sync only; TipTap focus would Safari-zoom near edges
-          if (!captureOwnsKeyboard()) {
+          if (!keepCaptureForPhone()) {
             focusFrameEditor(promptEditorRef.current)
           }
           hasAutoFocusedRef.current = true

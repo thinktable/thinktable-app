@@ -1506,10 +1506,11 @@ span[data-added="true"] {
     width: 100%; /* Stretch to frame/editor width even when text is short or empty */
     box-sizing: border-box;
   }
-  /* databaseBlock atoms span the row so the grip/I-bar band matches the frame.
+  /* databaseBlock / imageBlock atoms span the row so the grip/I-bar band matches the frame.
      boardLink stays shrink-wrapped (no width:100%) so the open menu can sit just right of the
      title when the frame is wider — not pinned to the frame’s right edge. */ 
-  .ProseMirror[data-single-line="true"] .tt-database-block {
+  .ProseMirror[data-single-line="true"] .tt-database-block,
+  .ProseMirror[data-single-line="true"] .tt-image-block {
     width: 100%;
     box-sizing: border-box;
   }
@@ -1752,6 +1753,126 @@ span[data-added="true"] {
   .ProseMirror .tt-database-block-label:empty::before {
     content: attr(data-placeholder);
     color: #9ca3af;
+  }
+
+  /* imageBlock — Turn into Image (placeholder until src, then <img>) */
+  .ProseMirror .tt-image-block {
+    position: relative;
+    margin: 2px 0;
+    width: 100%;
+    min-width: 240px;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  .ProseMirror .react-renderer.node-imageBlock {
+    width: 100%;
+    min-width: 240px;
+    max-width: 100%;
+  }
+  .ProseMirror .tt-image-block-row {
+    display: block;
+    width: 100%;
+  }
+  .ProseMirror .tt-image-block-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.85rem 1rem;
+    border-radius: 0.5rem;
+    background: #f3f4f6;
+    color: #6b7280;
+  }
+  .dark .ProseMirror .tt-image-block-placeholder {
+    background: #1f2937;
+    color: #9ca3af;
+  }
+  .ProseMirror .tt-image-block-placeholder-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #4b5563;
+  }
+  .dark .ProseMirror .tt-image-block-placeholder-label {
+    color: #d1d5db;
+  }
+  .ProseMirror .tt-image-block-actions,
+  .ProseMirror .tt-image-block-embed {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
+  }
+  .ProseMirror .tt-image-block-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    height: 1.75rem;
+    padding: 0 0.55rem;
+    border-radius: 0.375rem;
+    border: 1px solid #e5e7eb;
+    background: #fff;
+    font-size: 0.75rem;
+    color: #374151;
+    cursor: pointer;
+  }
+  .ProseMirror .tt-image-block-action:hover {
+    background: #f9fafb;
+  }
+  .dark .ProseMirror .tt-image-block-action {
+    border-color: #374151;
+    background: #111827;
+    color: #e5e7eb;
+  }
+  .dark .ProseMirror .tt-image-block-action:hover {
+    background: #1f2937;
+  }
+  .ProseMirror .tt-image-block-embed-input {
+    flex: 1;
+    min-width: 8rem;
+    height: 1.75rem;
+    padding: 0 0.5rem;
+    border-radius: 0.375rem;
+    border: 1px solid #e5e7eb;
+    background: #fff;
+    font-size: 0.75rem;
+  }
+  .dark .ProseMirror .tt-image-block-embed-input {
+    border-color: #374151;
+    background: #111827;
+    color: #e5e7eb;
+  }
+  .ProseMirror .tt-image-block-error {
+    font-size: 0.7rem;
+    color: #dc2626;
+  }
+  .ProseMirror .tt-image-block-media {
+    position: relative;
+    width: 100%;
+  }
+  .ProseMirror .tt-image-block-img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 0.375rem;
+  }
+  .ProseMirror .tt-image-block-replace {
+    position: absolute;
+    top: 0.4rem;
+    right: 0.4rem;
+    display: none;
+    height: 1.5rem;
+    padding: 0 0.5rem;
+    border-radius: 0.375rem;
+    border: none;
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+    font-size: 0.7rem;
+    cursor: pointer;
+  }
+  .ProseMirror .tt-image-block-media:hover .tt-image-block-replace {
+    display: inline-flex;
+    align-items: center;
   }
 
   /* Turn into — Notion-like block type chrome */

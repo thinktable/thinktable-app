@@ -577,7 +577,7 @@ export function AiComposer({
 
   const openNotionConnect = () => {
     setPlusOpen(false)
-    // Reuse top-bar Notion OAuth entry if present
+    // Reuse More → Connections → Notion (hidden [data-notion-connect] host)
     const btn = document.querySelector<HTMLElement>('[data-notion-connect]')
     if (btn) {
       btn.click()

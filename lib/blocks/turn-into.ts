@@ -2,6 +2,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js' // Persist transforms
 import type { BlockTypeId } from '@/components/block-actions-menu' // Shared type ids
+import { looksLikeImageSrc } from '@/lib/tiptap/image-block' // URL-only blocks become image src
 import {
   ensureBoardBodyBlock,
   isBlockContentEmpty,
@@ -86,7 +87,7 @@ function unwrapKnownShells(html: string): string {
   const trimmed = (html || '').trim() || '<p></p>'
   // Pull content out of our custom wrappers / headings / lists / quote / code
   const wrappers = [
-    /^<div[^>]*data-type="(?:callout|toggleList|toggleHeading|blockEquation|syncedBlock|columns)"[^>]*>([\s\S]*)<\/div>$/i,
+    /^<div[^>]*data-type="(?:callout|toggleList|toggleHeading|blockEquation|syncedBlock|columns|imageBlock)"[^>]*>([\s\S]*)<\/div>$/i,
     /^<h[1-4][^>]*>([\s\S]*)<\/h[1-4]>$/i,
     /^<blockquote[^>]*>([\s\S]*)<\/blockquote>$/i,
     /^<pre[^>]*><code[^>]*>([\s\S]*)<\/code><\/pre>$/i,
@@ -168,6 +169,11 @@ export function transformHtmlToBlockType(html: string, blockType: BlockTypeId): 
       return `<blockquote>${body}</blockquote>`
     case 'callout':
       return `<div data-type="callout">${body}</div>`
+    case 'image': {
+      const plain = htmlToPlainText(html).trim()
+      const src = looksLikeImageSrc(plain) ? plain : ''
+      return `<div data-type="imageBlock"${src ? ` data-src="${escapeHtml(src)}"` : ''}></div>`
+    }
     case 'blockEquation': {
       const plain = htmlToPlainText(html) || 'E = mc^2'
       return `<div data-type="blockEquation"><p>${escapeHtml(plain)}</p></div>`

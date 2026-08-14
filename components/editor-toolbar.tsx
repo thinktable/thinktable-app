@@ -42,7 +42,7 @@ import {
   Undo2,
   Redo2,
   Paintbrush,
-  Share2,
+  Lock,
   RotateCcw,
   PaintBucket,
   LassoSelect,
@@ -55,8 +55,6 @@ import {
   Boxes, // Layout Smart Align — multi-box glyph
   Presentation, // View presentation mode
   Table,
-  File,
-  Camera,
   Anchor,
   ListFilter,
   ArrowUpDown,
@@ -67,8 +65,8 @@ import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useQueryClient } from '@tanstack/react-query'
 import { useTheme } from './theme-provider'
-import { NotionConnectButton } from './notion-connect-button'
 import { ShareBoardMenu } from './share-board-menu' // Share dropdown: Notion people + role links
+import { BoardTopBarShare } from './board-top-bar-share' // Copy link / favorite / More (Connections → Notion)
 import { AutomationsMenu } from './automations-menu' // Actions-bar Automations list popover
 import { useBoardAccess } from '@/lib/share/board-access-context' // Owner-only share menu
 import { useAiEditSession } from '@/lib/ai/edit-session' // Top-bar AI content mask toggle
@@ -893,7 +891,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
 
       const rightSectionRect = rightSection.getBoundingClientRect()
       const leftW = leftChrome?.getBoundingClientRect().width ?? 0 // Menu + board path
-      const rightW = rightSectionRect.width // Notion / Share / AI
+      const rightW = rightSectionRect.width // Share / copy / favorite / more / AI
       const sideInset = Math.max(leftW, rightW) // Symmetric inset so the cluster can sit on the board center
 
       // Calculate widths of fixed elements (More menu)
@@ -908,9 +906,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       // Use different item groups based on edit menu mode
       const itemGroups = editMenuPillMode === 'insert'
         ? [
-          { id: 'smartAlign', width: 40 }, // Smart Align (Boxes) — Layout bar
+          { id: 'insertGroup1', width: 96 }, // Table — right of Layout; hides first
           { id: 'arrows', width: 40 }, // Layout arrow direction
-          { id: 'insertGroup1', width: 237 }, // Table, File, Camera
+          { id: 'smartAlign', width: 40 }, // Smart Align (Boxes) — Layout bar
           { id: 'undoRedo', width: 70 },
         ]
         : editMenuPillMode === 'view'
@@ -930,8 +928,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               // Group 2 (Eraser): 1 button (28) + 16px padding = 44px
               // Group 1 (Lasso, Vertical, Horizontal): 3 buttons (28 + 4 + 28 + 4 + 28) + 16px padding = 108px
               { id: 'drawGroup4', width: 156 }, // Colors (no trailing slash — last draw group)
-              { id: 'drawGroup3', width: 76 + 5 }, // Pencil, Highlighter + slash
-              { id: 'drawGroup2', width: 44 + 5 }, // Eraser + slash
+              { id: 'drawGroup3', width: 76 + 5 }, // Pencil, Highlighter + slash before colors
+              { id: 'drawGroup2', width: 28 + 4 }, // Eraser — same cluster as pencil (no slash)
               { id: 'drawGroup1', width: 108 + 5 }, // Lasso, Vertical, Horizontal + slash
               { id: 'undoRedo', width: 70 },
             ]
@@ -993,7 +991,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       data-preview-style-chrome // Clicks here keep nested preview style-focus alive
       className="absolute inset-0 pointer-events-none" // Fill the map-column bar so tools can board-center
     >
-      {/* Tools — true center of the board bar, independent of title / Notion / Share */}
+      {/* Tools — true center of the board bar, independent of title / Share cluster */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
         <div
           data-toolbar-center
@@ -1224,57 +1222,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           </>
         )}
 
-        {/* Insert Mode Buttons - Table, File, Camera */}
-        {editMenuPillMode === 'insert' && (
-          <>
-            {/* Group 1: Table, File, Camera */}
-            {!isItemHidden('insertGroup1') && (
-              <div className="flex items-center gap-1 px-2 flex-shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      // TODO: Implement table insertion
-                    }}
-                    className="h-7 px-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center gap-1.5"
-                    title="Table"
-                  >
-                    <Table className="h-4 w-4" />
-                    <span className="text-sm">Table</span>
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      // TODO: Implement file insertion
-                    }}
-                    className="h-7 px-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center gap-1.5"
-                    title="File"
-                  >
-                    <File className="h-4 w-4" />
-                    <span className="text-sm">File</span>
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      // TODO: Implement camera/image insertion
-                    }}
-                    className="h-7 px-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center gap-1.5"
-                    title="Camera"
-                  >
-                    <Camera className="h-4 w-4" />
-                    <span className="text-sm">Camera</span>
-                  </Button>
-              </div>
-            )}
-            {/* Slash before Smart Align / layout arrow or More menu */}
-            {!isItemHidden('insertGroup1') && (!isItemHidden('smartAlign') || !isItemHidden('arrows') || hiddenItems.size > 0) && (
-              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
-            )}
-          </>
-        )}
-
         {/* Smart Align + layout arrow — Layout bar (pill still `insert`) */}
         {editMenuPillMode === 'insert' && (!isItemHidden('smartAlign') || !isItemHidden('arrows')) && (
           <div className="flex items-center gap-0.5 flex-shrink-0">
@@ -1335,8 +1282,30 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             )}
           </div>
         )}
+        {/* Slash between layout tools and Table */}
+        {editMenuPillMode === 'insert' && (!isItemHidden('smartAlign') || !isItemHidden('arrows')) && !isItemHidden('insertGroup1') && (
+          <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
+        )}
+
+        {/* Table — right of Layout */}
+        {editMenuPillMode === 'insert' && !isItemHidden('insertGroup1') && (
+          <div className="flex items-center gap-1 px-2 flex-shrink-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                // TODO: Implement table insertion
+              }}
+              className="h-7 px-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center gap-1.5"
+              title="Table"
+            >
+              <Table className="h-4 w-4" />
+              <span className="text-sm">Table</span>
+            </Button>
+          </div>
+        )}
         {/* Slash before More menu when Layout tools overflow */}
-        {editMenuPillMode === 'insert' && (!isItemHidden('smartAlign') || !isItemHidden('arrows')) && hiddenItems.size > 0 && (
+        {editMenuPillMode === 'insert' && (!isItemHidden('smartAlign') || !isItemHidden('arrows') || !isItemHidden('insertGroup1')) && hiddenItems.size > 0 && (
           <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
         )}
 
@@ -1422,93 +1391,91 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
               </>
             )}
-            {/* Group 2: Eraser (Not yet implemented) */}
-            {!isItemHidden('drawGroup2') && (
+            {/* Eraser + Pencil + Highlighter — one cluster, no slash between eraser and pencil */}
+            {(!isItemHidden('drawGroup2') || !isItemHidden('drawGroup3')) && (
               <>
                 <div className="flex items-center gap-1 px-2 flex-shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => {
-                      // Toggle eraser tool - if already selected, deselect it
-                      if (drawTool === 'eraser') {
-                        setDrawTool(null)
-                        setIsDrawing(false) // Disable drawing mode
-                      } else {
-                        setDrawTool('eraser')
-                        setIsDrawing(false) // Disable drawing mode when using eraser (if implemented)
-                      }
-                      // Blur the button to remove focus state
-                      e.currentTarget.blur()
-                    }}
-                    className={cn(
-                      "h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0",
-                      drawTool === 'eraser' 
-                        ? 'bg-gray-100 dark:bg-gray-800' 
-                        : 'hover:bg-gray-100 dark:hover:bg-gray-800'
-                    )}
-                    title={drawTool === 'eraser' ? 'Eraser Active (Click to deselect)' : 'Eraser (Not yet implemented)'}
-                  >
-                    <Eraser className="h-4 w-4" />
-                  </Button>
-                </div>
-                <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
-              </>
-            )}
-            {/* Group 3: Freehand Drawing Toggle (Pencil), Highlighter */}
-            {!isItemHidden('drawGroup3') && (
-              <>
-                <div className="flex items-center gap-1 px-2 flex-shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => {
-                      // Toggle pencil tool - if already selected, deselect it
-                      if (drawTool === 'pencil') {
-                        setDrawTool(null)
-                        setIsDrawing(false) // Disable drawing mode
-                      } else {
-                        setDrawTool('pencil')
-                        setIsDrawing(true) // Enable drawing mode when selecting pencil
-                      }
-                      // Blur the button to remove focus state
-                      e.currentTarget.blur()
-                    }}
-                    className={cn(
-                      "h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0",
-                      drawTool === 'pencil' 
-                        ? 'bg-gray-100 dark:bg-gray-800' 
-                        : 'hover:bg-gray-100 dark:hover:bg-gray-800'
-                    )}
-                    title={drawTool === 'pencil' ? 'Drawing Mode Active (Click to deselect)' : 'Freehand Drawing (Click to enable drawing mode)'}
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => {
-                      // Toggle highlighter tool - if already selected, deselect it
-                      if (drawTool === 'highlighter') {
-                        setDrawTool(null)
-                        setIsDrawing(false) // Disable drawing mode
-                      } else {
-                        setDrawTool('highlighter')
-                        setIsDrawing(false) // Disable drawing mode when using highlighter (if implemented)
-                      }
-                      // Blur the button to remove focus state
-                      e.currentTarget.blur()
-                    }}
-                    className={cn(
-                      "h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0",
-                      drawTool === 'highlighter' 
-                        ? 'bg-gray-100 dark:bg-gray-800' 
-                        : 'hover:bg-gray-100 dark:hover:bg-gray-800'
-                    )}
-                    title={drawTool === 'highlighter' ? 'Highlighter Active (Click to deselect)' : 'Highlighter (Not yet implemented)'}
-                  >
-                    <Highlighter className="h-4 w-4" />
-                  </Button>
+                  {!isItemHidden('drawGroup2') && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        // Toggle eraser tool - if already selected, deselect it
+                        if (drawTool === 'eraser') {
+                          setDrawTool(null)
+                          setIsDrawing(false) // Disable drawing mode
+                        } else {
+                          setDrawTool('eraser')
+                          setIsDrawing(false) // Disable drawing mode when using eraser (if implemented)
+                        }
+                        // Blur the button to remove focus state
+                        e.currentTarget.blur()
+                      }}
+                      className={cn(
+                        "h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0",
+                        drawTool === 'eraser'
+                          ? 'bg-gray-100 dark:bg-gray-800'
+                          : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                      )}
+                      title={drawTool === 'eraser' ? 'Eraser Active (Click to deselect)' : 'Eraser (Not yet implemented)'}
+                    >
+                      <Eraser className="h-4 w-4" />
+                    </Button>
+                  )}
+                  {!isItemHidden('drawGroup3') && (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          // Toggle pencil tool - if already selected, deselect it
+                          if (drawTool === 'pencil') {
+                            setDrawTool(null)
+                            setIsDrawing(false) // Disable drawing mode
+                          } else {
+                            setDrawTool('pencil')
+                            setIsDrawing(true) // Enable drawing mode when selecting pencil
+                          }
+                          // Blur the button to remove focus state
+                          e.currentTarget.blur()
+                        }}
+                        className={cn(
+                          "h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0",
+                          drawTool === 'pencil'
+                            ? 'bg-gray-100 dark:bg-gray-800'
+                            : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                        )}
+                        title={drawTool === 'pencil' ? 'Drawing Mode Active (Click to deselect)' : 'Freehand Drawing (Click to enable drawing mode)'}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          // Toggle highlighter tool - if already selected, deselect it
+                          if (drawTool === 'highlighter') {
+                            setDrawTool(null)
+                            setIsDrawing(false) // Disable drawing mode
+                          } else {
+                            setDrawTool('highlighter')
+                            setIsDrawing(false) // Disable drawing mode when using highlighter (if implemented)
+                          }
+                          // Blur the button to remove focus state
+                          e.currentTarget.blur()
+                        }}
+                        className={cn(
+                          "h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0",
+                          drawTool === 'highlighter'
+                            ? 'bg-gray-100 dark:bg-gray-800'
+                            : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                        )}
+                        title={drawTool === 'highlighter' ? 'Highlighter Active (Click to deselect)' : 'Highlighter (Not yet implemented)'}
+                      >
+                        <Highlighter className="h-4 w-4" />
+                      </Button>
+                    </>
+                  )}
                 </div>
                 <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
               </>
@@ -2443,37 +2410,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             {/* Show hidden items in more menu - different items based on edit menu mode */}
             {editMenuPillMode === 'insert' ? (
               <>
-                {/* Insert mode items - grouped by toolbar dividers */}
-                {/* First group: Table, File, Camera - all appear together when hidden */}
-                {isItemHidden('insertGroup1') && editor && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={() => {
-                        // TODO: Implement table insertion
-                      }}
-                    >
-                      <Table className="h-4 w-4 mr-2" />
-                      Table
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => {
-                        // TODO: Implement file insertion
-                      }}
-                    >
-                      <File className="h-4 w-4 mr-2" />
-                      File
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => {
-                        // TODO: Implement camera/image insertion
-                      }}
-                    >
-                      <Camera className="h-4 w-4 mr-2" />
-                      Camera
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
+                {/* Insert mode items — visual order: Smart Align, arrows, Table */}
                 {isItemHidden('smartAlign') && (
                   <>
                     <DropdownMenuItem>
@@ -2500,6 +2437,19 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <DropdownMenuItem onClick={() => setArrowDirection('up')}>
                       <ArrowUp className="h-4 w-4 mr-2" />
                       Arrow Up
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                {isItemHidden('insertGroup1') && editor && (
+                  <>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        // TODO: Implement table insertion
+                      }}
+                    >
+                      <Table className="h-4 w-4 mr-2" />
+                      Table
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>
@@ -2635,10 +2585,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       <Highlighter className="h-4 w-4 mr-2" />
                       Highlighter
                     </DropdownMenuItem>
-                    <DropdownMenuSeparator />
                   </>
                 )}
-                {/* Group 2: Eraser */}
+                {/* Group 2: Eraser — same cluster as pencil (no separator) */}
                 {isItemHidden('drawGroup2') && (
                   <>
                     <DropdownMenuItem onClick={() => {
@@ -3030,7 +2979,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         </div>
       </div>
 
-      {/* Right Section — AI origin + Notion + Share (pinned to the bar’s right, not in the centered cluster) */}
+      {/* Right Section — AI origin + Share + copy/favorite/more (pinned to the bar’s right, not in the centered cluster) */}
       <div className="absolute right-2 inset-y-0 z-20 flex items-center gap-1 pointer-events-auto" data-right-section>
         {/* Reset to Default — View/Actions only; not on Draw top bar */}
         {hasNonDefaultSettings && editMenuPillMode !== 'draw' && (
@@ -3068,12 +3017,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           </div>
         )}
 
-        {/* Notion connect — Mindmap.so-style OAuth (workspace → permissions → select pages) */}
-        <div className="flex items-center px-1 flex-shrink-0">
-          <NotionConnectButton />
-        </div>
-
-        {/* Share — owner only; viewers see a read-only role chip */}
+        {/* Share + copy link / favorite / More (Connections → Notion) */}
         <div className="flex items-center px-2 flex-shrink-0 gap-1">
           {!canEdit && (
             <span className="hidden sm:inline text-[11px] text-gray-500 px-1.5 py-0.5 rounded bg-gray-100">
@@ -3086,14 +3030,16 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 w-7 p-0 text-gray-400 flex-shrink-0"
+              className="h-7 px-2 gap-1.5 text-gray-400 flex-shrink-0"
               title="Save the board to share"
               type="button"
               disabled
             >
-              <Share2 className="h-4 w-4" />
+              <Lock className="h-4 w-4" />
+              <span className="text-sm font-medium">Share</span>
             </Button>
           ) : null}
+          <BoardTopBarShare conversationId={conversationId} />
         </div>
       </div>
     </div>

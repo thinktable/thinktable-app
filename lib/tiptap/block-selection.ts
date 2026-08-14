@@ -5,6 +5,7 @@ import { DOMSerializer, type Node as PMNode } from '@tiptap/pm/model' // Slice �
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import type { BlockTypeId } from '@/components/block-actions-menu'
+import { looksLikeImageSrc } from '@/lib/tiptap/image-block'
 
 const editorsByHostId = new Map<string, Editor>() // host **frame** RF id → TipTap editor (⋮⋮ drop targets)
 
@@ -69,7 +70,8 @@ export function isHandleBlockType(name: string): boolean {
     name === 'syncedBlock' ||
     name === 'columns' ||
     name === 'boardLink' || // Linked-page block (inline/title) gets the ⋮⋮ grip too
-    name === 'databaseBlock' // Notion database block gets the ⋮⋮ grip too
+    name === 'databaseBlock' || // Notion database block gets the ⋮⋮ grip too
+    name === 'imageBlock' // Image (placeholder or <img>) gets the ⋮⋮ grip too
   )
 }
 
@@ -197,6 +199,7 @@ export function editorBlockToTypeId(block: EditorBlockRef): BlockTypeId {
   }
   if (typeName === 'blockEquation') return 'blockEquation'
   if (typeName === 'syncedBlock') return 'syncedBlock'
+  if (typeName === 'imageBlock') return 'image'
   if (typeName === 'columns') {
     const count = Number(node.attrs.count) || 2
     return (`columns${Math.min(5, Math.max(2, count))}` as BlockTypeId)
@@ -290,7 +293,26 @@ export function turnEditorBlockInto(
   blockType: BlockTypeId
 ): boolean {
   if (!editor || editor.isDestroyed) return false
-  const { from, to } = block
+  const { from, to, typeName } = block
+
+  // Atom image has no inner caret — unwrap to a paragraph, then apply the target type
+  if (typeName === 'imageBlock' && blockType !== 'image') {
+    const src = (block.node.attrs.src as string | null) || ''
+    const seed = src && !src.startsWith('data:') ? src : '' // Don't dump data URLs into a paragraph
+    editor
+      .chain()
+      .focus()
+      .deleteRange({ from, to })
+      .insertContentAt(from, {
+        type: 'paragraph',
+        content: seed ? [{ type: 'text', text: seed }] : [],
+      } as JSONContent)
+      .run()
+    const next = findEditorBlockAtPos(editor, from + 1)
+    if (!next) return true
+    return turnEditorBlockInto(editor, next, blockType)
+  }
+
   editor.chain().focus().setTextSelection({ from: from + 1, to: Math.max(from + 1, to - 1) }).run()
 
   const clearLists = () => {
@@ -336,6 +358,22 @@ export function turnEditorBlockInto(
         .insertContentAt(from, {
           type: 'callout',
           content: [{ type: 'paragraph', content: text ? [{ type: 'text', text }] : [] }],
+        } as JSONContent)
+        .run()
+    }
+    case 'image': {
+      clearLists()
+      // If this block is already an image, keep it (Replace lives on the NodeView)
+      if (typeName === 'imageBlock') return true
+      const text = editor.state.doc.textBetween(from, to, '\n').trim()
+      const src = looksLikeImageSrc(text) ? text : null // URL-only blocks become the image src
+      return editor
+        .chain()
+        .focus()
+        .deleteRange({ from, to })
+        .insertContentAt(from, {
+          type: 'imageBlock',
+          attrs: { src, alt: '' },
         } as JSONContent)
         .run()
     }

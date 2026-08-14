@@ -91,8 +91,8 @@ export function newBlockMetadata(extra: Record<string, unknown> = {}): Record<st
 export function isBlockContentEmpty(content: string | undefined | null): boolean {
   if (!content) return true
   if (content === '<p></p>' || content === '<p><br></p>') return true
-  // boardLink / legacy pageLink / databaseBlock store the label in attrs — stripping tags looks empty
-  if (/data-type=["'](?:boardLink|pageLink|databaseBlock)["']/i.test(content)) return false
+  // boardLink / legacy pageLink / databaseBlock / imageBlock store payload in attrs — stripping tags looks empty
+  if (/data-type=["'](?:boardLink|pageLink|databaseBlock|imageBlock)["']/i.test(content)) return false
   return content.replace(/<[^>]*>/g, '').trim().length === 0
 }
 

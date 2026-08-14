@@ -20,6 +20,7 @@ import {
 } from '@/lib/tiptap/block-nodes'
 import { BoardLink } from '@/lib/tiptap/board-link' // Linked-page block (inline + title + preview)
 import { DatabaseBlock } from '@/lib/tiptap/database-block' // Notion database as a compact TipTap block
+import { ImageBlock } from '@/lib/tiptap/image-block' // Turn into → Image atom
 import { EmptyBlockBackspace } from '@/lib/tiptap/empty-block-backspace' // Backspace empty block → previous line
 import { Extension } from '@tiptap/core'
 import { createBlockHighlightPlugin } from '@/lib/tiptap/block-selection'
@@ -59,6 +60,7 @@ export function createPanelExtensions(placeholder?: string): any[] {
     Columns,
     BoardLink, // Block that links to a child page (Notion child-page block)
     DatabaseBlock, // Notion database stays one block (no map-frame sprawl of rows)
+    ImageBlock, // Image block (placeholder until src is set)
     EmptyBlockBackspace, // Empty block: Backspace → previous; Enter → no new blank line
     BlockHighlight, // Per-content-block menu highlight (not the map card)
   ]

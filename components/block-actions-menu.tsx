@@ -19,6 +19,7 @@ import {
   Heading2,
   Heading3,
   Heading4,
+  Image as ImageIcon,
   Link2,
   List,
   ListChecks,
@@ -148,6 +149,7 @@ export type BlockTypeId =
   | 'code'
   | 'quote'
   | 'callout'
+  | 'image'
   | 'blockEquation'
   | 'syncedBlock'
   | 'toggleHeading1'
@@ -363,6 +365,7 @@ export function blockTypeLabel(type: BlockTypeId): string {
     code: 'Code',
     quote: 'Quote',
     callout: 'Callout',
+    image: 'Image',
     blockEquation: 'Block equation',
     syncedBlock: 'Synced block',
     toggleHeading1: 'Toggle heading 1',
@@ -392,6 +395,7 @@ const TURN_INTO_OPTIONS: TurnIntoDef[] = [
   { id: 'code', label: 'Code', icon: <SquareCode className="h-4 w-4" /> },
   { id: 'quote', label: 'Quote', icon: <Quote className="h-4 w-4" /> },
   { id: 'callout', label: 'Callout', icon: <TextCursorInput className="h-4 w-4" /> },
+  { id: 'image', label: 'Image', icon: <ImageIcon className="h-4 w-4" /> },
   { id: 'blockEquation', label: 'Block equation', icon: <Sigma className="h-4 w-4" /> },
   { id: 'syncedBlock', label: 'Synced block', icon: <RefreshCw className="h-4 w-4" /> },
   { id: 'toggleHeading1', label: 'Toggle heading 1', icon: <Heading1 className="h-4 w-4" /> },

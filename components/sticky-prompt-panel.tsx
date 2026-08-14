@@ -479,7 +479,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
           </div>
           </div>
 
-          {/* Editor Toolbar - tools center on the board; Notion/Share stay right */}
+          {/* Editor Toolbar - tools center on the board; Share / copy / favorite / more stay right */}
           <EditorToolbar editor={activeEditor} conversationId={conversationId} />
         </div>
 

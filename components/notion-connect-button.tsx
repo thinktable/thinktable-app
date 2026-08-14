@@ -1,16 +1,16 @@
 'use client'
 
-// Top-bar Notion connect control — starts Mindmap.so-style OAuth hosted by Notion
+// Notion connect host + More-menu Connections row (OAuth / import / disconnect)
 
-import { useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { useQueryClient } from '@tanstack/react-query'
-import { Button } from './ui/button'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuTrigger,
+  DropdownMenuLabel,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
 } from './ui/dropdown-menu'
 import { NotionImportModal } from './notion-import-modal'
 import { NotionMarkIcon } from './notion-mark-icon' // Monochrome — matches other top-bar icons
@@ -22,7 +22,18 @@ type NotionStatus = {
   workspaceName?: string | null // Connected workspace label
 }
 
-export function NotionConnectButton() {
+type NotionConnectApi = {
+  status: NotionStatus | null // Latest /api/notion/status payload
+  loading: boolean // Status fetch or disconnect in flight
+  startConnect: () => void // Kick off hosted Notion OAuth
+  disconnect: () => Promise<void> // Drop stored tokens
+  openPicker: () => void // Open Import pages modal
+}
+
+const NotionConnectContext = createContext<NotionConnectApi | null>(null) // Shared by host + menu rows
+
+/** Fetch status, own the import modal, and listen for AI-composer connect events. */
+export function NotionConnectProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() // Current board path for returnTo
   const router = useRouter() // Navigate after import
   const queryClient = useQueryClient() // Refresh note panels after import
@@ -67,7 +78,7 @@ export function NotionConnectButton() {
     window.history.replaceState({}, '', window.location.pathname + (next ? `?${next}` : ''))
   }, [status?.connected])
 
-  const startConnect = () => {
+  const startConnect = useCallback(() => {
     if (status?.configured === false) {
       window.alert(
         'Add NOTION_CLIENT_ID and NOTION_CLIENT_SECRET to .env.local from a Notion public connection (redirect URI: http://localhost:3031/api/notion/callback), then restart the dev server.'
@@ -76,7 +87,7 @@ export function NotionConnectButton() {
     }
     const returnTo = pathname || '/' // Come back to the board after Notion page picker
     window.location.href = `/api/notion/auth?returnTo=${encodeURIComponent(returnTo)}` // Full navigation for OAuth
-  }
+  }, [status?.configured, pathname])
 
   const handleImport = async (opts: { pageIds: string[]; mode: 'card' | 'mindmap' }) => {
     const res = await fetch('/api/notion/import', {
@@ -111,7 +122,7 @@ export function NotionConnectButton() {
     }
   }
 
-  const disconnect = async () => {
+  const disconnect = useCallback(async () => {
     setLoading(true) // Disable UI while deleting
     try {
       await fetch('/api/notion/disconnect', { method: 'POST' }) // Remove stored tokens
@@ -120,7 +131,11 @@ export function NotionConnectButton() {
     } finally {
       setLoading(false) // Re-enable
     }
-  }
+  }, [])
+
+  const openPicker = useCallback(() => {
+    setPickerOpen(true) // Import pages from More → Connections → Notion
+  }, [])
 
   // AI composer Connection menu → open Notion connect / import
   useEffect(() => {
@@ -130,52 +145,75 @@ export function NotionConnectButton() {
     }
     window.addEventListener('thinktable-open-notion-connect', onOpen)
     return () => window.removeEventListener('thinktable-open-notion-connect', onOpen)
-  }, [status?.connected, status?.configured, pathname])
+  }, [status?.connected, startConnect])
+
+  const api = useMemo<NotionConnectApi>(
+    () => ({ status, loading, startConnect, disconnect, openPicker }),
+    [status, loading, startConnect, disconnect, openPicker]
+  )
+
+  return (
+    <NotionConnectContext.Provider value={api}>
+      {/* Hidden hit target so AI composer can still click [data-notion-connect] */}
+      <button
+        type="button"
+        data-notion-connect
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden
+        onClick={() => {
+          if (status?.connected) setPickerOpen(true)
+          else startConnect()
+        }}
+      />
+      {children}
+      <NotionImportModal open={pickerOpen} onOpenChange={setPickerOpen} onImport={handleImport} />
+    </NotionConnectContext.Provider>
+  )
+}
+
+/** Connections header + Notion row for the top-bar More menu. */
+export function NotionConnectMenuItems() {
+  const api = useContext(NotionConnectContext) // Provider owns status / OAuth
+  if (!api) return null
+  const { status, loading, startConnect, disconnect, openPicker } = api
 
   return (
     <>
+      <DropdownMenuLabel className="px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide text-gray-400">
+        Connections
+      </DropdownMenuLabel>
       {status?.connected ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              data-notion-connect
-              className={cn(
-                'h-7 w-7 p-0 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0'
-              )}
-              title={status.workspaceName ? `Notion · ${status.workspaceName}` : 'Notion connected'}
-              disabled={loading}
-            >
-              <NotionMarkIcon className="h-3.5 w-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger
+            disabled={loading}
+            className={cn('text-sm', loading && 'opacity-50')}
+            title={status.workspaceName ? `Notion · ${status.workspaceName}` : 'Notion connected'}
+          >
+            <NotionMarkIcon className="h-4 w-4 mr-2" />
+            Notion
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-56">
             <DropdownMenuItem disabled className="text-xs text-gray-500">
               Connected{status.workspaceName ? ` · ${status.workspaceName}` : ''}
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setPickerOpen(true)}>Import pages</DropdownMenuItem>
+            <DropdownMenuItem onClick={openPicker}>Import pages</DropdownMenuItem>
             <DropdownMenuItem onClick={startConnect}>Reconnect / change pages</DropdownMenuItem>
-            <DropdownMenuItem onClick={disconnect} className="text-red-600 focus:text-red-600">
+            <DropdownMenuItem onClick={() => void disconnect()} className="text-red-600 focus:text-red-600">
               Disconnect Notion
             </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
       ) : (
-        <Button
-          variant="ghost"
-          size="sm"
-          data-notion-connect
-          className="h-7 w-7 p-0 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0"
+        <DropdownMenuItem
+          disabled={loading}
           title={status?.configured === false ? 'Notion OAuth credentials missing — click for setup steps' : 'Connect Notion'}
           onClick={startConnect}
-          disabled={loading}
         >
-          <NotionMarkIcon className="h-3.5 w-3.5" />
-        </Button>
+          <NotionMarkIcon className="h-4 w-4 mr-2" />
+          Notion
+        </DropdownMenuItem>
       )}
-
-      <NotionImportModal open={pickerOpen} onOpenChange={setPickerOpen} onImport={handleImport} />
     </>
   )
 }

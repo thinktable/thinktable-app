@@ -101,6 +101,7 @@ import {
   readNotionConnection,
   ungroupBlocks,
 } from '@/lib/blocks' // blocks, groups, page-body ensure
+import { transformHtmlToBlockType } from '@/lib/blocks/turn-into' // Seed empty-frame HTML for I-bar Turn into
 import { absFlowPosition, nodeFlowSize, useBlockGroupDrag } from './use-block-group-drag' // Drag attach/detach between groups / page
 import { useFrameNestStackDrag, isStackCollapsedMeta } from './use-frame-nest-stack-drag' // Edge-snap → stack reveal
 import { minStackIndex } from '@/lib/frame-side-stacks' // Per-side stack z-order
@@ -616,6 +617,14 @@ function BoardFlowInner({
   // Mirror of iBarPosition for the always-on capture effect (avoids remounting listeners every place/clear)
   const iBarPositionRef = useRef<{ x: number; y: number } | null>(null)
   iBarPositionRef.current = iBarPosition
+  // Pre-frame ⋮⋮ menu (opens before a frame exists); screen coords for position:fixed
+  const [iBarBlockMenu, setIBarBlockMenu] = useState<{
+    x: number
+    y: number
+    openLeft: boolean
+  } | null>(null)
+  const iBarBlockMenuOpenRef = useRef(false) // Capture-phase keys skip while the menu owns typing
+  iBarBlockMenuOpenRef.current = !!iBarBlockMenu
   // Board id for I-bar persist without rebinding keydown (conversationId in effect deps dropped keys on first create)
   const conversationIdRef = useRef(conversationId)
   conversationIdRef.current = conversationId
@@ -5764,73 +5773,219 @@ function BoardFlowInner({
     return attachPhoneSelectMarquee(root, rfStore) // Pointer marquee → userSelectionRect + frame select
   }, [embedded, isMobileMode, isDrawing, mapPointerTool, rfStore])
 
-  // Create an empty block at a flow position (I-bar grip click — cursor lands with TipTap handle)
-  const createBlockAtFlowPosition = useCallback(async (flowX: number, flowY: number) => {
-    // Align panel so the text caret sits where the I-bar was (gutter pl-6 + panel padding)
-    const cursorOffsetX = 40 // p-1+px-3 (16) + TipTap handle gutter (24)
+  // Spawn a frame at a flow position (board Add frame / I-bar menu Turn into). Optimistic RF node first.
+  const createBlockAtFlowPosition = useCallback(async (
+    flowX: number,
+    flowY: number,
+    opts?: { html?: string; blockType?: BlockTypeId } // Seed content + Turn into kind (empty text if omitted)
+  ): Promise<string | null> => {
+    const cursorOffsetX = 40 // p-1+px-3 (16) + TipTap handle gutter (24) — caret sits on the old I-bar
     const cursorOffsetY = 20 // p-1 + pt padding to first line
     const itemPosition = { x: flowX - cursorOffsetX, y: flowY - cursorOffsetY }
     setIBarPosition(null) // Clear pre-create cursor
-    setIBarInputAnchor(null) // Grip path goes straight to TipTap — drop capture field
+    iBarPositionRef.current = null // Sync ref now so menu onClose doesn't re-arm capture
+    setIBarInputAnchor(null) // Drop capture field — TipTap will take focus
+    setIBarBlockMenu(null) // Menu is gone once a real frame exists
+    iBarBlockMenuOpenRef.current = false
     iBarArmedRef.current = false
     if (iBarInputRef.current) {
       iBarInputRef.current.value = ''
       if (document.activeElement === iBarInputRef.current) iBarInputRef.current.blur()
     }
 
+    const html = opts?.html ?? '<p></p>' // Empty paragraph unless Turn into seeded a type
+    const messageId = generateUUID() // Client id so the RF node and DB row match
+
+    const optimisticMessage = {
+      id: messageId,
+      role: 'user' as const,
+      content: html,
+      created_at: new Date().toISOString(),
+      metadata: newBlockMetadata({
+        position: itemPosition, // Spawn aligned to I-bar
+        fadeIn: true, // Autofocus TipTap once the panel mounts
+        ...(opts?.blockType ? { blockType: opts.blockType } : {}),
+      }),
+    }
+
+    const panelId = `panel-${messageId}`
+    const liveBoardId = conversationIdRef.current || ''
+    originalPositionsRef.current.set(panelId, itemPosition)
+    setNodes((nds) => [
+      ...nds.map((n) => ({ ...n, selected: false })),
+      {
+        id: panelId,
+        type: 'chatPanel',
+        position: itemPosition,
+        selected: true,
+        data: {
+          promptMessage: optimisticMessage,
+          responseMessage: undefined,
+          conversationId: liveBoardId,
+          isResponseCollapsed: false,
+        },
+      },
+    ])
+
+    const patch = (key: unknown[]) => {
+      queryClient.setQueryData(key, (old: unknown) => {
+        const list = Array.isArray(old) ? old : []
+        if (list.some((m: { id?: string }) => m.id === messageId)) return list
+        return [...list, optimisticMessage]
+      })
+    }
+    if (liveBoardId) {
+      patch(['messages-for-panels', liveBoardId])
+      patch(['messages-for-panels', liveBoardId, 'full'])
+      patch(['messages-for-panels', liveBoardId, 'embed'])
+    }
+
     try {
-      const supabase = createClient() // Browser Supabase client for insert
-      const { data: { user } } = await supabase.auth.getUser() // Require signed-in user
-      if (!user) return
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return messageId // Node is already on the board; persist skipped
 
-      let currentConversationId = conversationId // Prefer the open board
-
-      // Boot a conversation when the user adds the first block on a blank /board route
+      let currentConversationId = conversationIdRef.current
       if (!currentConversationId) {
         const { data: newConversation, error: convError } = await supabase
           .from('conversations')
           .insert({
             user_id: user.id,
             title: 'New Conversation',
-            metadata: { position: -1 }, // Appear at top of Pages list
+            metadata: { position: -1 },
           })
           .select()
           .single()
-
         if (convError || !newConversation) {
           console.error('Error creating conversation for add-block:', convError)
-          return
+          return messageId
         }
-
         currentConversationId = newConversation.id
-        replaceBoardUrl(currentConversationId) // Address bar only — Next router.replace would remount the frame
+        conversationIdRef.current = currentConversationId
+        patch(['messages-for-panels', currentConversationId])
+        patch(['messages-for-panels', currentConversationId, 'full'])
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === panelId
+              ? { ...n, data: { ...n.data, conversationId: currentConversationId } }
+              : n
+          )
+        )
+        replaceBoardUrl(currentConversationId) // Address bar only — router.replace remounts the frame
       }
 
-      const { error } = await supabase
-        .from('messages')
-        .insert({
-          conversation_id: currentConversationId,
-          user_id: user.id,
-          role: 'user',
-          content: '',
-          metadata: newBlockMetadata({
-            position: itemPosition, // Spawn aligned to I-bar
-            fadeIn: true,
-          }),
-        })
-        .select()
-        .single()
-
+      const { error } = await supabase.from('messages').insert({
+        id: messageId,
+        conversation_id: currentConversationId,
+        user_id: user.id,
+        role: 'user',
+        content: html,
+        metadata: optimisticMessage.metadata,
+      })
       if (error) {
         console.error('Error creating block at flow position:', error)
+        return messageId
+      }
+      return messageId
+    } catch (error) {
+      console.error('Error creating block at flow position:', error)
+      return messageId
+    }
+  }, [queryClient, setNodes])
+
+  // Pre-frame ⋮⋮ menu — Turn into / Duplicate spawn a frame; Delete dismisses the I-bar
+  const handleIBarBlockAction = useCallback(
+    async (action: BlockActionId, payload?: BlockActionPayload) => {
+      const pos = iBarPositionRef.current // Capture before create clears the I-bar
+      setIBarBlockMenu(null)
+      iBarBlockMenuOpenRef.current = false
+
+      if (action === 'delete') {
+        setIBarPosition(null) // Nothing to delete — drop the place cursor
+        iBarPositionRef.current = null
+        setIBarInputAnchor(null)
+        iBarArmedRef.current = false
+        if (iBarInputRef.current) {
+          iBarInputRef.current.value = ''
+          if (document.activeElement === iBarInputRef.current) iBarInputRef.current.blur()
+        }
         return
       }
 
-      refetchMessages() // Pull the new panel onto the map
-    } catch (error) {
-      console.error('Error creating block at flow position:', error)
+      if (action === 'turnInto' && payload?.blockType && pos) {
+        const blockType = payload.blockType
+        if (blockType === 'board' || blockType === 'boardIn') {
+          const messageId = await createBlockAtFlowPosition(pos.x, pos.y, {
+            html: '<p></p>',
+            blockType,
+          })
+          const boardId = conversationIdRef.current
+          if (!messageId || !boardId) return
+          try {
+            const supabase = createClient()
+            const { data: { user } } = await supabase.auth.getUser()
+            if (!user) return
+            const { applyTurnInto, htmlToPlainText } = await import('@/lib/blocks/turn-into')
+            const { linkedBoardId } = await applyTurnInto(supabase, {
+              messageId,
+              conversationId: boardId,
+              userId: user.id,
+              blockType,
+              boardInParentId: payload.boardInParentId || null,
+            })
+            if (linkedBoardId) {
+              const { editorForHostNode } = await import('@/lib/tiptap/block-selection')
+              const { setFrameToSoleBoardLink } = await import('@/lib/tiptap/board-blocks')
+              const ed = editorForHostNode(`panel-${messageId}`)
+              if (ed) {
+                setFrameToSoleBoardLink(ed, {
+                  boardId: linkedBoardId,
+                  title: htmlToPlainText('') || 'Untitled',
+                  icon: null,
+                  variant: 'title',
+                })
+              }
+              await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+            }
+          } catch (err) {
+            console.error('Failed to turn I-bar into board:', err)
+          }
+          return
+        }
+        const html = transformHtmlToBlockType('', blockType) // Empty heading / list / etc.
+        await createBlockAtFlowPosition(pos.x, pos.y, { html, blockType })
+        return
+      }
+
+      if ((action === 'duplicate' || action === 'copyLink') && pos) {
+        const messageId = await createBlockAtFlowPosition(pos.x, pos.y) // Empty text frame
+        if (action === 'copyLink' && messageId) {
+          const url = `${window.location.href.split('?')[0]}?block=panel-${messageId}`
+          void navigator.clipboard.writeText(url).catch(() => {})
+        }
+        return
+      }
+
+      // Stubs (color / comment / …) — keep the I-bar so the user can still type
+      iBarArmedRef.current = true
+      iBarInputRef.current?.focus({ preventScroll: true })
+    },
+    [createBlockAtFlowPosition, queryClient]
+  )
+
+  // Outside click: dismiss the pre-frame block menu (grip + menu itself are exempt)
+  useEffect(() => {
+    if (!iBarBlockMenu) return
+    const onDoc = (event: MouseEvent) => {
+      const t = event.target as HTMLElement
+      if (t.closest?.('.block-actions-menu, [data-tt-ibar-grip]')) return
+      setIBarBlockMenu(null)
+      iBarBlockMenuOpenRef.current = false
+      iBarArmedRef.current = true // I-bar still showing — typing is live again
     }
-  }, [conversationId, router, refetchMessages])
+    document.addEventListener('mousedown', onDoc, true)
+    return () => document.removeEventListener('mousedown', onDoc, true)
+  }, [iBarBlockMenu])
 
   // Close board menu when clicking / right-clicking outside it
   useEffect(() => {
@@ -7510,6 +7665,8 @@ function BoardFlowInner({
         iBarCreatingRef.current = true
         iBarCreatePosRef.current = pos
         setIBarPosition(null)
+        iBarPositionRef.current = null
+        setIBarBlockMenu(null) // Typing spawned a frame — menu is no longer pre-frame
         setIsCreatingInlineNote(true)
 
         const cursorOffsetX = 40
@@ -7656,7 +7813,28 @@ function BoardFlowInner({
     iBarApplyTextRef.current = applyIBarText // Textarea onInput + compositionend call this
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Pre-frame menu: Escape closes it even though capture is disarmed while search is focused
+      if (event.key === 'Escape' && iBarBlockMenuOpenRef.current) {
+        event.preventDefault()
+        event.stopPropagation()
+        setIBarBlockMenu(null)
+        iBarBlockMenuOpenRef.current = false
+        iBarArmedRef.current = true // Menu closed — typing at the I-bar is live again
+        iBarInputRef.current?.focus({ preventScroll: true })
+        return
+      }
+
       if (!isCapturing()) return
+
+      // Menu search / other fields own keys — don't spawn a frame from those keystrokes
+      const keyTarget = event.target as HTMLElement | null
+      if (
+        keyTarget &&
+        keyTarget !== iBarInputRef.current &&
+        keyTarget.closest('input, textarea, [contenteditable="true"], .block-actions-menu')
+      ) {
+        return
+      }
 
       // Escape dismisses the I-bar (only before create starts)
       if (event.key === 'Escape') {
@@ -7664,6 +7842,7 @@ function BoardFlowInner({
           iBarArmedRef.current = false
           setIBarPosition(null)
           setIBarInputAnchor(null)
+          setIBarBlockMenu(null)
           iBarTypeBufferRef.current = ''
           const el = iBarInputRef.current
           if (el) {
@@ -7678,6 +7857,9 @@ function BoardFlowInner({
       if (event.target === iBarInputRef.current) {
         if (event.key === 'Enter') {
           event.preventDefault() // Don’t insert a bare newline into the capture field
+        }
+        if (event.key === 'Backspace' || event.key === 'Delete') {
+          event.stopPropagation() // RF deleteKeyCode would otherwise remove the selected new frame
         }
         return
       }
@@ -7817,6 +7999,7 @@ function BoardFlowInner({
     setIBarPosition({ x: flowX, y: flowY })
     iBarPositionRef.current = { x: flowX, y: flowY } // Sync before paint so first soft-key can spawn
     setIBarViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom })
+    setIBarBlockMenu(null) // New I-bar — close any pre-frame block menu
     setIBarInputAnchor({
       x: flowX,
       y: flowY,
@@ -8430,7 +8613,8 @@ function BoardFlowInner({
           setRightClickedNode(null) // Don't stack with node action popup
           setBoardMenuPosition(null) // Don't stack with board menu
           boardClickFlowRef.current = null
-          // Place blinking cursor + grip (type or click grip to create block) — not Item/Flashcard menu
+          setIBarBlockMenu(null) // New I-bar — close any pre-frame block menu
+          // Place blinking cursor + grip (type or click grip to open the block menu) — not Item/Flashcard menu
           setIBarPosition({ x: flowX, y: flowY })
           iBarPositionRef.current = { x: flowX, y: flowY } // Available immediately for first soft-key spawn
           setIBarViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom })
@@ -8935,7 +9119,7 @@ function BoardFlowInner({
 
 
 
-      {/* I-bar + grip — empty page/canvas click (or double-click); type or click grip to create block */}
+      {/* I-bar + grip — empty board click (or double-click); type to create a frame, or click ⋮⋮ for the block menu (no frame required) */}
       {iBarPosition && (
         <div
           className="absolute flex items-center"
@@ -8950,12 +9134,13 @@ function BoardFlowInner({
         >
           <button
             type="button"
-            className="nodrag nopan flex items-center justify-center rounded text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/10 pointer-events-auto cursor-grab"
+            className="nodrag nopan flex items-center justify-center rounded text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/10 pointer-events-auto cursor-pointer"
             style={{
               width: `${20 * iBarViewport.zoom}px`,
               height: `${24 * iBarViewport.zoom}px`,
             }}
-            title="Create block"
+            title="Block actions"
+            data-tt-ibar-grip
             onMouseDown={(e) => {
               e.stopPropagation()
               e.preventDefault()
@@ -8963,7 +9148,28 @@ function BoardFlowInner({
             onClick={(e) => {
               e.stopPropagation()
               e.preventDefault()
-              void createBlockAtFlowPosition(iBarPosition.x, iBarPosition.y)
+              // Second click on the same ⋮⋮ closes the pre-frame block menu
+              if (iBarBlockMenuOpenRef.current) {
+                setIBarBlockMenu(null)
+                iBarBlockMenuOpenRef.current = false
+                iBarArmedRef.current = true // Menu closed — typing at the I-bar is live again
+                iBarInputRef.current?.focus({ preventScroll: true })
+                return
+              }
+              const rect = e.currentTarget.getBoundingClientRect()
+              const MENU_W = 248 // Same estimate as TipTap ⋮⋮ BlockActionsMenu
+              const GAP = 8
+              const openLeft = rect.left - GAP - MENU_W >= 0 // Prefer left of the grip when there's room
+              iBarArmedRef.current = false // Menu search owns keys until close
+              iBarBlockMenuOpenRef.current = true
+              if (iBarInputRef.current && document.activeElement === iBarInputRef.current) {
+                iBarInputRef.current.blur()
+              }
+              setIBarBlockMenu({
+                x: openLeft ? rect.left : rect.right,
+                y: rect.top,
+                openLeft,
+              })
             }}
           >
             <GripVertical style={{ width: `${16 * iBarViewport.zoom}px`, height: `${16 * iBarViewport.zoom}px` }} />
@@ -8980,6 +9186,49 @@ function BoardFlowInner({
         </div>
       )}
 
+      {/* Pre-frame block menu — I-bar ⋮⋮ click; no frame required */}
+      {iBarBlockMenu &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <BlockActionsMenu
+            positionMode="fixed"
+            x={iBarBlockMenu.x}
+            y={iBarBlockMenu.y}
+            zoom={1}
+            openLeft={iBarBlockMenu.openLeft}
+            currentBlockType="text"
+            showAddChild={false}
+            selectedCount={1}
+            canUngroup={false}
+            boardInTargets={(() => {
+              const convs =
+                (queryClient.getQueryData(['conversations']) as
+                  | Array<{ id: string; title?: string | null }>
+                  | undefined) || []
+              const targets = convs
+                .filter((c) => c.id !== conversationId)
+                .slice(0, 40)
+                .map((c) => ({ id: c.id, title: c.title?.trim() || 'Untitled' }))
+              return [
+                { id: conversationId || '', title: 'Current board' },
+                ...targets.filter((t) => t.id),
+              ]
+            })()}
+            onAction={(action, payload) => {
+              void handleIBarBlockAction(action, payload)
+            }}
+            onClose={() => {
+              setIBarBlockMenu(null)
+              iBarBlockMenuOpenRef.current = false
+              if (iBarPositionRef.current) {
+                iBarArmedRef.current = true // Dismissed without creating — type at the I-bar
+                iBarInputRef.current?.focus({ preventScroll: true })
+              }
+            }}
+          />,
+          document.body
+        )}
+
       {/* Always-mounted capture field: board tap focuses it so iOS shows the keyboard; feeds I-bar buffer via onInput */}
       <textarea
         ref={iBarInputRef}
@@ -8991,7 +9240,7 @@ function BoardFlowInner({
         inputMode="text"
         rows={1}
         tabIndex={-1}
-        className="tt-ibar-capture nodrag nopan"
+        className="tt-ibar-capture nodrag nopan nokey"
         onInput={(e) => iBarApplyTextRef.current(e.currentTarget.value)}
         onCompositionEnd={(e) => iBarApplyTextRef.current(e.currentTarget.value)}
         onBlur={() => {

@@ -165,8 +165,9 @@ function layoutForBlock(
       ? ((el.querySelector?.('.tt-database-block-row') as HTMLElement | null) ||
           (el.querySelector?.('.tt-database-block-label') as HTMLElement | null))
       : null
+    const imageRow = el?.querySelector?.('.tt-image-block-row') as HTMLElement | null
     const pageLabel = el?.querySelector?.('.tt-board-link-label') as HTMLElement | null
-    const textEl = dbHeader || pageLabel || el
+    const textEl = dbHeader || imageRow || pageLabel || el
 
     // Always pin to first-line mid via screen→local on the layout root (rotation-safe)
     if (textEl) {
@@ -177,7 +178,8 @@ function layoutForBlock(
       let lineCenter: number
       if (fr && fr.height > 0) {
         const isDb = !!(dbHeader || el?.classList?.contains?.('tt-database-block'))
-        const useTop = isDb || fr.height > firstLineH * 2
+        const isImage = !!(imageRow || el?.classList?.contains?.('tt-image-block'))
+        const useTop = isDb || isImage || fr.height > firstLineH * 2
         const midY = useTop ? fr.top + Math.min(firstLineH, fr.height) / 2 : (fr.top + fr.bottom) / 2
         lineCenter = screenToLocal(root, (fr.left + fr.right) / 2, midY).y
         if (!(Number.isFinite(lh) && lh > 0)) {
@@ -894,14 +896,24 @@ export function TipTapBlockHandles({
       // Plain click on a block that's part of a multi-selection → group actions menu (keep wash)
       const cur = selectionRef.current
       if (cur.length > 1 && cur.some((b) => b.from === block.from)) {
+        // Same group ⋮⋮ again → close the menu (selection wash stays)
+        if (menu && cur.some((b) => b.from === menu.block.from)) {
+          setMenu(null)
+          return
+        }
         const blockType = refineListBlockType(editor, block)
         setMenu({ ...menuPlacement(e.clientX, e.clientY), block, blockType })
+        return
+      }
+      // Same armed ⋮⋮ again → close the menu (block stays selected for a follow-up drag)
+      if (menu && menu.block.from === block.from) {
+        setMenu(null)
         return
       }
       // Arm this single block + open its menu (follow-up ⋮⋮ drag can move it)
       openForBlock(block, e.clientX, e.clientY)
     },
-    [editor, applySelection, collectBlocksBetween, openForBlock, menuPlacement, isPanelSelected]
+    [editor, applySelection, collectBlocksBetween, openForBlock, menuPlacement, isPanelSelected, menu]
   )
 
   if (!editor || !enabled) return null
