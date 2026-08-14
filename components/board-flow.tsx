@@ -147,6 +147,8 @@ import {
   readFrameLayoutCache,
   writeFrameLayoutCache,
   patchFrameLayoutEntry,
+  frameShimmerNodeId,
+  BOARD_LOAD_FADE_MS,
 } from '@/components/frame-content-shimmer' // Shared shimmer + layout cache helpers
 
 interface Message {
@@ -1614,6 +1616,9 @@ function BoardFlowInner({
   const minimapCollapsed = phoneAiOpen ? !aiDockMinimapOpen : isMinimapHidden
   const [isScrollingToBottom, setIsScrollingToBottom] = useState(false) // Track if we're currently scrolling to bottom (for minimap flash prevention)
   const [minimapLoadReady, setMinimapLoadReady] = useState(false) // Stay clipped until frames + prefs have landed
+  const [boardLoadPhase, setBoardLoadPhase] = useState<'cold' | 'reveal' | 'done'>('cold') // Crossfade shells → contents once
+  const boardLoadPhaseRef = useRef(boardLoadPhase) // Panel merge reads phase without adding it to effect deps
+  boardLoadPhaseRef.current = boardLoadPhase
   const minimapExpanded = minimapLoadReady && !minimapCollapsed && !isScrollingToBottom // One flag for +/- and the height tween
   const [clickedEdge, setClickedEdge] = useState<Edge | null>(null) // Track clicked edge for popup (local state for popup logic)
 
@@ -2005,10 +2010,13 @@ function BoardFlowInner({
     if (entries.length === 0) return // First visit — nothing to place until messages arrive
     setNodes(
       entries.map(([id, entry]) => ({
-        id, // Same ids as real chatPanels so the swap is stable
+        id: frameShimmerNodeId(id), // Distinct from chatPanel id so both can overlap during the fade
         type: 'frameShimmer' as const,
+        className: 'tt-frame-shimmer-node', // CSS targets this wrapper for fade-out
+        zIndex: 1000, // Sit above the real frame while dissolving
         position: { x: entry.x, y: entry.y },
         data: {
+          frameId: id, // Real message / frame id (layout cache key)
           width: entry.width,
           height: entry.height,
           hasText: entry.hasText,
@@ -2016,16 +2024,36 @@ function BoardFlowInner({
         },
         draggable: false,
         selectable: false,
-        // Explicit size so RF fitView / AABB use the cached box
+        // Exact cached box — same AABB as the real frame (no 220/120 floor that shifts the shell)
         style: {
-          width: entry.width || 220,
-          height: entry.height || 72,
+          width: entry.width && entry.width > 0 ? entry.width : 220,
+          height: entry.height && entry.height > 0 ? entry.height : 72,
         },
-        width: entry.width || 220,
-        height: entry.height || 72,
+        width: entry.width && entry.width > 0 ? entry.width : 220,
+        height: entry.height && entry.height > 0 ? entry.height : 72,
       }))
     )
   }, [conversationId, isMessagesPending, messages.length, setNodes])
+
+  useEffect(() => {
+    setBoardLoadPhase('cold') // New board — wait for this load’s crossfade
+  }, [conversationId])
+
+  useEffect(() => {
+    if (!conversationId || isMessagesPending) return // Still fetching
+    if (messages.length === 0 && boardLoadPhase === 'cold') {
+      setBoardLoadPhase('done') // Empty board has no shells or contents to fade
+    }
+  }, [conversationId, isMessagesPending, messages.length, boardLoadPhase])
+
+  useEffect(() => {
+    if (boardLoadPhase !== 'reveal') return // Only after panels have mounted under the shells
+    const t = window.setTimeout(() => {
+      setNodes((nds) => nds.filter((n) => n.type !== 'frameShimmer')) // Shells finished fading
+      setBoardLoadPhase('done')
+    }, BOARD_LOAD_FADE_MS)
+    return () => window.clearTimeout(t)
+  }, [boardLoadPhase, setNodes])
 
   const hasFrameShimmer = (nodes || []).some((n) => n.type === 'frameShimmer') // Load shells still on the board
   const hasRealMapNodes = (nodes || []).some((n) => n.type !== 'frameShimmer' && n.type !== 'placeholder') // Frames/drawings MiniMap can paint
@@ -4061,9 +4089,10 @@ function BoardFlowInner({
     const messagesKeyToUse = messagesToUse.map(m => `${m.id}:${m.role}`).join(',')
     console.log('🔄 BoardFlow: Creating panels from messages, count:', messagesToUse.length, 'messagesKey:', messagesKeyToUse, 'prevKey:', prevMessagesKeyRef.current)
 
-    // Skip if messages haven't actually changed (but always rebuild if load shells are still up)
+    // Skip if messages haven't actually changed (keep shells in place until the load fade removes them)
     const hasShimmerShells = (nodes || []).some((n) => n.type === 'frameShimmer')
-    if (messagesKeyToUse === prevMessagesKeyRef.current && !hasShimmerShells) {
+    const hasRealPanels = (nodes || []).some((n) => n.type === 'chatPanel') // Already swapped in this load
+    if (messagesKeyToUse === prevMessagesKeyRef.current && (hasRealPanels || !hasShimmerShells)) {
       console.log('🔄 BoardFlow: Messages key unchanged, skipping panel creation')
       return
     }
@@ -4502,8 +4531,8 @@ function BoardFlowInner({
         if (!existingNodeIds.has(n.id)) return false // Not an existing node
         const existingNode = nodes.find(existing => existing.id === n.id)
         if (!existingNode) return false
-        // Load shells share real frame ids — always swap them for chatPanel
-        if (existingNode.type === 'frameShimmer') return true
+        // Load shells use prefixed ids — never treat them as the real frame
+        if (existingNode.type === 'frameShimmer') return false
         // Update if response changed (e.g., response was added or updated)
         const existingResponseId = existingNode.data?.responseMessage?.id
         const newResponseId = n.data?.responseMessage?.id
@@ -4520,7 +4549,7 @@ function BoardFlowInner({
       // Lock-to-board toggle “fixed” drag only because it forced draggable:true).
       const unchangedNodesCanvas = nodes
         .filter((n) => {
-          if (n.type === 'frameShimmer') return false // Never keep shimmer shells once messages resolve
+          if (n.type === 'frameShimmer') return true // Keep shells until the load fade unmounts them
           const needsUpdate = nodesToUpdateCanvas.some((update) => update.id === n.id)
           const stillInMessages =
             n.type === 'freehand' ||
@@ -4566,6 +4595,9 @@ function BoardFlowInner({
       if (trulyNewNodesCanvas.length === 1) takeSnapshot()
       
       setNodes(updatedCanvasNodes)
+      if (boardLoadPhaseRef.current === 'cold') {
+        setBoardLoadPhase('reveal') // Same paint: shells fade out, real nodes/edges fade in
+      }
 
       // Persist new frame positions only — never recenter or force 100% zoom on create
       // (I-bar / grip / AI / Notion frames must stay under the user’s current viewport)
@@ -8666,7 +8698,8 @@ function BoardFlowInner({
         className={cn(
           'h-full w-full bg-gray-50 dark:bg-[#0f0f0f]',
           isThreadConnecting && 'tt-thread-connecting', // Invisible edge points stay snappable while dragging a thread
-          !embedded && mapPointerTool === 'pan' && !isDrawing && 'tt-map-pan-tool' // Grab cursor while pan tool is active
+          !embedded && mapPointerTool === 'pan' && !isDrawing && 'tt-map-pan-tool', // Grab cursor while pan tool is active
+          boardLoadPhase === 'reveal' && 'tt-board-load-reveal' // Crossfade placeholder shells with real contents
         )}
         onInit={(instance) => {
           const currentViewport = instance.getViewport()

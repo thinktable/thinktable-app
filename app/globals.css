@@ -183,9 +183,7 @@
 .tt-frame-shimmer {
   width: 100%;
   height: 100%;
-  min-width: 8rem; /* Keep unresized empty frames from collapsing to zero */
-  min-height: 2.5rem; /* ~one empty frame row */
-  border-radius: 4px; /* Soft frame silhouette */
+  border-radius: 4px; /* Soft frame silhouette — size comes from the cached RF box */
   pointer-events: none; /* Loading only — never steal drag/select */
   background: linear-gradient(
     90deg,
@@ -211,20 +209,40 @@
   background-size: 200% 100%;
 }
 
-/* Text-content frames: placeholder lines (not a solid box) */
+/* Text-content frames: one stub per TipTap block, same metrics as `.prose p` */
 .tt-frame-shimmer-lines {
   display: flex;
   flex-direction: column;
-  gap: 0.55em; /* ≈ TipTap block line gap */
+  gap: 0; /* Paragraphs have no extra margin — line box is the row */
   width: 100%;
-  min-width: 8rem;
-  padding: 0.15em 0;
+  font-size: 0.875rem; /* Match `.prose` (14px) — not the RF node’s 16px */
+  line-height: 1.75; /* Match `.prose p` */
   pointer-events: none;
 }
 
+@media (hover: none), (pointer: coarse) {
+  .react-flow .tt-frame-shimmer-lines {
+    font-size: 16px; /* Same bump as `.react-flow .prose` on phone */
+  }
+}
+
+/* RF shell only — same inset as frame contentFit (pl-0.5 + ⋮⋮ gutter + pr-4 + 4px vertical) */
+.tt-frame-shimmer-frame-pad {
+  padding: 4px 16px 4px 26px; /* 2px + 24px left; 16px right — don’t stack with Tailwind pl-6 */
+  box-sizing: border-box;
+}
+
 .tt-frame-shimmer-line {
-  height: 0.85em; /* Roughly one text line */
+  height: 1.75em; /* One `.prose p` line box */
   max-width: 100%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center; /* Bar on the glyph band, not the top of the line box */
+}
+
+.tt-frame-shimmer-line-bar {
+  height: 0.72em; /* ~x-height of body text */
+  width: 100%;
   border-radius: 4px;
   background: linear-gradient(
     90deg,
@@ -243,26 +261,36 @@
 }
 .tt-frame-shimmer-line:nth-child(2) {
   width: 68%;
+}
+.tt-frame-shimmer-line:nth-child(2) .tt-frame-shimmer-line-bar {
   animation-delay: 0.08s;
 }
 .tt-frame-shimmer-line:nth-child(3) {
   width: 80%;
+}
+.tt-frame-shimmer-line:nth-child(3) .tt-frame-shimmer-line-bar {
   animation-delay: 0.16s;
 }
 .tt-frame-shimmer-line:nth-child(4) {
   width: 54%;
+}
+.tt-frame-shimmer-line:nth-child(4) .tt-frame-shimmer-line-bar {
   animation-delay: 0.24s;
 }
 .tt-frame-shimmer-line:nth-child(5) {
   width: 74%;
+}
+.tt-frame-shimmer-line:nth-child(5) .tt-frame-shimmer-line-bar {
   animation-delay: 0.32s;
 }
 .tt-frame-shimmer-line:nth-child(n + 6) {
   width: 60%;
+}
+.tt-frame-shimmer-line:nth-child(n + 6) .tt-frame-shimmer-line-bar {
   animation-delay: 0.4s;
 }
 
-.dark .tt-frame-shimmer-line {
+.dark .tt-frame-shimmer-line-bar {
   background: linear-gradient(
     90deg,
     #2a2a2a 0%,
@@ -272,6 +300,56 @@
     #2a2a2a 100%
   );
   background-size: 200% 100%;
+}
+
+/* Board load: placeholder shells fade out while real frames / threads fade in (300ms = BOARD_LOAD_FADE_MS) */
+@keyframes tt-board-load-fade-out {
+  from {
+    opacity: 1; /* Shells start fully visible */
+  }
+  to {
+    opacity: 0; /* Then dissolve so contents can take their place */
+  }
+}
+
+@keyframes tt-board-load-fade-in {
+  from {
+    opacity: 0; /* Contents start hidden under the shells */
+  }
+  to {
+    opacity: 1; /* Then settle in as shells finish fading */
+  }
+}
+
+.tt-board-load-fade-out {
+  animation: tt-board-load-fade-out 300ms ease-out both; /* Overlay shimmer inside a frame */
+  pointer-events: none; /* Fading shells must not steal drag / select */
+}
+
+.tt-board-load-fade-in {
+  animation: tt-board-load-fade-in 300ms ease-out both; /* TipTap body when no RF shell overlapped */
+}
+
+.react-flow.tt-board-load-reveal .react-flow__node:not(.tt-frame-shimmer-node),
+.react-flow.tt-board-load-reveal .react-flow__edge,
+.react-flow.tt-board-load-reveal .react-flow__connectionline {
+  animation: tt-board-load-fade-in 300ms ease-out both; /* Real board contents */
+}
+
+.react-flow.tt-board-load-reveal .react-flow__node.tt-frame-shimmer-node {
+  animation: tt-board-load-fade-out 300ms ease-out both; /* Layout-cached shells */
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tt-board-load-fade-out,
+  .tt-board-load-fade-in,
+  .react-flow.tt-board-load-reveal .react-flow__node,
+  .react-flow.tt-board-load-reveal .react-flow__edge,
+  .react-flow.tt-board-load-reveal .react-flow__connectionline {
+    animation: none !important; /* Instant swap when the user prefers less motion */
+    opacity: 1 !important;
+  }
 }
 
 /* Top-bar board path crumbs while titles fetch — reserve width so tools don’t collapse */
@@ -306,7 +384,13 @@
   background-size: 200% 100%;
 }
 
-/* First paint of the tool cluster is already compact/full — don’t animate that into place */
+/* Mode pill + hide pill wait until top-bar tools have their final compact/full layout */
+html:not(:has([data-toolbar-center][data-toolbar-ready])) [data-edit-menu-context],
+html:not(:has([data-toolbar-center][data-toolbar-ready])) [data-edit-pill-context],
+html:not(:has([data-toolbar-center][data-toolbar-ready])) [data-edit-menu-hover] {
+  opacity: 0; /* Hold transparent until tools are ready, then the elements’ opacity transition fades them in together */
+  pointer-events: none;
+}
 [data-toolbar-center]:not([data-toolbar-animate]) .tt-toolbar-title,
 [data-toolbar-center]:not([data-toolbar-animate]) button {
   transition: none !important; /* Skip collapse animation on load */

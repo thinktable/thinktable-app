@@ -506,6 +506,7 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
       
       {/* Hover zone covering full pill select area - triggers hide pill visibility and keeps menu open */}
       <div
+        data-edit-menu-hover
         className="absolute left-1/2 -translate-x-1/2 pointer-events-auto flex items-center justify-center"
         style={{
           top: '52px', // Start right below top bar (52px height)

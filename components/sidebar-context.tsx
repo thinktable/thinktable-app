@@ -153,7 +153,7 @@ export function SidebarContextProvider({
       if (isSidebarPinnedRef.current) return // Re-check in case pinned during grace
       setIsSidebarOpen(false) // Hide after bridge grace period
       closeTimerRef.current = null
-    }, 180) // ms — enough to move pointer from logo to popup
+    }, 350) // ms — linger so the pointer can leave the icon and enter the popup
   }, [cancelCloseSidebar])
 
   const toggleSidebar = useCallback(() => {

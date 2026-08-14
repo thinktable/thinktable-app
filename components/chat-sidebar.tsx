@@ -10,6 +10,12 @@ import {
 import { ThinktableBrandMark, PersonalizeAiModal } from './personalize-ai-modal' // Brand
 import { AiThreadPicker, type AiThreadFilter } from './ai/ai-thread-picker' // History
 import { AiTranscript } from './ai/ai-transcript' // Turns
+import {
+  AiTranscriptPlaceholder,
+  ChatLoadStage,
+  isChatTranscriptLoading,
+  useChatLoadReveal,
+} from './ai/ai-chat-load' // Load shimmer → fade-out → transcript fade-in
 import { AiComposer, regenerateAfterEdit } from './ai/ai-composer' // Composer
 import { AiPromptBars } from './ai/ai-prompt-bars' // Compact prompt stack / phone list
 import type { AiContextSnapshot, AiMessage, AiThread } from '@/lib/ai/types' // Types
@@ -64,13 +70,20 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   const mapDockRef = useRef<HTMLDivElement>(null) // Outer fixed shell (keyboard inset)
   const mapDockContentRef = useRef<HTMLDivElement>(null) // Inner max-w-lg — left edge Free nav aligns to
 
-  const [threadHydrated, setThreadHydrated] = useState(false) // Block persist-until-restore (Strict Mode safe)
+  const [threadHydrated, setThreadHydrated] = useState(false) // False until restore finishes (SSR + client match)
+  const [loadedThreadId, setLoadedThreadId] = useState<string | null>(null) // Thread whose messages are in state
 
   // Publish whether the chat box (transcript) has messages — Free nav fill depends on it
   useEffect(() => {
-    setAiChatHasTranscript(messages.length > 0)
+    const loading = isChatTranscriptLoading(
+      threadHydrated,
+      thread?.id,
+      loadedThreadId,
+      messages.length > 0
+    ) // Placeholder occupies the transcript card, so treat it as “has transcript”
+    setAiChatHasTranscript(messages.length > 0 || loading)
     return () => setAiChatHasTranscript(false) // Clear on unmount
-  }, [messages.length, setAiChatHasTranscript])
+  }, [messages.length, threadHydrated, thread?.id, loadedThreadId, setAiChatHasTranscript])
 
   // Restore the last active thread once on mount (same chat after reload)
   useEffect(() => {
@@ -115,14 +128,24 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   useEffect(() => {
     if (!thread?.id) {
       setMessages([])
+      setLoadedThreadId(null) // New chat — nothing to restore
       return
     }
     let cancelled = false
     const load = async () => {
-      const res = await fetch(`/api/ai/threads/${thread.id}/messages`)
-      if (!res.ok) return
-      const data = await res.json()
-      if (!cancelled) setMessages(data.messages || [])
+      try {
+        const res = await fetch(`/api/ai/threads/${thread.id}/messages`)
+        const data = res.ok ? await res.json() : { messages: [] }
+        if (!cancelled) {
+          setMessages(data.messages || [])
+          setLoadedThreadId(thread.id) // Unlock reveal even when the fetch is empty / failed
+        }
+      } catch {
+        if (!cancelled) {
+          setMessages([])
+          setLoadedThreadId(thread.id) // Don't leave the placeholder spinning
+        }
+      }
     }
     void load()
     return () => {
@@ -221,6 +244,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   const handleNew = useCallback(() => {
     setThread(null)
     setMessages([])
+    setLoadedThreadId(null) // Don't treat the next thread as already loaded
     setStreamingId(null)
     setAttachedSnapshots([])
     setMode('ask')
@@ -338,9 +362,17 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     [messages, thread?.id, attachedSnapshots, handleSaveSnapshot]
   )
 
-  if (!isChatSidebarOpen && !isMobileMode) return null // Desktop: unmount when closed; phone: keep dock mounted for same-tap focus
-
   const hasTranscript = messages.length > 0
+  const chatLoading = isChatTranscriptLoading(
+    threadHydrated,
+    thread?.id,
+    loadedThreadId,
+    messages.length > 0
+  ) // Restore only — don’t cover a live first send
+  const loadPhase = useChatLoadReveal(chatLoading) // Placeholder out, then content in
+  const showLoadPlaceholder = loadPhase === 'placeholder' || loadPhase === 'out' // Keep phone card during fade-out
+
+  if (!isChatSidebarOpen && !isMobileMode) return null // Desktop: unmount when closed; phone: keep dock mounted for same-tap focus
 
   const promptBarProps = {
     boardId: conversationId, // This-board recents when the picker is filtered
@@ -440,7 +472,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
               isChatSidebarOpen ? 'pointer-events-auto' : 'pointer-events-none'
             )}
           >
-            {isChatSidebarOpen && (
+            {(isChatSidebarOpen && (hasTranscript || showLoadPlaceholder)) && (
               <div
                 className={cn(
                   'relative rounded-xl min-h-[40px]', // Response box — ticks pin here, not in the composer
@@ -448,15 +480,17 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                   'border border-black/10 dark:border-white/10 shadow-sm'
                 )}
               >
-                {hasTranscript && (
-                  <div data-ai-transcript-scroll className="max-h-[32vh] overflow-y-auto px-3 py-2 pr-12">
-                    <AiTranscript
-                      messages={messages}
-                      streamingId={streamingId}
-                      onEditUserMessage={handleEditUserMessage}
-                    />
-                  </div>
-                )}
+                <div data-ai-transcript-scroll className="max-h-[32vh] overflow-y-auto px-3 py-2 pr-12">
+                  <ChatLoadStage phase={loadPhase} placeholder={<AiTranscriptPlaceholder />}>
+                    {hasTranscript ? (
+                      <AiTranscript
+                        messages={messages}
+                        streamingId={streamingId}
+                        onEditUserMessage={handleEditUserMessage}
+                      />
+                    ) : null}
+                  </ChatLoadStage>
+                </div>
                 <div className="absolute right-2 top-1/2 -translate-y-1/2 z-10">
                   <AiPromptBars orientation="horizontal" {...promptBarProps} />
                 </div>
@@ -569,7 +603,8 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
         </header>
 
         <div data-ai-transcript-scroll className="flex-1 min-h-0 overflow-y-auto px-4 py-6 pr-8">
-          {!hasTranscript ? (
+          <ChatLoadStage phase={loadPhase} placeholder={<AiTranscriptPlaceholder />}>
+            {!hasTranscript ? (
             <div className="flex flex-col items-start gap-5 max-w-[280px] mx-auto mt-6">
               <div
                 className="flex items-center gap-2.5"
@@ -646,6 +681,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
               onEditUserMessage={handleEditUserMessage}
             />
           )}
+          </ChatLoadStage>
 
           <div
             data-chat-return-slot

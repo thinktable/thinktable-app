@@ -43,6 +43,7 @@ import {
   FrameContentShimmer,
   frameHasVisibleText,
   shimmerBarCountFromHtml,
+  BOARD_LOAD_FADE_MS,
 } from '@/components/frame-content-shimmer' // Frame vs text-line load shell while TipTap mounts
 import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Strip blank lines on frame deselect
 import { setAiTextSelection } from '@/lib/ai/selection-bridge' // Live highlighted-text pills in AI composer
@@ -492,6 +493,7 @@ function TipTapContent({
   notionSync = 'live', // Live Sync vs Manual
   onNotionConnection,
   pinConnectionsToFrame = false, // Free-frame clip: hug spacer only; real group is pinned to the frame
+  loadCrossfade = false, // Board load: keep the shell overlay and fade it out; new frames skip this
 }: {
   content: string
   className?: string
@@ -524,6 +526,7 @@ function TipTapContent({
   notionSync?: NotionSyncMode
   onNotionConnection?: (next: { connected: boolean; sync?: NotionSyncMode }) => void
   pinConnectionsToFrame?: boolean
+  loadCrossfade?: boolean // Fade the load shell out as TipTap fades in (skip for fadeIn creates)
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { setActiveEditor } = useEditorContext()
@@ -1019,9 +1022,24 @@ function TipTapContent({
   // Extract 'inline' from className if present to apply inline-block display
   const isInline = className?.includes('inline')
   const otherClasses = className?.replace(/\binline\b/g, '').trim()
-  // Only while TipTap is actually mounting (immediatelyRender: false) — drop as soon as editor exists
-  const showFrameShimmer = !!enableBlockHandles && !isFlashcard && !editor
+  // Keep the load shell until it finishes fading — TipTap mounts under it (immediatelyRender: false)
+  const [keepShimmer, setKeepShimmer] = useState(
+    () => !!loadCrossfade && !!enableBlockHandles && !isFlashcard && !editor // Load shells only — not new fadeIn frames
+  )
+  const [shimmerExiting, setShimmerExiting] = useState(false) // Opacity 1→0 once the editor exists
+  const showFrameShimmer = !!enableBlockHandles && !isFlashcard && (!editor || keepShimmer) // Mount shell, then load overlay
   const shimmerHasText = frameHasVisibleText(content) // Text lines vs solid box (empty / spaces)
+
+  useEffect(() => {
+    if (!editor || !keepShimmer) return // Nothing to fade, or already gone
+    if (!enableBlockHandles || isFlashcard || !loadCrossfade) {
+      setKeepShimmer(false) // Chat/flashcard/new frames never overlay a load shell
+      return
+    }
+    setShimmerExiting(true) // Fade the shell out as real blocks are on screen
+    const t = window.setTimeout(() => setKeepShimmer(false), BOARD_LOAD_FADE_MS) // Unmount after the CSS fade
+    return () => window.clearTimeout(t)
+  }, [editor, enableBlockHandles, isFlashcard, keepShimmer, loadCrossfade])
 
   if (!editor && (!enableBlockHandles || isFlashcard)) return null // Chat/flashcard keep prior null mount
 
@@ -1053,15 +1071,9 @@ function TipTapContent({
           isLoading && !isFlashcard && 'shimmer'
         )}
       >
-        {showFrameShimmer ? (
-          <FrameContentShimmer
-            hasText={shimmerHasText}
-            barCount={shimmerBarCountFromHtml(content)}
-            withGutter={shimmerHasText}
-            className={shimmerHasText ? undefined : 'min-h-[2.5rem]'}
-          />
-        ) : editor ? (
-          <>
+        {editor ? (
+          <div className={cn(enableBlockHandles && showFrameShimmer && 'pl-6')}>
+            {/* Gutter on the content layer while the shell still overlays (parent skips pl-6) */}
             <TipTapBlockHandles
               editor={editor}
               enabled={enableBlockHandles && !isFlashcard}
@@ -1073,7 +1085,23 @@ function TipTapContent({
               notionConnected={notionConnected} // Notion-connected frames get a slimmer block ⋮⋮ menu
             />
             <EditorContent editor={editor} className="block w-full" />
-          </>
+          </div>
+        ) : null}
+        {showFrameShimmer ? (
+          <div
+            className={cn(
+              editor && 'absolute inset-0 z-[1]', // Sit on top of TipTap so the shell can dissolve
+              shimmerExiting && 'tt-board-load-fade-out' // Fade out as board contents are visible
+            )}
+            aria-hidden={!!editor}
+          >
+            <FrameContentShimmer
+              hasText={shimmerHasText}
+              barCount={shimmerBarCountFromHtml(content)}
+              withGutter={shimmerHasText}
+              className={shimmerHasText ? undefined : 'min-h-[2.5rem]'}
+            />
+          </div>
         ) : null}
         {/* Connections group: in-flow for hug; spacer only when pinned to the free-frame box */}
         {notionConnected && enableBlockHandles && !isFlashcard && !showFrameShimmer && (
@@ -4475,6 +4503,12 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       setIsInitialShrinkComplete(true)
       return
     }
+    // Blocks hug via max-content — the 300ms opacity:0 made load shells and frames miss each other
+    if (isBlock) {
+      hasInitialShrunkRef.current = promptMessage?.id || id
+      setIsInitialShrinkComplete(true)
+      return
+    }
     // Map I-bar / grip-created frames must stay visible — the 300ms opacity:0 hid typed text
     if (promptMessage?.metadata?.fadeIn === true) {
       hasInitialShrunkRef.current = promptMessage?.id || id
@@ -5783,6 +5817,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               notionSync={notionSync}
               onNotionConnection={handleNotionConnection}
               pinConnectionsToFrame={pinConnectionsToFrame}
+              loadCrossfade={promptMessage?.metadata?.fadeIn !== true} // Load: dissolve the shell; new frames use note-fade-in
               boardInTargets={(() => {
                 const convs =
                   (queryClient.getQueryData(['conversations']) as

@@ -1099,10 +1099,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
         <div
           data-toolbar-center
+          data-toolbar-ready={toolbarLayoutReady ? 'true' : undefined} // Mode pill waits for this so it doesn’t paint before tools
           data-toolbar-animate={toolbarAnimate ? 'true' : undefined}
           className={cn(
-            'pointer-events-auto relative z-10 flex items-center gap-1 h-full overflow-hidden',
-            !toolbarLayoutReady && 'invisible' // Layout in place; show only after compact/hidden is correct
+            'relative z-10 flex items-center gap-1 h-full overflow-hidden transition-opacity duration-200 ease-out',
+            toolbarLayoutReady ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none' // Fade in with the mode pill once compact/hidden is correct
           )}
         >
       {/* Left Section - collapsible items */}

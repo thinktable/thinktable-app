@@ -15,13 +15,13 @@ export type FrameShimmerNodeData = {
 }
 
 function FrameShimmerNodeInner({ data }: NodeProps<FrameShimmerNodeData>) {
-  const width = Math.max(120, data?.width || 220) // Prefer cached measure; else a typical empty-frame width
-  const height = Math.max(40, data?.height || 72) // Prefer cached measure; else ~empty frame height
+  const width = data?.width && data.width > 0 ? data.width : 220 // Exact cached RF box — don’t inflate
+  const height = data?.height && data.height > 0 ? data.height : 72
   const hasText = !!data?.hasText
 
   return (
     <div
-      className="pointer-events-none select-none"
+      className="pointer-events-none select-none overflow-hidden"
       style={{ width, height }}
       aria-busy="true"
       aria-label="Loading frame"
@@ -29,7 +29,8 @@ function FrameShimmerNodeInner({ data }: NodeProps<FrameShimmerNodeData>) {
       <FrameContentShimmer
         hasText={hasText}
         barCount={data?.barCount || 2}
-        withGutter={hasText} // Match TipTap block gutter when showing text lines
+        withGutter={false} // Left inset lives in matchFramePad (gutter + pl-0.5) so Tailwind pl-6 can’t override
+        matchFramePad={hasText} // Same pl-0.5 / gutter / pr-4 / 4px vertical as the real frame
         className="h-full w-full"
       />
     </div>

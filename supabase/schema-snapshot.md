@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-14T18:19:55Z`
+- Snapped at: `2026-08-14T19:14:20Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
-- CLI: `supabase` `2.114.0` (marker via `migration new`)
+- CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260814191420_path_menu_hover_board_load_reveal.sql`.
+- Path crumb hover: 320ms dwell + slower fade-in, 120ms leave grace (stay open into nested flyouts). Board nav hover leave ~350ms. Frame shells overlap real frames then fade with content; chat placeholder fades out fully before transcript fades in.
+- Schema unchanged.
+
+## Prior: top bar load layout minimap
 
 - No DDL. Marker `20260814181955_top_bar_load_layout_minimap.sql`.
 - Top bar: one path shimmer; chat-open cookie so the column exists on first HTML; tools stay hidden until that width is measured (already collapsed if space requires). Minimap expand-up after frames land.

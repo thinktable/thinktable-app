@@ -4,7 +4,8 @@
 import { cn } from '@/lib/utils'
 import { EditorToolbar } from './editor-toolbar'
 import { useEditorContext } from './editor-context'
-import { useRef, useState } from 'react'
+import { BOARD_LOAD_FADE_MS } from '@/components/frame-content-shimmer' // Same 300ms as board frame shells
+import { useEffect, useRef, useState } from 'react'
 import { useSidebarContext } from './sidebar-context'
 import { ChevronRight, File, FileText, Menu } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
@@ -56,6 +57,9 @@ type PathBoard = {
 }
 
 const PATH_MENU_LIMIT = 8 // Cap visible siblings; show “N more” like Notion
+const PATH_MENU_OPEN_MS = 320 // Dwell on a path name before the sibling menu fades in
+const PATH_MENU_CLOSE_MS = 120 // Leave grace — snappier hide, still covers name → list
+const PATH_MENU_MOTION = 'data-[state=open]:duration-300' // Slow fade-in; hide uses the default fade-out
 
 // One crumb bar while the board path query is pending (holds left-chrome width)
 function BoardPathShimmer() {
@@ -109,6 +113,110 @@ function sortPathBoards(a: PathBoard, b: PathBoard) {
   return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
 }
 
+// Board row in a path menu — leaf item, or nested tree flyout with delayed hover
+function PathBoardMenuItem({
+  board,
+  childrenOf,
+  currentBoardId,
+  goTo,
+  isCurrent,
+  alignChevron = false, // Hidden chevron so nested leaves line up with tree rows
+}: {
+  board: PathBoard
+  childrenOf: (id: string) => PathBoard[]
+  currentBoardId?: string
+  goTo: (id: string) => void
+  isCurrent: boolean
+  alignChevron?: boolean
+}) {
+  const kids = childrenOf(board.id) // Nested boards under this name
+  const [subOpen, setSubOpen] = useState(false) // Controlled so hover dwell can be slower than Radix’s 100ms
+  const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Pending tree-open dwell
+
+  useEffect(() => {
+    return () => {
+      if (openTimerRef.current) clearTimeout(openTimerRef.current) // Don’t open after unmount
+    }
+  }, [])
+
+  const cancelTreeOpen = () => {
+    if (openTimerRef.current) {
+      clearTimeout(openTimerRef.current) // Left the name before the flyout appeared
+      openTimerRef.current = null
+    }
+  }
+
+  const openTree = (immediate = false) => {
+    if (immediate) {
+      cancelTreeOpen()
+      setSubOpen(true) // Already in the flyout — keep it
+      return
+    }
+    if (subOpen || openTimerRef.current) return // Visible or dwell already running
+    openTimerRef.current = setTimeout(() => {
+      openTimerRef.current = null
+      setSubOpen(true) // Fade the tree in after hovering the name
+    }, PATH_MENU_OPEN_MS)
+  }
+
+  if (kids.length === 0) {
+    return (
+      <DropdownMenuItem
+        className={cn('cursor-pointer', isCurrent && 'bg-gray-100 dark:bg-[#2a2a3a]')}
+        onClick={() => goTo(board.id)}
+      >
+        <PathPageIcon icon={board.icon} hasContent={board.hasContent} className="mr-1.5" />
+        <span className={cn('truncate', alignChevron && 'flex-1')}>{board.title}</span>
+        {alignChevron && <ChevronRight className="ml-auto h-3.5 w-3.5 opacity-0" aria-hidden />}
+      </DropdownMenuItem>
+    )
+  }
+
+  return (
+    <DropdownMenuSub
+      open={subOpen}
+      onOpenChange={(next) => {
+        if (next) {
+          if (openTimerRef.current) return // Pointer dwell already owns hover-open
+          setSubOpen(true) // Keyboard / click: show immediately
+          return
+        }
+        cancelTreeOpen()
+        setSubOpen(false) // Hide with Radix’s original leave grace
+      }}
+    >
+      <DropdownMenuSubTrigger
+        className={cn('cursor-pointer', isCurrent && 'bg-gray-100 dark:bg-[#2a2a3a]')}
+        onPointerEnter={() => openTree()}
+        onPointerLeave={cancelTreeOpen}
+        onClick={(e) => {
+          e.preventDefault()
+          goTo(board.id) // Click the name still opens that board
+        }}
+      >
+        <PathPageIcon icon={board.icon} hasContent={board.hasContent} className="mr-1.5" />
+        <span className="truncate flex-1">{board.title}</span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent
+        className={cn('w-52', PATH_MENU_MOTION)}
+        onPointerEnter={() => openTree(true)}
+      >
+        {kids.map((child) => (
+          <PathBoardMenuItem
+            key={child.id}
+            board={child}
+            childrenOf={childrenOf}
+            currentBoardId={currentBoardId}
+            goTo={goTo}
+            isCurrent={child.id === currentBoardId}
+            alignChevron
+          />
+        ))}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  )
+}
+
 // One breadcrumb segment: click opens page; hover lists same-level pages
 function PathSegmentMenu({
   segment,
@@ -125,18 +233,57 @@ function PathSegmentMenu({
 }) {
   const router = useRouter()
   const [open, setOpen] = useState(false) // Hover-controlled sibling menu
-  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Pending fade-in dwell
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Pending fade-out
 
-  const openMenu = () => {
+  const clearMenuTimers = () => {
+    if (openTimerRef.current) clearTimeout(openTimerRef.current)
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
-    setOpen(true)
+    openTimerRef.current = null
+    closeTimerRef.current = null
   }
+
+  useEffect(() => {
+    return () => {
+      if (openTimerRef.current) clearTimeout(openTimerRef.current)
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    }
+  }, []) // Drop timers if the crumb unmounts
+
+  const openMenu = (immediate = false) => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current) // Crossing trigger → menu must not dismiss
+      closeTimerRef.current = null
+    }
+    if (immediate) {
+      if (openTimerRef.current) {
+        clearTimeout(openTimerRef.current)
+        openTimerRef.current = null
+      }
+      setOpen(true) // Already bridging into the open menu
+      return
+    }
+    if (open || openTimerRef.current) return // Visible or dwell already running
+    openTimerRef.current = setTimeout(() => {
+      openTimerRef.current = null
+      setOpen(true) // Fade in after hovering the path name
+    }, PATH_MENU_OPEN_MS)
+  }
+
   const scheduleCloseMenu = () => {
+    if (openTimerRef.current) {
+      clearTimeout(openTimerRef.current) // Left before the menu appeared
+      openTimerRef.current = null
+    }
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
-    closeTimerRef.current = setTimeout(() => setOpen(false), 160) // Bridge trigger ↔ menu
+    closeTimerRef.current = setTimeout(() => {
+      closeTimerRef.current = null
+      setOpen(false) // Hide after leave grace
+    }, PATH_MENU_CLOSE_MS)
   }
 
   const goTo = (id: string) => {
+    clearMenuTimers()
     setOpen(false)
     router.push(`/board/${id}`)
   }
@@ -145,12 +292,23 @@ function PathSegmentMenu({
   const moreCount = Math.max(0, siblings.length - PATH_MENU_LIMIT)
 
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen} modal={false}>
+    <DropdownMenu
+      open={open}
+      onOpenChange={(next) => {
+        if (next) setOpen(true) // Click / keyboard still open immediately
+        else scheduleCloseMenu() // Don’t snap shut — same grace as pointer leave
+      }}
+      modal={false}
+    >
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          onMouseEnter={openMenu}
-          onMouseLeave={scheduleCloseMenu}
+          onMouseEnter={() => openMenu()}
+          onMouseLeave={(e) => {
+            const to = e.relatedTarget as HTMLElement | null
+            if (to?.closest?.('[data-radix-popper-content-wrapper], [role="menu"]')) return // Moving into the board list / tree
+            scheduleCloseMenu()
+          }}
           onClick={(e) => {
             e.preventDefault()
             goTo(segment.id) // Click path name → open that page
@@ -170,94 +328,25 @@ function PathSegmentMenu({
       <DropdownMenuContent
         align="start"
         sideOffset={6}
-        className="w-56 max-h-72 overflow-y-auto"
-        onMouseEnter={openMenu}
-        onMouseLeave={scheduleCloseMenu}
+        className={cn('w-56 max-h-72 overflow-y-auto', PATH_MENU_MOTION)}
+        onMouseEnter={() => openMenu(true)}
+        onMouseLeave={(e) => {
+          const to = e.relatedTarget as HTMLElement | null
+          if (to?.closest?.('[data-radix-popper-content-wrapper], [role="menu"]')) return // Moving into a nested tree flyout
+          scheduleCloseMenu()
+        }}
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
-        {visible.map((board) => {
-          const kids = childrenOf(board.id)
-          const isCurrent = board.id === currentBoardId || board.id === segment.id
-          if (kids.length > 0) {
-            return (
-              <DropdownMenuSub key={board.id}>
-                <DropdownMenuSubTrigger
-                  className={cn(
-                    'cursor-pointer',
-                    isCurrent && 'bg-gray-100 dark:bg-[#2a2a3a]'
-                  )}
-                  onClick={(e) => {
-                    e.preventDefault()
-                    goTo(board.id) // Click sibling with children still opens it
-                  }}
-                  >
-                    <PathPageIcon icon={board.icon} hasContent={board.hasContent} className="mr-1.5" />
-                    <span className="truncate flex-1">{board.title}</span>
-                  </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent className="w-52">
-                    {kids.map((child) => {
-                      const grandkids = childrenOf(child.id)
-                      if (grandkids.length > 0) {
-                        return (
-                          <DropdownMenuSub key={child.id}>
-                            <DropdownMenuSubTrigger
-                              className="cursor-pointer"
-                              onClick={(e) => {
-                                e.preventDefault()
-                                goTo(child.id)
-                              }}
-                            >
-                              <PathPageIcon icon={child.icon} hasContent={child.hasContent} className="mr-1.5" />
-                              <span className="truncate flex-1">{child.title}</span>
-                            </DropdownMenuSubTrigger>
-                            <DropdownMenuSubContent className="w-52">
-                              {grandkids.map((g) => (
-                                <DropdownMenuItem
-                                  key={g.id}
-                                  className="cursor-pointer"
-                                  onClick={() => goTo(g.id)}
-                                >
-                                  <PathPageIcon icon={g.icon} hasContent={g.hasContent} className="mr-1.5" />
-                                  <span className="truncate">{g.title}</span>
-                                </DropdownMenuItem>
-                              ))}
-                            </DropdownMenuSubContent>
-                          </DropdownMenuSub>
-                        )
-                      }
-                      return (
-                        <DropdownMenuItem
-                          key={child.id}
-                          className={cn(
-                            'cursor-pointer',
-                            child.id === currentBoardId && 'bg-gray-100 dark:bg-[#2a2a3a]'
-                          )}
-                          onClick={() => goTo(child.id)}
-                        >
-                          <PathPageIcon icon={child.icon} hasContent={child.hasContent} className="mr-1.5" />
-                          <span className="truncate flex-1">{child.title}</span>
-                          <ChevronRight className="ml-auto h-3.5 w-3.5 opacity-0" aria-hidden />
-                        </DropdownMenuItem>
-                      )
-                    })}
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-              )
-            }
-            return (
-              <DropdownMenuItem
-                key={board.id}
-                className={cn(
-                  'cursor-pointer',
-                  isCurrent && 'bg-gray-100 dark:bg-[#2a2a3a]'
-                )}
-                onClick={() => goTo(board.id)}
-              >
-                <PathPageIcon icon={board.icon} hasContent={board.hasContent} className="mr-1.5" />
-                <span className="truncate">{board.title}</span>
-              </DropdownMenuItem>
-            )
-          })}
+        {visible.map((board) => (
+          <PathBoardMenuItem
+            key={board.id}
+            board={board}
+            childrenOf={childrenOf}
+            currentBoardId={currentBoardId}
+            goTo={goTo}
+            isCurrent={board.id === currentBoardId || board.id === segment.id}
+          />
+        ))}
         {moreCount > 0 && (
           <div className="px-2 py-1.5 text-xs text-gray-400 dark:text-gray-500">
             {moreCount} more
@@ -384,7 +473,22 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
   const path = titleData?.path
   const displayTitle = titleData?.label || (conversationId || projectId ? '' : 'Thinktable') // Empty while shimmering
   const showBoardPath = Boolean(conversationId && path && path.length > 0) // Interactive path on board pages
-  const showPathShimmer = Boolean((conversationId || projectId) && !path?.length) // Hold chrome width until titles land
+  const pathKey = conversationId || projectId || '' // Board/project we’re loading a title for
+  const pathReady = Boolean(path?.length) // Titles have landed for this pathKey
+  const [revealedPathKey, setRevealedPathKey] = useState<string | null>(null) // Last key that finished the load fade
+  const pathRevealed = revealedPathKey === pathKey // True once this board’s crumb → title fade is done
+  const showPathShimmer = Boolean(pathKey) && (!pathReady || !pathRevealed) // Shell until the fade unmounts it
+  const pathEntering = Boolean(pathKey) && pathReady && !pathRevealed // Overlap: path fading in under the crumb
+
+  useEffect(() => {
+    if (!pathKey) {
+      setRevealedPathKey('') // Home label — nothing to crossfade
+      return
+    }
+    if (!pathReady || revealedPathKey === pathKey) return // Still waiting, or already faded this board
+    const t = window.setTimeout(() => setRevealedPathKey(pathKey), BOARD_LOAD_FADE_MS) // Drop the crumb after the CSS fade
+    return () => window.clearTimeout(t)
+  }, [pathKey, pathReady, revealedPathKey])
 
   // Siblings at the same parent level as a path segment
   const siblingsFor = (segment: BoardPathSegment): PathBoard[] => {
@@ -434,7 +538,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
           }}
         >
           {/* Left chrome — menu + board path; z-20 so title stays clickable if tools overlap */}
-          <div data-top-bar-left data-path-ready={showPathShimmer ? undefined : 'true'} className="relative z-20 flex items-center min-w-0 shrink-0">
+          <div data-top-bar-left data-path-ready={pathReady || !pathKey ? 'true' : undefined} className="relative z-20 flex items-center min-w-0 shrink-0">
           {/* Menu icon — hover opens; click pins open until clicked again (survives page switch) */}
           <div
             data-nav-logo-trigger
@@ -459,11 +563,15 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
           </div>
 
           {/* Board path — click opens page; hover lists same-level pages */}
-          <div className="flex items-center gap-0 min-w-0 shrink mr-2 max-w-[min(420px,48vw)] text-sm font-medium">
-            {showPathShimmer ? (
-              <BoardPathShimmer />
-            ) : showBoardPath && path ? (
-              <span className="truncate select-none flex items-center min-w-0" title={displayTitle}>
+          <div className="relative flex items-center gap-0 min-w-0 shrink mr-2 max-w-[min(420px,48vw)] text-sm font-medium">
+            {pathReady && showBoardPath && path ? (
+              <span
+                className={cn(
+                  'truncate select-none flex items-center min-w-0',
+                  pathEntering && 'tt-board-load-fade-in' // Fade in under the dissolving crumb
+                )}
+                title={displayTitle}
+              >
                 {path.map((segment, index) => {
                   const isLast = index === path.length - 1
                   return (
@@ -487,14 +595,27 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
                   )
                 })}
               </span>
-            ) : (
+            ) : pathReady || !pathKey ? (
               <span
-                className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate select-none px-0.5"
+                className={cn(
+                  'text-sm font-medium text-gray-900 dark:text-gray-100 truncate select-none px-0.5',
+                  pathEntering && 'tt-board-load-fade-in' // Project title uses the same load fade
+                )}
                 title={displayTitle}
               >
                 {displayTitle}
               </span>
-            )}
+            ) : null}
+            {showPathShimmer ? (
+              <span
+                className={cn(
+                  pathReady && 'absolute inset-0 z-[1] flex items-center', // Overlay once the real path is in-flow
+                  pathEntering && 'tt-board-load-fade-out' // Dissolve as the path appears
+                )}
+              >
+                <BoardPathShimmer />
+              </span>
+            ) : null}
           </div>
           </div>
 

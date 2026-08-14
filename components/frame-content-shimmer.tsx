@@ -4,6 +4,14 @@
 
 import { cn } from '@/lib/utils'
 
+export const BOARD_LOAD_FADE_MS = 300 // Keep in sync with `.tt-board-load-fade-*` in globals.css
+export const FRAME_SHIMMER_ID_PREFIX = 'tt-shimmer:' // Distinct from chatPanel ids so shells can overlap real frames
+
+/** RF node id for a layout-cached load shell (must not collide with the real frame id). */
+export function frameShimmerNodeId(frameId: string) {
+  return `${FRAME_SHIMMER_ID_PREFIX}${frameId}` // Prefix so setNodes can keep both during the crossfade
+}
+
 /** True when HTML has visible typed text (not empty / spaces-only / tag-only). */
 export function frameHasVisibleText(html: string | undefined | null): boolean {
   if (!html) return false
@@ -31,11 +39,13 @@ export function FrameContentShimmer({
   hasText = false,
   barCount = 2,
   withGutter = false,
+  matchFramePad = false, // RF shell: inset like contentFit so bars sit on the real text
   className,
 }: {
   hasText?: boolean
   barCount?: number
   withGutter?: boolean
+  matchFramePad?: boolean
   className?: string
 }) {
   if (!hasText) {
@@ -52,13 +62,20 @@ export function FrameContentShimmer({
   const n = Math.min(Math.max(barCount, 1), 6)
   return (
     <div
-      className={cn('relative w-full', withGutter && 'pl-6', className)}
+      className={cn(
+        'relative w-full h-full',
+        withGutter && 'pl-6', // Same ⋮⋮ gutter as TipTap blocks
+        matchFramePad && 'tt-frame-shimmer-frame-pad', // RF node is the frame box — pad to the text
+        className
+      )}
       aria-busy="true"
       aria-label="Loading frame"
     >
       <div className="tt-frame-shimmer-lines" role="presentation">
         {Array.from({ length: n }, (_, i) => (
-          <div key={i} className="tt-frame-shimmer-line" />
+          <div key={i} className="tt-frame-shimmer-line">
+            <div className="tt-frame-shimmer-line-bar" />
+          </div>
         ))}
       </div>
     </div>
