@@ -6242,33 +6242,43 @@ function BoardFlowInner({
       if (targets.length === 0) return
       takeSnapshot?.()
       const ids = new Set(targets.map((n) => n.id))
+      // Border color needs a visible style; clearing color leaves style alone
+      const patchMeta = (meta: Record<string, unknown>) => {
+        const out: Record<string, unknown> = { ...meta, [kind]: value || null }
+        if (kind === 'borderColor') {
+          if (value) {
+            if (!out.borderStyle || out.borderStyle === 'none') out.borderStyle = 'solid'
+            if (out.borderWeight == null) out.borderWeight = 1
+          }
+        }
+        return out
+      }
+      const patchData = (data: ChatPanelNodeData) => {
+        const pm = data?.promptMessage
+        const meta = patchMeta({ ...((pm?.metadata as Record<string, unknown>) || {}) })
+        return {
+          ...data,
+          [kind]: value,
+          ...(kind === 'borderColor' && value
+            ? {
+                borderStyle: (data.borderStyle && data.borderStyle !== 'none'
+                  ? data.borderStyle
+                  : 'solid') as string,
+                borderWeight: data.borderWeight ?? 1,
+              }
+            : {}),
+          promptMessage: pm ? { ...pm, metadata: meta } : pm,
+        }
+      }
       setNodes((nds) =>
         nds.map((n) => {
           if (!ids.has(n.id)) return n
-          const pm = n.data?.promptMessage
-          const meta = { ...((pm?.metadata as Record<string, unknown>) || {}), [kind]: value || null }
-          return {
-            ...n,
-            data: {
-              ...n.data,
-              [kind]: value,
-              promptMessage: pm ? { ...pm, metadata: meta } : pm,
-            },
-          }
+          return { ...n, data: patchData(n.data) }
         })
       )
       setRightClickedNode((prev) => {
         if (!prev || !ids.has(prev.id)) return prev
-        const pm = prev.data?.promptMessage
-        const meta = { ...((pm?.metadata as Record<string, unknown>) || {}), [kind]: value || null }
-        return {
-          ...prev,
-          data: {
-            ...prev.data,
-            [kind]: value,
-            promptMessage: pm ? { ...pm, metadata: meta } : pm,
-          },
-        }
+        return { ...prev, data: patchData(prev.data) }
       })
       const supabase = createClient()
       for (const n of targets) {
@@ -6276,11 +6286,65 @@ function BoardFlowInner({
         if (!msgId) continue
         const live = nodes.find((x) => x.id === n.id) || n
         const pm = live.data?.promptMessage
-        const meta = { ...((pm?.metadata as Record<string, unknown>) || {}), [kind]: value || null }
+        const meta = patchMeta({ ...((pm?.metadata as Record<string, unknown>) || {}) })
         try {
           await supabase.from('messages').update({ metadata: meta }).eq('id', msgId)
         } catch (err) {
           console.error('Failed to save frame color:', err)
+        }
+      }
+    },
+    [frameActionTargets, nodes, setNodes, takeSnapshot]
+  )
+
+  // Persist border thickness onto the menu target (and selected mates)
+  const handleSetFrameBorderWeight = useCallback(
+    async (weight: number, commit = true) => {
+      const targets = frameActionTargets()
+      if (targets.length === 0) return
+      const w = Math.min(8, Math.max(1, weight)) // Continuous 1–8px (no integer snap)
+      if (commit) takeSnapshot?.() // One undo point per drag gesture
+      const ids = new Set(targets.map((n) => n.id))
+      const patchMeta = (meta: Record<string, unknown>) => ({
+        ...meta,
+        borderWeight: w,
+        // Ensure a visible stroke when thickening — keep existing color/style
+        borderStyle:
+          meta.borderStyle && meta.borderStyle !== 'none' ? meta.borderStyle : 'solid',
+      })
+      const patchData = (data: ChatPanelNodeData) => {
+        const pm = data?.promptMessage
+        const meta = patchMeta({ ...((pm?.metadata as Record<string, unknown>) || {}) })
+        return {
+          ...data,
+          borderWeight: w,
+          borderStyle:
+            data.borderStyle && data.borderStyle !== 'none' ? data.borderStyle : 'solid',
+          promptMessage: pm ? { ...pm, metadata: meta } : pm,
+        }
+      }
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (!ids.has(n.id)) return n
+          return { ...n, data: patchData(n.data) }
+        })
+      )
+      setRightClickedNode((prev) => {
+        if (!prev || !ids.has(prev.id)) return prev
+        return { ...prev, data: patchData(prev.data) }
+      })
+      if (!commit) return // Live preview only while the slider is moving
+      const supabase = createClient()
+      for (const n of targets) {
+        const msgId = n.data?.promptMessage?.id as string | undefined
+        if (!msgId) continue
+        const live = nodes.find((x) => x.id === n.id) || n
+        const pm = live.data?.promptMessage
+        const meta = patchMeta({ ...((pm?.metadata as Record<string, unknown>) || {}) })
+        try {
+          await supabase.from('messages').update({ metadata: meta }).eq('id', msgId)
+        } catch (err) {
+          console.error('Failed to save frame border weight:', err)
         }
       }
     },
@@ -6489,6 +6553,12 @@ function BoardFlowInner({
         case 'setBorderColor':
           void handleSetFrameColor('borderColor', payload?.borderColor ?? '')
           break
+        case 'setBorderWeight':
+          void handleSetFrameBorderWeight(
+            payload?.borderWeight ?? 1,
+            payload?.borderWeightCommit !== false // Default commit; slider drag passes false
+          )
+          break
         case 'lockToBoard':
           handleToggleBoardLock()
           break
@@ -6531,6 +6601,7 @@ function BoardFlowInner({
       handleSelectionToBoard,
       handleSetFrameShape,
       handleSetFrameColor,
+      handleSetFrameBorderWeight,
       handleToggleBoardLock,
       handleToggleFrameLock,
       handleNotionConnection,
@@ -8832,6 +8903,14 @@ function BoardFlowInner({
             (rightClickedNode.data?.promptMessage?.metadata?.borderColor as string | undefined) ||
             ''
           }
+          currentBorderWeight={(() => {
+            const raw =
+              rightClickedNode.data?.borderWeight ??
+              (rightClickedNode.data?.promptMessage?.metadata as Record<string, unknown> | undefined)
+                ?.borderWeight
+            const n = typeof raw === 'number' ? raw : parseFloat(String(raw ?? '1'))
+            return Number.isFinite(n) && n > 0 ? n : 1
+          })()}
           boardLocked={
             (rightClickedNode.data?.promptMessage?.metadata as Record<string, unknown> | undefined)
               ?.boardLocked === true

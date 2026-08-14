@@ -40,8 +40,6 @@ import {
   FolderInput,
   PencilLine,
   Type,
-  PaintBucket,
-  Pencil,
   Anchor,
   AlignJustify,
   Hash,
@@ -78,6 +76,61 @@ import {
   frameShapeLabel,
   type FrameShapeChoice,
 } from '@/lib/frame-shape' // Frame-as-shape picker values
+
+/** Notion-like frame palette — fill uses pale bg; border uses stronger stroke hues. */
+const FRAME_COLOR_SWATCHES = [
+  { id: 'default', name: 'Default', fill: '', border: '' }, // Empty = transparent chrome
+  { id: 'gray', name: 'Gray', fill: '#F1F1EF', border: '#787774' },
+  { id: 'brown', name: 'Brown', fill: '#F4EEEE', border: '#9F6B53' },
+  { id: 'orange', name: 'Orange', fill: '#FBECDD', border: '#D9730D' },
+  { id: 'yellow', name: 'Yellow', fill: '#FBF3DB', border: '#CB912F' },
+  { id: 'green', name: 'Green', fill: '#EDF3EC', border: '#448361' },
+  { id: 'blue', name: 'Blue', fill: '#E7F3F8', border: '#337EA9' },
+  { id: 'purple', name: 'Purple', fill: '#F6F3F9', border: '#9065B0' },
+  { id: 'pink', name: 'Pink', fill: '#F9F2F5', border: '#C14C8A' },
+  { id: 'red', name: 'Red', fill: '#FDEBEC', border: '#E03E3E' },
+] as const
+
+type FrameColorKind = 'fill' | 'border' // Which chrome channel a last-used / pick targets
+
+/** Persisted “Last used” row for the frame Color flyout. */
+type FrameLastColor = {
+  kind: FrameColorKind
+  id: string
+  value: string
+  label: string
+}
+
+const FRAME_LAST_COLOR_KEY = 'thinktable-frame-last-color' // localStorage key
+
+/** Case-insensitive hex/empty match for active swatch highlighting. */
+function colorsMatch(a: string, b: string): boolean {
+  return (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase()
+}
+
+/** Read last-used frame color from localStorage (null if missing/corrupt). */
+function readFrameLastColor(): FrameLastColor | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(FRAME_LAST_COLOR_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as FrameLastColor
+    if (!parsed || (parsed.kind !== 'fill' && parsed.kind !== 'border')) return null
+    if (typeof parsed.label !== 'string' || typeof parsed.value !== 'string') return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+/** Persist last-used frame color for the top of the Color flyout. */
+function writeFrameLastColor(entry: FrameLastColor) {
+  try {
+    localStorage.setItem(FRAME_LAST_COLOR_KEY, JSON.stringify(entry))
+  } catch {
+    // Ignore quota / private-mode failures
+  }
+}
 
 /** Baseline block kinds (Notion Turn into list) — stored as metadata.blockType for now. */
 export type BlockTypeId =
@@ -126,6 +179,7 @@ export type BlockActionId =
   | 'setFrameShape' // Apply / clear a silhouette on the host frame
   | 'setFillColor' // Frame background (transparent when empty)
   | 'setBorderColor' // Frame border stroke
+  | 'setBorderWeight' // Frame border thickness in px
   | 'lockToBoard' // Pin selected frames so they cannot drag
   | 'lockFramesTogether' // Rigid-group lock for ≥2 selected frames
   | 'connectNotion' // Connections → Notion (link this frame)
@@ -140,6 +194,8 @@ export type BlockActionPayload = {
   frameShape?: FrameShapeChoice // Present when action === 'setFrameShape'
   fillColor?: string // Empty string = transparent fill
   borderColor?: string // Empty string = transparent border
+  borderWeight?: number // Border thickness in px (fractional OK)
+  borderWeightCommit?: boolean // true = undo snapshot + DB save (slider release)
   notionSync?: NotionSyncMode // Present when action === 'setNotionSync'
 }
 
@@ -197,6 +253,8 @@ export type BlockActionsMenuProps = {
   currentFillColor?: string
   /** Current frame border (frame menu). Empty = transparent. */
   currentBorderColor?: string
+  /** Current frame border thickness in px (frame menu). */
+  currentBorderWeight?: number
   /** True when the focused frame is pinned to the board. */
   boardLocked?: boolean
   /** True when ≥2 selected frames share a frameLockGroupId. */
@@ -282,7 +340,7 @@ type RowDef =
       shortcut?: string
       icon: React.ReactNode
       danger?: boolean
-      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape' | 'fillColor' | 'borderColor' | 'connections' | 'notionConnection'
+      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape' | 'frameColor' | 'connections' | 'notionConnection'
       hidden?: boolean
       beta?: boolean
     }
@@ -420,6 +478,7 @@ export function BlockActionsMenu({
   showFrameShape = false,
   currentFillColor = '',
   currentBorderColor = '',
+  currentBorderWeight = 1,
   boardLocked = false,
   framesLockedTogether = false,
   canLockFramesTogether = false,
@@ -440,8 +499,7 @@ export function BlockActionsMenu({
     | 'turnInto'
     | 'boardIn'
     | 'frameShape'
-    | 'fillColor'
-    | 'borderColor'
+    | 'frameColor'
     | 'connections'
     | 'notionConnection'
     | null
@@ -451,28 +509,54 @@ export function BlockActionsMenu({
   const rootRef = useRef<HTMLDivElement>(null) // Position flyout
   const connectionsRowRef = useRef<HTMLButtonElement>(null) // Align Connections picker to that row
   const notionRowRef = useRef<HTMLButtonElement>(null) // Align Notion sync menu to that row
-  const [rowFlyoutTop, setRowFlyoutTop] = useState(0) // px from menu top → Connections / Notion row
+  const colorRowRef = useRef<HTMLButtonElement>(null) // Align frame Color flyout to Color row
+  const [rowFlyoutTop, setRowFlyoutTop] = useState(0) // px from menu top → Connections / Notion / Color row
+  const [lastFrameColor, setLastFrameColor] = useState<FrameLastColor | null>(null) // Last used fill/border
+  const [borderWeightDraft, setBorderWeightDraft] = useState<number | null>(null) // Live slider value while dragging
+  const borderWeightDraggingRef = useRef(false) // Ignore prop sync mid-drag
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
 
   useEffect(() => {
+    setLastFrameColor(readFrameLastColor()) // Hydrate Last used after mount
+  }, [])
+
+  // Follow prop when not dragging so external updates stay in sync
+  useEffect(() => {
+    if (!borderWeightDraggingRef.current) setBorderWeightDraft(null)
+  }, [currentBorderWeight])
+
+  useEffect(() => {
     if (showPropertySearch) propertySearchRef.current?.focus() // Caret in Property search
   }, [showPropertySearch])
 
-  // Park Connections / Notion flyouts beside their row (not at the menu top)
+  // Park Connections / Notion / Color flyouts beside their row (not at the menu top)
   useLayoutEffect(() => {
     const row =
       openSubmenu === 'connections'
         ? connectionsRowRef.current
         : openSubmenu === 'notionConnection'
           ? notionRowRef.current
-          : null
+          : openSubmenu === 'frameColor'
+            ? colorRowRef.current
+            : null
     const root = rootRef.current
     if (!row || !root) return
     setRowFlyoutTop(row.getBoundingClientRect().top - root.getBoundingClientRect().top)
   }, [openSubmenu, notionConnected])
+
+  /** Apply fill or border, remember as Last used, keep the flyout open. */
+  const applyFrameColor = (kind: FrameColorKind, swatch: (typeof FRAME_COLOR_SWATCHES)[number]) => {
+    const value = kind === 'fill' ? swatch.fill : swatch.border
+    const label = `${swatch.name} ${kind === 'fill' ? 'background' : 'border'}`
+    const entry: FrameLastColor = { kind, id: swatch.id, value, label }
+    writeFrameLastColor(entry)
+    setLastFrameColor(entry)
+    if (kind === 'fill') onAction('setFillColor', { fillColor: value })
+    else onAction('setBorderColor', { borderColor: value })
+  }
 
   const rows = useMemo((): RowDef[] => {
     const list: RowDef[] = [
@@ -488,7 +572,7 @@ export function BlockActionsMenu({
         id: 'color',
         label: 'Color',
         icon: <PaintRoller className="h-4 w-4" />,
-        submenu: 'color',
+        submenu: showFrameShape ? 'frameColor' : 'color', // Frame → fill/border palette; block → stub
       },
       {
         kind: 'action',
@@ -551,22 +635,6 @@ export function BlockActionsMenu({
         icon: <Shapes className="h-4 w-4" />,
         submenu: 'frameShape', // Silhouette picker — frames act as shapes
         hidden: !showFrameShape, // Frame menu only (not TipTap block ⋮⋮)
-      },
-      {
-        kind: 'action',
-        id: 'setFillColor',
-        label: 'Fill',
-        icon: <PaintBucket className="h-4 w-4" />,
-        submenu: 'fillColor', // Frame background color picker
-        hidden: !showFrameShape,
-      },
-      {
-        kind: 'action',
-        id: 'setBorderColor',
-        label: 'Border',
-        icon: <Pencil className="h-4 w-4" />,
-        submenu: 'borderColor', // Frame border color picker
-        hidden: !showFrameShape,
       },
       {
         kind: 'action',
@@ -870,8 +938,7 @@ export function BlockActionsMenu({
           const hasSub = Boolean(row.submenu)
           const isTurnIntoOpen = row.submenu === 'turnInto' && openSubmenu === 'turnInto'
           const isShapeOpen = row.submenu === 'frameShape' && openSubmenu === 'frameShape'
-          const isFillOpen = row.submenu === 'fillColor' && openSubmenu === 'fillColor'
-          const isBorderOpen = row.submenu === 'borderColor' && openSubmenu === 'borderColor'
+          const isFrameColorOpen = row.submenu === 'frameColor' && openSubmenu === 'frameColor'
           const isConnectionsOpen = row.submenu === 'connections' && openSubmenu === 'connections'
           const isNotionConnOpen =
             row.submenu === 'notionConnection' && openSubmenu === 'notionConnection'
@@ -883,15 +950,16 @@ export function BlockActionsMenu({
                   ? connectionsRowRef
                   : row.submenu === 'notionConnection'
                     ? notionRowRef
-                    : undefined
+                    : row.submenu === 'frameColor'
+                      ? colorRowRef
+                      : undefined
               }
               variant="ghost"
               size="sm"
               onMouseEnter={() => {
                 if (row.submenu === 'turnInto') setOpenSubmenu('turnInto')
                 else if (row.submenu === 'frameShape') setOpenSubmenu('frameShape')
-                else if (row.submenu === 'fillColor') setOpenSubmenu('fillColor')
-                else if (row.submenu === 'borderColor') setOpenSubmenu('borderColor')
+                else if (row.submenu === 'frameColor') setOpenSubmenu('frameColor')
                 else if (row.submenu === 'notionConnection') setOpenSubmenu('notionConnection') // Hover → sync menu
                 else if (row.submenu === 'connections') return // Click-only picker
                 else setOpenSubmenu(null)
@@ -907,12 +975,8 @@ export function BlockActionsMenu({
                   setOpenSubmenu((s) => (s === 'frameShape' ? null : 'frameShape'))
                   return
                 }
-                if (row.submenu === 'fillColor') {
-                  setOpenSubmenu((s) => (s === 'fillColor' ? null : 'fillColor'))
-                  return
-                }
-                if (row.submenu === 'borderColor') {
-                  setOpenSubmenu((s) => (s === 'borderColor' ? null : 'borderColor'))
+                if (row.submenu === 'frameColor') {
+                  setOpenSubmenu((s) => (s === 'frameColor' ? null : 'frameColor'))
                   return
                 }
                 if (row.submenu === 'connections') {
@@ -934,7 +998,7 @@ export function BlockActionsMenu({
               className={cn(
                 'justify-start text-sm h-8 px-2 font-normal',
                 row.danger && 'text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950',
-                (isTurnIntoOpen || isShapeOpen || isFillOpen || isBorderOpen || isConnectionsOpen || isNotionConnOpen) && 'bg-gray-100 dark:bg-[#2a2a2a]'
+                (isTurnIntoOpen || isShapeOpen || isFrameColorOpen || isConnectionsOpen || isNotionConnOpen) && 'bg-gray-100 dark:bg-[#2a2a2a]'
               )}
             >
               <span className="mr-2 text-gray-500 dark:text-gray-400">{row.icon}</span>
@@ -1237,63 +1301,163 @@ export function BlockActionsMenu({
         </div>
       )}
 
-      {/* Fill — frame background color (empty = transparent) */}
-      {openSubmenu === 'fillColor' && (
+      {/* Frame Color — Last used / Background color / Border color (Notion-style) */}
+      {openSubmenu === 'frameColor' && (
         <div
-          className="absolute left-full top-0 ml-1 z-[1001] w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2"
-          onMouseEnter={() => setOpenSubmenu('fillColor')}
+          className="absolute left-full ml-1 z-[1001] w-[240px] max-h-[min(420px,70vh)] overflow-y-auto bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] py-1.5"
+          style={{ top: rowFlyoutTop }} // Beside the Color row
+          onMouseEnter={() => setOpenSubmenu('frameColor')}
         >
-          <div className="px-1 pb-1.5 text-[11px] text-gray-400">Frame fill</div>
-          <input
-            type="color"
-            value={currentFillColor || '#ffffff'}
-            onChange={(e) => onAction('setFillColor', { fillColor: e.target.value })}
-            className="w-full h-8 rounded border border-gray-300 dark:border-gray-600 cursor-pointer"
-            title="Fill color"
-            aria-label="Fill color"
-          />
-          <Button
-            variant={!currentFillColor ? 'default' : 'outline'}
-            size="sm"
-            className="w-full mt-2 h-7 text-xs"
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              onAction('setFillColor', { fillColor: '' })
-            }}
-          >
-            Transparent
-          </Button>
-        </div>
-      )}
+          {/* Last used */}
+          <div className="px-3 pt-1 pb-1 text-[11px] font-medium text-gray-400">Last used</div>
+          {lastFrameColor ? (
+            <button
+              type="button"
+              className="mx-1 flex w-[calc(100%-8px)] items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] text-gray-900 hover:bg-gray-50 dark:text-gray-100 dark:hover:bg-[#2a2a2a]"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                // Re-apply the stored channel + value (do not rematch by id)
+                if (lastFrameColor.kind === 'fill') {
+                  onAction('setFillColor', { fillColor: lastFrameColor.value })
+                } else {
+                  onAction('setBorderColor', { borderColor: lastFrameColor.value })
+                }
+                writeFrameLastColor(lastFrameColor)
+              }}
+            >
+              <span
+                className="h-5 w-5 shrink-0 rounded-[4px] border border-gray-200 dark:border-gray-600"
+                style={{
+                  backgroundColor: lastFrameColor.value || '#ffffff', // Swatch preview (default = white)
+                }}
+                aria-hidden
+              />
+              <span className="flex-1 truncate">{lastFrameColor.label}</span>
+              <span className="text-[11px] text-gray-400 tabular-nums">⌘⇧H</span>
+            </button>
+          ) : (
+            <div className="px-3 py-1.5 text-[12px] text-gray-400">None yet</div>
+          )}
 
-      {/* Border — frame stroke color (empty = transparent) */}
-      {openSubmenu === 'borderColor' && (
-        <div
-          className="absolute left-full top-8 ml-1 z-[1001] w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2"
-          onMouseEnter={() => setOpenSubmenu('borderColor')}
-        >
-          <div className="px-1 pb-1.5 text-[11px] text-gray-400">Frame border</div>
-          <input
-            type="color"
-            value={currentBorderColor || '#000000'}
-            onChange={(e) => onAction('setBorderColor', { borderColor: e.target.value })}
-            className="w-full h-8 rounded border border-gray-300 dark:border-gray-600 cursor-pointer"
-            title="Border color"
-            aria-label="Border color"
-          />
-          <Button
-            variant={!currentBorderColor ? 'default' : 'outline'}
-            size="sm"
-            className="w-full mt-2 h-7 text-xs"
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              onAction('setBorderColor', { borderColor: '' })
-            }}
-          >
-            Transparent
-          </Button>
+          <div className="my-1.5 mx-2 h-px bg-gray-100 dark:bg-[#2f2f2f]" />
+
+          {/* Background color (= frame fill) */}
+          <div className="px-3 pt-0.5 pb-1 text-[11px] font-medium text-gray-400">
+            Background color
+          </div>
+          {FRAME_COLOR_SWATCHES.map((swatch) => {
+            const selected = colorsMatch(currentFillColor, swatch.fill)
+            return (
+              <button
+                key={`fill-${swatch.id}`}
+                type="button"
+                className={cn(
+                  'mx-1 flex w-[calc(100%-8px)] items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] text-gray-900 hover:bg-gray-50 dark:text-gray-100 dark:hover:bg-[#2a2a2a]',
+                  selected && 'bg-purple-50/60 outline outline-2 outline-blue-500 outline-offset-[-1px] dark:bg-purple-950/30'
+                )}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  applyFrameColor('fill', swatch)
+                }}
+              >
+                <span
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[4px] border border-gray-200 dark:border-gray-600"
+                  style={{ backgroundColor: swatch.fill || '#ffffff' }}
+                  aria-hidden
+                />
+                <span className="flex-1 truncate">{swatch.name} background</span>
+              </button>
+            )
+          })}
+
+          <div className="my-1.5 mx-2 h-px bg-gray-100 dark:bg-[#2f2f2f]" />
+
+          {/* Border color */}
+          <div className="px-3 pt-0.5 pb-1 text-[11px] font-medium text-gray-400">Border color</div>
+          {/* Size slider — continuous drag; commit on release */}
+          {(() => {
+            const clampedProp = Math.min(8, Math.max(1, Number(currentBorderWeight) || 1))
+            const shown =
+              borderWeightDraft != null
+                ? Math.min(8, Math.max(1, borderWeightDraft))
+                : clampedProp
+            const label =
+              Math.abs(shown - Math.round(shown)) < 0.05
+                ? String(Math.round(shown))
+                : shown.toFixed(1)
+            return (
+              <div className="mx-1 mb-1.5 flex items-center gap-2 px-2 py-1">
+                <input
+                  type="range"
+                  min={1}
+                  max={8}
+                  step={0.1}
+                  value={shown}
+                  onPointerDown={(e) => {
+                    e.stopPropagation()
+                    borderWeightDraggingRef.current = true // Own the thumb until release
+                    setBorderWeightDraft(shown)
+                  }}
+                  onChange={(e) => {
+                    e.stopPropagation()
+                    const w = parseFloat(e.target.value)
+                    setBorderWeightDraft(w)
+                    // Live preview only — no undo snapshot / DB write yet
+                    onAction('setBorderWeight', { borderWeight: w, borderWeightCommit: false })
+                  }}
+                  onPointerUp={(e) => {
+                    e.stopPropagation()
+                    borderWeightDraggingRef.current = false
+                    const w = parseFloat((e.currentTarget as HTMLInputElement).value) // Final thumb position
+                    onAction('setBorderWeight', { borderWeight: w, borderWeightCommit: true })
+                    setBorderWeightDraft(null)
+                  }}
+                  onPointerCancel={() => {
+                    borderWeightDraggingRef.current = false
+                    setBorderWeightDraft(null)
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-gray-200 accent-gray-700 dark:bg-[#333] dark:accent-gray-300"
+                  title={`Border size: ${label}px`}
+                  aria-label="Border size"
+                />
+                <span className="w-7 shrink-0 text-right text-[11px] tabular-nums text-gray-500">
+                  {label}
+                </span>
+              </div>
+            )
+          })()}
+          {FRAME_COLOR_SWATCHES.map((swatch) => {
+            const selected = colorsMatch(currentBorderColor, swatch.border)
+            return (
+              <button
+                key={`border-${swatch.id}`}
+                type="button"
+                className={cn(
+                  'mx-1 flex w-[calc(100%-8px)] items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] text-gray-900 hover:bg-gray-50 dark:text-gray-100 dark:hover:bg-[#2a2a2a]',
+                  selected && 'bg-purple-50/60 outline outline-2 outline-blue-500 outline-offset-[-1px] dark:bg-purple-950/30'
+                )}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  applyFrameColor('border', swatch)
+                }}
+              >
+                <span
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[4px] border bg-white dark:bg-[#1f1f1f]"
+                  style={{
+                    borderColor: swatch.border || '#d1d5db',
+                    borderWidth: swatch.border ? 2 : 1,
+                    boxShadow: swatch.border ? `inset 0 0 0 1px ${swatch.border}` : undefined,
+                  }}
+                  aria-hidden
+                />
+                <span className="flex-1 truncate">{swatch.name} border</span>
+              </button>
+            )
+          })}
         </div>
       )}
 

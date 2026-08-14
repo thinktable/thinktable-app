@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-13T23:33:50Z`
+- Snapped at: `2026-08-14T01:28:06Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
-- CLI: `supabase` `2.90.0` (marker via `migration new`; nested workdir path corrected)
+- CLI: `supabase` `2.114.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260814012801_frame_color_menu_border_slider.sql`.
+- Frame Color menu: Last used → Background → Border (smooth 1–8px size slider); solid fills; border shows from color alone; hide Draw reset arrow.
+- Schema unchanged.
+
+## Prior: board menu long press draggable heal
 
 - No DDL. Marker `20260813233344_board_menu_long_press_draggable_heal.sql`.
 - Board empty-pane menu; phone long-press → Board/frame/Map menus; unselected TipTap non-editable; message merge always recomputes frame `draggable` (fix stuck-after-Linear/pin).

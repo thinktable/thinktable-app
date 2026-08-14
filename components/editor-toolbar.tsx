@@ -3035,8 +3035,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
 
       {/* Right Section — AI origin + Notion + Share (pinned to the bar’s right, not in the centered cluster) */}
       <div className="absolute right-2 inset-y-0 z-20 flex items-center gap-1 pointer-events-auto" data-right-section>
-        {/* Reset to Default Button - only show when settings differ from defaults */}
-        {hasNonDefaultSettings && (
+        {/* Reset to Default — View/Actions only; not on Draw top bar */}
+        {hasNonDefaultSettings && editMenuPillMode !== 'draw' && (
           <div className="flex items-center pl-2 pr-0 -mr-1 flex-shrink-0">
             <Button
               variant="ghost"

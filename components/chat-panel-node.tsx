@@ -1699,41 +1699,30 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     return `rgba(${r}, ${g}, ${b}, ${opacity})`
   }, [])
 
-  // Calculate panel background color with transparency
-  // If fillColor is provided, convert to rgba with 0.15 opacity
-  // If fillColor is empty/transparent, use fully transparent background
+  // Calculate panel background color
+  // Notion-style pastels are stored as-is (full color); empty = transparent
   const panelBackgroundColor = useMemo(() => {
     if (data.fillColor) {
-      return hexToRgba(data.fillColor, 0.15) // Maintain 15% opacity for transparency
+      return data.fillColor // Solid wash — pastels read correctly (0.15 made them invisible)
     }
-    return 'transparent' // Fully transparent when no fill color is set
-  }, [data.fillColor, hexToRgba])
+    return 'transparent'
+  }, [data.fillColor])
 
-  // Calculate prompt/grey area background color
-  // Dark mode: 10% opacity, Light mode: 15% opacity
-  // If fillColor is provided, use that color with theme-specific opacity
-  // If fillColor is empty/transparent, use fully transparent
+  // Calculate prompt/grey area background color — inherit frame fill when set
   const promptAreaBackgroundColor = useMemo(() => {
     if (data.fillColor) {
-      // Dark mode: 10% opacity, Light mode: 15% opacity
-      const opacity = resolvedTheme === 'dark' ? 0.10 : 0.15
-      return hexToRgba(data.fillColor, opacity)
+      return data.fillColor
     }
-    return 'transparent' // Fully transparent when no fill color is set
-  }, [data.fillColor, resolvedTheme, hexToRgba])
+    return 'transparent'
+  }, [data.fillColor])
 
-  // Calculate response/white area background color
-  // Dark mode: 15% opacity, Light mode: 10% opacity
-  // If fillColor is provided, use that color with theme-specific opacity
-  // If fillColor is empty/transparent, use fully transparent
+  // Calculate response/white area background color — inherit frame fill when set
   const responseAreaBackgroundColor = useMemo(() => {
     if (data.fillColor) {
-      // Dark mode: 15% opacity, Light mode: 10% opacity
-      const opacity = resolvedTheme === 'dark' ? 0.15 : 0.10
-      return hexToRgba(data.fillColor, opacity)
+      return data.fillColor
     }
-    return 'transparent' // Fully transparent when no fill color is set
-  }, [data.fillColor, resolvedTheme, hexToRgba])
+    return 'transparent'
+  }, [data.fillColor])
 
   // Connection points: blue fill + white border (matches selection chrome blue-500)
   const handleColor = '#3b82f6'
@@ -1742,15 +1731,12 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
 
   // Check if panel is minimal (transparent fill + no visible border)
   // When minimal and not selected, handles should be hidden
-  // Empty borderColor = Transparent (same as fill); borderStyle 'none' also counts
+  // Empty borderColor = transparent; only explicit borderStyle 'none' hides a colored border
   const isFillTransparent = !data.fillColor || data.fillColor === '' || data.fillColor === null
   const isBorderColorTransparent =
     !data.borderColor || data.borderColor === '' || data.borderColor === null
   const isBorderNone =
-    isBorderColorTransparent ||
-    !data.borderStyle ||
-    data.borderStyle === 'none' ||
-    data.borderStyle === null
+    isBorderColorTransparent || data.borderStyle === 'none' // Color alone is enough to show a border
   const isMinimalPanel = isFillTransparent && isBorderNone
   const shouldHideHandles = isMinimalPanel && !selected
 
@@ -5006,21 +4992,18 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         // Rotated: outer is transparent shell (fill on inner) — kills upright ghost under rotated card
         backgroundColor:
           frameShape || isContentRotated ? 'transparent' : panelBackgroundColor,
-        borderColor: selected
-          ? undefined
-          : frameShape || isBorderColorTransparent || isContentRotated
+        borderColor:
+          frameShape || isBorderColorTransparent || isContentRotated
             ? 'transparent'
-            : data.borderColor,
-        borderStyle: selected
-          ? 'solid'
-          : frameShape || isBorderNone || isContentRotated
+            : data.borderColor, // Keep custom border visible while selected (Color menu feedback)
+        borderStyle:
+          frameShape || isBorderNone || isContentRotated
             ? 'none'
-            : ((data.borderStyle as React.CSSProperties['borderStyle']) || undefined),
-        borderWidth: selected
-          ? (data.borderWeight || '1px')
-          : frameShape || isBorderNone || isContentRotated
+            : ((data.borderStyle as React.CSSProperties['borderStyle']) || 'solid'), // Color without style → solid
+        borderWidth:
+          frameShape || isBorderNone || isContentRotated
             ? 0
-            : (data.borderWeight || undefined),
+            : (data.borderWeight || 1), // Default 1px when a border color is set
         ['--tt-frame-ui-scale' as string]: frameUiScale,
         ['--tt-frame-line-w' as string]: `${frameLineW}px`,
         ['--tt-frame-line-hit' as string]: `${frameLineHit}px`,
