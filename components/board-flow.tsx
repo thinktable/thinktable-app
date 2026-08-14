@@ -174,6 +174,7 @@ const MINIMAP_WIDTH = 179 // Keep in sync with .minimap-custom-size width in glo
 const MINIMAP_BOTTOM = 8 // Inset from map column bottom edge
 const MINIMAP_LEFT = 8 // Match top-bar menu button (sticky-prompt-panel paddingLeft 0.5rem)
 const MINIMAP_NAV_GAP = 6 // Air between Free nav and minimap in the column stack
+const MINIMAP_EXPAND_MS = 220 // Shared open/close/load height tween (expand-up)
 const FREE_NAV_WIDTH = MINIMAP_WIDTH // Same width as the minimap so the column stack lines up
 const BRAND_RIGHT = 12 // Inset from map column right edge
 // Stable key-code arrays — new array literals each render make RF's useKeyPress loop (Max update depth).
@@ -1612,6 +1613,8 @@ function BoardFlowInner({
   // Collapse = preference hidden, OR jumped without an active peek/pin
   const minimapCollapsed = phoneAiOpen ? !aiDockMinimapOpen : isMinimapHidden
   const [isScrollingToBottom, setIsScrollingToBottom] = useState(false) // Track if we're currently scrolling to bottom (for minimap flash prevention)
+  const [minimapLoadReady, setMinimapLoadReady] = useState(false) // Stay clipped until frames + prefs have landed
+  const minimapExpanded = minimapLoadReady && !minimapCollapsed && !isScrollingToBottom // One flag for +/- and the height tween
   const [clickedEdge, setClickedEdge] = useState<Edge | null>(null) // Track clicked edge for popup (local state for popup logic)
 
   // Sync clickedEdge to context so toolbar can access it
@@ -2024,6 +2027,28 @@ function BoardFlowInner({
     )
   }, [conversationId, isMessagesPending, messages.length, setNodes])
 
+  const hasFrameShimmer = (nodes || []).some((n) => n.type === 'frameShimmer') // Load shells still on the board
+  const hasRealMapNodes = (nodes || []).some((n) => n.type !== 'frameShimmer' && n.type !== 'placeholder') // Frames/drawings MiniMap can paint
+  // Clip the minimap until prefs + frames are in, then expand-up (same tween as +/-)
+  useEffect(() => {
+    if (embedded || minimapLoadReady) return // Embeds have no minimap; only arm once
+    if (isLoadingMinimapMode) return // Don't expand until shown/hidden/hover is known
+    if (!reactFlowInstance) return // MiniMap needs the RF store
+    if (conversationId && isMessagesPending) return // Wait for this board's frames
+    if (hasFrameShimmer) return // Don't reveal over placeholder silhouettes
+    if (conversationId && messages.length > 0 && !hasRealMapNodes) return // Wait until panels replace the fetch
+    let cancelled = false // Drop the rAF if a later load gate fails
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!cancelled) setMinimapLoadReady(true) // Two frames so MiniMap SVG can paint while clipped
+      })
+    })
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(id)
+    }
+  }, [embedded, minimapLoadReady, isLoadingMinimapMode, reactFlowInstance, conversationId, isMessagesPending, hasFrameShimmer, hasRealMapNodes, messages.length])
+
   // Refetch frames when AI edit session saves/discards/applies pending
   useEffect(() => {
     const onMutated = (event: Event) => {
@@ -2324,7 +2349,7 @@ function BoardFlowInner({
   // Uses the same fitViewOptions as defined in ReactFlow props
   // We need to attach listeners directly to the minimap DOM element after React Flow renders it
   useEffect(() => {
-    if (messages.length === 0 || !reactFlowInstance || isMinimapHidden) return
+    if (messages.length === 0 || !reactFlowInstance || !minimapExpanded) return
 
     let minimapElement: HTMLElement | null = null
     let cleanup: (() => void) | null = null
@@ -2629,7 +2654,7 @@ function BoardFlowInner({
     return () => {
       if (cleanup) cleanup()
     }
-  }, [messages.length, reactFlowInstance, isMinimapHidden, viewMode]) // Re-attach when minimap visibility or view mode changes
+  }, [messages.length, reactFlowInstance, minimapExpanded, viewMode]) // Re-attach when minimap visibility or view mode changes
 
   // Set up Supabase Realtime subscription for live message updates
   useEffect(() => {
@@ -8895,7 +8920,7 @@ function BoardFlowInner({
            }px`,
            left: `${mapChromeLeft}px`,
            width: FREE_NAV_WIDTH,
-           gap: `${MINIMAP_NAV_GAP}px`, // Slight air between Free nav and minimap
+           gap: 0, // Nav↔minimap air lives on the minimap clip so it collapses with the expand tween
            transition: 'none', // Instant with AI dock — no lag
          }}
        >
@@ -8935,13 +8960,13 @@ function BoardFlowInner({
               isChatSidebarOpen && !aiChatHasTranscript
                 ? 'bg-white dark:bg-[#0f0f0f]'
                 : 'bg-gray-50 dark:bg-[#0f0f0f]',
-              minimapCollapsed || isScrollingToBottom
+              !minimapExpanded
                 ? 'text-gray-500 dark:text-gray-400 hover:opacity-90'
                 : 'text-gray-900 dark:text-gray-100 hover:opacity-90'
             )}
-            title={minimapCollapsed || isScrollingToBottom ? 'Show minimap' : 'Hide minimap'}
-            aria-label={minimapCollapsed || isScrollingToBottom ? 'Show minimap' : 'Hide minimap'}
-            aria-pressed={!(minimapCollapsed || isScrollingToBottom)}
+            title={!minimapExpanded ? 'Show minimap' : 'Hide minimap'}
+            aria-label={!minimapExpanded ? 'Show minimap' : 'Hide minimap'}
+            aria-pressed={minimapExpanded}
             onContextMenuCapture={(e) => {
               e.preventDefault()
               e.stopPropagation()
@@ -8976,7 +9001,7 @@ function BoardFlowInner({
               }
             }}
           >
-            {minimapCollapsed || isScrollingToBottom ? (
+            {!minimapExpanded ? (
               <Plus className="h-2.5 w-2.5" strokeWidth={2.5} />
             ) : (
               <Minus className="h-2.5 w-2.5" strokeWidth={2.5} />
@@ -9038,36 +9063,48 @@ function BoardFlowInner({
           </div>
         </div>
 
-        {/* Minimap — in-flow under Free nav so it cannot be covered by absolute positioning */}
-        {!minimapCollapsed && !isScrollingToBottom && (
+        {/* Minimap — always mounted, height-clipped so load and +/- share an expand-up tween */}
+        <div
+          data-minimap-context
+          className="relative"
+          aria-hidden={!minimapExpanded}
+          onContextMenuCapture={(e) => {
+            // Capture: MiniMap SVG can eat bubble-phase contextmenu
+            e.preventDefault()
+            e.stopPropagation()
+            setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
+          }}
+          onMouseEnter={() => {
+            setIsMinimapHovering(true)
+            isMinimapHoveringRef.current = true
+            if (minimapHideTimeoutRef.current) {
+              clearTimeout(minimapHideTimeoutRef.current)
+              minimapHideTimeoutRef.current = null
+            }
+          }}
+          onMouseLeave={(e) => {
+            setIsMinimapHovering(false)
+            isMinimapHoveringRef.current = false
+            checkAndHideMinimap(e.relatedTarget as HTMLElement)
+          }}
+          style={{
+            position: 'relative',
+            width: MINIMAP_WIDTH, // Same as Free nav so the column edges line up
+            height: minimapExpanded ? MINIMAP_HEIGHT : 0, // Closed = clipped; open grows because the stack is bottom-anchored
+            marginTop: minimapExpanded ? MINIMAP_NAV_GAP : 0, // Collapse the nav air with the same tween
+            overflow: 'hidden', // Reveal MiniMap from the bottom as height grows
+            flexShrink: 0,
+            pointerEvents: minimapExpanded ? 'auto' : 'none', // Clicks pass through while clipped
+            transition: `height ${MINIMAP_EXPAND_MS}ms ease-out, margin-top ${MINIMAP_EXPAND_MS}ms ease-out`,
+          }}
+        >
           <div
-            data-minimap-context
-            className="relative"
-            onContextMenuCapture={(e) => {
-              // Capture: MiniMap SVG can eat bubble-phase contextmenu
-              e.preventDefault()
-              e.stopPropagation()
-              setMinimapContextMenuPosition({ x: e.clientX, y: e.clientY })
-            }}
-            onMouseEnter={() => {
-              setIsMinimapHovering(true)
-              isMinimapHoveringRef.current = true
-              if (minimapHideTimeoutRef.current) {
-                clearTimeout(minimapHideTimeoutRef.current)
-                minimapHideTimeoutRef.current = null
-              }
-            }}
-            onMouseLeave={(e) => {
-              setIsMinimapHovering(false)
-              isMinimapHoveringRef.current = false
-              checkAndHideMinimap(e.relatedTarget as HTMLElement)
-            }}
             style={{
-              position: 'relative',
-              width: MINIMAP_WIDTH, // Same as Free nav so the column edges line up
-              height: MINIMAP_HEIGHT,
-              flexShrink: 0,
-              pointerEvents: 'auto',
+              position: 'absolute',
+              bottom: 0, // Pin full-size MiniMap to the clip bottom so growth reveals upward
+              left: 0,
+              width: MINIMAP_WIDTH,
+              height: MINIMAP_HEIGHT, // Keep RF MiniMap at real size while the clip is 0
             }}
           >
             <MiniMap
@@ -9078,6 +9115,7 @@ function BoardFlowInner({
               maskColor={resolvedTheme === 'dark'
                 ? 'rgba(42, 42, 58, 0.35)'
                 : 'rgba(200, 200, 200, 0.2)'}
+              maskStrokeColor="none"
               pannable={true}
               zoomable={true}
               className="minimap-custom-size shadow-sm"
@@ -9095,7 +9133,7 @@ function BoardFlowInner({
               }}
             />
           </div>
-        )}
+        </div>
        </div>
 
       </>

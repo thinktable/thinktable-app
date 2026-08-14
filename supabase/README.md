@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260814181955_top_bar_load_layout_minimap` — Top bar load layout (path shimmer, chat-column measure); minimap expand-up
 - `20260814134144_prompt_bars_menu_placement_ibar` — AI prompt bars, chrome-free menu placement, I-bar pane-click slop
 - `20260814065945_top_bar_tool_titles` — Mode-bar tool titles + two-stage collapse (Search title hides on field slide-out)
 - `20260814063716_view_capture_presentation` — View Capture + Presentation menus (local captures, add-to-chat)

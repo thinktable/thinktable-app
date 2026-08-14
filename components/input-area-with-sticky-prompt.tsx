@@ -238,40 +238,10 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
     }
   }, [])
 
-  // Center Actions/Layout/Draw/View menu + hide pill on the board / edit-bar column
-  // (not the prompt box). Chat sidebar overlays and does not change column width.
-  const [pillSelectLeft, setPillSelectLeft] = useState(0)
-  const [pillSelectWidth, setPillSelectWidth] = useState(200) // Default width, will be measured
+  // Center Actions/Layout/Draw/View on the map column via CSS (left 50%) so it paints
+  // centered on load — do not JS-measure after React Flow mounts (that started at left:0 and slid).
+  const [pillSelectWidth, setPillSelectWidth] = useState(200) // Hover-zone width; measured once mounted
   const pillSelectRef = useRef<HTMLDivElement>(null)
-  
-  useEffect(() => {
-    const getBoardColumn = (): HTMLElement | null => {
-      // Map column wraps BoardFlow + overlays; react-flow fills it
-      const rf = document.querySelector('.react-flow') as HTMLElement | null
-      if (!rf) return null
-      return (rf.parentElement as HTMLElement) || rf
-    }
-
-    const calculatePillSelectPosition = () => {
-      const boardColumn = getBoardColumn()
-      if (!boardColumn) return
-      setPillSelectLeft(boardColumn.clientWidth / 2) // Center of board / edit-bar area
-    }
-    
-    calculatePillSelectPosition()
-    window.addEventListener('resize', calculatePillSelectPosition)
-
-    const boardColumn = getBoardColumn()
-    const resizeObserver = boardColumn
-      ? new ResizeObserver(() => calculatePillSelectPosition())
-      : null
-    if (resizeObserver && boardColumn) resizeObserver.observe(boardColumn)
-    
-    return () => {
-      window.removeEventListener('resize', calculatePillSelectPosition)
-      if (resizeObserver) resizeObserver.disconnect()
-    }
-  }, [])
   
   // Keep refs in sync with state
   useEffect(() => {
@@ -411,7 +381,7 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
     return () => {
       resizeObserver.disconnect()
     }
-  }, [isPillSelectHidden, pillSelectLeft])
+  }, [isPillSelectHidden])
 
   // Function to check and hide prompt box if cursor left all related areas
   const checkAndHidePromptBox = useCallback(() => {
@@ -536,13 +506,11 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
       
       {/* Hover zone covering full pill select area - triggers hide pill visibility and keeps menu open */}
       <div
-        className="absolute pointer-events-auto flex items-center justify-center"
+        className="absolute left-1/2 -translate-x-1/2 pointer-events-auto flex items-center justify-center"
         style={{
-          left: `${pillSelectLeft}px`,
           top: '52px', // Start right below top bar (52px height)
           width: `${Math.max(pillSelectWidth || 200, 200)}px`, // Match pill select width, minimum 200px
           height: '20px', // Reduced height - just enough to cover pill area for hover
-          transform: 'translateX(-50%)', // Center on calculated position
           zIndex: 18, // Below pill (z-25) and pill select (z-20) but still captures hover in gap area
         }}
         onMouseEnter={() => {
@@ -644,7 +612,7 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
           className={cn(
           // Soft when menu open; medium when hidden; darker on direct pill hover.
           // Stays compact until hovered briefly, then expands.
-          'absolute rounded-full cursor-pointer transition-all duration-200 z-30',
+          'absolute left-1/2 -translate-x-1/2 rounded-full cursor-pointer transition-[width,height,opacity,background-color] duration-200 z-30',
           isPillExpanded ? 'w-20 h-2' : 'w-12 h-1.5',
           isHoveringPill
             ? 'bg-gray-300 dark:bg-gray-600' // Direct hover: darker
@@ -655,10 +623,8 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
           (editMenuMode === 'shown' && !isHoveringPillSelectArea) ? 'opacity-0' : 'opacity-100'
         )}
         style={{
-          left: `${pillSelectLeft}px`,
           // Keep centered on top bar bottom edge (52px) as height changes
           top: isPillExpanded ? '48px' : '49px',
-          transform: 'translateX(-50%)', // Center on calculated position
         }}
         title={isPillSelectHidden ? 'Show mode selector' : 'Hide mode selector'}
       />
@@ -673,13 +639,11 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
           setContextMenuPosition({ x: e.clientX, y: e.clientY })
         }}
         className={cn(
-          'absolute z-20 transition-opacity duration-200',
+          'absolute left-1/2 -translate-x-1/2 z-20 transition-opacity duration-200',
           isPillSelectHidden ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'
         )}
           style={{
-            left: `${pillSelectLeft}px`,
             top: '64px', // Position below pill (pill ends at ~63px, so 64px gives 1px gap, no overlap)
-            transform: 'translateX(-50%)', // Center on calculated position
           }}
         onMouseEnter={() => {
           // Keep menu open while interacting with it; treat as still in the hover cluster

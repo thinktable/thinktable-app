@@ -274,6 +274,51 @@
   background-size: 200% 100%;
 }
 
+/* Top-bar board path crumbs while titles fetch — reserve width so tools don’t collapse */
+.tt-topbar-path-shimmer {
+  display: inline-block; /* Row crumb, not a stacked frame line */
+  height: 1rem; /* Match text-sm path label */
+  border-radius: 4px; /* Same soft chip as frame shimmer lines */
+  flex-shrink: 0; /* Hold left-chrome width during load */
+  pointer-events: none; /* Placeholder only */
+  vertical-align: middle; /* Sit on the path text baseline */
+  background: linear-gradient(
+    90deg,
+    #e5e7eb 0%,
+    #e5e7eb 35%,
+    #f3f4f6 50%,
+    #e5e7eb 65%,
+    #e5e7eb 100%
+  );
+  background-size: 200% 100%;
+  animation: tt-frame-shimmer-sweep 1.4s ease-in-out infinite;
+}
+
+.dark .tt-topbar-path-shimmer {
+  background: linear-gradient(
+    90deg,
+    #2a2a2a 0%,
+    #2a2a2a 35%,
+    #3a3a3a 50%,
+    #2a2a2a 65%,
+    #2a2a2a 100%
+  );
+  background-size: 200% 100%;
+}
+
+/* First paint of the tool cluster is already compact/full — don’t animate that into place */
+[data-toolbar-center]:not([data-toolbar-animate]) .tt-toolbar-title,
+[data-toolbar-center]:not([data-toolbar-animate]) button {
+  transition: none !important; /* Skip collapse animation on load */
+}
+
+/* Cookie-SSR may paint the desktop chat column; never steal map width on phone */
+@media (max-width: 899px) {
+  [data-chat-sidebar] {
+    display: none !important; /* Phone uses the map dock, not this column */
+  }
+}
+
 /* Shimmer effect - applies to text elements within shimmer container */
 /* Targets all paragraph elements and spans inside the shimmer wrapper */
 /* Uses explicit colors (gray-900/gray-500) to ensure proper text visibility */
@@ -762,17 +807,15 @@ span[data-added="true"] {
     background-color: #171717 !important; /* Dark background matching sidebar */
   }
 
-  /* Ensure minimap viewport indicator (grey border/mask) stays within bounds */
+  /* Mask is an SVG evenodd <path> in flow units — never CSS-size it (179×120 clips the overlay to the origin). Never stroke it (the viewport hole would get a second border). */
   .minimap-custom-size .react-flow__minimap-mask {
-    width: 100% !important;
-    height: 100% !important;
-    max-width: 179px !important;
-    max-height: 120px !important;
+    stroke: none; /* Fill-only overlay; stroke draws both outer bounds and the inner window */
   }
 
   /* Dark mode minimap mask fill — match nav #2a2a3a */
   .dark .minimap-custom-size .react-flow__minimap-mask {
     fill: rgba(42, 42, 58, 0.45) !important;
+    stroke: none; /* Same: no inner window ring */
   }
 
   /* Ensure minimap SVG and viewport indicator are properly scaled */
@@ -787,18 +830,6 @@ span[data-added="true"] {
   /* Dark mode minimap SVG background */
   .dark .minimap-custom-size svg {
     background-color: #171717 !important; /* Dark background matching sidebar */
-  }
-
-  /* Viewport indicator stroke — gray to match nav (not blue) */
-  .minimap-custom-size .react-flow__minimap-mask rect {
-    stroke: rgb(209, 213, 219) !important; /* gray-300 */
-    stroke-width: 2px !important;
-  }
-
-  /* Dark mode viewport indicator stroke */
-  .dark .minimap-custom-size .react-flow__minimap-mask rect {
-    stroke: rgb(75, 85, 99) !important; /* gray-600 */
-    stroke-width: 2px !important;
   }
 
   /* Minimap node dots - larger size and color states */

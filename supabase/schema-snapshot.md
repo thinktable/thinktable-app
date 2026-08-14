@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-14T13:41:44Z`
+- Snapped at: `2026-08-14T18:19:55Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
-- CLI: `supabase` `2.90.0` (marker via `migration new`; latest available `2.114.0`)
+- CLI: `supabase` `2.114.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260814181955_top_bar_load_layout_minimap.sql`.
+- Top bar: one path shimmer; chat-open cookie so the column exists on first HTML; tools stay hidden until that width is measured (already collapsed if space requires). Minimap expand-up after frames land.
+- Schema unchanged.
+
+## Prior: prompt bars menu placement ibar
 
 - No DDL. Marker `20260814134144_prompt_bars_menu_placement_ibar.sql`.
 - AI prompt bars (sidebar ticks / phone dashes); chrome-free menu placement; I-bar pane-click slop.

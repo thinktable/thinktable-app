@@ -57,6 +57,15 @@ type PathBoard = {
 
 const PATH_MENU_LIMIT = 8 // Cap visible siblings; show “N more” like Notion
 
+// One crumb bar while the board path query is pending (holds left-chrome width)
+function BoardPathShimmer() {
+  return (
+    <span className="truncate select-none flex items-center min-w-0" aria-busy="true" aria-label="Loading board path">
+      <span className="tt-topbar-path-shimmer w-32" /> {/* ~one title; not a fake ancestor / current pair */}
+    </span>
+  )
+}
+
 function getParentId(metadata: Record<string, unknown> | null | undefined): string | null {
   const parentRaw = metadata?.parent_id
   return typeof parentRaw === 'string' && parentRaw.trim() !== '' ? parentRaw : null
@@ -363,11 +372,19 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
     },
     enabled: Boolean(conversationId || projectId),
     staleTime: 30_000,
+    placeholderData: (previousData, previousQuery) => {
+      // Same board — pathBoards dump changing the key must not flash shimmer / collapse tools
+      if (previousQuery?.queryKey[1] === conversationId && previousQuery?.queryKey[2] === projectId) {
+        return previousData
+      }
+      return undefined
+    },
   })
 
   const path = titleData?.path
-  const displayTitle = titleData?.label || (conversationId || projectId ? '…' : 'Thinktable') // Placeholder while loading
+  const displayTitle = titleData?.label || (conversationId || projectId ? '' : 'Thinktable') // Empty while shimmering
   const showBoardPath = Boolean(conversationId && path && path.length > 0) // Interactive path on board pages
+  const showPathShimmer = Boolean((conversationId || projectId) && !path?.length) // Hold chrome width until titles land
 
   // Siblings at the same parent level as a path segment
   const siblingsFor = (segment: BoardPathSegment): PathBoard[] => {
@@ -417,7 +434,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
           }}
         >
           {/* Left chrome — menu + board path; z-20 so title stays clickable if tools overlap */}
-          <div data-top-bar-left className="relative z-20 flex items-center min-w-0 shrink-0">
+          <div data-top-bar-left data-path-ready={showPathShimmer ? undefined : 'true'} className="relative z-20 flex items-center min-w-0 shrink-0">
           {/* Menu icon — hover opens; click pins open until clicked again (survives page switch) */}
           <div
             data-nav-logo-trigger
@@ -443,7 +460,9 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
 
           {/* Board path — click opens page; hover lists same-level pages */}
           <div className="flex items-center gap-0 min-w-0 shrink mr-2 max-w-[min(420px,48vw)] text-sm font-medium">
-            {showBoardPath && path ? (
+            {showPathShimmer ? (
+              <BoardPathShimmer />
+            ) : showBoardPath && path ? (
               <span className="truncate select-none flex items-center min-w-0" title={displayTitle}>
                 {path.map((segment, index) => {
                   const isLast = index === path.length - 1

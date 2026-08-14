@@ -7,7 +7,7 @@ import { Button } from './ui/button'
 import { useReactFlowContext } from './react-flow-context'
 import { threadAlgorithmFromStyle, type ThreadStylePref } from '@/components/threads' // Smooth/Sharp/Linear
 import { usePreviewFocus } from '@/lib/preview-focus-context' // Nested preview View-style targeting
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -76,6 +76,7 @@ import { CapturesMenu } from './captures-menu' // View-bar Capture list popover
 import { ToolbarTitle } from './toolbar-title' // Animated icon-adjacent titles
 import { PresentationsMenu } from './presentations-menu' // View-bar Presentation list popover
 import { useBoardAccess } from '@/lib/share/board-access-context' // Owner-only share menu
+import { useSidebarContext } from './sidebar-context' // Wait for chat column restore before measuring titles
 import { useAiEditSession } from '@/lib/ai/edit-session' // Top-bar AI content mask toggle
 import { htmlHasAiOrigin } from '@/lib/ai/wrap-ai-html' // Detect AI-origin spans in frame HTML
 import { LegoBrickIcon } from './lego-brick-icon' // Frame-group lock: two bricks, top one stud back
@@ -101,6 +102,7 @@ function titledToolWidth(label: string) {
 
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const { canShare, canEdit, role } = useBoardAccess() // Gate share + show view-only chrome
+  const { isChatSidebarOpen, chatChromeReady } = useSidebarContext() // Measure only after chat column is restored
   const { reactFlowInstance, isLocked, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, mapUndo, mapRedo, canMapUndo, canMapRedo, getMapTakeSnapshot } = useReactFlowContext()
   const { showAiOrigin, setShowAiOrigin } = useAiEditSession() // Reddish AI content overlay toggle
   const queryClientForAi = useQueryClient() // Scan page frames for AI-origin content
@@ -399,6 +401,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const compactEarlyLabelsRef = useRef(false) // Hysteresis for the first title-collapse stage
   const [compactLabels, setCompactLabels] = useState(false) // Remaining titles after the early cluster
   const compactLabelsRef = useRef(false) // Hysteresis so the title animation does not thrash at the threshold
+  const [toolbarLayoutReady, setToolbarLayoutReady] = useState(false) // Hide tools until first measure so names don’t paint then collapse
+  const toolbarLayoutReadyRef = useRef(false) // Same flag for checkVisibility without a stale closure
+  const [toolbarAnimate, setToolbarAnimate] = useState(false) // Enable title transitions only after the first correct layout
   const [boardSearch, setBoardSearch] = useState('') // Actions-bar live search over frame title + body
   const [boardSearchOpen, setBoardSearchOpen] = useState(false) // Icon-only until click; then the field slides out
   const boardSearchInputRef = useRef<HTMLInputElement>(null) // Place the I-bar in the sliding field
@@ -900,20 +905,27 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   }, [fillColor, borderColor, borderStyle, borderWeight, clickedEdge, reactFlowInstance])
 
   // Track which items should be hidden based on available space (Google Docs style)
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!toolbarRef.current) return
 
     const checkVisibility = () => {
       const toolbar = toolbarRef.current
       if (!toolbar) return
+      if (!chatChromeReady) return // Chat column not restored yet — measuring now would fit titles then collapse
 
       const bar = toolbar.closest('[data-edit-top-bar]') as HTMLElement | null // Full map-column bar
       const leftChrome = bar?.querySelector('[data-top-bar-left]') as HTMLElement | null
       const toolbarRect = (bar ?? toolbar).getBoundingClientRect()
       const rightSection = toolbar.querySelector('[data-right-section]') as HTMLElement
-      const moreMenuButton = toolbar.querySelector('[data-more-menu]') as HTMLElement
 
-      if (!rightSection) return
+      const pathReady = !leftChrome || leftChrome.getAttribute('data-path-ready') === 'true' // Wait for board path (not shimmer)
+      if (!pathReady) return // Path still a placeholder — left inset will grow
+
+      if (!rightSection) {
+        toolbarLayoutReadyRef.current = true
+        setToolbarLayoutReady(true) // Nothing to collapse; still reveal
+        return
+      }
 
       const rightSectionRect = rightSection.getBoundingClientRect()
       const leftW = leftChrome?.getBoundingClientRect().width ?? 0 // Menu + board path
@@ -1008,9 +1020,10 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       const sumGroups = (groups: { width: number }[]) => groups.reduce((sum, item) => sum + item.width + 8, 0) // +8 gap/slash
       const fullTotal = sumGroups(fullGroups) // Filter/ink + remaining titles
       const midTotal = sumGroups(midGroups) // Filter/ink icons; remaining titles
-      const expandSlop = 24 // Extra room before titles expand again — keeps the animation from flickering
-      const wasEarly = compactEarlyLabelsRef.current // Last early-collapse decision
-      const wasRest = compactLabelsRef.current // Last remaining-title collapse
+      const firstPass = !toolbarLayoutReadyRef.current // First fit has no hysteresis — load already collapsed if needed
+      const expandSlop = firstPass ? 0 : 24 // Extra room before titles expand again — keeps later animation from flickering
+      const wasEarly = firstPass ? false : compactEarlyLabelsRef.current // Last early-collapse decision
+      const wasRest = firstPass ? false : compactLabelsRef.current // Last remaining-title collapse
       let nextEarly = wasEarly
       let nextRest = wasRest
       if (fullTotal <= availableWidth - ((wasEarly || wasRest) ? expandSlop : 0)) { // Room for every title
@@ -1042,28 +1055,37 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         if (prev.size === newHiddenItems.size && [...newHiddenItems].every((id) => prev.has(id))) return prev
         return newHiddenItems
       })
+      toolbarLayoutReadyRef.current = true
+      setToolbarLayoutReady(true) // Reveal only after compact/hidden match this column width
     }
 
-    // Initial check with delay to ensure DOM is ready
-    const initialTimeout = setTimeout(checkVisibility, 100)
+    checkVisibility() // After chat restore + path ready; still before paint on that commit
 
     const resizeObserver = new ResizeObserver(() => {
-      requestAnimationFrame(checkVisibility)
+      checkVisibility() // Sync — rAF would paint expanded titles for a frame then collapse
     })
     resizeObserver.observe(toolbarRef.current)
     const barEl = toolbarRef.current.closest('[data-edit-top-bar]') // Re-measure when the map column resizes
     if (barEl) resizeObserver.observe(barEl)
     const leftEl = barEl?.querySelector('[data-top-bar-left]') // Title path width changes the center inset
     if (leftEl) resizeObserver.observe(leftEl)
+    const attrObserver = leftEl
+      ? new MutationObserver(() => checkVisibility()) // Path shimmer → real title may not change width
+      : null
+    if (attrObserver && leftEl) attrObserver.observe(leftEl, { attributes: true, attributeFilter: ['data-path-ready'] })
 
     window.addEventListener('resize', checkVisibility)
 
     return () => {
-      clearTimeout(initialTimeout)
       resizeObserver.disconnect()
+      attrObserver?.disconnect()
       window.removeEventListener('resize', checkVisibility)
     }
-  }, [editor, editMenuPillMode, boardSearchOpen]) // Re-run when edit menu mode or search slide changes
+  }, [editor, editMenuPillMode, boardSearchOpen, chatChromeReady, isChatSidebarOpen]) // Re-run when the map column’s final width is known
+
+  useLayoutEffect(() => {
+    if (toolbarLayoutReady && !toolbarAnimate) setToolbarAnimate(true) // After first reveal, allow later collapse/expand animation
+  }, [toolbarLayoutReady, toolbarAnimate])
 
   const isItemHidden = (item: string) => hiddenItems.has(item)
 
@@ -1077,7 +1099,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
         <div
           data-toolbar-center
-          className="pointer-events-auto relative z-10 flex items-center gap-1 h-full overflow-hidden"
+          data-toolbar-animate={toolbarAnimate ? 'true' : undefined}
+          className={cn(
+            'pointer-events-auto relative z-10 flex items-center gap-1 h-full overflow-hidden',
+            !toolbarLayoutReady && 'invisible' // Layout in place; show only after compact/hidden is correct
+          )}
         >
       {/* Left Section - collapsible items */}
       <div ref={leftSectionRef} className="flex items-center gap-1 flex-shrink min-w-0">

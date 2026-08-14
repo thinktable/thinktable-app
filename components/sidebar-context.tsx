@@ -8,6 +8,7 @@ import {
   useCallback,
   useRef,
   useEffect,
+  useLayoutEffect,
   ReactNode,
 } from 'react'
 import { getStoredLogoDrawing, TT_LOGO_DRAWING_STORAGE_KEY } from './personalize-ai-modal'
@@ -15,11 +16,11 @@ import { getStoredLogoDrawing, TT_LOGO_DRAWING_STORAGE_KEY } from './personalize
 /** Width of the right chat sidebar when open (keeps top bar / map shrunk left). Notion-like panel width. */
 export const CHAT_SIDEBAR_WIDTH = 360
 
-/** localStorage key — reopen chat column after reload when it was open. */
+/** localStorage + cookie key — reopen chat column after reload when it was open. */
 export const TT_CHAT_SIDEBAR_OPEN_KEY = 'thinktable-chat-sidebar-open'
 
-/** localStorage key — restore the same AI thread after reload. */
-export const TT_CHAT_THREAD_ID_KEY = 'thinktable-chat-thread-id'
+/** Cookie twin of the localStorage flag so SSR can paint the column already open. */
+export const TT_CHAT_SIDEBAR_COOKIE = 'thinktable-chat-sidebar-open'
 
 /** Read whether chat was open last session (SSR-safe → false). */
 function getStoredChatSidebarOpen(): boolean {
@@ -27,11 +28,15 @@ function getStoredChatSidebarOpen(): boolean {
   return localStorage.getItem(TT_CHAT_SIDEBAR_OPEN_KEY) === 'true' // Persist open across reload
 }
 
-/** Persist chat open/closed so reload restores the column. */
+/** Persist chat open/closed so reload restores the column (localStorage + cookie for SSR). */
 function persistChatSidebarOpen(open: boolean) {
   if (typeof window === 'undefined') return // No storage on server
-  localStorage.setItem(TT_CHAT_SIDEBAR_OPEN_KEY, open ? 'true' : 'false') // Write flag
+  localStorage.setItem(TT_CHAT_SIDEBAR_OPEN_KEY, open ? 'true' : 'false') // Client restore
+  document.cookie = `${TT_CHAT_SIDEBAR_COOKIE}=${open ? 'true' : 'false'}; Path=/; Max-Age=31536000; SameSite=Lax` // First HTML paint
 }
+
+/** localStorage key — restore the same AI thread after reload. */
+export const TT_CHAT_THREAD_ID_KEY = 'thinktable-chat-thread-id'
 
 interface SidebarContextType {
   isMobileMode: boolean // True when window is too small (minimap auto-hides)
@@ -44,6 +49,7 @@ interface SidebarContextType {
   scheduleCloseSidebar: () => void // Hide after short delay (bridge logo ↔ menu; no-op if pinned)
   cancelCloseSidebar: () => void // Cancel pending delayed close when re-entering
   isChatSidebarOpen: boolean // True when right chat sidebar is visible
+  chatChromeReady: boolean // True after storage restore so the top bar can measure the final column
   toggleChatSidebar: () => void // Toggle right chat sidebar (logo by minimap)
   setChatSidebarOpen: (open: boolean) => void // Explicit open/close for chat sidebar
   logoDrawing: string | null // Custom logo PNG data URL (shared by chat + map open icon)
@@ -63,11 +69,18 @@ interface SidebarContextType {
 
 const SidebarContext = createContext<SidebarContextType | undefined>(undefined)
 
-export function SidebarContextProvider({ children }: { children: ReactNode }) {
+export function SidebarContextProvider({
+  children,
+  initialChatOpen = false,
+}: {
+  children: ReactNode
+  initialChatOpen?: boolean // Cookie from the server so the column exists in the first HTML
+}) {
   const [isMobileMode, setIsMobileMode] = useState(false) // Compact layout flag from board flows
   const [isSidebarOpen, setIsSidebarOpen] = useState(false) // Left nav popup visibility
   const [isSidebarPinned, setIsSidebarPinned] = useState(false) // Click-pinned: stay open across leave/nav
-  const [isChatSidebarOpen, setIsChatSidebarOpen] = useState(false) // Closed until client hydrates localStorage
+  const [isChatSidebarOpen, setIsChatSidebarOpen] = useState(initialChatOpen) // Cookie/SSR: already open when it was last time
+  const [chatChromeReady, setChatChromeReady] = useState(false) // False until this layout effect restores open/closed
   const [logoDrawing, setLogoDrawingState] = useState<string | null>(null) // Shared custom logo drawing
   const [aiMapDockLiftPx, setAiMapDockLiftPx] = useState(0) // Phone: lift Free nav above AI dock
   const [aiMapDockLeftPx, setAiMapDockLeftPx] = useState<number | null>(null) // Phone: align Free nav to dock left
@@ -95,14 +108,17 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
     aiComposerFocusRef.current = fn // Mounted phone AiComposer wires this
   }, [])
 
-  // Hydrate chat open + logo after mount (SSR useState init stays false — must re-read here)
-  useEffect(() => {
+  // Restore chat open + logo before first paint; cookie already opened the column in SSR HTML
+  useLayoutEffect(() => {
     const narrow = window.innerWidth < 900 // Same threshold as board-flow minimap mobile mode
     setIsMobileMode(narrow) // Ready before first brand tap (phone map-dock path)
     const storedOpen = getStoredChatSidebarOpen() // Last session flag
-    // Phone: don’t restore an open column — brand tap opens the map dock + keyboard instead
-    setIsChatSidebarOpen(narrow ? false : storedOpen)
+    const nextOpen = narrow ? false : storedOpen // Phone: don’t restore a desktop column
+    isChatOpenRef.current = nextOpen // Sync before children measure on the next commit
+    setIsChatSidebarOpen(nextOpen)
+    if (!narrow) persistChatSidebarOpen(storedOpen) // Backfill cookie so the next SSR already has the column
     setLogoDrawingState(getStoredLogoDrawing()) // Custom logo PNG
+    setChatChromeReady(true) // Next commit: column is final; top bar may measure
   }, [])
 
   const setLogoDrawing = useCallback((url: string | null) => {
@@ -191,6 +207,7 @@ export function SidebarContextProvider({ children }: { children: ReactNode }) {
         scheduleCloseSidebar,
         cancelCloseSidebar,
         isChatSidebarOpen,
+        chatChromeReady,
         toggleChatSidebar,
         setChatSidebarOpen,
         logoDrawing,
@@ -224,6 +241,7 @@ export function useSidebarContext() {
       scheduleCloseSidebar: () => {},
       cancelCloseSidebar: () => {},
       isChatSidebarOpen: false,
+      chatChromeReady: true, // No provider — nothing to restore; measure immediately
       toggleChatSidebar: () => {},
       setChatSidebarOpen: () => {},
       logoDrawing: null as string | null,

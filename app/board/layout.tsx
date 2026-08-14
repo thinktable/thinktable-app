@@ -1,5 +1,6 @@
 // Main board layout — full-bleed map; AppSidebar mounts as fixed hover popup (not a column)
 import React from 'react'
+import { cookies } from 'next/headers'
 import AppSidebar from '@/components/app-sidebar'
 import { SidebarContextProvider } from '@/components/sidebar-context'
 
@@ -23,10 +24,11 @@ export default async function BoardLayout({
   // Always render the layout - handle all errors gracefully
   // Get user safely - if it fails, just render without sidebar
   const user = await getSafeUser()
+  const initialChatOpen = (await cookies()).get('thinktable-chat-sidebar-open')?.value === 'true' // Column already in first HTML
 
   // Always render - never throw errors
   return (
-    <SidebarContextProvider>
+    <SidebarContextProvider initialChatOpen={initialChatOpen}>
       <div className="flex flex-col" style={{ height: 'calc(var(--vh, 1vh) * 100)' }}>
         <div className="flex-1 flex overflow-hidden relative">
           {user ? <AppSidebar user={user} /> : null}
