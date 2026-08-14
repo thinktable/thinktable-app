@@ -1,6 +1,6 @@
 'use client'
 
-// Floating pill select — segmented control (Actions / Insert / Draw / View)
+// Floating pill select — segmented control (Actions / Layout / Draw / View)
 import { useState, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 

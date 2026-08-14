@@ -514,6 +514,11 @@ function TipTapContent({
       handleDOMEvents: {
         mousedown: (view: any, event: Event) => {
           const mouseEvent = event as MouseEvent
+          // Right-click: skip PM I-bar. Do NOT stopPropagation/preventDefault — Chrome
+          // then never fires contextmenu, so the frame menu never opens.
+          if (mouseEvent.button === 2) {
+            return true // Skip ProseMirror caret; let contextmenu bubble to the frame menu
+          }
           // Unselected: editor is already editable:false — do NOT preventDefault here
           // (that aborted RF/d3 frame drag on press+move). Only suppress the follow-up I-bar.
           if (!isPanelSelectedRef.current) {
@@ -537,6 +542,10 @@ function TipTapContent({
 
           // Don’t override selection here — PM places the I-bar; container click confirms via posAtCoords
           return false
+        },
+        contextmenu: (_view: any, event: Event) => {
+          event.preventDefault() // Block native Cut/Copy so the frame menu can show
+          return false // Let it bubble to RF / board-flow capture
         },
         blur: (view: any) => {
           // Re-haze any temporarily revealed spans when the editor loses focus
@@ -917,6 +926,7 @@ function TipTapContent({
   // Focus editor + place I-bar — only when the frame is already selected (not the select click)
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
     if (!editor) return
+    if (e.button !== 0) return // Right-click is the frame menu, not an I-bar
     // Unselected: never place caret — RF selects/drags the frame first
     if (!isPanelSelected) return
     // Same gesture that just selected the frame / armed a nest — no I-bar
@@ -4931,7 +4941,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           !isProjectBoard && promptMessage?.id && isFramePending(promptMessage.id) ? 'true' : undefined
         }
         className={cn(
-          'group border relative cursor-grab active:cursor-grabbing overflow-visible transition-[opacity,box-shadow,background-color,border-color] duration-300', // Chrome sits outside; clip only inner body
+          'group nopan border relative cursor-grab active:cursor-grabbing overflow-visible transition-[opacity,box-shadow,background-color,border-color] duration-300', // nopan: right-click opens frame menu, not board pan
           // When rotated, fill lives on the inner shell only (avoids upright+rotated double shape)
           !frameShape && !isContentRotated && 'rounded-2xl',
           !isFillTransparent && !frameShape && !isContentRotated && 'backdrop-blur-sm',

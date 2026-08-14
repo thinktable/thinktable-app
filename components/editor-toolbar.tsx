@@ -52,6 +52,8 @@ import {
   Sparkles,
   Circle,
   Grid3x3,
+  Boxes, // Layout Smart Align — multi-box glyph
+  Presentation, // View presentation mode
   Table,
   File,
   Camera,
@@ -60,7 +62,6 @@ import {
   ArrowUpDown,
   Zap,
   Search,
-  Move,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
@@ -81,7 +82,7 @@ interface EditorToolbarProps {
 
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const { canShare, canEdit, role } = useBoardAccess() // Gate share + show view-only chrome
-  const { reactFlowInstance, isLocked, layoutMode, setLayoutMode, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, mapUndo, mapRedo, canMapUndo, canMapRedo, snapEnabled, setSnapEnabled, getMapTakeSnapshot } = useReactFlowContext()
+  const { reactFlowInstance, isLocked, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, mapUndo, mapRedo, canMapUndo, canMapRedo, getMapTakeSnapshot } = useReactFlowContext()
   const { showAiOrigin, setShowAiOrigin } = useAiEditSession() // Reddish AI content overlay toggle
   const queryClientForAi = useQueryClient() // Scan page frames for AI-origin content
   const [hasAiContent, setHasAiContent] = useState(false)
@@ -895,30 +896,28 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       const rightW = rightSectionRect.width // Notion / Share / AI
       const sideInset = Math.max(leftW, rightW) // Symmetric inset so the cluster can sit on the board center
 
-      // Calculate widths of fixed elements (More menu, Layout dropdown)
+      // Calculate widths of fixed elements (More menu)
       // More menu appears when items are hidden, so we need to account for it in calculations
-      // Layout dropdown is always visible at the end of the centered cluster
       // We always reserve space for the more menu button (even when not visible) since it will appear when items are hidden
       const moreMenuWidth = 32 + 8 // More menu button width (h-7 w-7) + gap/separator - always reserve this space
-      const layoutDropdownWidth = editMenuPillMode === 'home' ? 70 + 8 : 0 // Layout (None/Suggest/…) only on Actions
 
       // Max cluster width that still fits on the true board center without covering title or Share
-      const availableWidth = toolbarRect.width - 2 * sideInset - moreMenuWidth - layoutDropdownWidth - 16
+      const availableWidth = toolbarRect.width - 2 * sideInset - moreMenuWidth - 16
 
       // Define item groups with their approximate widths (right to left priority for hiding)
-      // Note: 'layout' is excluded from this list as it's positioned outside the left section and should never be hidden
       // Use different item groups based on edit menu mode
       const itemGroups = editMenuPillMode === 'insert'
         ? [
+          { id: 'smartAlign', width: 40 }, // Smart Align (Boxes) — Layout bar
+          { id: 'arrows', width: 40 }, // Layout arrow direction
           { id: 'insertGroup1', width: 237 }, // Table, File, Camera
           { id: 'undoRedo', width: 70 },
         ]
         : editMenuPillMode === 'view'
           ? [
-            // View mode buttons: Board Style dropdown
-            // Board Style: Grid icon (16px) + gap (6px) + text "Board Style" (~80px) + padding (16px) = ~118px
-            { id: 'boardStyle', width: 118 },
-            { id: 'snap', width: 40 },
+            // View: Board rule/style + presentation
+            { id: 'presentation', width: 40 }, // Presentation icon (hides first — rightmost)
+            { id: 'boardStyle', width: 118 }, // Board rule/style dropdown
             { id: 'undoRedo', width: 70 },
           ]
           : editMenuPillMode === 'draw'
@@ -937,10 +936,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               { id: 'undoRedo', width: 70 },
             ]
             : [
-              // Actions mode: undo + locks + filter/sort/automations + search + layout arrow
+              // Actions mode: undo + locks + filter/sort/automations + search
               { id: 'search', width: boardSearchOpen ? 180 : 40 }, // Icon-only until the field slides out
               { id: 'actions', width: 120 }, // Filter + Sort + Automations
-              { id: 'arrows', width: 40 }, // Layout arrow direction
               { id: 'undoRedo', width: 70 },
               { id: 'lock', width: 64 }, // Board lock + frame lock (no slash between)
             ]
@@ -1124,7 +1122,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-7 w-7 p-0 text-[#2383e2] hover:text-[#1a6fc9] hover:bg-blue-50 flex-shrink-0"
+                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0"
                     title="Filter"
                   >
                     <ListFilter className="h-4 w-4" />
@@ -1141,7 +1139,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-7 w-7 p-0 text-[#2383e2] hover:text-[#1a6fc9] hover:bg-blue-50 flex-shrink-0"
+                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0"
                     title="Sort"
                   >
                     <ArrowUpDown className="h-4 w-4" />
@@ -1159,8 +1157,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 conversationId={conversationId}
               />
             </div>
-            {/* If search is hidden, slash before layout arrow or More menu */}
-            {isItemHidden('search') && (!isItemHidden('arrows') || hiddenItems.size > 0) && (
+            {/* If search is hidden, slash before More menu */}
+            {isItemHidden('search') && hiddenItems.size > 0 && (
               <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
             )}
           </>
@@ -1219,55 +1217,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 />
               </div>
             </div>
-            {/* Slash before layout arrow or More menu when arrow is overflowed */}
-            {(!isItemHidden('arrows') || hiddenItems.size > 0) && (
+            {/* Slash before More menu when items overflow */}
+            {hiddenItems.size > 0 && (
               <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
             )}
           </>
-        )}
-
-        {/* Layout arrow direction — stays in Actions; thread style moved to the thread click menu */}
-        {editMenuPillMode === 'home' && !isItemHidden('arrows') && (
-          <DropdownMenu open={openDropdown === 'arrowDirection'} onOpenChange={(open) => handleDropdownOpenChange('arrowDirection', open)}>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 w-7 p-0 text-gray-600 hover:text-gray-900 hover:bg-gray-100 flex-shrink-0"
-              >
-                {arrowDirection === 'down' && <ArrowDown className="h-4 w-4" />}
-                {arrowDirection === 'up' && <ArrowUp className="h-4 w-4" />}
-                {arrowDirection === 'left' && <ArrowLeft className="h-4 w-4" />}
-                {arrowDirection === 'right' && <ArrowRight className="h-4 w-4" />}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
-              <DropdownMenuItem
-                onClick={() => setArrowDirection('down')}
-                className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'down' && 'bg-gray-100')}
-              >
-                <ArrowDown className="h-4 w-4" />
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => setArrowDirection('right')}
-                className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'right' && 'bg-gray-100')}
-              >
-                <ArrowRight className="h-4 w-4" />
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => setArrowDirection('left')}
-                className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'left' && 'bg-gray-100')}
-              >
-                <ArrowLeft className="h-4 w-4" />
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => setArrowDirection('up')}
-                className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'up' && 'bg-gray-100')}
-              >
-                <ArrowUp className="h-4 w-4" />
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
         )}
 
         {/* Insert Mode Buttons - Table, File, Camera */}
@@ -1314,7 +1268,76 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   </Button>
               </div>
             )}
+            {/* Slash before Smart Align / layout arrow or More menu */}
+            {!isItemHidden('insertGroup1') && (!isItemHidden('smartAlign') || !isItemHidden('arrows') || hiddenItems.size > 0) && (
+              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
+            )}
           </>
+        )}
+
+        {/* Smart Align + layout arrow — Layout bar (pill still `insert`) */}
+        {editMenuPillMode === 'insert' && (!isItemHidden('smartAlign') || !isItemHidden('arrows')) && (
+          <div className="flex items-center gap-0.5 flex-shrink-0">
+            {!isItemHidden('smartAlign') && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0"
+                title="Smart Align"
+                aria-label="Smart Align"
+              >
+                <Boxes className="h-4 w-4" /> {/* Multi-box: Smart Align (UI until wired) */}
+              </Button>
+            )}
+            {!isItemHidden('arrows') && (
+              <DropdownMenu open={openDropdown === 'arrowDirection'} onOpenChange={(open) => handleDropdownOpenChange('arrowDirection', open)}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0"
+                    title="Layout direction"
+                    aria-label="Layout direction"
+                  >
+                    {arrowDirection === 'down' && <ArrowDown className="h-4 w-4" />}
+                    {arrowDirection === 'up' && <ArrowUp className="h-4 w-4" />}
+                    {arrowDirection === 'left' && <ArrowLeft className="h-4 w-4" />}
+                    {arrowDirection === 'right' && <ArrowRight className="h-4 w-4" />}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
+                  <DropdownMenuItem
+                    onClick={() => setArrowDirection('down')}
+                    className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'down' && 'bg-gray-100')}
+                  >
+                    <ArrowDown className="h-4 w-4" />
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => setArrowDirection('right')}
+                    className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'right' && 'bg-gray-100')}
+                  >
+                    <ArrowRight className="h-4 w-4" />
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => setArrowDirection('left')}
+                    className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'left' && 'bg-gray-100')}
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => setArrowDirection('up')}
+                    className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'up' && 'bg-gray-100')}
+                  >
+                    <ArrowUp className="h-4 w-4" />
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
+        )}
+        {/* Slash before More menu when Layout tools overflow */}
+        {editMenuPillMode === 'insert' && (!isItemHidden('smartAlign') || !isItemHidden('arrows')) && hiddenItems.size > 0 && (
+          <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
         )}
 
         {/* Draw Mode Buttons - Lasso, Insert Spaces, Eraser, Pencil, Highlighter, Colors */}
@@ -1599,25 +1622,28 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
+            {/* Slash before presentation or More menu */}
+            {(!isItemHidden('presentation') || hiddenItems.size > 0) && (
+              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
+            )}
           </>
         )}
 
-        {/* Snap Toggle Button - View Mode Only */}
-        {editMenuPillMode === 'view' && !isItemHidden('snap') && (
-          <>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setSnapEnabled(!snapEnabled)}
-              className={cn(
-                'h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0',
-                snapEnabled && 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100'
-              )}
-              title={snapEnabled ? 'Disable snap to grid' : 'Enable snap to grid'}
-            >
-              <Move className="h-4 w-4" />
-            </Button>
-          </>
+        {/* Presentation — View bar (UI until wired) */}
+        {editMenuPillMode === 'view' && !isItemHidden('presentation') && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0"
+            title="Presentation"
+            aria-label="Presentation"
+          >
+            <Presentation className="h-4 w-4" /> {/* Screen glyph: present the board */}
+          </Button>
+        )}
+        {/* Slash before More menu when presentation stays visible but other View tools overflow */}
+        {editMenuPillMode === 'view' && !isItemHidden('presentation') && hiddenItems.size > 0 && (
+          <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
         )}
 
         {/* Paint Format / Clear Formatting Button */}
@@ -2448,6 +2474,36 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <DropdownMenuSeparator />
                   </>
                 )}
+                {isItemHidden('smartAlign') && (
+                  <>
+                    <DropdownMenuItem>
+                      <Boxes className="h-4 w-4 mr-2" />
+                      Smart Align
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                {isItemHidden('arrows') && (
+                  <>
+                    <DropdownMenuItem onClick={() => setArrowDirection('down')}>
+                      <ArrowDown className="h-4 w-4 mr-2" />
+                      Arrow Down
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setArrowDirection('right')}>
+                      <ArrowRight className="h-4 w-4 mr-2" />
+                      Arrow Right
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setArrowDirection('left')}>
+                      <ArrowLeft className="h-4 w-4 mr-2" />
+                      Arrow Left
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setArrowDirection('up')}>
+                      <ArrowUp className="h-4 w-4 mr-2" />
+                      Arrow Up
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 {/* Common items (undo/redo, lock) */}
                 {isItemHidden('undoRedo') && editor && (
                   <>
@@ -2487,6 +2543,15 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     >
                       <Grid3x3 className="h-4 w-4 mr-2" />
                       Board Style
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                {isItemHidden('presentation') && (
+                  <>
+                    <DropdownMenuItem>
+                      <Presentation className="h-4 w-4 mr-2" />
+                      Presentation
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>
@@ -2712,15 +2777,15 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 {isItemHidden('actions') && (
                   <>
                     <DropdownMenuItem onClick={() => handleDropdownOpenChange('boardFilter', true)}>
-                      <ListFilter className="h-4 w-4 mr-2 text-[#2383e2]" />
+                      <ListFilter className="h-4 w-4 mr-2" />
                       Filter
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => handleDropdownOpenChange('boardSort', true)}>
-                      <ArrowUpDown className="h-4 w-4 mr-2 text-[#2383e2]" />
+                      <ArrowUpDown className="h-4 w-4 mr-2" />
                       Sort
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => handleDropdownOpenChange('boardAutomations', true)}>
-                      <Zap className="h-4 w-4 mr-2 text-[#2383e2]" />
+                      <Zap className="h-4 w-4 mr-2" />
                       Automations
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
@@ -2817,26 +2882,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       Align Right
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
-                  </>
-                )}
-                {isItemHidden('arrows') && (
-                  <>
-                    <DropdownMenuItem onClick={() => setArrowDirection('down')}>
-                      <ArrowDown className="h-4 w-4 mr-2" />
-                      Arrow Down
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setArrowDirection('right')}>
-                      <ArrowRight className="h-4 w-4 mr-2" />
-                      Arrow Right
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setArrowDirection('left')}>
-                      <ArrowLeft className="h-4 w-4 mr-2" />
-                      Arrow Left
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setArrowDirection('up')}>
-                      <ArrowUp className="h-4 w-4 mr-2" />
-                      Arrow Up
-                    </DropdownMenuItem>
                   </>
                 )}
                 {isItemHidden('panelControls') && (
@@ -2978,54 +3023,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 )}
               </>
             )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
-
-      {/* Slash between More menu and Layout dropdown when items overflow */}
-      {hiddenItems.size > 0 && editMenuPillMode === 'home' && (
-        <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
-      )}
-
-      {/* Layout Dropdown — Actions bar only */}
-      {editMenuPillMode === 'home' && !isItemHidden('layout') && (
-        <DropdownMenu open={openDropdown === 'layoutMode'} onOpenChange={(open) => handleDropdownOpenChange('layoutMode', open)}>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 flex-shrink-0"
-            >
-              <span className="text-sm capitalize">
-                {layoutMode === 'none' ? 'None' : layoutMode === 'auto' ? 'Suggest' : layoutMode}
-              </span>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-auto min-w-fit">
-            <DropdownMenuItem
-              onClick={() => setLayoutMode('auto')}
-              className={cn('flex items-center gap-2', layoutMode === 'auto' && 'bg-gray-100')}
-            >
-              Suggest <span>✨</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => setLayoutMode('tree')}
-              className={cn('flex items-center gap-2', layoutMode === 'tree' && 'bg-gray-100')}
-            >
-              Tree
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => setLayoutMode('cluster')}
-              className={cn('flex items-center gap-2', layoutMode === 'cluster' && 'bg-gray-100')}
-            >
-              Cluster
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => setLayoutMode('none')}
-              className={cn('flex items-center gap-2', layoutMode === 'none' && 'bg-gray-100')}
-            >
-              None
-            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       )}

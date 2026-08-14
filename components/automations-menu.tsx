@@ -110,7 +110,7 @@ export function AutomationsMenu({ open, onOpenChange, conversationId }: Automati
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 w-7 p-0 text-[#2383e2] hover:text-[#1a6fc9] hover:bg-blue-50 flex-shrink-0" // Same blue as Filter/Sort
+          className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0" // Same gray as other top-bar icons
           title="Automations"
         >
           <Zap className="h-4 w-4" /> {/* Actions-bar automations control */}

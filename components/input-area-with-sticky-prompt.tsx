@@ -238,7 +238,7 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
     }
   }, [])
 
-  // Center Actions/Insert/Draw/View menu + hide pill on the board / edit-bar column
+  // Center Actions/Layout/Draw/View menu + hide pill on the board / edit-bar column
   // (not the prompt box). Chat sidebar overlays and does not change column width.
   const [pillSelectLeft, setPillSelectLeft] = useState(0)
   const [pillSelectWidth, setPillSelectWidth] = useState(200) // Default width, will be measured
@@ -602,7 +602,7 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
             if (!isHoveringPillRef.current) return
             setIsPillExpanded(true)
           }, 80) // Very short delay before grow
-          // After a short pill hover, reveal the mode toggle menu (Actions / Insert / Draw / View)
+          // After a short pill hover, reveal the mode toggle menu (Actions / Layout / Draw / View)
           if (isPillSelectHidden) {
             if (hoverTimeoutRef.current) {
               clearTimeout(hoverTimeoutRef.current)
@@ -700,7 +700,7 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
         <PillSelect
           options={[
             { value: 'home', label: 'Actions' },
-            { value: 'insert', label: 'Insert' },
+            { value: 'insert', label: 'Layout' },
             { value: 'draw', label: 'Draw' },
             { value: 'view', label: 'View' },
           ]}

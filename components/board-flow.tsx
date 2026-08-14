@@ -58,6 +58,7 @@ import {
   type BoardActionId,
 } from './board-actions-menu' // Empty-board right-click menu
 import { createLongPressController } from '@/lib/long-press' // Phone long-press → context menus
+import { attachPhoneSelectMarquee } from '@/lib/phone-select-marquee' // Touch select-tool marquee (RF Pane is mouse-only)
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useRef, useMemo, useState, useCallback } from 'react'
@@ -65,6 +66,7 @@ import { createPortal } from 'react-dom'
 import { useTheme } from '@/components/theme-provider'
 import { Button } from '@/components/ui/button'
 import { cn, generateUUID } from '@/lib/utils'
+import { replaceBoardUrl } from '@/lib/replace-board-url' // history.replaceState — router.replace remounts the frame
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
 import {
@@ -171,6 +173,13 @@ const BRAND_RIGHT = 12 // Inset from map column right edge
 const MULTI_SELECT_KEYS = ['Shift', 'Meta', 'Control'] // Shift/Cmd/Ctrl+click adds to selection
 const SELECTION_BOX_KEYS = ['Shift'] // Shift+drag draws a selection box
 const DELETE_KEYS = ['Backspace', 'Delete'] // Stable — inline arrays loop RF useKeyPress
+
+/** Right-click over text often targets a Text node, which has no `.closest`. */
+function eventElement(target: EventTarget | null): Element | null {
+  if (target instanceof Element) return target // Already an element
+  if (target instanceof Node) return target.parentElement // Text → parent element
+  return null
+}
 
 // Fetch messages for a conversation and create panels
 // For homepage boards, uses API route (public access via service role)
@@ -602,6 +611,9 @@ function BoardFlowInner({
   // Mirror of iBarPosition for the always-on capture effect (avoids remounting listeners every place/clear)
   const iBarPositionRef = useRef<{ x: number; y: number } | null>(null)
   iBarPositionRef.current = iBarPosition
+  // Board id for I-bar persist without rebinding keydown (conversationId in effect deps dropped keys on first create)
+  const conversationIdRef = useRef(conversationId)
+  conversationIdRef.current = conversationId
 
   // Load preferences from localStorage first (instant), then Supabase (sync)
   useEffect(() => {
@@ -4012,6 +4024,8 @@ function BoardFlowInner({
     prevMessagesKeyRef.current = messagesKeyToUse
 
     if (!conversationId || messagesToUse.length === 0) {
+      // Keep an in-flight I-bar frame on empty /board — clearing unmounts TipTap mid-type
+      if ((nodes || []).some((n) => n.type === 'chatPanel')) return
       console.log('🔄 BoardFlow: No conversationId or messages, clearing nodes')
       setNodes([])
       originalPositionsRef.current.clear()
@@ -5573,6 +5587,24 @@ function BoardFlowInner({
         e.preventDefault()
         e.stopPropagation()
         clearDomSelection()
+        return
+      }
+      // Desktop right-click on a frame (incl. over TipTap / boardLink text) → frame menu
+      const mouseEvent = e as MouseEvent
+      const el = eventElement(mouseEvent.target) // Text nodes have no .closest
+      if (!el) return
+      if (el.closest('input, textarea')) return // Native fields keep their own menu
+      if (el.closest('.node-popup') || el.closest('[data-map-menu]') || el.closest('.block-actions-menu')) return
+      const nodeEl = el.closest('.react-flow__node') as HTMLElement | null
+      if (!nodeEl) return // Empty pane / threads keep their own menus
+      const id = nodeEl.getAttribute('data-id')
+      const node = id
+        ? (nodesRef.current.find((n) => n.id === id) as Node<ChatPanelNodeData> | undefined)
+        : undefined
+      if (node && (node.type === 'chatPanel' || node.type === 'blockGroup')) {
+        e.preventDefault()
+        e.stopPropagation()
+        openFrameMenuAt(mouseEvent.clientX, mouseEvent.clientY, node)
       }
     }
     const onClickCapture = (e: MouseEvent) => {
@@ -5607,6 +5639,14 @@ function BoardFlowInner({
       root.removeEventListener('click', onClickCapture, { capture: true })
     }
   }, [embedded, openBoardMenuAt, openFrameMenuAt, rfStore])
+
+  // Phone select tool: RF Pane marquee is mouse-only; drive the same store rect from touch/pen
+  useEffect(() => {
+    if (embedded || !isMobileMode || isDrawing || mapPointerTool !== 'select') return // Pan tool / desktop / draw keep RF defaults
+    const root = boardRootRef.current
+    if (!root) return
+    return attachPhoneSelectMarquee(root, rfStore) // Pointer marquee → userSelectionRect + frame select
+  }, [embedded, isMobileMode, isDrawing, mapPointerTool, rfStore])
 
   // Create an empty block at a flow position (I-bar grip click — cursor lands with TipTap handle)
   const createBlockAtFlowPosition = useCallback(async (flowX: number, flowY: number) => {
@@ -5647,10 +5687,7 @@ function BoardFlowInner({
         }
 
         currentConversationId = newConversation.id
-        router.replace(`/board/${currentConversationId}`) // Match toolbar Component create UX
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('conversation-created', { detail: { conversationId: currentConversationId } }))
-        }
+        replaceBoardUrl(currentConversationId) // Address bar only — Next router.replace would remount the frame
       }
 
       const { error } = await supabase
@@ -5796,7 +5833,8 @@ function BoardFlowInner({
     if (!rightClickedNode) return
 
     const handleContextMenuOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement
+      const target = eventElement(event.target) // Text click target has no .closest
+      if (!target) return
       // Check if right-click is on the popup
       const isOnPopup = target.closest('.node-popup')
       // Check if right-click is on the same node that has the popup
@@ -6708,7 +6746,9 @@ function BoardFlowInner({
     if (!rightClickedNode) return
 
     const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement
+      if (event.button === 2) return // Right-click is contextmenu — don't close before the menu opens
+      const target = eventElement(event.target) // Text click target has no .closest
+      if (!target) return
       // Check if click is on the popup
       const isOnPopup = target.closest('.node-popup')
 
@@ -6731,7 +6771,8 @@ function BoardFlowInner({
 
     // Handle right-click outside to close popup
     const handleContextMenuOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement
+      const target = eventElement(event.target) // Text click target has no .closest
+      if (!target) return
       // Check if right-click is on the popup
       const isOnPopup = target.closest('.node-popup')
       // Check if right-click is on the same node that has the popup
@@ -7378,6 +7419,7 @@ function BoardFlowInner({
 
         // Instant RF node at the I-bar — selected + visible with the typed char already in content
         const panelId = `panel-${messageId}`
+        const liveBoardId = conversationIdRef.current || '' // Ref: capture effect must not rebind on first board create
         originalPositionsRef.current.set(panelId, notePosition)
         setNodes((nds) => [
           ...nds.map((n) => ({ ...n, selected: false })),
@@ -7389,7 +7431,7 @@ function BoardFlowInner({
             data: {
               promptMessage: optimisticMessage,
               responseMessage: undefined,
-              conversationId: conversationId || '',
+              conversationId: liveBoardId,
               isResponseCollapsed: false,
             },
           },
@@ -7403,10 +7445,10 @@ function BoardFlowInner({
             return [...list, optimisticMessage]
           })
         }
-        if (conversationId) {
-          patch(['messages-for-panels', conversationId])
-          patch(['messages-for-panels', conversationId, 'full'])
-          patch(['messages-for-panels', conversationId, 'embed'])
+        if (liveBoardId) {
+          patch(['messages-for-panels', liveBoardId])
+          patch(['messages-for-panels', liveBoardId, 'full'])
+          patch(['messages-for-panels', liveBoardId, 'embed'])
         }
 
         pushSeed()
@@ -7423,7 +7465,7 @@ function BoardFlowInner({
               return
             }
 
-            let currentConversationId = conversationId
+            let currentConversationId = conversationIdRef.current // Ref so this closure survives board-id assignment
             if (!currentConversationId) {
               const { data: newConversation, error: convError } = await supabase
                 .from('conversations')
@@ -7439,12 +7481,10 @@ function BoardFlowInner({
                 return
               }
               currentConversationId = newConversation.id
-              router.replace(`/board/${currentConversationId}`)
-              window.dispatchEvent(
-                new CustomEvent('conversation-created', {
-                  detail: { conversationId: currentConversationId },
-                })
-              )
+              conversationIdRef.current = currentConversationId // Persist path + later keys use this id immediately
+              // Seed caches BEFORE BoardPage enables the query so the merge keeps this frame
+              patch(['messages-for-panels', currentConversationId])
+              patch(['messages-for-panels', currentConversationId, 'full'])
               setNodes((nds) =>
                 nds.map((n) =>
                   n.id === panelId
@@ -7452,8 +7492,7 @@ function BoardFlowInner({
                     : n
                 )
               )
-              patch(['messages-for-panels', currentConversationId])
-              patch(['messages-for-panels', currentConversationId, 'full'])
+              replaceBoardUrl(currentConversationId) // No App Router remount mid-type
             }
 
             const latestHtml = bufferToHtml(iBarTypeBufferRef.current)
@@ -7469,8 +7508,7 @@ function BoardFlowInner({
               console.error('Error persisting inline note:', error)
               return
             }
-            // Soft refetch — existing panel id stays mounted (messagesKey adds this id only once)
-            await refetchMessages()
+            // Do not refetch here — polling / later idle refetch would rebuild while capture still owns keys
             pushSeed()
           } catch (error) {
             console.error('Error persisting inline note:', error)
@@ -7619,7 +7657,7 @@ function BoardFlowInner({
       window.removeEventListener('tt-ibar-request-seed', onRequestSeed)
       iBarApplyTextRef.current = () => {}
     }
-  }, [conversationId, router, refetchMessages, setNodes, queryClient])
+  }, [setNodes, queryClient])
 
   // Focus the hidden capture field in the same user-gesture turn as the board tap (required for iOS keyboard)
   const focusIBarCapture = useCallback(() => {
@@ -8071,12 +8109,7 @@ function BoardFlowInner({
 
                 currentConversationId = newConversation.id
 
-                // Update URL to include conversation ID (like ChatGPT)
-                router.replace(`/board/${currentConversationId}`)
-                // Dispatch event to notify board page of new conversation
-                if (typeof window !== 'undefined') {
-                  window.dispatchEvent(new CustomEvent('conversation-created', { detail: { conversationId: currentConversationId } }))
-                }
+                replaceBoardUrl(currentConversationId) // Address bar only — router.replace remounts the map
               }
 
               // Find source and target nodes to get message IDs
@@ -8321,7 +8354,9 @@ function BoardFlowInner({
               ? false
               : mapPointerTool === 'pan'
                 ? true
-                : [1, 2] // Select tool: middle/right still pan; left drag = selection box
+                : isMobileMode
+                  ? false // Phone: RF [1,2] only filters mousedown — touchstart still pans
+                  : [1, 2] // Desktop select: middle/right still pan; left drag = selection box
         }
         selectionOnDrag={!embedded && !isDrawing && mapPointerTool === 'select'} // Left-drag marquee without Shift
         zoomOnScroll={embedded ? true : !isScrollMode && !isDrawing}

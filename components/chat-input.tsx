@@ -9,6 +9,7 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
+import { replaceBoardUrl } from '@/lib/replace-board-url' // history.replaceState — router.replace remounts the board
 import { useReactFlowContext } from './react-flow-context'
 import {
   Dialog,
@@ -298,13 +299,8 @@ export function ChatInput({ conversationId, projectId, onHeightChange, variant =
 
         convId = newConversation.id
 
-        // Dispatch event IMMEDIATELY to update conversationId state synchronously
-        // This must happen before creating the message so the query is enabled
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('conversation-created', { detail: { conversationId: convId } }))
-        }
-        // Update URL to include conversation ID (like ChatGPT)
-        router.replace(`/board/${convId}`)
+        // Dispatch + address-bar only — Next router.replace would remount BoardFlow mid-send
+        replaceBoardUrl(convId)
       }
 
       // Create user message first (with isFlashcard metadata if in flashcards mode)
@@ -739,13 +735,8 @@ export function ChatInput({ conversationId, projectId, onHeightChange, variant =
 
         currentConversationId = newConversation.id
 
-        // Dispatch event IMMEDIATELY to update conversationId state synchronously
-        // This must happen before creating the message so the query is enabled
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('conversation-created', { detail: { conversationId: currentConversationId } }))
-        }
-        // Update URL to include conversation ID (like ChatGPT)
-        router.replace(`/board/${currentConversationId}`)
+        // Dispatch + address-bar only — Next router.replace would remount BoardFlow mid-send
+        replaceBoardUrl(currentConversationId)
       }
 
       // If already loading, add to queue instead of processing immediately

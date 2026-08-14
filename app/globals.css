@@ -876,6 +876,10 @@ span[data-added="true"] {
     user-select: none;
     -webkit-touch-callout: none;
   }
+  /* Phone select: stop the browser from panning the page so the marquee/frame drag can run */
+  .react-flow__pane {
+    touch-action: none;
+  }
   /* TipTap body text stays selectable for editing — only while the frame is selected */
   .react-flow .ProseMirror,
   .react-flow .ProseMirror * {

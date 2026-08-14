@@ -1376,19 +1376,15 @@ export function BlockActionsMenu({
 
           {/* Border color */}
           <div className="px-3 pt-0.5 pb-1 text-[11px] font-medium text-gray-400">Border color</div>
-          {/* Size slider — continuous drag; commit on release */}
+          {/* Size slider — continuous drag; commit on release (no numeric readout) */}
           {(() => {
             const clampedProp = Math.min(8, Math.max(1, Number(currentBorderWeight) || 1))
             const shown =
               borderWeightDraft != null
                 ? Math.min(8, Math.max(1, borderWeightDraft))
                 : clampedProp
-            const label =
-              Math.abs(shown - Math.round(shown)) < 0.05
-                ? String(Math.round(shown))
-                : shown.toFixed(1)
             return (
-              <div className="mx-1 mb-1.5 flex items-center gap-2 px-2 py-1">
+              <div className="mx-1 mb-1.5 flex items-center px-2 py-1">
                 <input
                   type="range"
                   min={1}
@@ -1419,13 +1415,10 @@ export function BlockActionsMenu({
                     setBorderWeightDraft(null)
                   }}
                   onMouseDown={(e) => e.stopPropagation()}
-                  className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-gray-200 accent-gray-700 dark:bg-[#333] dark:accent-gray-300"
-                  title={`Border size: ${label}px`}
+                  className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-gray-200 accent-gray-700 dark:bg-[#333] dark:accent-gray-300"
+                  title="Border size"
                   aria-label="Border size"
                 />
-                <span className="w-7 shrink-0 text-right text-[11px] tabular-nums text-gray-500">
-                  {label}
-                </span>
               </div>
             )
           })()}

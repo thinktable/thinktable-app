@@ -291,6 +291,7 @@ export function BoardLinkView({ node, updateAttributes }: NodeViewProps) {
         onFocus={() => setEditing(true)} // Entering edit mode hides the open-page chrome
         onBlur={commitTitle}
         onMouseDown={(e) => {
+          if (e.button === 2) return // Don't place I-bar; don't stop/prevent — Chrome skips contextmenu if we do
           // Unselected frame: do not place caret — let RF select/drag the frame
           const frame = (e.currentTarget as HTMLElement).closest('.react-flow__node')
           if (!frame?.classList.contains('selected')) return
@@ -311,6 +312,7 @@ export function BoardLinkView({ node, updateAttributes }: NodeViewProps) {
           }
         }}
         onPointerDown={(e) => {
+          if (e.button === 2) return // Right-click must reach the frame menu
           // Only trap the pointer when the host frame is selected (else RF drags the frame)
           const frame = (e.currentTarget as HTMLElement).closest('.react-flow__node')
           if (frame?.classList.contains('selected')) e.stopPropagation()
