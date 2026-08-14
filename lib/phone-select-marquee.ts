@@ -2,6 +2,7 @@
 
 import type { Edge, Node, NodeChange, EdgeChange } from 'reactflow' // RF store item types for select changes
 import { getConnectedEdges } from 'reactflow' // Same edge-select as RF Pane while the rect grows
+import { boardRotationRef, rotateVec } from '@/lib/board-rotation' // Marquee vs rotated frame AABB
 
 const SKIP_SEL =
   '.react-flow__node, .react-flow__edge, .react-flow__connection, .react-flow__handle, [data-minimap-context], [data-minimap-toggle-context], [data-minimap-pill-context]' // Frames / threads / chrome — not empty-board marquee
@@ -35,11 +36,34 @@ function hitsPaneRect(node: Node, rect: PaneRect, transform: [number, number, nu
   const [tx, ty, zoom] = transform // Viewport translate + scale
   const fx = node.positionAbsolute?.x ?? node.position.x // Flow-space left
   const fy = node.positionAbsolute?.y ?? node.position.y // Flow-space top
-  const nx = fx * zoom + tx // Pane-space left
-  const ny = fy * zoom + ty // Pane-space top
-  const nw = (node.width ?? 0) * zoom // Pane-space width
-  const nh = (node.height ?? 0) * zoom // Pane-space height
-  return nx < rect.x + rect.width && nx + nw > rect.x && ny < rect.y + rect.height && ny + nh > rect.y // Partial hit — fat-finger friendly
+  const nw = (node.width ?? 0) * zoom // Unrotated pane-space width
+  const nh = (node.height ?? 0) * zoom // Unrotated pane-space height
+  const rot = boardRotationRef.current // Camera heading
+  if (Math.abs(rot) < 0.01) {
+    const nx = fx * zoom + tx // Pane-space left
+    const ny = fy * zoom + ty // Pane-space top
+    return nx < rect.x + rect.width && nx + nw > rect.x && ny < rect.y + rect.height && ny + nh > rect.y // Partial hit — fat-finger friendly
+  }
+  const corners = [
+    [0, 0],
+    [node.width ?? 0, 0],
+    [node.width ?? 0, node.height ?? 0],
+    [0, node.height ?? 0],
+  ] // Flow-space corners of the frame box
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const [cx, cy] of corners) {
+    const { x, y } = rotateVec(rot, (fx + cx) * zoom, (fy + cy) * zoom) // Camera R then T
+    const px = tx + x
+    const py = ty + y
+    if (px < minX) minX = px
+    if (py < minY) minY = py
+    if (px > maxX) maxX = px
+    if (py > maxY) maxY = py
+  }
+  return minX < rect.x + rect.width && maxX > rect.x && minY < rect.y + rect.height && maxY > rect.y // AABB vs screen marquee
 }
 
 function selectChanges<T extends { id: string; selected?: boolean }>(items: T[], selectedIds: string[]) {
@@ -137,15 +161,22 @@ export function attachPhoneSelectMarquee(root: HTMLElement, store: RfStore) {
     reset() // Interrupted (scroll, overlay) — drop the box
   }
 
+  const onTouchStart = (event: TouchEvent) => {
+    if (event.touches.length < 2) return // One finger keeps marquee
+    reset() // Pinch / two-finger pan — don't draw a select box
+  }
+
   root.addEventListener('pointerdown', onDown) // Bubble: nodes already skipped via SKIP_SEL
   root.addEventListener('pointermove', onMove)
   root.addEventListener('pointerup', onUp)
   root.addEventListener('pointercancel', onCancel)
+  root.addEventListener('touchstart', onTouchStart, { capture: true, passive: true }) // 2nd finger lands before pointerdown on iOS
   return () => {
     reset()
     root.removeEventListener('pointerdown', onDown)
     root.removeEventListener('pointermove', onMove)
     root.removeEventListener('pointerup', onUp)
     root.removeEventListener('pointercancel', onCancel)
+    root.removeEventListener('touchstart', onTouchStart, { capture: true })
   }
 }

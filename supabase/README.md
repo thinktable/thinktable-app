@@ -25,6 +25,10 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260814035712_board_camera_rotation` — Board camera rotation (nav icon/slider, phone twist pinch-lock, Safari trackpad)
+- `20260814024128_view_presentation_icon` — View Presentation icon + Layout/View bar rework
+- `20260814012801_frame_color_menu_border_slider` — Frame Color menu border size slider
+- `20260813233344_board_menu_long_press_draggable_heal` — Board menu + long-press + draggable heal
 - `20260813114401_frame_connections_notion` — Frame Connections → Notion (live/manual + footer mark)
 - `20260813103833_turn_into_property_pane` — Turn into Property pane + Automations UI
 - `20260811110630_frame_snap_rotate_mates_mid_drag_reshap` — snap mates follow rotation AABB; mid-drag re-snap

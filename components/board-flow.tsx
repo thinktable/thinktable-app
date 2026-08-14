@@ -120,6 +120,9 @@ import { BoardEmbedProvider } from '@/lib/board-embed-context' // Hide nested pr
 import { useBoardAccess } from '@/lib/share/board-access-context' // Shared view/comment → read-only map
 import { ThinktableBrandMark } from './personalize-ai-modal'
 import { NavZoomControl } from './nav-zoom-control' // Zoom % lives in bottom nav (not top bar)
+import { NavRotateControl } from './nav-rotate-control' // Board rotate icon — right of zoom %
+import { BoardRotationProvider, useBoardRotation } from './board-rotation-context' // Two-finger twist + nav camera heading
+import { applyBoardRotationToPositionChanges, flowToPane, paneToFlow, viewportKeepingPanePoint } from '@/lib/board-rotation' // Camera-aware pane ↔ flow
 import { LeftVerticalMenu } from './left-vertical-menu'
 import { FreehandNode } from './freehand/FreehandNode' // Freehand drawing node component
 import { Freehand, retryFailedSaves } from './freehand/Freehand' // Freehand drawing overlay component and retry function
@@ -165,9 +168,11 @@ interface ChatPanelNodeData {
 }
 
 const MINIMAP_HEIGHT = 120 // Keep in sync with .minimap-custom-size height in globals.css
+const MINIMAP_WIDTH = 179 // Keep in sync with .minimap-custom-size width in globals.css
 const MINIMAP_BOTTOM = 8 // Inset from map column bottom edge
 const MINIMAP_LEFT = 8 // Match top-bar menu button (sticky-prompt-panel paddingLeft 0.5rem)
 const MINIMAP_NAV_GAP = 6 // Air between Free nav and minimap in the column stack
+const FREE_NAV_WIDTH = MINIMAP_WIDTH // Same width as the minimap so the column stack lines up
 const BRAND_RIGHT = 12 // Inset from map column right edge
 // Stable key-code arrays — new array literals each render make RF's useKeyPress loop (Max update depth).
 const MULTI_SELECT_KEYS = ['Shift', 'Meta', 'Control'] // Shift/Cmd/Ctrl+click adds to selection
@@ -890,6 +895,7 @@ function BoardFlowInner({
   const rfStore = useStoreApi() // Embed: force pane width/height when CSS % height collapses
   const updateNodeInternals = useUpdateNodeInternals() // Remeasure Handles after connect so paths attach
   const { setReactFlowInstance, registerSetNodes, isLocked, layoutMode, setLayoutMode, setIsDeterministicMapping, panelWidth: contextPanelWidth, isPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection, boardRule: contextBoardRule, boardStyle: contextBoardStyle, clickedEdge: contextClickedEdge, setClickedEdge: setContextClickedEdge, fillColor, borderColor, borderWeight, borderStyle, flashcardMode, setFlashcardMode, selectedTag, setSelectedTag, isDrawing, drawTool, drawShape, registerMapUndoRedo, registerMapTakeSnapshot, snapEnabled } = useReactFlowContext()
+  const { rotation: boardRotation, setScrollMode } = useBoardRotation() // Subscribe so I-bar / overlays re-place when the camera twists
   const { onNodeDrag: onBlockGroupNodeDrag, onNodeDragStop: onBlockGroupNodeDragStop } = useBlockGroupDrag({
     conversationId, // Persist attach/detach to this map
     getNodes: () => reactFlowInstance.getNodes(), // Live RF nodes during drag (not a stale closure)
@@ -1803,6 +1809,10 @@ function BoardFlowInner({
 
     saveToSupabase()
   }, [viewMode, isScrollMode])
+
+  useEffect(() => {
+    setScrollMode(isScrollMode) // Phone two-finger: Scroll nav pans like trackpad; Zoom nav pinches
+  }, [isScrollMode, setScrollMode])
 
   // Save minimap visibility to localStorage and Supabase when it changes
   useEffect(() => {
@@ -3783,6 +3793,9 @@ function BoardFlowInner({
       }
     }
 
+    // Camera rotate: RF applies screen deltas along unrotated axes — rewrite so frames follow the finger
+    changesToProcess = applyBoardRotationToPositionChanges(changesToProcess, nodes)
+
     // Apply helper lines snapping if enabled (before calling onNodesChange)
     const updatedChanges = snapEnabled ? updateHelperLines(changesToProcess, nodes) : changesToProcess
     
@@ -4987,8 +5000,34 @@ function BoardFlowInner({
           return
         }
 
-        // Allow Ctrl/Cmd+scroll for zoom even in scroll mode (but not in linear mode, handled above)
+        // Trackpad pinch is ctrl+wheel — always zoom around the cursor, even in Scroll nav
         if (e.ctrlKey || e.metaKey) {
+          // Safari Mac pinch is GestureEvent (board-rotation); don’t double-zoom
+          if (typeof window !== 'undefined' && 'GestureEvent' in window && !/iPhone|iPad|iPod/.test(navigator.userAgent)) {
+            return
+          }
+          e.preventDefault()
+          e.stopPropagation()
+          if (!reactFlowInstance) return
+          const viewport = reactFlowInstance.getViewport()
+          const rect = (reactFlowElement as HTMLElement).getBoundingClientRect()
+          const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform)
+          const factor = e.ctrlKey && isMac ? 10 : 1
+          const pinchDelta =
+            -e.deltaY * (e.deltaMode === 1 ? 0.05 : e.deltaMode ? 1 : 0.002) * factor
+          const nextZoom = Math.min(2, Math.max(0.1, viewport.zoom * Math.pow(2, pinchDelta)))
+          if (nextZoom === viewport.zoom) return
+          reactFlowInstance.setViewport(
+            viewportKeepingPanePoint(
+              e.clientX - rect.left,
+              e.clientY - rect.top,
+              viewport,
+              boardRotation,
+              boardRotation,
+              nextZoom
+            )
+          )
+          prevZoomRef.current = nextZoom
           return
         }
 
@@ -5032,7 +5071,7 @@ function BoardFlowInner({
         document.removeEventListener('wheel', handleWheel, { capture: true })
       }
     }
-  }, [isScrollMode, viewMode, reactFlowInstance, getBottomScrollLimit, checkIfAtBottom, chronologicalPanels, focusedPanelIndex, centerPanelAbovePrompt])
+  }, [isScrollMode, viewMode, reactFlowInstance, getBottomScrollLimit, checkIfAtBottom, chronologicalPanels, focusedPanelIndex, centerPanelAbovePrompt, boardRotation])
 
   // Check if at bottom when viewport changes in linear mode
   // Don't run when nodes change due to selection - only run when nodes are added/removed or viewMode changes
@@ -5317,6 +5356,7 @@ function BoardFlowInner({
         })
       })
 
+      setNodePopupPosition({ x: clientX, y: clientY }) // Viewport coords — menu is position:fixed
       const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
       if (reactFlowInstance && reactFlowElement) {
         const rect = reactFlowElement.getBoundingClientRect()
@@ -5326,7 +5366,6 @@ function BoardFlowInner({
         const flowX = (screenX - viewport.x) / viewport.zoom
         const flowY = (screenY - viewport.y) / viewport.zoom
         nodeClickPositionRef.current = { x: flowX, y: flowY }
-        setNodePopupPosition({ x: screenX, y: screenY })
         nodePopupZoomRef.current = viewport.zoom
       }
       setRightClickedNode(node)
@@ -5400,6 +5439,7 @@ function BoardFlowInner({
   // Handle node right-click to show popup (select node if not selected, then show popup)
   const handleNodeContextMenu = useCallback(
     (event: React.MouseEvent, node: Node<ChatPanelNodeData>) => {
+      if (event.button !== 2) return // Phone pinch/hold uses long-press; iOS contextmenu is button 0
       event.preventDefault()
       event.stopPropagation()
       openFrameMenuAt(event.clientX, event.clientY, node)
@@ -5410,6 +5450,7 @@ function BoardFlowInner({
   // Handle pane (background) right-click — frame menu if selection, else board menu
   const handlePaneContextMenu = useCallback(
     (event: React.MouseEvent) => {
+      if (event.button !== 2) return // Phone pinch/hold uses long-press; iOS contextmenu is button 0
       event.preventDefault()
       event.stopPropagation()
       openBoardMenuAt(event.clientX, event.clientY)
@@ -5482,6 +5523,7 @@ function BoardFlowInner({
 
         // Ignore other overlay chrome
         if (
+          el.closest('.react-flow__resize-control') || // Live corner/edge drag
           el.closest('.node-popup') ||
           el.closest('[data-chat-sidebar-toggle]') ||
           el.closest('[data-map-menu]')
@@ -5526,8 +5568,36 @@ function BoardFlowInner({
     })
     longPressRef.current = controller
 
+    const frameNodeFromEvent = (e: Event): Node<ChatPanelNodeData> | null => {
+      const el = eventElement(e.target) // Text-node clicks have no .closest
+      if (!el) return null
+      if (el.closest('input, textarea')) return null
+      if (el.closest('.node-popup') || el.closest('[data-map-menu]') || el.closest('.block-actions-menu')) {
+        return null
+      }
+      const nodeEl = el.closest('.react-flow__node') as HTMLElement | null
+      if (!nodeEl) return null
+      const id = nodeEl.getAttribute('data-id')
+      const node = id
+        ? (nodesRef.current.find((n) => n.id === id) as Node<ChatPanelNodeData> | undefined)
+        : undefined
+      if (node && (node.type === 'chatPanel' || node.type === 'blockGroup')) return node
+      return null
+    }
+
     const onDown = (e: PointerEvent) => {
-      const el = e.target instanceof Element ? e.target : null
+      // Desktop right-press: open the frame menu here. RF panOnDrag includes 2, so
+      // contextmenu is often preventDefault'd and never reaches onNodeContextMenu.
+      if (e.pointerType === 'mouse' && e.button === 2) {
+        const node = frameNodeFromEvent(e)
+        if (node) {
+          e.preventDefault()
+          e.stopPropagation()
+          openFrameMenuAt(e.clientX, e.clientY, node)
+        }
+        return
+      }
+      const el = eventElement(e.target)
       // Selected frame + text: don't arm — keep iOS/TipTap text selection
       if (
         el &&
@@ -5540,6 +5610,7 @@ function BoardFlowInner({
         // Unselected frame text: arm → frame menu (selection cleared while armed)
       }
       if (el?.closest('input, textarea')) return
+      if (el?.closest('.react-flow__resize-control')) return // Corner/edge drag — don't arm the 450ms menu
 
       controller.pointerDown(e)
       if (controller.isArmed()) {
@@ -5570,6 +5641,22 @@ function BoardFlowInner({
       controller.pointerCancel(e)
       setArmedClass(false)
     }
+    const onTouchStart = (e: TouchEvent) => {
+      controller.touchStart(e) // 2+ fingers: iOS often skips the second pointerdown
+      if (controller.shouldSuppress()) setArmedClass(false)
+    }
+    const onTouchMove = (e: TouchEvent) => {
+      controller.touchStart(e) // Backup if the 2nd finger's touchstart missed the root
+      if (controller.shouldSuppress()) setArmedClass(false)
+    }
+    const onTouchEnd = (e: TouchEvent) => {
+      controller.touchEnd(e)
+      if (!controller.isArmed()) setArmedClass(false)
+    }
+    const onGestureStart = () => {
+      controller.gestureStart() // Safari pinch/twist
+      setArmedClass(false)
+    }
     const onSelectStart = (e: Event) => {
       // Block browser text/image selection while holding for a menu
       if (controller.isArmed() || controller.didFire()) {
@@ -5582,26 +5669,18 @@ function BoardFlowInner({
       if (controller.isArmed() || controller.didFire()) clearDomSelection()
     }
     const onContextMenu = (e: Event) => {
-      // Suppress iOS callout while armed or after we opened our menu (non-editor)
-      if (controller.isArmed() || controller.didFire()) {
+      // Pinch / two-finger pan must never open a menu (iOS fires contextmenu after the hold)
+      if (controller.shouldSuppress() || controller.isArmed() || controller.didFire()) {
         e.preventDefault()
         e.stopPropagation()
         clearDomSelection()
         return
       }
-      // Desktop right-click on a frame (incl. over TipTap / boardLink text) → frame menu
+      // Backup if pointerdown didn't run (some browsers still deliver contextmenu)
       const mouseEvent = e as MouseEvent
-      const el = eventElement(mouseEvent.target) // Text nodes have no .closest
-      if (!el) return
-      if (el.closest('input, textarea')) return // Native fields keep their own menu
-      if (el.closest('.node-popup') || el.closest('[data-map-menu]') || el.closest('.block-actions-menu')) return
-      const nodeEl = el.closest('.react-flow__node') as HTMLElement | null
-      if (!nodeEl) return // Empty pane / threads keep their own menus
-      const id = nodeEl.getAttribute('data-id')
-      const node = id
-        ? (nodesRef.current.find((n) => n.id === id) as Node<ChatPanelNodeData> | undefined)
-        : undefined
-      if (node && (node.type === 'chatPanel' || node.type === 'blockGroup')) {
+      if (mouseEvent.button !== 2) return // Touch menus come from long-press, not native contextmenu
+      const node = frameNodeFromEvent(e)
+      if (node) {
         e.preventDefault()
         e.stopPropagation()
         openFrameMenuAt(mouseEvent.clientX, mouseEvent.clientY, node)
@@ -5616,10 +5695,16 @@ function BoardFlowInner({
       }
     }
 
+    const touchOpts: AddEventListenerOptions = { capture: true, passive: true }
     root.addEventListener('pointerdown', onDown, { capture: true })
     root.addEventListener('pointermove', onMove, { capture: true })
     root.addEventListener('pointerup', onUp, { capture: true })
     root.addEventListener('pointercancel', onCancel, { capture: true })
+    root.addEventListener('touchstart', onTouchStart, touchOpts)
+    root.addEventListener('touchmove', onTouchMove, touchOpts)
+    root.addEventListener('touchend', onTouchEnd, touchOpts)
+    root.addEventListener('touchcancel', onTouchEnd, touchOpts)
+    root.addEventListener('gesturestart', onGestureStart, { capture: true })
     root.addEventListener('selectstart', onSelectStart, { capture: true })
     document.addEventListener('selectionchange', onSelectionChange)
     root.addEventListener('contextmenu', onContextMenu, { capture: true })
@@ -5633,12 +5718,43 @@ function BoardFlowInner({
       root.removeEventListener('pointermove', onMove, { capture: true })
       root.removeEventListener('pointerup', onUp, { capture: true })
       root.removeEventListener('pointercancel', onCancel, { capture: true })
+      root.removeEventListener('touchstart', onTouchStart, { capture: true })
+      root.removeEventListener('touchmove', onTouchMove, { capture: true })
+      root.removeEventListener('touchend', onTouchEnd, { capture: true })
+      root.removeEventListener('touchcancel', onTouchEnd, { capture: true })
+      root.removeEventListener('gesturestart', onGestureStart, { capture: true })
       root.removeEventListener('selectstart', onSelectStart, { capture: true })
       document.removeEventListener('selectionchange', onSelectionChange)
       root.removeEventListener('contextmenu', onContextMenu, { capture: true })
       root.removeEventListener('click', onClickCapture, { capture: true })
     }
   }, [embedded, openBoardMenuAt, openFrameMenuAt, rfStore])
+
+  // Desktop right-click on a frame — document capture so RF panOnDrag:[1,2] cannot swallow it
+  useEffect(() => {
+    if (embedded) return
+    const onRightPress = (e: PointerEvent) => {
+      if (e.pointerType !== 'mouse' || e.button !== 2) return
+      const el = eventElement(e.target)
+      if (!el) return
+      if (el.closest('input, textarea')) return
+      if (el.closest('.node-popup') || el.closest('[data-map-menu]') || el.closest('.block-actions-menu')) {
+        return
+      }
+      const nodeEl = el.closest('.react-flow__node') as HTMLElement | null
+      if (!nodeEl) return
+      const id = nodeEl.getAttribute('data-id')
+      const node = id
+        ? (nodesRef.current.find((n) => n.id === id) as Node<ChatPanelNodeData> | undefined)
+        : undefined
+      if (!node || (node.type !== 'chatPanel' && node.type !== 'blockGroup')) return
+      e.preventDefault()
+      e.stopPropagation()
+      openFrameMenuAt(e.clientX, e.clientY, node)
+    }
+    document.addEventListener('pointerdown', onRightPress, { capture: true })
+    return () => document.removeEventListener('pointerdown', onRightPress, { capture: true })
+  }, [embedded, openFrameMenuAt])
 
   // Phone select tool: RF Pane marquee is mouse-only; drive the same store rect from touch/pen
   useEffect(() => {
@@ -7693,10 +7809,9 @@ function BoardFlowInner({
     const screenX = event.clientX - reactFlowRect.left
     const screenY = event.clientY - reactFlowRect.top
     
-    // Convert screen coordinates to flow coordinates (world space)
+    // Convert screen coordinates to flow coordinates (world space — rotation-aware)
     const viewport = reactFlowInstance.getViewport()
-    const flowX = (screenX - viewport.x) / viewport.zoom
-    const flowY = (screenY - viewport.y) / viewport.zoom
+    const { x: flowX, y: flowY } = paneToFlow(screenX, screenY, viewport)
     
     // Store flow coordinates and current viewport for rendering
     setIBarPosition({ x: flowX, y: flowY })
@@ -7854,19 +7969,21 @@ function BoardFlowInner({
       )
       if (nextZoom === viewport.zoom) return
 
-      // Keep the flow point under the cursor fixed while zooming
-      const flowX = (e.clientX - rect.left - viewport.x) / viewport.zoom
-      const flowY = (e.clientY - rect.top - viewport.y) / viewport.zoom
-      reactFlowInstance.setViewport({
-        zoom: nextZoom,
-        x: e.clientX - rect.left - flowX * nextZoom,
-        y: e.clientY - rect.top - flowY * nextZoom,
-      })
+      // Keep the flow point under the cursor fixed while zooming (rotation-aware)
+      const next = viewportKeepingPanePoint(
+        e.clientX - rect.left,
+        e.clientY - rect.top,
+        viewport,
+        boardRotation,
+        boardRotation,
+        nextZoom
+      )
+      reactFlowInstance.setViewport(next)
     }
 
     root.addEventListener('wheel', onWheel, { passive: false, capture: true })
     return () => root.removeEventListener('wheel', onWheel, { capture: true })
-  }, [reactFlowInstance, embedded])
+  }, [reactFlowInstance, embedded, boardRotation])
 
   return (
     <div
@@ -8308,8 +8425,7 @@ function BoardFlowInner({
           const screenX = event.clientX - reactFlowRect.left
           const screenY = event.clientY - reactFlowRect.top
           const viewport = reactFlowInstance.getViewport()
-          const flowX = (screenX - viewport.x) / viewport.zoom // Caret point in world space
-          const flowY = (screenY - viewport.y) / viewport.zoom
+          const { x: flowX, y: flowY } = paneToFlow(screenX, screenY, viewport) // Caret point in world space (rotation-aware)
 
           setRightClickedNode(null) // Don't stack with node action popup
           setBoardMenuPosition(null) // Don't stack with board menu
@@ -8360,7 +8476,7 @@ function BoardFlowInner({
         }
         selectionOnDrag={!embedded && !isDrawing && mapPointerTool === 'select'} // Left-drag marquee without Shift
         zoomOnScroll={embedded ? true : !isScrollMode && !isDrawing}
-        zoomOnPinch={true}
+        zoomOnPinch={embedded ? true : !isDrawing} // Pinch always zooms; Scroll nav only changes wheel pan vs wheel zoom
         zoomOnDoubleClick={false}
         minZoom={embedded ? 0.15 : 0.1}
         maxZoom={embedded ? 2.5 : 2}
@@ -8587,7 +8703,7 @@ function BoardFlowInner({
              (isMobileMode && isChatSidebarOpen ? 2 : MINIMAP_BOTTOM) + mapChromeBottomPad
            }px`,
            left: `${mapChromeLeft}px`,
-           width: 179,
+           width: FREE_NAV_WIDTH,
            gap: `${MINIMAP_NAV_GAP}px`, // Slight air between Free nav and minimap
            transition: 'none', // Instant with AI dock — no lag
          }}
@@ -8678,7 +8794,8 @@ function BoardFlowInner({
           <div
             className={cn(
               // Board fill when chat closed or chat box (transcript) open; white only for input-only open
-              'p-1 flex items-center gap-1 relative min-w-[179px] border-0 shadow-sm rounded-lg',
+              // w-full = column width (minimap); gap-0 — slashes carry the visual gap so 179px fits
+              'px-0.5 py-1 flex items-center gap-0 relative w-full border-0 shadow-sm rounded-lg',
               isChatSidebarOpen && !aiChatHasTranscript
                 ? 'bg-white dark:bg-[#0f0f0f]'
                 : 'bg-gray-50 dark:bg-[#0f0f0f]'
@@ -8700,14 +8817,17 @@ function BoardFlowInner({
                 <span>{isScrollMode ? 'Scroll' : 'Zoom'}</span>
               </Button>
             </div>
-            {/* Thin slash — slightly shorter than top-bar text-2xl */}
-            <span className="flex h-7 items-center text-xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
+            {/* Thin slash — Scroll/Zoom | zoom% */}
+            <span className="flex h-7 items-center text-xl font-thin text-gray-300 dark:text-gray-500 mx-0.5 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
             <div className="flex-1 basis-0 flex items-center justify-center min-w-0">
               <NavZoomControl />
             </div>
             <div className="flex items-center shrink-0">
-              {/* Thin slash — slightly shorter than top-bar text-2xl */}
-              <span className="flex h-7 items-center text-xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
+              <NavRotateControl />
+            </div>
+            <div className="flex items-center shrink-0">
+              {/* Thin slash — rotate | select/pan */}
+              <span className="flex h-7 items-center text-xl font-thin text-gray-300 dark:text-gray-500 mx-0.5 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
               <Button
                 type="button"
                 variant="ghost"
@@ -8753,7 +8873,7 @@ function BoardFlowInner({
             }}
             style={{
               position: 'relative',
-              width: 179,
+              width: MINIMAP_WIDTH, // Same as Free nav so the column edges line up
               height: MINIMAP_HEIGHT,
               flexShrink: 0,
               pointerEvents: 'auto',
@@ -8775,7 +8895,7 @@ function BoardFlowInner({
                 borderRadius: '8px',
                 overflow: 'hidden',
                 cursor: 'pointer',
-                width: 179,
+                width: MINIMAP_WIDTH, // Match Free nav / CSS .minimap-custom-size
                 height: MINIMAP_HEIGHT,
                 position: 'absolute',
                 top: 0,
@@ -8820,9 +8940,9 @@ function BoardFlowInner({
         <div
           className="absolute flex items-center"
           style={{
-            // Convert flow coordinates back to screen coordinates; grip sits left of caret
-            left: `${iBarPosition.x * iBarViewport.zoom + iBarViewport.x}px`,
-            top: `${iBarPosition.y * iBarViewport.zoom + iBarViewport.y}px`,
+            // Convert flow coordinates back to pane coordinates (rotation-aware); grip sits left of caret
+            left: `${flowToPane(iBarPosition.x, iBarPosition.y, iBarViewport, boardRotation).x}px`,
+            top: `${flowToPane(iBarPosition.x, iBarPosition.y, iBarViewport, boardRotation).y}px`,
             zIndex: 1000,
             transform: `translateX(-${22 * iBarViewport.zoom}px)`, // Room for ⋮⋮ left of cursor
             gap: `${4 * iBarViewport.zoom}px`,
@@ -8907,9 +9027,13 @@ function BoardFlowInner({
         }}
       />
 
-      {/* Block actions menu — handle click or right-click on a node */}
-      {rightClickedNode && reactFlowInstance && (
+      {/* Frame menu — portaled + fixed so RF overflow / zoom cannot clip it */}
+      {rightClickedNode &&
+        reactFlowInstance &&
+        typeof document !== 'undefined' &&
+        createPortal(
         <BlockActionsMenu
+          positionMode="fixed"
           x={nodePopupPosition.x}
           y={nodePopupPosition.y}
           zoom={reactFlowInstance.getViewport().zoom}
@@ -8994,7 +9118,8 @@ function BoardFlowInner({
             nodeClickPositionRef.current = null
             nodePopupZoomRef.current = null
           }}
-        />
+        />,
+        document.body
       )}
 
       {/* Board menu — empty-pane right-click */}
@@ -9215,9 +9340,11 @@ export function BoardFlow({
   return (
     <BoardEmbedProvider embedded={embedded}>
       <ReactFlowProvider>
-        <Suspense fallback={<div className="h-full w-full flex items-center justify-center">Loading...</div>}>
-          <BoardFlowWithSearchParams conversationId={conversationId} embedded={embedded} />
-        </Suspense>
+        <BoardRotationProvider>
+          <Suspense fallback={<div className="h-full w-full flex items-center justify-center">Loading...</div>}>
+            <BoardFlowWithSearchParams conversationId={conversationId} embedded={embedded} />
+          </Suspense>
+        </BoardRotationProvider>
       </ReactFlowProvider>
     </BoardEmbedProvider>
   )

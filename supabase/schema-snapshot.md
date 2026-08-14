@@ -1,13 +1,25 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-14T01:28:06Z`
+- Snapped at: `2026-08-14T03:57:14Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.114.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260814035712_board_camera_rotation.sql`.
+- Board camera rotation: Free nav rotate icon (drag snaps at 0°, slider does not) + Reset; phone two-finger twist with ~42° arm + pinch zoom-lock; Safari trackpad `GestureEvent` (Chromium does not expose trackpad rotate).
+- Schema unchanged.
+
+## Prior: view presentation icon
+
+- No DDL. Marker `20260814024128_view_presentation_icon.sql`.
+- View top bar: Presentation icon with slash after Board style; Layout/View bar rework (Smart Align).
+- Schema unchanged.
+
+## Prior: frame color menu border slider
 
 - No DDL. Marker `20260814012801_frame_color_menu_border_slider.sql`.
 - Frame Color menu: Last used → Background → Border (smooth 1–8px size slider); solid fills; border shows from color alone; hide Draw reset arrow.

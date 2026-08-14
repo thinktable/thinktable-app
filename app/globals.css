@@ -880,6 +880,17 @@ span[data-added="true"] {
   .react-flow__pane {
     touch-action: none;
   }
+  /* Board camera rotate — inner layers only so RF’s viewport matrix keeps m22 = zoom */
+  .react-flow.tt-board-rotated .react-flow__nodes,
+  .react-flow.tt-board-rotated .react-flow__edges,
+  .react-flow.tt-board-rotated .react-flow__edgelabel-renderer {
+    transform: rotate(var(--tt-board-rot, 0deg));
+    transform-origin: 0 0; /* Flow origin — viewport already applied translate+scale */
+  }
+  .react-flow.tt-board-rotated .react-flow__background {
+    transform: translate(var(--tt-vx, 0px), var(--tt-vy, 0px)) rotate(var(--tt-board-rot, 0deg))
+      translate(calc(-1 * var(--tt-vx, 0px)), calc(-1 * var(--tt-vy, 0px))); /* Orbit the same flow origin */
+  }
   /* TipTap body text stays selectable for editing — only while the frame is selected */
   .react-flow .ProseMirror,
   .react-flow .ProseMirror * {
@@ -1152,6 +1163,7 @@ span[data-added="true"] {
   /* General resize control pointer events */
   .react-flow__resize-control {
     pointer-events: all;
+    touch-action: none; /* Phone: don't let Safari steal corner-drag for pan/pinch */
   }
 
   /* Hide midpoint resize handles - only show corner handles (4 total) for freehand nodes */

@@ -254,11 +254,11 @@ export function NavZoomControl({ className }: { className?: string }) {
           variant="ghost"
           size="sm"
           className={cn(
-            'h-6 px-1.5 text-xs text-gray-900 dark:text-gray-100 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] cursor-ns-resize',
+            'h-6 px-1 text-xs text-gray-900 dark:text-gray-100 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] cursor-ns-resize',
             isDraggingZoom && 'bg-gray-200 dark:bg-[#2a2a2a]',
             className
           )}
-          style={{ minWidth: '40px' }} // Stable width as % digits change
+          style={{ minWidth: '36px' }} // Compact so Free nav can match the 179px minimap
           onPointerDown={handleZoomPointerDown}
           onPointerMove={handleZoomPointerMove}
           onPointerUp={handleZoomPointerUp}

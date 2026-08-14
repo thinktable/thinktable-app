@@ -547,6 +547,23 @@ export function BlockActionsMenu({
     setRowFlyoutTop(row.getBoundingClientRect().top - root.getBoundingClientRect().top)
   }, [openSubmenu, notionConnected])
 
+  // Keep a fixed menu on-screen (old absolute + translate(-50%,-100%) parked it above the click, often off-view)
+  useLayoutEffect(() => {
+    if (positionMode !== 'fixed' || !rootRef.current) return
+    const el = rootRef.current
+    const r = el.getBoundingClientRect()
+    const pad = 8
+    let left = r.left
+    let top = r.top
+    if (left + r.width > window.innerWidth - pad) left = window.innerWidth - pad - r.width
+    if (top + r.height > window.innerHeight - pad) top = window.innerHeight - pad - r.height
+    if (left < pad) left = pad
+    if (top < pad) top = pad
+    el.style.left = `${left}px`
+    el.style.top = `${top}px`
+    el.style.transform = 'none'
+  }, [x, y, positionMode, openLeft, openSubmenu])
+
   /** Apply fill or border, remember as Last used, keep the flyout open. */
   const applyFrameColor = (kind: FrameColorKind, swatch: (typeof FRAME_COLOR_SWATCHES)[number]) => {
     const value = kind === 'fill' ? swatch.fill : swatch.border

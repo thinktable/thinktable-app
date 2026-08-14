@@ -1678,6 +1678,22 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const contentFitRef = useRef<HTMLDivElement>(null) // Inner unscaled content wrapper for intrinsic measure
   const frameScaleRef = useRef(1) // Latest scale — resize-end must not close over a stale render
   frameScaleRef.current = frameScale // Keep ref in sync every render
+  const frameUnlockedRef = useRef(frameUnlocked) // Live lock — resize callbacks stay identity-stable
+  frameUnlockedRef.current = frameUnlocked // Sync every render so d3-drag can read without rebinding
+  const frameTextWrapRef = useRef(frameTextWrap) // Live wrap flag for the same stable resize handlers
+  frameTextWrapRef.current = frameTextWrap
+  const wrapColWidthRef = useRef(wrapColWidth) // Live wrap columns — locked proportional math
+  wrapColWidthRef.current = wrapColWidth
+  const rotationRef = useRef(rotation) // Live frame rotation for AABB → content size
+  rotationRef.current = rotation
+  const promptContentRef = useRef(promptContent) // Live HTML for min-width during a drag
+  promptContentRef.current = promptContent
+  const intrinsicSizeRef = useRef(intrinsicSize) // Live unscaled content box for locked-wrap height
+  intrinsicSizeRef.current = intrinsicSize
+  const fontScaleRef = useRef(fontScale) // Persist on resize-end without closing over a stale callback
+  fontScaleRef.current = fontScale
+  const resizeRafRef = useRef<number | null>(null) // Coalesce live resize setState to one paint
+  const pendingResizeRef = useRef<{ width: number; height: number; scale?: number } | null>(null) // Last drag sample waiting for rAF
   const persistFrameMetaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Debounce hug-to-text saves
   const lockedResizeStartRef = useRef<{ width: number; height: number; scale: number } | null>(null) // Locked drag baseline
   const initialResizeWidthRef = useRef<number | null>(null) // Track initial panel width when resize starts (for note panels)
@@ -2621,6 +2637,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     const measure = () => {
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {
+        if (isResizingRef.current) return // Corner-drag owns size — hug RO would hitch the gesture (esp. phone)
         // databaseBlock: wait until the Notion table NodeView is mounted. Measuring the title
         // stub (~52×40) after a remount would hug-shrink the frame and clip the table away.
         const dbHost = el.querySelector('.tt-database-block') as HTMLElement | null
@@ -2838,6 +2855,18 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       .eq('id', promptMessage.id)
     if (updateError) console.error('Error saving frame metadata:', updateError)
   }, [isProjectBoard, promptMessage, supabase])
+  const persistFrameMetaRef = useRef(persistFrameMeta) // Stable resize-end persist — don't rebind d3-drag
+  persistFrameMetaRef.current = persistFrameMeta // Always the latest saver
+
+  // Paint the latest corner-drag sample (one React update per frame, not per touchmove)
+  const flushPendingResize = useCallback(() => {
+    resizeRafRef.current = null // This rAF has run
+    const pending = pendingResizeRef.current // Last sample from d3-drag
+    if (!pending) return // Nothing queued (end already applied)
+    pendingResizeRef.current = null // Don't flush twice
+    if (pending.scale != null) setFrameScale(pending.scale) // Locked proportional content scale
+    setResizeDimensions({ width: pending.width, height: pending.height }) // Drive panel box
+  }, [])
 
   // Heal: post-drag hug can persist ~52×40 on a databaseBlock frame (NodeView remount stub).
   // Clear the clip box + relock so the table can hug open again.
@@ -2865,43 +2894,57 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     })
   }, [isBlock, promptContent, resizeDimensions, persistFrameMeta])
 
-  // Corner pointer down — only then treat size changes as a user resize (ignore spurious RF callbacks)
+  // Identity MUST stay stable: NodeResizeControl's d3-drag effect rebinds when onResize*
+  // changes, and teardown drops element touchmove (phone) while window mouse listeners survive.
   const handleResizeStart = useCallback(() => {
-    isResizingRef.current = true // Block observer from fighting live resize
+    isResizingRef.current = true // Block hug observer from fighting live resize
+    if (resizeRafRef.current != null) cancelAnimationFrame(resizeRafRef.current) // Drop a stale paint
+    resizeRafRef.current = null
+    pendingResizeRef.current = null // Fresh gesture — don't flush a previous drag
     setIsUserResized(true) // Switch from line-grow to explicit frame box
-    const startW = resizeDimensions?.width ?? panelRef.current?.offsetWidth ?? 200
-    const startH = resizeDimensions?.height ?? panelRef.current?.offsetHeight ?? 40
-    lockedResizeStartRef.current = { width: startW, height: startH, scale: frameScale } // Locked proportional baseline
-  }, [resizeDimensions, frameScale])
+    const dims = resizeDimensionsRef.current // Live box without putting it in callback deps
+    const startW = dims?.width ?? panelRef.current?.offsetWidth ?? 200
+    const startH = dims?.height ?? panelRef.current?.offsetHeight ?? 40
+    lockedResizeStartRef.current = { width: startW, height: startH, scale: frameScaleRef.current } // Locked proportional baseline
+  }, [])
 
   // Handle resize end - clear resizing flag and persist explicit box size from final params
   const handleResizeEnd = useCallback(async (_event: any, params?: { width: number; height: number }) => {
+    if (resizeRafRef.current != null) cancelAnimationFrame(resizeRafRef.current) // Apply final size now, not next frame
+    resizeRafRef.current = null
+    pendingResizeRef.current = null // Don't let a queued sample overwrite the commit
     isResizingRef.current = false // Allow size-sync observer again
     isFirstResizeCallRef.current = true // Reset first-call bookkeeping
     setIsUserResized(true) // Persist mode: explicit frame box
     lockedResizeStartRef.current = null // Drop drag baseline
 
-    const minW = blockMinFrameWidth(promptContent)
-    let width = Math.max(params?.width ?? resizeDimensions?.width ?? 0, minW)
-    let height = Math.max(params?.height ?? resizeDimensions?.height ?? 0, BLOCK_MIN_FRAME_H)
+    const minW = blockMinFrameWidth(promptContentRef.current)
+    const dims = resizeDimensionsRef.current
+    const rot = rotationRef.current
+    const unlocked = frameUnlockedRef.current
+    const wrapping = frameTextWrapRef.current
+    const colW = wrapColWidthRef.current
+    const intrinsic = intrinsicSizeRef.current
+    let width = Math.max(params?.width ?? dims?.width ?? 0, minW)
+    let height = Math.max(params?.height ?? dims?.height ?? 0, BLOCK_MIN_FRAME_H)
     // RF end params are AABB when rotated — store unrotated content size
-    if (Math.abs(rotation) > 0.5 && params?.width && params?.height) {
-      const fallback = resizeDimensions || { width, height }
-      const content = contentSizeFromAabb(params.width, params.height, rotation, fallback)
+    if (Math.abs(rot) > 0.5 && params?.width && params?.height) {
+      const fallback = dims || { width, height }
+      const content = contentSizeFromAabb(params.width, params.height, rot, fallback)
       width = Math.max(content.width, minW)
       height = Math.max(content.height, BLOCK_MIN_FRAME_H)
     }
     const finalScale = frameScaleRef.current // Latest scale from the drag (avoid stale closure)
     let colToPersist: number | undefined // New wrap column width to store (unlocked-wrap resize sets the point)
-    if (!frameUnlocked && frameTextWrap) {
+    if (!unlocked && wrapping) {
       // Locked wrap: hug WIDTH to the scaled FIXED columns (no reflow) + HEIGHT to wrapped content.
-      if (wrapColWidth != null) width = Math.round(wrapColWidth * Math.max(0.15, finalScale)) + 2
-      height = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(intrinsicSize.height * Math.max(0.15, finalScale)) + 2)
-    } else if (!frameUnlocked) {
-      const hugged = scaledFrameSize(intrinsicSize, finalScale, minW) // Nowrap: snap to scaled text
+      if (colW != null) width = Math.round(colW * Math.max(0.15, finalScale)) + 2
+      height = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(intrinsic.height * Math.max(0.15, finalScale)) + 2)
+    } else if (!unlocked) {
+      const hugged = scaledFrameSize(intrinsic, finalScale, minW) // Nowrap: snap to scaled text
       width = hugged.width
       height = hugged.height
-    } else if (frameTextWrap) {
+    } else if (wrapping) {
       // Unlocked wrap: the dragged width IS the new wrap point — remember it (unscaled columns).
       colToPersist = Math.max(1, Math.floor((width - 2) / Math.max(0.15, finalScale)))
       setWrapColWidth(colToPersist)
@@ -2912,56 +2955,58 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       setResizeDimensions({ width, height }) // Lock final box size into local state
     }
     // Unlocked drag refreshes the last free-resize shape (bookkeeping only — unlock keeps current size).
-    if (frameUnlocked) {
+    if (unlocked) {
       setUnlockedFrameSize({ width, height })
       setUnlockedFrameScale(finalScale)
     }
 
-    await persistFrameMeta({
+    await persistFrameMetaRef.current({
       resizeDimensions: { width, height },
-      frameUnlocked,
-      frameTextWrap, // Wrap persists in either lock state now
+      frameUnlocked: unlocked,
+      frameTextWrap: wrapping, // Wrap persists in either lock state now
       frameScale: finalScale,
-      fontScale,
-      ...(frameUnlocked ? { unlockedFrameSize: { width, height }, unlockedFrameScale: finalScale } : {}),
+      fontScale: fontScaleRef.current,
+      ...(unlocked ? { unlockedFrameSize: { width, height }, unlockedFrameScale: finalScale } : {}),
       ...(colToPersist != null ? { wrapColWidth: colToPersist } : {}), // Save the new unlocked wrap point
     })
-  }, [resizeDimensions, frameUnlocked, frameTextWrap, wrapColWidth, fontScale, persistFrameMeta, intrinsicSize, promptContent, rotation])
+  }, [])
 
   // Corner-drag: locked → proportional content scale; unlocked → free frame (content stays)
   // When rotated, RF reports AABB size — convert back to unrotated content size.
   const handleResize = useCallback((_event: any, params: { width: number; height: number }) => {
     if (!isResizingRef.current) return // Ignore mount/select noise — only after handleResizeStart
-    const minW = blockMinFrameWidth(promptContent)
-    const fallback = resizeDimensions || lockedResizeStartRef.current || {
+    const minW = blockMinFrameWidth(promptContentRef.current)
+    const fallback = resizeDimensionsRef.current || lockedResizeStartRef.current || {
       width: minW,
       height: BLOCK_MIN_FRAME_H,
     }
     let width = Math.max(params.width, minW)
     let height = Math.max(params.height, BLOCK_MIN_FRAME_H)
-    if (Math.abs(rotation) > 0.5) {
-      const content = contentSizeFromAabb(width, height, rotation, fallback)
+    const rot = rotationRef.current
+    if (Math.abs(rot) > 0.5) {
+      const content = contentSizeFromAabb(width, height, rot, fallback)
       width = Math.max(content.width, minW)
       height = Math.max(content.height, BLOCK_MIN_FRAME_H)
     }
-    if (!frameUnlocked && lockedResizeStartRef.current) {
+    let nextScale: number | undefined
+    if (!frameUnlockedRef.current && lockedResizeStartRef.current) {
       // Locked (wrap OR nowrap): proportional content scale — width/text scale together.
       const start = lockedResizeStartRef.current
       const ratio = width / Math.max(1, start.width) // keepAspectRatio → width tracks height
-      const nextScale = Math.max(0.15, start.scale * ratio)
-      setFrameScale(nextScale) // Blocks scale with the frame
-      if (frameTextWrap && wrapColWidth != null) {
+      nextScale = Math.max(0.15, start.scale * ratio)
+      const colW = wrapColWidthRef.current
+      if (frameTextWrapRef.current && colW != null) {
         // Locked WRAP: derive the box from the FIXED column width × scale so NO character reflows —
         // the wrapped text just scales up/down (columns stay constant, +2 border).
-        setResizeDimensions({
-          width: Math.round(wrapColWidth * nextScale) + 2,
-          height: Math.max(BLOCK_MIN_FRAME_H, Math.round(intrinsicSize.height * nextScale) + 2),
-        })
-        return
+        width = Math.round(colW * nextScale) + 2
+        height = Math.max(BLOCK_MIN_FRAME_H, Math.round(intrinsicSizeRef.current.height * nextScale) + 2)
       }
     }
-    setResizeDimensions({ width, height }) // Drive panel style — matches RF dimension changes
-  }, [frameUnlocked, frameTextWrap, wrapColWidth, intrinsicSize, promptContent, rotation, resizeDimensions])
+    pendingResizeRef.current = { width, height, scale: nextScale } // Latest sample wins
+    if (resizeRafRef.current == null) {
+      resizeRafRef.current = requestAnimationFrame(flushPendingResize) // One React paint per frame
+    }
+  }, [flushPendingResize])
 
   // Persist item rotation degrees into message metadata after a rotate gesture ends
   const saveRotation = useCallback(async (nextRotation: number) => {
