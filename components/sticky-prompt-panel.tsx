@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils'
 import { EditorToolbar } from './editor-toolbar'
 import { useEditorContext } from './editor-context'
 import { BOARD_LOAD_FADE_MS } from '@/components/frame-content-shimmer' // Same 300ms as board frame shells
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useSidebarContext } from './sidebar-context'
 import { ChevronRight, File, FileText, Menu } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
@@ -60,6 +60,47 @@ const PATH_MENU_LIMIT = 8 // Cap visible siblings; show “N more” like Notion
 const PATH_MENU_OPEN_MS = 320 // Dwell on a path name before the sibling menu fades in
 const PATH_MENU_CLOSE_MS = 120 // Leave grace — snappier hide, still covers name → list
 const PATH_MENU_MOTION = 'data-[state=open]:duration-300' // Slow fade-in; hide uses the default fade-out
+
+// Slash between path crumbs (same weight as the top-bar undo/Share seam)
+function PathSlash() {
+  return (
+    <span
+      className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none"
+      aria-hidden
+    >
+      /
+    </span>
+  )
+}
+
+// Visible path: highest / … (hidden middles) / parent / current
+type PathSlot =
+  | { type: 'crumb'; segment: BoardPathSegment; role: 'root' | 'parent' | 'current' } // Named board in the bar
+  | { type: 'ellipsis'; hidden: BoardPathSegment[] } // Collapsed ancestors between root and parent
+
+function slotsForPath(path: BoardPathSegment[]): PathSlot[] {
+  if (path.length === 0) return [] // Empty while loading
+  if (path.length === 1) return [{ type: 'crumb', segment: path[0], role: 'current' }] // Root board only
+  if (path.length === 2) {
+    return [
+      { type: 'crumb', segment: path[0], role: 'root' }, // Highest is also the parent
+      { type: 'crumb', segment: path[1], role: 'current' },
+    ]
+  }
+  if (path.length === 3) {
+    return [
+      { type: 'crumb', segment: path[0], role: 'root' }, // Highest
+      { type: 'crumb', segment: path[1], role: 'parent' }, // No middles → no …
+      { type: 'crumb', segment: path[2], role: 'current' },
+    ]
+  }
+  return [
+    { type: 'crumb', segment: path[0], role: 'root' }, // Highest always stays
+    { type: 'ellipsis', hidden: path.slice(1, -2) }, // Any boards between highest and parent
+    { type: 'crumb', segment: path[path.length - 2], role: 'parent' },
+    { type: 'crumb', segment: path[path.length - 1], role: 'current' },
+  ]
+}
 
 // One crumb bar while the board path query is pending (holds left-chrome width)
 function BoardPathShimmer() {
@@ -221,12 +262,14 @@ function PathBoardMenuItem({
 function PathSegmentMenu({
   segment,
   isLast,
+  iconOnly,
   siblings,
   childrenOf,
   currentBoardId,
 }: {
   segment: BoardPathSegment
   isLast: boolean
+  iconOnly?: boolean // Ancestors drop their title when the path cap is tight (icon minimum)
   siblings: PathBoard[]
   childrenOf: (id: string) => PathBoard[]
   currentBoardId?: string
@@ -314,15 +357,16 @@ function PathSegmentMenu({
             goTo(segment.id) // Click path name → open that page
           }}
           className={cn(
-            'inline-flex items-center gap-1 truncate max-w-[10rem] rounded px-0.5 -mx-0.5 text-left transition-colors hover:bg-gray-100 dark:hover:bg-gray-800',
+            'inline-flex items-center gap-1 rounded px-0.5 -mx-0.5 text-left transition-colors hover:bg-gray-100 dark:hover:bg-gray-800',
             isLast
-              ? 'text-gray-900 dark:text-gray-100'
-              : 'text-gray-400 dark:text-gray-500 font-normal'
+              ? 'min-w-0 max-w-full text-gray-900 dark:text-gray-100' // Current board; CSS ellipsis if still cutoff
+              : 'flex-shrink-0 text-gray-400 dark:text-gray-500 font-normal' // Ancestors: full name or icon-only
           )}
           title={segment.title}
+          aria-label={segment.title}
         >
           <PathPageIcon icon={segment.icon} hasContent={segment.hasContent} />
-          <span className="truncate">{segment.title}</span>
+          {!iconOnly && <span className={isLast ? 'truncate' : undefined}>{segment.title}</span>}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -360,10 +404,125 @@ function PathSegmentMenu({
   )
 }
 
+// … crumb between highest and parent — lists the boards the path hid
+function PathEllipsisMenu({
+  hidden,
+  currentBoardId,
+}: {
+  hidden: BoardPathSegment[]
+  currentBoardId?: string
+}) {
+  const router = useRouter()
+  const [open, setOpen] = useState(false) // Hover-controlled hidden-path menu
+  const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Pending fade-in dwell
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Pending fade-out
+
+  const clearMenuTimers = () => {
+    if (openTimerRef.current) clearTimeout(openTimerRef.current)
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    openTimerRef.current = null
+    closeTimerRef.current = null
+  }
+
+  useEffect(() => {
+    return () => {
+      if (openTimerRef.current) clearTimeout(openTimerRef.current)
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    }
+  }, [])
+
+  const openMenu = (immediate = false) => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
+    if (immediate) {
+      if (openTimerRef.current) {
+        clearTimeout(openTimerRef.current)
+        openTimerRef.current = null
+      }
+      setOpen(true)
+      return
+    }
+    if (open || openTimerRef.current) return
+    openTimerRef.current = setTimeout(() => {
+      openTimerRef.current = null
+      setOpen(true)
+    }, PATH_MENU_OPEN_MS)
+  }
+
+  const scheduleCloseMenu = () => {
+    if (openTimerRef.current) {
+      clearTimeout(openTimerRef.current)
+      openTimerRef.current = null
+    }
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    closeTimerRef.current = setTimeout(() => {
+      closeTimerRef.current = null
+      setOpen(false)
+    }, PATH_MENU_CLOSE_MS)
+  }
+
+  const goTo = (id: string) => {
+    clearMenuTimers()
+    setOpen(false)
+    router.push(`/board/${id}`)
+  }
+
+  return (
+    <DropdownMenu
+      open={open}
+      onOpenChange={(next) => {
+        if (next) setOpen(true)
+        else scheduleCloseMenu()
+      }}
+      modal={false}
+    >
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          onMouseEnter={() => openMenu()}
+          onMouseLeave={(e) => {
+            const to = e.relatedTarget as HTMLElement | null
+            if (to?.closest?.('[data-radix-popper-content-wrapper], [role="menu"]')) return
+            scheduleCloseMenu()
+          }}
+          className="inline-flex flex-shrink-0 items-center rounded px-0.5 -mx-0.5 text-gray-400 dark:text-gray-500 font-normal hover:bg-gray-100 dark:hover:bg-gray-800"
+          title="More boards in path"
+          aria-label="More boards in path"
+        >
+          ...
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        sideOffset={6}
+        className={cn('w-56 max-h-72 overflow-y-auto', PATH_MENU_MOTION)}
+        onMouseEnter={() => openMenu(true)}
+        onMouseLeave={(e) => {
+          const to = e.relatedTarget as HTMLElement | null
+          if (to?.closest?.('[data-radix-popper-content-wrapper], [role="menu"]')) return
+          scheduleCloseMenu()
+        }}
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
+        {hidden.map((segment) => (
+          <DropdownMenuItem
+            key={segment.id}
+            className={cn('cursor-pointer', segment.id === currentBoardId && 'bg-gray-100 dark:bg-[#2a2a3a]')}
+            onClick={() => goTo(segment.id)}
+          >
+            <PathPageIcon icon={segment.icon} hasContent={segment.hasContent} className="mr-1.5" />
+            <span className="truncate">{segment.title}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 export function EditPanel({ conversationId, projectId }: EditPanelProps) {
   const { activeEditor } = useEditorContext()
-  const [isHidden, setIsHidden] = useState(false) // Track if top bar is hidden
-  const [isHovering, setIsHovering] = useState(false) // Track if mouse is hovering over pill
   const { openSidebar, scheduleCloseSidebar, toggleSidebar, isSidebarPinned, isMobileMode } = useSidebarContext()
   const supabase = createClient() // Client for board/project title lookup
 
@@ -490,6 +649,30 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
     return () => window.clearTimeout(t)
   }, [pathKey, pathReady, revealedPathKey])
 
+  const pathSlots = path ? slotsForPath(path) : [] // Highest / … / parent / current
+  const [iconOnlyAncestors, setIconOnlyAncestors] = useState(false) // Drop ancestor titles when the cap is tight
+  const pathBoxRef = useRef<HTMLDivElement>(null) // Capped path box (--tt-path-max)
+  const pathFullRef = useRef<HTMLSpanElement>(null) // Hidden full-label row for compact measure
+
+  useLayoutEffect(() => {
+    const box = pathBoxRef.current
+    const full = pathFullRef.current
+    if (!box || !full) return // Path not mounted
+    const sync = () => {
+      const cap = box.clientWidth // Room after --tt-path-max
+      if (cap <= 0) return
+      const need = full.scrollWidth // Highest + … + parent + current with titles
+      setIconOnlyAncestors((prev) => {
+        if (!prev) return need > cap + 1 // Collapse names to icons
+        return need > cap - 8 // Hysteresis so labels don’t flicker
+      })
+    }
+    sync()
+    const ro = new ResizeObserver(sync) // Cap / title / icon changes
+    ro.observe(box)
+    return () => ro.disconnect()
+  }, [path, pathReady, pathSlots.length])
+
   // Siblings at the same parent level as a path segment
   const siblingsFor = (segment: BoardPathSegment): PathBoard[] => {
     return pathBoards
@@ -518,27 +701,26 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
           top: '0px',
         }}
       >
-        {/* Top bar content - hidden when isHidden is true */}
+        {/* Top bar — always shown (no hide-pill) */}
         <div
           data-edit-top-bar // Full map-column bar; toolbar tools center against this, not leftover flex space
           className={cn(
             // Match React Flow board/main area background — no border, no shadow
-            'relative bg-gray-50 dark:bg-[#0f0f0f] flex items-center gap-1 w-full transition-all duration-200',
-            isHidden ? 'opacity-0 h-0 overflow-hidden' : 'overflow-visible'
+            'relative bg-gray-50 dark:bg-[#0f0f0f] flex items-center gap-1 w-full overflow-visible'
           )}
           style={{
             // No rounded corners - fills map column width (chat sidebar is a sibling column)
             borderRadius: '0px',
             border: 'none', // Explicitly no bottom (or any) border
             boxShadow: 'none',
-            height: isHidden ? '0px' : `${panelHeight}px`, // Same height as input box (52px), 0 when hidden
-            paddingLeft: isHidden ? '0' : '0.5rem', // 8px left padding
-            paddingRight: isHidden ? '0' : '0.5rem', // 8px right padding
+            height: `${panelHeight}px`, // Same height as input box (52px)
+            paddingLeft: '0.5rem', // 8px left padding
+            paddingRight: '0.5rem', // 8px right padding
             boxSizing: 'border-box', // Ensure padding is included in height
           }}
         >
-          {/* Left chrome — menu + board path; z-20 so title stays clickable if tools overlap */}
-          <div data-top-bar-left data-path-ready={pathReady || !pathKey ? 'true' : undefined} className="relative z-20 flex items-center min-w-0 shrink-0">
+          {/* Left chrome — menu + board path; shrink-0 so the title isn’t crushed by the flex bar */}
+          <div data-top-bar-left data-path-ready={pathReady || !pathKey ? 'true' : undefined} className="relative z-20 flex items-center flex-shrink-0">
           {/* Menu icon — hover opens; click pins open until clicked again (survives page switch) */}
           <div
             data-nav-logo-trigger
@@ -562,43 +744,71 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
             </button>
           </div>
 
-          {/* Board path — click opens page; hover lists same-level pages */}
-          <div className="relative flex items-center gap-0 min-w-0 shrink mr-2 max-w-[min(420px,48vw)] text-sm font-medium">
+          {/* Board path — highest / … / parent / current; ancestor names → icons; current title ellipsizes */}
+          <div
+            ref={pathBoxRef}
+            data-board-path
+            className="relative min-w-0 flex-shrink-0 overflow-hidden text-sm font-medium text-gray-900 dark:text-gray-100"
+            style={{ maxWidth: 'var(--tt-path-max, none)' }} // Measured px to undo/Share; none until then so names aren’t pre-cut
+          >
             {pathReady && showBoardPath && path ? (
-              <span
-                className={cn(
-                  'truncate select-none flex items-center min-w-0',
-                  pathEntering && 'tt-board-load-fade-in' // Fade in under the dissolving crumb
-                )}
-                title={displayTitle}
-              >
-                {path.map((segment, index) => {
-                  const isLast = index === path.length - 1
-                  return (
-                    <span key={segment.id} className="inline-flex items-center min-w-0">
-                      {index > 0 && (
-                        <span
-                          className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none"
-                          aria-hidden
-                        >
-                          /
+              <>
+                <span
+                  ref={pathFullRef}
+                  data-path-full
+                  aria-hidden
+                  className="pointer-events-none absolute left-0 top-0 -z-10 flex w-max items-center whitespace-nowrap opacity-0" // Full titles; compact measure only
+                >
+                  {pathSlots.map((slot, index) => (
+                    <span key={slot.type === 'ellipsis' ? 'ellipsis' : slot.segment.id} className="inline-flex items-center flex-shrink-0">
+                      {index > 0 && <PathSlash />}
+                      {slot.type === 'ellipsis' ? (
+                        <span className="px-0.5">...</span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-0.5">
+                          <PathPageIcon icon={slot.segment.icon} hasContent={slot.segment.hasContent} />
+                          <span>{slot.segment.title}</span>
                         </span>
                       )}
-                      <PathSegmentMenu
-                        segment={segment}
-                        isLast={isLast}
-                        siblings={siblingsFor(segment)}
-                        childrenOf={childrenOf}
-                        currentBoardId={conversationId}
-                      />
                     </span>
-                  )
-                })}
-              </span>
+                  ))}
+                </span>
+                <span
+                  className={cn(
+                    'select-none flex w-max min-w-0 max-w-full items-center whitespace-nowrap', // Hug until the cap; current truncates
+                    pathEntering && 'tt-board-load-fade-in' // Fade in under the dissolving crumb
+                  )}
+                  title={displayTitle}
+                >
+                  {pathSlots.map((slot, index) => {
+                    const isCurrent = slot.type === 'crumb' && slot.role === 'current'
+                    return (
+                      <span
+                        key={slot.type === 'ellipsis' ? 'ellipsis' : slot.segment.id}
+                        className={cn('inline-flex items-center', isCurrent ? 'min-w-0' : 'flex-shrink-0')}
+                      >
+                        {index > 0 && <PathSlash />}
+                        {slot.type === 'ellipsis' ? (
+                          <PathEllipsisMenu hidden={slot.hidden} currentBoardId={conversationId} />
+                        ) : (
+                          <PathSegmentMenu
+                            segment={slot.segment}
+                            isLast={isCurrent}
+                            iconOnly={iconOnlyAncestors && !isCurrent} // Icons minimum on highest / parent
+                            siblings={siblingsFor(slot.segment)}
+                            childrenOf={childrenOf}
+                            currentBoardId={conversationId}
+                          />
+                        )}
+                      </span>
+                    )
+                  })}
+                </span>
+              </>
             ) : pathReady || !pathKey ? (
               <span
                 className={cn(
-                  'text-sm font-medium text-gray-900 dark:text-gray-100 truncate select-none px-0.5',
+                  'text-sm font-medium text-gray-900 dark:text-gray-100 select-none px-0.5 whitespace-nowrap truncate inline-block max-w-full',
                   pathEntering && 'tt-board-load-fade-in' // Project title uses the same load fade
                 )}
                 title={displayTitle}
@@ -622,20 +832,6 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
           {/* Editor Toolbar - tools center on the board; Share / copy / favorite / more stay right */}
           <EditorToolbar editor={activeEditor} conversationId={conversationId} />
         </div>
-
-        {/* Thin pill toggle below top bar - only visible on hover or when hidden */}
-        <div
-          onClick={() => setIsHidden(!isHidden)}
-          onMouseEnter={() => setIsHovering(true)}
-          onMouseLeave={() => setIsHovering(false)}
-          className={cn(
-            'w-12 h-1.5 rounded-full cursor-pointer transition-all duration-200 bg-gray-300 dark:bg-gray-600 hover:bg-gray-400 dark:hover:bg-gray-500',
-            isHidden ? 'mt-2' : 'mt-1.5',
-            // Show pill when hovering on it, or always show if bar is hidden (so user can restore it)
-            (isHovering || isHidden) ? 'opacity-100' : 'opacity-0'
-          )}
-          title={isHidden ? 'Show toolbar' : 'Hide toolbar'}
-        />
       </div>
     </>
   )

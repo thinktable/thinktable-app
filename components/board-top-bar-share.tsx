@@ -1,6 +1,6 @@
 'use client'
 
-// Top-bar cluster right of Share: copy link, favorite, More (Notion-style board actions)
+// Top-bar cluster right of Share: copy link, favorite, More (phone: copy + star live in More)
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react' // Copy flash + favorite + More search
 import {
@@ -45,6 +45,7 @@ import { createClient } from '@/lib/supabase/client' // Persist favorite; word c
 import { useQueryClient } from '@tanstack/react-query' // Keep Boards list in sync; reuse frame cache
 import { cn } from '@/lib/utils' // Class merge
 import { useReactFlowContext } from './react-flow-context' // Present switches to View mode
+import { useSidebarContext } from './sidebar-context' // Phone hides copy/star into More
 import { NotionConnectMenuItems, NotionConnectProvider } from './notion-connect-button' // Connections → Notion
 
 type BoardTopBarShareProps = {
@@ -109,6 +110,7 @@ function MenuToggle({ on }: { on: boolean }) {
 export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
   const queryClient = useQueryClient() // Patch conversations cache after favorite
   const { setEditMenuPillMode } = useReactFlowContext() // Present → View bar
+  const { isMobileMode } = useSidebarContext() // Phone: copy + star collapse into More
   const [copied, setCopied] = useState(false) // Brief checkmark after copy
   const [favorited, setFavorited] = useState(false) // Star fill from metadata.favorite
   const [menuOpen, setMenuOpen] = useState(false) // Load footer stats when More opens
@@ -274,6 +276,8 @@ export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
     showConnections ||
     [
       'Copy link',
+      'Add to favorites',
+      'Remove from favorites',
       'Copy board contents',
       'Duplicate',
       'Move to',
@@ -308,29 +312,34 @@ export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
   return (
     <NotionConnectProvider>
       <div className="flex items-center gap-1 flex-shrink-0">
-        <Button
-          variant="ghost"
-          size="sm"
-          className={iconBtn}
-          title={copied ? 'Copied' : 'Copy link'}
-          type="button"
-          disabled={!conversationId}
-          onClick={() => void copyLink()}
-        >
-          {copied ? <Check className="h-4 w-4 text-green-600" /> : <Link2 className="h-4 w-4" />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className={iconBtn}
-          title={favorited ? 'Remove from favorites' : 'Add to favorites'}
-          type="button"
-          disabled={!conversationId}
-          aria-pressed={favorited}
-          onClick={() => void toggleFavorite()}
-        >
-          <Star className={cn('h-4 w-4', favorited && 'fill-current')} />
-        </Button>
+        {!isMobileMode && (
+          <>
+            {/* Desktop: copy + star sit beside More; phone uses More rows only */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className={iconBtn}
+              title={copied ? 'Copied' : 'Copy link'}
+              type="button"
+              disabled={!conversationId}
+              onClick={() => void copyLink()}
+            >
+              {copied ? <Check className="h-4 w-4 text-green-600" /> : <Link2 className="h-4 w-4" />}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={iconBtn}
+              title={favorited ? 'Remove from favorites' : 'Add to favorites'}
+              type="button"
+              disabled={!conversationId}
+              aria-pressed={favorited}
+              onClick={() => void toggleFavorite()}
+            >
+              <Star className={cn('h-4 w-4', favorited && 'fill-current')} />
+            </Button>
+          </>
+        )}
         <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
           <DropdownMenuTrigger asChild>
             <Button
@@ -395,6 +404,15 @@ export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
                   <Link2 className="h-4 w-4 mr-2" />
                   Copy link
                   <DropdownMenuShortcut>⌘⌥L</DropdownMenuShortcut>
+                </DropdownMenuItem>
+              )}
+              {(matchesQuery('Add to favorites', q) || matchesQuery('Remove from favorites', q)) && (
+                <DropdownMenuItem
+                  disabled={!conversationId} // Unsaved board has no conversations.metadata.favorite
+                  onClick={() => void toggleFavorite()} // Same persist path as the star button
+                >
+                  <Star className={cn('h-4 w-4 mr-2', favorited && 'fill-current')} />
+                  {favorited ? 'Remove from favorites' : 'Add to favorites'}
                 </DropdownMenuItem>
               )}
               {matchesQuery('Copy board contents', q) && (

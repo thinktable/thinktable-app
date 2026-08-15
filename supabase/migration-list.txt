@@ -114,3 +114,4 @@
 20260815001725_menu_flyouts_always_right.sql
 20260815005933_frame_property_ibar_align.sql
 20260815012513_phone_zoom_swipe_frame_caret.sql
+20260815045351_phone_mode_pill_undo_cluster.sql

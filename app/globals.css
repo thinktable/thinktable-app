@@ -384,16 +384,39 @@
   background-size: 200% 100%;
 }
 
-/* Mode pill + hide pill wait until top-bar tools have their final compact/full layout */
-html:not(:has([data-toolbar-center][data-toolbar-ready])) [data-edit-menu-context],
-html:not(:has([data-toolbar-center][data-toolbar-ready])) [data-edit-pill-context],
-html:not(:has([data-toolbar-center][data-toolbar-ready])) [data-edit-menu-hover] {
+/* Mode pill waits until top-bar tools have their final compact/full layout */
+html:not(:has([data-toolbar-center][data-toolbar-ready])) [data-edit-menu-context] {
   opacity: 0; /* Hold transparent until tools are ready, then the elements’ opacity transition fades them in together */
   pointer-events: none;
 }
 [data-toolbar-center]:not([data-toolbar-animate]) .tt-toolbar-title,
 [data-toolbar-center]:not([data-toolbar-animate]) button {
   transition: none !important; /* Skip collapse animation on load */
+}
+
+/* Phone pill: desktop cluster px-2 + slash mx-1 is too wide — pack Draw’s 6 icons evenly */
+[data-phone-mode-tools] {
+  gap: 0; /* Slash margins are the only group gap (same idea as Free nav) */
+}
+[data-phone-mode-tools] > div {
+  padding-inline: 0; /* Drop the desktop bar’s cluster padding */
+}
+[data-phone-mode-tools] > span[aria-hidden] {
+  margin-inline: 0.125rem; /* 2px — match in-group gap so the slash doesn’t blow the rhythm */
+  font-size: 1.25rem; /* text-xl thin slash, not the desktop text-2xl */
+}
+[data-phone-undo] {
+  /* Tools pill is ~40px tall → rounded-full radius 20px; tuck under that cap so the curve has no board gap */
+  margin-left: -1.25rem; /* Pull fill under the tools right curve */
+  padding-left: 1.5rem; /* 20px overlap + former 4px — arrows stay where they were */
+  padding-right: 0.25rem; /* Tight to redo — same inset as the tools pill’s px-1, not another 20px cap */
+}
+[data-phone-undo] > [data-undo-redo] {
+  padding-inline: 0.125rem; /* Undo/redo sit tight to the pill seam, not desktop px-2 */
+  gap: 0; /* No flex gap — the w-7 hit boxes were holding the glyphs apart */
+}
+[data-phone-undo] > [data-undo-redo] > button + button {
+  margin-left: -0.25rem; /* 4px pull — tighter than gap-1, looser than the -8px overlap */
 }
 
 /* Cookie-SSR may paint the desktop chat column; never steal map width on phone */

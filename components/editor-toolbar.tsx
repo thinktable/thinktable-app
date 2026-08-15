@@ -8,6 +8,7 @@ import { useReactFlowContext } from './react-flow-context'
 import { threadAlgorithmFromStyle, type ThreadStylePref } from '@/components/threads' // Smooth/Sharp/Linear
 import { usePreviewFocus } from '@/lib/preview-focus-context' // Nested preview View-style targeting
 import { useState, useEffect, useLayoutEffect, useRef } from 'react'
+import { createPortal } from 'react-dom' // Phone: mode tools inside the pill; undo/redo to its right
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -46,7 +47,6 @@ import {
   Redo2,
   Paintbrush,
   Lock,
-  RotateCcw,
   PaintBucket,
   LassoSelect,
   Eraser,
@@ -77,6 +77,7 @@ import { ToolbarTitle } from './toolbar-title' // Animated icon-adjacent titles
 import { PresentationsMenu } from './presentations-menu' // View-bar Presentation list popover
 import { useBoardAccess } from '@/lib/share/board-access-context' // Owner-only share menu
 import { useSidebarContext } from './sidebar-context' // Wait for chat column restore before measuring titles
+import { usePhoneModeMenu } from './phone-mode-menu-context' // Phone pill drill-in portal host
 import { useAiEditSession } from '@/lib/ai/edit-session' // Top-bar AI content mask toggle
 import { htmlHasAiOrigin } from '@/lib/ai/wrap-ai-html' // Detect AI-origin spans in frame HTML
 import { LegoBrickIcon } from './lego-brick-icon' // Frame-group lock: two bricks, top one stud back
@@ -100,9 +101,57 @@ function titledToolWidth(label: string) {
   return 16 + 6 + Math.ceil(label.length * 7.5) + 16 // icon + gap-1.5 + glyph estimate + px-2
 }
 
+/** Slash-free cluster immediately right of undo/redo — never fold into More; phone pill instead. */
+function leftmostGroupIds(mode: string): Set<string> {
+  if (mode === 'insert') return new Set(['smartAlign', 'arrows']) // Tidy up + Layout (no slash between)
+  if (mode === 'view') return new Set(['boardStyle']) // Board, then slash, then Capture/Present
+  if (mode === 'draw') return new Set(['drawGroup2', 'drawGroup3']) // Eraser + ink, then slash, then lasso/spaces
+  return new Set(['lock']) // Anchor + Snap frames, then slash, then Filter cluster
+}
+
+/** Icon-only width of each mode’s furthest-left slash-free cluster. Phone pill uses the widest. */
+const LEFTMOST_ICON_WIDTH: Record<string, number> = {
+  home: 64, // Anchor + Snap
+  insert: 40 + 4 + 40, // Tidy up + Layout (gap-0.5)
+  draw: 28 + 4 + 76, // Eraser + pencil + highlighter
+  view: 40, // Board
+}
+
+/** Phone: mount mode tools in the Actions/Layout/Draw/View pill; desktop: keep them in the top bar. */
+function PhoneModeToolsPortal({
+  enabled,
+  host,
+  children,
+}: {
+  enabled: boolean // phoneTools — leftmost cluster would overflow into More
+  host: HTMLElement | null // Phone tools row right of the mode dropdown
+  children: React.ReactNode // Mode tools (not undo/redo)
+}) {
+  if (enabled) {
+    if (!host) return null // Host mounts with the phone pill — undo/redo sit beside it
+    return createPortal(children, host) // Same buttons, right of the mode dropdown inside the pill
+  }
+  return <>{children}</>
+}
+
+/** Phone: mount undo/redo to the right of the mode pill, outside it; desktop: keep them in the top bar. */
+function PhoneUndoRedoPortal({
+  enabled,
+  host,
+  children,
+}: {
+  enabled: boolean // phoneTools — tools have left the bar for the pill
+  host: HTMLElement | null // Sibling of the pill; null until that node mounts
+  children: React.ReactNode // Undo/redo cluster
+}) {
+  if (enabled && host) return createPortal(children, host) // Outside the toggle chrome, to its right
+  return <>{children}</> // Stay on the bar until the host exists (no flash) or until desktop
+}
+
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const { canShare, canEdit, role } = useBoardAccess() // Gate share + show view-only chrome
   const { isChatSidebarOpen, chatChromeReady } = useSidebarContext() // Measure only after chat column is restored
+  const { toolsHost, undoHost, phoneTools, setPhoneTools } = usePhoneModeMenu() // Pill portal + undo sibling + overflow→phone flag
   const { reactFlowInstance, isLocked, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, mapUndo, mapRedo, canMapUndo, canMapRedo, getMapTakeSnapshot } = useReactFlowContext()
   const { showAiOrigin, setShowAiOrigin } = useAiEditSession() // Reddish AI content overlay toggle
   const queryClientForAi = useQueryClient() // Scan page frames for AI-origin content
@@ -358,33 +407,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     }
   }
 
-  // Default values for settings
-  const DEFAULT_BOARD_RULE: 'wide' | 'college' | 'narrow' = 'college'
-  const DEFAULT_BOARD_STYLE: 'none' | 'dotted' | 'lined' | 'grid' = 'dotted'
-  const DEFAULT_FILL_COLOR = '' // Transparent fill — matches default frame chrome
-  const DEFAULT_BORDER_COLOR = '' // Transparent border — matches default frame chrome
-  const DEFAULT_BORDER_WEIGHT = 1
-  const DEFAULT_BORDER_STYLE: 'solid' | 'dashed' | 'dotted' | 'none' = 'solid'
-
-  // Check if any settings differ from defaults
-  const hasNonDefaultSettings = 
-    boardRule !== DEFAULT_BOARD_RULE ||
-    boardStyle !== DEFAULT_BOARD_STYLE ||
-    fillColor !== DEFAULT_FILL_COLOR ||
-    borderColor !== DEFAULT_BORDER_COLOR ||
-    borderWeight !== DEFAULT_BORDER_WEIGHT ||
-    borderStyle !== DEFAULT_BORDER_STYLE
-
-  // Reset all settings to defaults
-  const handleResetToDefault = () => {
-    setBoardRule(DEFAULT_BOARD_RULE)
-    setBoardStyle(DEFAULT_BOARD_STYLE)
-    setFillColor(DEFAULT_FILL_COLOR)
-    setBorderColor(DEFAULT_BORDER_COLOR)
-    setBorderWeight(DEFAULT_BORDER_WEIGHT)
-    setBorderStyle(DEFAULT_BORDER_STYLE)
-  }
-
   // Hide formatting options (clear formatting to line options) when insert/draw/view mode is selected
   const shouldHideFormattingOptions = true // Text / frame / thread menus own these now
 
@@ -397,12 +419,14 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const [pencilColor, setPencilColor] = useState<DrawInk>('black') // Freehand ink — remembered per tool, not shared with highlighter
   const [highlighterColor, setHighlighterColor] = useState<DrawInk>('black') // Highlighter ink — independent of freehand so each dropdown keeps its last pick
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set())
+  const [hideUndoMoreSlash, setHideUndoMoreSlash] = useState(false) // Folded + truncated path: drop undo|/|More
   const [compactEarlyLabels, setCompactEarlyLabels] = useState(false) // Filter/sort/automations/eraser cluster — collapses first
   const compactEarlyLabelsRef = useRef(false) // Hysteresis for the first title-collapse stage
   const [compactLabels, setCompactLabels] = useState(false) // Remaining titles after the early cluster
   const compactLabelsRef = useRef(false) // Hysteresis so the title animation does not thrash at the threshold
   const [toolbarLayoutReady, setToolbarLayoutReady] = useState(false) // Hide tools until first measure so names don’t paint then collapse
   const toolbarLayoutReadyRef = useRef(false) // Same flag for checkVisibility without a stale closure
+  const phoneToolsRef = useRef(false) // Hysteresis for overflow→pill so it doesn’t thrash at the threshold
   const [toolbarAnimate, setToolbarAnimate] = useState(false) // Enable title transitions only after the first correct layout
   const [boardSearch, setBoardSearch] = useState('') // Actions-bar live search over frame title + body
   const [boardSearchOpen, setBoardSearchOpen] = useState(false) // Icon-only until click; then the field slides out
@@ -934,8 +958,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
 
       // Calculate widths of fixed elements (More menu)
       // More menu appears when items are hidden, so we need to account for it in calculations
-      // We always reserve space for the more menu button (even when not visible) since it will appear when items are hidden
-      const moreMenuWidth = 32 + 8 // More menu button width (h-7 w-7) + gap/separator - always reserve this space
+      // Always reserve More when deciding overflow / phone — dropping it would grow availableWidth and thrash
+      const moreMenuWidth = 32 + 8 // Overflow More button (h-7 w-7 + gap)
 
       // Max cluster width that still fits on the true board center without covering title or Share
       const availableWidth = toolbarRect.width - 2 * sideInset - moreMenuWidth - 16
@@ -957,9 +981,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           ]
           : editMenuPillMode === 'draw'
             ? [
+              { id: 'drawGroup1', width: 108 }, // Lasso + insert-space — rightmost, hide first
               { id: 'drawGroup3', width: 76 }, // Pencil, Highlighter icons
-              { id: 'drawGroup2', width: 28 + 4 }, // Eraser icon
-              { id: 'drawGroup1', width: 108 + 5 }, // Lasso + insert-space icons + slash
+              { id: 'drawGroup2', width: 28 + 4 + 5 }, // Eraser icon + slash after ink cluster
               { id: 'undoRedo', width: 70 },
             ]
             : [
@@ -986,9 +1010,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           ]
           : editMenuPillMode === 'draw'
             ? [
+              { id: 'drawGroup1', width: titledToolWidth('Lasso') + 4 + titledToolWidth('Vertical space') + 4 + titledToolWidth('Horizontal space') + 16 }, // Rightmost
               { id: 'drawGroup3', width: 76 }, // Ink titles already collapsed
-              { id: 'drawGroup2', width: 28 + 4 },
-              { id: 'drawGroup1', width: titledToolWidth('Lasso') + 4 + titledToolWidth('Vertical space') + 4 + titledToolWidth('Horizontal space') + 16 + 5 },
+              { id: 'drawGroup2', width: 28 + 4 + 5 }, // Eraser + slash after ink cluster
               { id: 'undoRedo', width: 70 },
             ]
             : [
@@ -1005,9 +1029,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           ? midGroups // View has no early cluster
           : editMenuPillMode === 'draw'
             ? [
+              { id: 'drawGroup1', width: titledToolWidth('Lasso') + 4 + titledToolWidth('Vertical space') + 4 + titledToolWidth('Horizontal space') + 16 }, // Rightmost
               { id: 'drawGroup3', width: titledToolWidth('Pencil') + 4 + titledToolWidth('Highlighter') + 16 }, // Ink titles
-              { id: 'drawGroup2', width: titledToolWidth('Eraser') + 4 },
-              { id: 'drawGroup1', width: titledToolWidth('Lasso') + 4 + titledToolWidth('Vertical space') + 4 + titledToolWidth('Horizontal space') + 16 + 5 },
+              { id: 'drawGroup2', width: titledToolWidth('Eraser') + 4 + 5 }, // Eraser + slash after ink cluster
               { id: 'undoRedo', width: 70 },
             ]
             : [
@@ -1040,21 +1064,73 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       compactLabelsRef.current = nextRest
       const itemGroups = nextRest ? iconGroups : nextEarly ? midGroups : fullGroups // Measure the chrome we will actually render
 
+      const leftIds = leftmostGroupIds(editMenuPillMode) // Slash-free cluster right of undo/redo
+      const widestLeftmost = Math.max( // Hungriest left cluster across modes so the pill doesn’t flip on mode change
+        LEFTMOST_ICON_WIDTH.home,
+        LEFTMOST_ICON_WIDTH.insert,
+        LEFTMOST_ICON_WIDTH.draw,
+        LEFTMOST_ICON_WIDTH.view
+      )
+      const keepW = 70 + 8 + widestLeftmost + 8 // Undo/redo + widest left cluster + gaps — below this, phone pill
+      const wasPhone = firstPass ? false : phoneToolsRef.current // Last overflow→pill decision
+      const nextPhone = keepW > availableWidth - (wasPhone ? expandSlop : 0) // Titles already collapsed; left cluster would fold
+      phoneToolsRef.current = nextPhone
+      if (wasPhone !== nextPhone) setPhoneTools(nextPhone) // Skip when unchanged so the pill doesn’t reset
+
       const newHiddenItems = new Set<string>()
-      let currentWidth = sumGroups(itemGroups)
-      for (const item of itemGroups) { // Array is right-to-left; hide rightmost first
-        if (currentWidth > availableWidth) {
-          newHiddenItems.add(item.id)
-          currentWidth -= item.width + 8
+      if (!nextPhone) {
+        let currentWidth = sumGroups(itemGroups)
+        for (const item of itemGroups) { // Array is right-to-left; hide rightmost first
+      if (item.id === 'undoRedo') continue // Undo/redo never overflow into More; they leave the bar for the pill sibling
+          if (leftIds.has(item.id)) break // Left cluster stays; phone pill takes over instead of More
+          if (currentWidth > availableWidth) {
+            newHiddenItems.add(item.id)
+            currentWidth -= item.width + 8
+          }
         }
       }
 
-      setCompactEarlyLabels((prev) => (prev === nextEarly ? prev : nextEarly)) // Skip render if unchanged
-      setCompactLabels((prev) => (prev === nextRest ? prev : nextRest))
+      setCompactEarlyLabels((prev) => { // Phone pill uses icon+title from the tools themselves; skip bar collapse
+        const next = nextPhone ? true : nextEarly
+        return prev === next ? prev : next
+      })
+      setCompactLabels((prev) => {
+        const next = nextPhone ? true : nextRest
+        return prev === next ? prev : next
+      })
       setHiddenItems((prev) => { // Skip render if the hidden set is unchanged
         if (prev.size === newHiddenItems.size && [...newHiddenItems].every((id) => prev.has(id))) return prev
         return newHiddenItems
       })
+
+      const PATH_GAP = 8 // Air between path glyphs and the centered undo cluster
+      const hamEl = leftChrome?.querySelector('[data-nav-logo-trigger]') as HTMLElement | null // Menu icon; path starts after it
+      const centerEl = toolbar.querySelector('[data-toolbar-center]') as HTMLElement | null // Board-centered undo/tools
+      const hamRight = hamEl?.getBoundingClientRect().right ?? toolbarRect.left + 40 // Path origin in viewport px
+      const shareLeft = rightSectionRect.left // Share cluster; phone path runs to here
+      const pathBox = leftChrome?.querySelector('[data-board-path]') as HTMLElement | null // Live crumbs + hidden full-title row
+      if (centerEl) centerEl.style.transform = '' // Clear any leftover slide from before tools stayed centered
+      const clusterW = centerEl?.getBoundingClientRect().width ?? 70 // Layout width of the centered cluster
+      const barCenter = toolbarRect.left + toolbarRect.width / 2 // True board center
+      const centeredLeft = barCenter - clusterW / 2 // Undo’s left while centered
+      const pathFull = pathBox?.querySelector('[data-path-full]') as HTMLElement | null // Hidden full-title row
+      const naturalPath = pathFull?.scrollWidth ?? 0 // Uncapped path width without expanding the live crumbs
+      if (nextPhone) { // Tools + undo have left the bar — path can run to Share
+        const pathMax = Math.max(64, Math.floor(shareLeft - PATH_GAP - hamRight)) // Title uses the empty bar
+        if (bar) bar.style.setProperty('--tt-path-max', `${pathMax}px`)
+        setHideUndoMoreSlash((prev) => (prev === true ? prev : true)) // Nothing after undo on the bar
+        toolbarLayoutReadyRef.current = true
+        setToolbarLayoutReady(true)
+        return
+      }
+      const pathMax = Math.max(64, Math.floor(centeredLeft - PATH_GAP - hamRight)) // Truncate against centered undo
+      if (bar) bar.style.setProperty('--tt-path-max', `${pathMax}px`)
+      const truncated = naturalPath > pathMax + 1 // Full titles need more than the centered lane
+      const hideable = itemGroups.filter((item) => item.id !== 'undoRedo') // Undo/redo never fold
+      const allFolded = hideable.length > 0 && hideable.every((item) => newHiddenItems.has(item.id)) // Only undo/redo + More remain
+      const nextHideSlash = allFolded && truncated // Desktop: slash goes when colliding
+      setHideUndoMoreSlash((prev) => (prev === nextHideSlash ? prev : nextHideSlash))
+
       toolbarLayoutReadyRef.current = true
       setToolbarLayoutReady(true) // Reveal only after compact/hidden match this column width
     }
@@ -1081,7 +1157,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       attrObserver?.disconnect()
       window.removeEventListener('resize', checkVisibility)
     }
-  }, [editor, editMenuPillMode, boardSearchOpen, chatChromeReady, isChatSidebarOpen]) // Re-run when the map column’s final width is known
+  }, [editor, editMenuPillMode, boardSearchOpen, chatChromeReady, isChatSidebarOpen, setPhoneTools]) // Re-run when the map column’s final width is known
 
   useLayoutEffect(() => {
     if (toolbarLayoutReady && !toolbarAnimate) setToolbarAnimate(true) // After first reveal, allow later collapse/expand animation
@@ -1108,10 +1184,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         >
       {/* Left Section - collapsible items */}
       <div ref={leftSectionRef} className="flex items-center gap-1 flex-shrink min-w-0">
-        {/* Undo/redo — first in the board-centered cluster */}
-        {!isItemHidden('undoRedo') && (
-          <>
-            <div className="flex items-center gap-1 px-2 flex-shrink-0">
+        {/* Undo/redo — first in the board-centered cluster; on phone, portal to the right of the mode pill */}
+        <PhoneUndoRedoPortal enabled={phoneTools} host={undoHost}>
+        <div className="flex items-center gap-1 px-2 flex-shrink-0" data-undo-redo>
               <Button
                 variant="ghost"
                 size="sm"
@@ -1159,11 +1234,13 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 <Redo2 className="h-4 w-4" />
               </Button>
             </div>
-            {/* Slash before locks / Insert·Draw·View tools (same thin / as Actions) */}
-            <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
-          </>
-        )}
+        </PhoneUndoRedoPortal>
+            {/* Slash before locks / Insert·Draw·View tools — hide when only More remains and path is truncated */}
+            {!hideUndoMoreSlash && (
+              <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
+            )}
 
+        <PhoneModeToolsPortal enabled={phoneTools} host={toolsHost}>
         {/* Board lock / frame lock — also on the frame right-click menu */}
         {editMenuPillMode === 'home' && !isItemHidden('lock') && (
           <>
@@ -1445,98 +1522,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
         )}
 
-        {/* Draw Mode Buttons - Lasso, Insert Spaces, Eraser, Pencil, Highlighter (ink dropdowns on the tools) */}
+        {/* Draw Mode Buttons - Eraser, Pencil, Highlighter, Lasso, Insert Spaces (ink dropdowns on the tools) */}
         {editMenuPillMode === 'draw' && (
           <>
-            {/* Group 1: Selection Mode Toggle (Lasso), Insert Vertical Space, Insert Horizontal Space */}
-            {!isItemHidden('drawGroup1') && (
-              <>
-                <div className="flex items-center gap-1 px-2 flex-shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => {
-                      // Toggle lasso tool - if already selected, deselect it
-                      if (drawTool === 'lasso') {
-                        setDrawTool(null)
-                        setIsDrawing(false) // Disable drawing mode
-                      } else {
-                        setDrawTool('lasso')
-                        setIsDrawing(false) // Disable drawing mode when using selection
-                      }
-                      // Blur the button to remove focus state
-                      e.currentTarget.blur()
-                    }}
-                    className={cn(
-                      'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center',
-                      'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5', // Title condenses to icon on shrink
-                      drawTool === 'lasso'
-                        ? 'bg-gray-100 dark:bg-gray-800'
-                        : 'hover:bg-gray-100 dark:hover:bg-gray-800'
-                    )}
-                    title={drawTool === 'lasso' ? 'Selection Mode Active (Click to deselect)' : 'Selection Mode (Click to enable)'}
-                  >
-                    <LassoSelect className="h-4 w-4 flex-shrink-0" />
-                    <ToolbarTitle show={!compactLabels}>Lasso</ToolbarTitle>
-                  </Button>
-                    <Button
-                      ref={insertVerticalSpaceButtonRef}
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        // TODO: Implement insert vertical space
-                      }}
-                      onMouseEnter={handleInsertVerticalSpaceMouseEnter}
-                      onMouseLeave={handleInsertVerticalSpaceMouseLeave}
-                      className={cn(
-                        'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center',
-                        'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
-                      )}
-                      title="Insert Vertical Space"
-                    >
-                      <img 
-                        ref={insertVerticalSpaceIconRef}
-                        src="/insert%20space%20v%20icon%202.svg" 
-                        alt="Insert Vertical Space" 
-                        className="w-4 h-4 flex-shrink-0 transition-all duration-200"
-                        style={{ 
-                          filter: 'brightness(0) saturate(100%) invert(38%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(98%) contrast(100%)',
-                          opacity: 0.8
-                        }}
-                      />
-                      <ToolbarTitle show={!compactLabels}>Vertical space</ToolbarTitle>
-                    </Button>
-                    <Button
-                      ref={insertHorizontalSpaceButtonRef}
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        // TODO: Implement insert horizontal space
-                      }}
-                      onMouseEnter={handleInsertHorizontalSpaceMouseEnter}
-                      onMouseLeave={handleInsertHorizontalSpaceMouseLeave}
-                      className={cn(
-                        'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center',
-                        'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
-                      )}
-                      title="Insert Horizontal Space"
-                    >
-                      <img 
-                        ref={insertHorizontalSpaceIconRef}
-                        src="/insert%20space%20h%20icon%201.svg" 
-                        alt="Insert Horizontal Space" 
-                        className="w-4 h-4 flex-shrink-0 transition-all duration-200"
-                        style={{ 
-                          filter: 'brightness(0) saturate(100%) invert(38%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(98%) contrast(100%)',
-                          opacity: 0.8
-                        }}
-                      />
-                      <ToolbarTitle show={!compactLabels}>Horizontal space</ToolbarTitle>
-                    </Button>
-                </div>
-                <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
-              </>
-            )}
             {/* Eraser + Pencil + Highlighter — one cluster, no slash between eraser and pencil */}
             {(!isItemHidden('drawGroup2') || !isItemHidden('drawGroup3')) && (
               <>
@@ -1656,6 +1644,95 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       </DropdownMenu>
                     </>
                   )}
+                </div>
+                <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
+              </>
+            )}
+            {/* Group 1: Selection Mode Toggle (Lasso), Insert Vertical Space, Insert Horizontal Space */}
+            {!isItemHidden('drawGroup1') && (
+              <>
+                <div className="flex items-center gap-1 px-2 flex-shrink-0">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => {
+                      // Toggle lasso tool - if already selected, deselect it
+                      if (drawTool === 'lasso') {
+                        setDrawTool(null)
+                        setIsDrawing(false) // Disable drawing mode
+                      } else {
+                        setDrawTool('lasso')
+                        setIsDrawing(false) // Disable drawing mode when using selection
+                      }
+                      // Blur the button to remove focus state
+                      e.currentTarget.blur()
+                    }}
+                    className={cn(
+                      'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center',
+                      'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5', // Title condenses to icon on shrink
+                      drawTool === 'lasso'
+                        ? 'bg-gray-100 dark:bg-gray-800'
+                        : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                    )}
+                    title={drawTool === 'lasso' ? 'Selection Mode Active (Click to deselect)' : 'Selection Mode (Click to enable)'}
+                  >
+                    <LassoSelect className="h-4 w-4 flex-shrink-0" />
+                    <ToolbarTitle show={!compactLabels}>Lasso</ToolbarTitle>
+                  </Button>
+                    <Button
+                      ref={insertVerticalSpaceButtonRef}
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        // TODO: Implement insert vertical space
+                      }}
+                      onMouseEnter={handleInsertVerticalSpaceMouseEnter}
+                      onMouseLeave={handleInsertVerticalSpaceMouseLeave}
+                      className={cn(
+                        'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center',
+                        'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
+                      )}
+                      title="Insert Vertical Space"
+                    >
+                      <img 
+                        ref={insertVerticalSpaceIconRef}
+                        src="/insert%20space%20v%20icon%202.svg" 
+                        alt="Insert Vertical Space" 
+                        className="w-4 h-4 flex-shrink-0 transition-all duration-200"
+                        style={{ 
+                          filter: 'brightness(0) saturate(100%) invert(38%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(98%) contrast(100%)',
+                          opacity: 0.8
+                        }}
+                      />
+                      <ToolbarTitle show={!compactLabels}>Vertical space</ToolbarTitle>
+                    </Button>
+                    <Button
+                      ref={insertHorizontalSpaceButtonRef}
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        // TODO: Implement insert horizontal space
+                      }}
+                      onMouseEnter={handleInsertHorizontalSpaceMouseEnter}
+                      onMouseLeave={handleInsertHorizontalSpaceMouseLeave}
+                      className={cn(
+                        'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center',
+                        'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
+                      )}
+                      title="Insert Horizontal Space"
+                    >
+                      <img 
+                        ref={insertHorizontalSpaceIconRef}
+                        src="/insert%20space%20h%20icon%201.svg" 
+                        alt="Insert Horizontal Space" 
+                        className="w-4 h-4 flex-shrink-0 transition-all duration-200"
+                        style={{ 
+                          filter: 'brightness(0) saturate(100%) invert(38%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(98%) contrast(100%)',
+                          opacity: 0.8
+                        }}
+                      />
+                      <ToolbarTitle show={!compactLabels}>Horizontal space</ToolbarTitle>
+                    </Button>
                 </div>
               </>
             )}
@@ -2523,11 +2600,12 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             </>
           )}
         </>
+      </PhoneModeToolsPortal>
       </div>
       {/* End of left section */}
 
       {/* More menu button - contains hidden items, left-aligned after collapsible items */}
-      {hiddenItems.size > 0 && (
+      {!phoneTools && hiddenItems.size > 0 && (
         <DropdownMenu open={openDropdown === 'moreMenu'} onOpenChange={(open) => handleDropdownOpenChange('moreMenu', open)}>
           <DropdownMenuTrigger asChild>
             <Button
@@ -2588,32 +2666,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <DropdownMenuSeparator />
                   </>
                 )}
-                {/* Common items (undo/redo, lock) */}
-                {isItemHidden('undoRedo') && editor && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={() => {
-                      if (canMapUndo) mapUndo()
-                      else editor.chain().focus().undo().run()
-                    }}
-                      disabled={!canMapUndo && !editor.can().undo()}
-                    >
-                      <Undo2 className="h-4 w-4 mr-2" />
-                      Undo
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => {
-                      if (canMapRedo) mapRedo()
-                      else editor.chain().focus().redo().run()
-                    }}
-                      disabled={!canMapRedo && !editor.can().redo()}
-                    >
-                      <Redo2 className="h-4 w-4 mr-2" />
-                      Redo
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
               </>
             ) : editMenuPillMode === 'view' ? (
               <>
@@ -2648,36 +2700,27 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <DropdownMenuSeparator />
                   </>
                 )}
-                {/* Common items (undo/redo, lock) */}
-                {isItemHidden('undoRedo') && editor && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={() => {
-                      if (canMapUndo) mapUndo()
-                      else editor.chain().focus().undo().run()
-                    }}
-                      disabled={!canMapUndo && !editor.can().undo()}
-                    >
-                      <Undo2 className="h-4 w-4 mr-2" />
-                      Undo
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => {
-                      if (canMapRedo) mapRedo()
-                      else editor.chain().focus().redo().run()
-                    }}
-                      disabled={!canMapRedo && !editor.can().redo()}
-                    >
-                      <Redo2 className="h-4 w-4 mr-2" />
-                      Redo
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
               </>
             ) : editMenuPillMode === 'draw' ? (
               <>
-                {/* Draw mode items - grouped by toolbar dividers */}
+                {/* Draw mode items — same left-to-right order as the bar */}
+                {/* Group 2: Eraser — same cluster as pencil (no separator) */}
+                {isItemHidden('drawGroup2') && (
+                  <>
+                    <DropdownMenuItem onClick={() => {
+                      if (drawTool === 'eraser') {
+                        setDrawTool(null)
+                        setIsDrawing(false)
+                      } else {
+                        setDrawTool('eraser')
+                        setIsDrawing(false)
+                      }
+                    }}>
+                      <Eraser className="h-4 w-4 mr-2" />
+                      Eraser
+                    </DropdownMenuItem>
+                  </>
+                )}
                 {/* Group 3: Pencil, Highlighter — overflow keeps toggle + ink submenu */}
                 {isItemHidden('drawGroup3') && (
                   <>
@@ -2749,23 +2792,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                         ))}
                       </DropdownMenuSubContent>
                     </DropdownMenuSub>
-                  </>
-                )}
-                {/* Group 2: Eraser — same cluster as pencil (no separator) */}
-                {isItemHidden('drawGroup2') && (
-                  <>
-                    <DropdownMenuItem onClick={() => {
-                      if (drawTool === 'eraser') {
-                        setDrawTool(null)
-                        setIsDrawing(false)
-                      } else {
-                        setDrawTool('eraser')
-                        setIsDrawing(false)
-                      }
-                    }}>
-                      <Eraser className="h-4 w-4 mr-2" />
-                      Eraser
-                    </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>
                 )}
@@ -2811,32 +2837,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <DropdownMenuSeparator />
                   </>
                 )}
-                {/* Common items (undo/redo, lock) */}
-                {isItemHidden('undoRedo') && editor && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={() => {
-                      if (canMapUndo) mapUndo()
-                      else editor.chain().focus().undo().run()
-                    }}
-                      disabled={!canMapUndo && !editor.can().undo()}
-                    >
-                      <Undo2 className="h-4 w-4 mr-2" />
-                      Undo
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => {
-                      if (canMapRedo) mapRedo()
-                      else editor.chain().focus().redo().run()
-                    }}
-                      disabled={!canMapRedo && !editor.can().redo()}
-                    >
-                      <Redo2 className="h-4 w-4 mr-2" />
-                      Redo
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
               </>
             ) : (
               <>
@@ -2856,31 +2856,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     >
                       <LegoBrickIcon className="h-4 w-4 mr-2" /> {/* Overflow menu: same brick as Actions bar */}
                       Snap frames
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                {isItemHidden('undoRedo') && editor && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={() => {
-                      if (canMapUndo) mapUndo()
-                      else editor.chain().focus().undo().run()
-                    }}
-                      disabled={!canMapUndo && !editor.can().undo()}
-                    >
-                      <Undo2 className="h-4 w-4 mr-2" />
-                      Undo
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => {
-                      if (canMapRedo) mapRedo()
-                      else editor.chain().focus().redo().run()
-                    }}
-                      disabled={!canMapRedo && !editor.can().redo()}
-                    >
-                      <Redo2 className="h-4 w-4 mr-2" />
-                      Redo
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>
@@ -3143,21 +3118,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
 
       {/* Right Section — AI origin + Share + copy/favorite/more (pinned to the bar’s right, not in the centered cluster) */}
       <div className="absolute right-2 inset-y-0 z-20 flex items-center gap-1 pointer-events-auto" data-right-section>
-        {/* Reset to Default — View/Actions only; not on Draw top bar */}
-        {hasNonDefaultSettings && editMenuPillMode !== 'draw' && (
-          <div className="flex items-center pl-2 pr-0 -mr-1 flex-shrink-0">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0 text-gray-600 hover:text-gray-900 hover:bg-gray-100 flex-shrink-0"
-              title="Reset to default"
-              onClick={handleResetToDefault}
-            >
-              <RotateCcw className="h-4 w-4" />
-            </Button>
-          </div>
-        )}
-
         {/* Show AI-written content (reddish mask) — only when page has AI-origin spans */}
         {hasAiContent && (
           <div className="flex items-center px-1 flex-shrink-0">
