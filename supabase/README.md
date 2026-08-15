@@ -25,6 +25,8 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260815000653_turn_into_menu_frame_block_chrome` — Turn into Format/Property tabs; Block/Frame headers; menu row visibility
+- `20260814222457_phone_chat_dock_visible` — Phone AI chat dock visible under 900px (`:not([data-chat-map-dock])`)
 - `20260814205759_board_reload_perf_cold_load` — Board cold-load perf (no 500ms poll; homepage probe gated; loading.tsx; RF Node type-import)
 - `20260814191420_path_menu_hover_board_load_reveal` — Path-menu hover dwell/fade; board-nav leave grace; frame/chat load reveal
 - `20260814181955_top_bar_load_layout_minimap` — Top bar load layout (path shimmer, chat-column measure); minimap expand-up

@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-14T22:24:57Z`
+- Snapped at: `2026-08-15T00:06:53Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260815000653_turn_into_menu_frame_block_chrome.sql`.
+- Block/frame menus: Turn into Format / Property tabs (compact one-pane flyout); Block vs Frame headers; hide Turn into on frame menu; hide Present from here on block ⋮⋮ menu.
+- Schema unchanged.
+
+## Prior: phone chat dock visible
 
 - No DDL. Marker `20260814222457_phone_chat_dock_visible.sql`.
 - Phone AI dock invisible under 900px: `globals.css` hid all `[data-chat-sidebar]` including the map dock — narrowed to `:not([data-chat-map-dock])`. Dock portals onto `[data-board-root]`; RF `Node` type-only import (runtime `instanceof` crash). Empty-frame grey outline + Free nav board fill when chat open.

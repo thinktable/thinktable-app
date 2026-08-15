@@ -352,7 +352,7 @@ type RowDef =
 /** Human label for a baseline block type (menu context + Turn into). */
 export function blockTypeLabel(type: BlockTypeId): string {
   const map: Record<BlockTypeId, string> = {
-    text: 'Text',
+    text: 'Block', // Menu header for default/plain blocks (Turn into still says Text)
     heading1: 'Heading 1',
     heading2: 'Heading 2',
     heading3: 'Heading 3',
@@ -500,6 +500,7 @@ export function BlockActionsMenu({
   const [query, setQuery] = useState('') // Filter actions + turn-into
   const [propertyQuery, setPropertyQuery] = useState('') // Filter inside the Property pane
   const [showPropertySearch, setShowPropertySearch] = useState(false) // Magnifier next to Property
+  const [turnIntoPane, setTurnIntoPane] = useState<'format' | 'property'>('format') // Format / Property tabs (one pane at a time)
   const [openSubmenu, setOpenSubmenu] = useState<
     | 'turnInto'
     | 'boardIn'
@@ -522,6 +523,15 @@ export function BlockActionsMenu({
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  // Reset to Format when the Turn into flyout closes so reopen starts compact
+  useEffect(() => {
+    if (openSubmenu !== 'turnInto' && openSubmenu !== 'boardIn') {
+      setTurnIntoPane('format')
+      setShowPropertySearch(false)
+      setPropertyQuery('')
+    }
+  }, [openSubmenu])
 
   useEffect(() => {
     setLastFrameColor(readFrameLastColor()) // Hydrate Last used after mount
@@ -557,7 +567,7 @@ export function BlockActionsMenu({
       })
     place() // Before paint so the first frame is already in-bounds
     return watchMenuSafeRect(place) // Window + phone keyboard move the chat dock
-  }, [x, y, positionMode, openLeft, openSubmenu, notionConnected, query, propertyQuery, showPropertySearch])
+  }, [x, y, positionMode, openLeft, openSubmenu, notionConnected, query, propertyQuery, showPropertySearch, turnIntoPane])
 
   /** Apply fill or border, remember as Last used, keep the flyout open. */
   const applyFrameColor = (kind: FrameColorKind, swatch: (typeof FRAME_COLOR_SWATCHES)[number]) => {
@@ -578,6 +588,7 @@ export function BlockActionsMenu({
         label: 'Turn into',
         icon: <RefreshCw className="h-4 w-4" />,
         submenu: 'turnInto',
+        hidden: showFrameShape, // Frame menu has no Turn into (block ⋮⋮ only)
       },
       {
         kind: 'action',
@@ -711,7 +722,7 @@ export function BlockActionsMenu({
         shortcut: '⌘⇧X',
         icon: <PencilLine className="h-4 w-4" />,
       },
-      { kind: 'separator' },
+      { kind: 'separator', hidden: !showFrameShape }, // Only when Present is shown (frame menu)
       {
         kind: 'action',
         id: 'presentFromHere',
@@ -719,6 +730,7 @@ export function BlockActionsMenu({
         shortcut: '⌘⇧P',
         icon: <MonitorPlay className="h-4 w-4" />,
         beta: true,
+        hidden: !showFrameShape, // Frame menu only — not TipTap block ⋮⋮
       },
       { kind: 'separator' },
       {
@@ -928,9 +940,9 @@ export function BlockActionsMenu({
         />
       </div>
 
-      {/* Current block type context (Notion-style) */}
+      {/* Current context: Frame menu vs TipTap block type (Notion-style) */}
       <div className="px-2.5 pb-1 text-xs text-gray-500 dark:text-gray-400">
-        {blockTypeLabel(currentBlockType)}
+        {showFrameShape ? 'Frame' : blockTypeLabel(currentBlockType)}
       </div>
 
       <div data-tt-menu-body className="flex flex-col gap-0.5 overflow-y-auto px-0.5 pb-0.5">
@@ -1068,58 +1080,58 @@ export function BlockActionsMenu({
         ))}
       </div>
 
-      {/* Turn into flyout: type list shrink-wraps; Property is a fixed second column */}
+      {/* Turn into flyout: Format / Property tabs — one pane so the menu stays compact */}
       {(openSubmenu === 'turnInto' || openSubmenu === 'boardIn') && (
         <div
           data-tt-menu-flyout="main"
-          className="absolute z-[1001] inline-flex w-fit bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f]"
+          className={cn(
+            'absolute z-[1001] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f]',
+            turnIntoPane === 'property' ? 'w-[320px]' : 'w-max min-w-[180px]'
+          )}
           onMouseEnter={() => {
             if (openSubmenu !== 'boardIn') setOpenSubmenu('turnInto')
           }}
         >
-          {/* Left: shrink-wrap to the longest type label; same row rhythm as the main menu */}
-          <div className="flex w-max min-w-max shrink-0 flex-col gap-1 overflow-y-auto p-1">
-            {filteredTurnInto.map((t) => (
-              <Button
-                key={t.id}
-                variant="ghost"
-                size="sm"
-                onMouseEnter={() => {
-                  if (t.id === 'boardIn') setOpenSubmenu('boardIn')
-                  else if (openSubmenu === 'boardIn') setOpenSubmenu('turnInto')
-                }}
-                onClick={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  if (t.id === 'boardIn') {
-                    setOpenSubmenu('boardIn')
-                    return
-                  }
-                  onAction('turnInto', { blockType: t.id })
-                  onClose()
-                }}
-                className={cn(
-                  'justify-start gap-2 text-sm h-8 px-2 font-normal w-auto min-w-full whitespace-nowrap',
-                  currentBlockType === t.id && 'bg-blue-50 dark:bg-blue-950/40',
-                  t.id === 'boardIn' && openSubmenu === 'boardIn' && 'bg-gray-100 dark:bg-[#2a2a2a]'
-                )}
-              >
-                <span className="text-gray-500 dark:text-gray-400">{t.icon}</span>
-                <span className="flex-1 text-left">{t.label}</span>
-                {t.id === 'boardIn' && <ChevronRight className="h-3.5 w-3.5 text-gray-400" />}
-                {currentBlockType === t.id && t.id !== 'boardIn' && (
-                  <Check className="h-3.5 w-3.5 text-gray-500" />
-                )}
-              </Button>
-            ))}
-          </div>
-
-          <div className="w-px shrink-0 self-stretch bg-gray-100 dark:bg-[#2f2f2f] my-1" />
-
-          {/* Right: Property header + AI Autofill + type grids + connectors */}
-          <div className="w-[320px] shrink-0 overflow-y-auto p-1.5">
-            <div className="flex items-center gap-1 px-1.5 py-1">
-              <span className="flex-1 text-[11px] text-gray-400">Property</span>
+          {/* Format / Property — slash separates the two section headings on one row */}
+          <div className="flex items-center gap-1.5 border-b border-gray-100 px-2.5 py-1.5 dark:border-[#2f2f2f]">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setTurnIntoPane('format')
+                setShowPropertySearch(false)
+              }}
+              className={cn(
+                'text-[11px]',
+                turnIntoPane === 'format'
+                  ? 'text-gray-700 dark:text-gray-200'
+                  : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+              )}
+            >
+              Format
+            </button>
+            <span className="text-[11px] text-gray-300 dark:text-gray-600" aria-hidden>
+              /
+            </span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setTurnIntoPane('property')
+                if (openSubmenu === 'boardIn') setOpenSubmenu('turnInto')
+              }}
+              className={cn(
+                'flex-1 text-left text-[11px]',
+                turnIntoPane === 'property'
+                  ? 'text-gray-700 dark:text-gray-200'
+                  : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+              )}
+            >
+              Property
+            </button>
+            {turnIntoPane === 'property' && (
               <button
                 type="button"
                 aria-label="Search properties"
@@ -1132,88 +1144,131 @@ export function BlockActionsMenu({
               >
                 <Search className="h-3.5 w-3.5" />
               </button>
-            </div>
-            {showPropertySearch && (
-              <input
-                ref={propertySearchRef}
-                value={propertyQuery}
-                onChange={(e) => setPropertyQuery(e.target.value)}
-                onMouseDown={(e) => e.stopPropagation()} // Don't let the menu root preventDefault steal focus
-                placeholder="Type property name..."
-                className="mb-1.5 h-7 w-full rounded-md border border-gray-200 bg-gray-50 px-2 text-xs outline-none dark:border-[#3a3a3a] dark:bg-[#2a2a2a] dark:text-gray-100"
-              />
             )}
-
-            {filteredAiAutofill.length > 0 && (
-              <>
-                <div className="px-1.5 pb-1 pt-0.5 text-[11px] text-gray-400">AI Autofill</div>
-                <div className="flex flex-col gap-0.5">
-                  {filteredAiAutofill.map((t) => (
-                    <Button
-                      key={t.id}
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        onAction('turnInto', { aiAutofill: t.id }) // AI Autofill stub
-                        onClose()
-                      }}
-                      className="justify-start text-sm h-8 px-1.5 font-normal w-full"
-                    >
-                      <span className="mr-1.5 shrink-0 text-gray-500 dark:text-gray-400">{t.icon}</span>
-                      <span className="min-w-0 truncate text-left">{t.label}</span>
-                      <span
-                        className={cn(
-                          'ml-1.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none',
-                          t.badge === 'Custom Agent'
-                            ? 'bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300'
-                            : 'bg-gray-100 text-gray-500 dark:bg-[#2a2a2a] dark:text-gray-400'
-                        )}
-                      >
-                        {t.badge}
-                      </span>
-                      {t.chevron && <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-gray-400" />}
-                    </Button>
-                  ))}
-                </div>
-                <div className="my-1.5 h-px bg-gray-100 dark:bg-[#2f2f2f]" />
-              </>
-            )}
-
-            {filteredPropertySections.map((section, i) => (
-              <div key={section.id}>
-                {i > 0 && <div className="my-1.5 h-px bg-gray-100 dark:bg-[#2f2f2f]" />}
-                <div className="grid grid-cols-2 gap-0.5">
-                  {section.items.map((t) => (
-                    <Button
-                      key={t.id}
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        onAction('turnInto', { propertyType: t.id }) // Property type pick
-                        onClose()
-                      }}
-                      className="justify-start text-sm h-8 px-1.5 font-normal w-full"
-                    >
-                      <span className="mr-1.5 flex h-4 w-4 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
-                        {t.icon}
-                      </span>
-                      <span className="min-w-0 truncate text-left">{t.label}</span>
-                      {t.hint && (
-                        <HelpCircle className="ml-auto h-3.5 w-3.5 shrink-0 text-gray-300" />
-                      )}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            ))}
           </div>
 
-          {/* Board in — nest under a parent; sits to the right of the combined flyout */}
-          {openSubmenu === 'boardIn' && (
+          {turnIntoPane === 'format' ? (
+            /* Format: shrink-wrap type list */
+            <div className="flex w-max min-w-max flex-col gap-1 overflow-y-auto p-1">
+              {filteredTurnInto.map((t) => (
+                <Button
+                  key={t.id}
+                  variant="ghost"
+                  size="sm"
+                  onMouseEnter={() => {
+                    if (t.id === 'boardIn') setOpenSubmenu('boardIn')
+                    else if (openSubmenu === 'boardIn') setOpenSubmenu('turnInto')
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    if (t.id === 'boardIn') {
+                      setOpenSubmenu('boardIn')
+                      return
+                    }
+                    onAction('turnInto', { blockType: t.id })
+                    onClose()
+                  }}
+                  className={cn(
+                    'justify-start gap-2 text-sm h-8 px-2 font-normal w-auto min-w-full whitespace-nowrap',
+                    currentBlockType === t.id && 'bg-blue-50 dark:bg-blue-950/40',
+                    t.id === 'boardIn' && openSubmenu === 'boardIn' && 'bg-gray-100 dark:bg-[#2a2a2a]'
+                  )}
+                >
+                  <span className="text-gray-500 dark:text-gray-400">{t.icon}</span>
+                  <span className="flex-1 text-left">{t.label}</span>
+                  {t.id === 'boardIn' && <ChevronRight className="h-3.5 w-3.5 text-gray-400" />}
+                  {currentBlockType === t.id && t.id !== 'boardIn' && (
+                    <Check className="h-3.5 w-3.5 text-gray-500" />
+                  )}
+                </Button>
+              ))}
+            </div>
+          ) : (
+            /* Property: AI Autofill + type grids + connectors */
+            <div className="max-h-[min(70vh,420px)] overflow-y-auto p-1.5">
+              {showPropertySearch && (
+                <input
+                  ref={propertySearchRef}
+                  value={propertyQuery}
+                  onChange={(e) => setPropertyQuery(e.target.value)}
+                  onMouseDown={(e) => e.stopPropagation()} // Don't let the menu root preventDefault steal focus
+                  placeholder="Type property name..."
+                  className="mb-1.5 h-7 w-full rounded-md border border-gray-200 bg-gray-50 px-2 text-xs outline-none dark:border-[#3a3a3a] dark:bg-[#2a2a2a] dark:text-gray-100"
+                />
+              )}
+
+              {filteredAiAutofill.length > 0 && (
+                <>
+                  <div className="px-1.5 pb-1 pt-0.5 text-[11px] text-gray-400">AI Autofill</div>
+                  <div className="flex flex-col gap-0.5">
+                    {filteredAiAutofill.map((t) => (
+                      <Button
+                        key={t.id}
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          onAction('turnInto', { aiAutofill: t.id }) // AI Autofill stub
+                          onClose()
+                        }}
+                        className="justify-start text-sm h-8 px-1.5 font-normal w-full"
+                      >
+                        <span className="mr-1.5 shrink-0 text-gray-500 dark:text-gray-400">{t.icon}</span>
+                        <span className="min-w-0 truncate text-left">{t.label}</span>
+                        <span
+                          className={cn(
+                            'ml-1.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none',
+                            t.badge === 'Custom Agent'
+                              ? 'bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300'
+                              : 'bg-gray-100 text-gray-500 dark:bg-[#2a2a2a] dark:text-gray-400'
+                          )}
+                        >
+                          {t.badge}
+                        </span>
+                        {t.chevron && <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-gray-400" />}
+                      </Button>
+                    ))}
+                  </div>
+                  <div className="my-1.5 h-px bg-gray-100 dark:bg-[#2f2f2f]" />
+                </>
+              )}
+
+              {filteredPropertySections.map((section, i) => (
+                <div key={section.id}>
+                  {i > 0 && <div className="my-1.5 h-px bg-gray-100 dark:bg-[#2f2f2f]" />}
+                  <div className="grid grid-cols-2 gap-0.5">
+                    {section.items.map((t) => (
+                      <Button
+                        key={t.id}
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          onAction('turnInto', { propertyType: t.id }) // Property type pick
+                          onClose()
+                        }}
+                        className="justify-start text-sm h-8 px-1.5 font-normal w-full"
+                      >
+                        <span className="mr-1.5 flex h-4 w-4 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
+                          {t.icon}
+                        </span>
+                        <span className="min-w-0 truncate text-left">{t.label}</span>
+                        {t.hint && (
+                          <HelpCircle className="ml-auto h-3.5 w-3.5 shrink-0 text-gray-300" />
+                        )}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Board in — nest under a parent; sits to the right of the Format pane */}
+          {openSubmenu === 'boardIn' && turnIntoPane === 'format' && (
             <div
               data-tt-menu-flyout="nested"
               className="absolute z-[1002] min-w-[200px] overflow-y-auto bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
