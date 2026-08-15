@@ -2,6 +2,7 @@
 
 // Frame load shells + last-visit layout cache (position/size + whether content had text).
 
+import type { CSSProperties } from 'react' // Optional inline size for empty in-flow shells
 import { cn } from '@/lib/utils'
 
 export const BOARD_LOAD_FADE_MS = 300 // Keep in sync with `.tt-board-load-fade-*` in globals.css
@@ -41,17 +42,20 @@ export function FrameContentShimmer({
   withGutter = false,
   matchFramePad = false, // RF shell: inset like contentFit so bars sit on the real text
   className,
+  style,
 }: {
   hasText?: boolean
   barCount?: number
   withGutter?: boolean
   matchFramePad?: boolean
   className?: string
+  style?: CSSProperties // Optional hug size for in-flow empty shells (overrides width/height 100%)
 }) {
   if (!hasText) {
     return (
       <div
         className={cn('tt-frame-shimmer', className)}
+        style={style} // Explicit size wins over CSS width/height 100% for new empty frames
         aria-busy="true"
         aria-label="Loading frame"
         role="presentation"

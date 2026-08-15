@@ -205,33 +205,9 @@ export type BlockActionPayload = {
 /** AI Autofill rows in the Property pane (stubs until wired). */
 export type AiAutofillId = 'summarize' | 'translate' | 'riskTier' | 'customerSentiment'
 
-/** Notion-like property kinds in the Turn into right pane. */
-export type PropertyTypeId =
-  | 'text'
-  | 'number'
-  | 'select'
-  | 'multiSelect'
-  | 'status'
-  | 'date'
-  | 'person'
-  | 'files'
-  | 'checkbox'
-  | 'url'
-  | 'phone'
-  | 'email'
-  | 'relation'
-  | 'rollup'
-  | 'formula'
-  | 'button'
-  | 'uniqueId'
-  | 'place'
-  | 'createdTime'
-  | 'lastEditedTime'
-  | 'createdBy'
-  | 'lastEditedBy'
-  | 'googleDriveFile'
-  | 'figmaFile'
-  | 'zendeskTicket'
+/** Notion-like property kinds — shared with frame metadata + top chrome. */
+export type { PropertyTypeId } from '@/lib/blocks/property'
+import type { PropertyTypeId } from '@/lib/blocks/property' // Local use in this module
 
 export type BoardInTarget = {
   id: string // Conversation id to nest under

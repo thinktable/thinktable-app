@@ -20,6 +20,7 @@ import {
   type BlockActionPayload,
   type BlockTypeId,
   type BoardInTarget,
+  type PropertyTypeId,
 } from '@/components/block-actions-menu'
 import {
   deleteEditorBlockRange,
@@ -65,6 +66,7 @@ type TipTapBlockHandlesProps = {
   conversationId?: string // Page id — extract a block onto the page as its own frame
   boardInTargets?: BoardInTarget[]
   onPageTurnInto?: (blockType: 'board' | 'boardIn', boardInParentId?: string | null) => void
+  onPropertyTurnInto?: (propertyType: PropertyTypeId) => void // Turn into → Property
   notionConnected?: boolean // Notion-connected frame → slimmer block ⋮⋮ menu
 }
 
@@ -230,6 +232,7 @@ export function TipTapBlockHandles({
   conversationId,
   boardInTargets = [],
   onPageTurnInto,
+  onPropertyTurnInto,
   notionConnected = false,
 }: TipTapBlockHandlesProps) {
   const { screenToFlowPosition } = useReactFlow() // Drop-on-page → flow coords for a new frame
@@ -833,6 +836,11 @@ export function TipTapBlockHandles({
         ? [...sel].sort((a, b) => b.from - a.from) // Reverse doc order for safe range edits
         : [menu.block]
 
+      if (action === 'turnInto' && payload?.propertyType) {
+        onPropertyTurnInto?.(payload.propertyType) // Stamp propertyType on the host frame
+        clearBlockSelection()
+        return
+      }
       if (action === 'turnInto' && payload?.blockType) {
         if (payload.blockType === 'board' || payload.blockType === 'boardIn') {
           if (isMulti) void turnSelectionIntoBoard(sel, payload.blockType, payload.boardInParentId)
@@ -865,7 +873,7 @@ export function TipTapBlockHandles({
       }
       clearBlockSelection()
     },
-    [editor, menu, clearBlockSelection, turnBlockIntoBoard, turnSelectionIntoBoard, hostNodeId]
+    [editor, menu, clearBlockSelection, turnBlockIntoBoard, turnSelectionIntoBoard, hostNodeId, onPropertyTurnInto]
   )
 
   // Grip click: plain = arm block + actions menu; Shift/⌘ = multi-select.

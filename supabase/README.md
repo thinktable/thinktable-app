@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260815005933_frame_property_ibar_align` — Frame property chrome + I-bar create align
 - `20260815001725_menu_flyouts_always_right` — Menu flyouts always right of parent; lock card on flyout open
 - `20260815000653_turn_into_menu_frame_block_chrome` — Turn into Format/Property tabs; Block/Frame headers; menu row visibility
 - `20260814222457_phone_chat_dock_visible` — Phone AI chat dock visible under 900px (`:not([data-chat-map-dock])`)

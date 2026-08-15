@@ -183,7 +183,7 @@
 .tt-frame-shimmer {
   width: 100%;
   height: 100%;
-  border-radius: 4px; /* Soft frame silhouette — size comes from the cached RF box */
+  border-radius: 1rem; /* Match frame rounded-2xl — size comes from the cached RF box or explicit hug class */
   pointer-events: none; /* Loading only — never steal drag/select */
   background: linear-gradient(
     90deg,
@@ -1192,11 +1192,9 @@ span[data-added="true"] {
   @keyframes note-fade-in {
     from {
       opacity: 0;
-      transform: scale(0.98);
     }
     to {
       opacity: 1;
-      transform: scale(1);
     }
   }
   
@@ -1601,10 +1599,11 @@ span[data-added="true"] {
     50% { filter: saturate(1.35); }
   }
 
-  /* Frame blocks: fill the content box so empty/short lines stay full-row clickable.
-     min-width:max-content still lets unresized frames hug the longest nowrap line. */
+  /* Frame blocks: hug the longest nowrap line. Do NOT use width:100% here — that is cyclic
+     with unresized `max-content` frames and inflated empty boxes to ~120×160. Clicks in the
+     empty part of a wider resized frame still land via contentFit’s padding handler. */
   .ProseMirror[data-single-line="true"] {
-    width: 100% !important;
+    width: max-content !important;
     max-width: none !important;
     min-width: max-content;
     box-sizing: border-box;
@@ -1618,7 +1617,7 @@ span[data-added="true"] {
   .ProseMirror[data-single-line="true"] blockquote {
     white-space: nowrap !important; /* Line runs until Enter creates the next block */
     min-width: 1ch; /* Empty lines keep a clickable band so the I-bar can land */
-    width: 100%; /* Stretch to frame/editor width even when text is short or empty */
+    width: max-content; /* Intrinsic line width — not 100% (cyclic with frame hug) */
     box-sizing: border-box;
   }
   /* databaseBlock / imageBlock atoms span the row so the grip/I-bar band matches the frame.

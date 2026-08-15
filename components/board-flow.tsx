@@ -32,6 +32,7 @@ import {
   normalizeHandleId,
   type ThreadEdgeData,
 } from '@/components/threads' // Miro-style editable threads + connection preview
+import { threadComfortScale } from '@/components/threads/constants' // Same ⋮⋮ comfort curve for pre-frame I-bar grip
 import { useIsThreadConnecting } from '@/components/threads/use-is-thread-connecting' // Pane class while connecting
 import {
   BlockActionsMenu,
@@ -99,6 +100,7 @@ import {
   ungroupBlocks,
 } from '@/lib/blocks' // blocks, groups (page-body ensure is promote-only — not cold load)
 import { transformHtmlToBlockType } from '@/lib/blocks/turn-into' // Seed empty-frame HTML for I-bar Turn into
+import { PROPERTY_GROUP_H } from '@/lib/blocks/property' // Top property strip height — I-bar spawn offset
 import { absFlowPosition, nodeFlowSize, useBlockGroupDrag } from './use-block-group-drag' // Drag attach/detach between groups / page
 import { useFrameNestStackDrag, isStackCollapsedMeta } from './use-frame-nest-stack-drag' // Edge-snap → stack reveal
 import { minStackIndex } from '@/lib/frame-side-stacks' // Per-side stack z-order
@@ -183,6 +185,9 @@ const MINIMAP_NAV_GAP = 6 // Air between Free nav and minimap in the column stac
 const MINIMAP_EXPAND_MS = 220 // Shared open/close/load height tween (expand-up)
 const FREE_NAV_WIDTH = MINIMAP_WIDTH // Same width as the minimap so the column stack lines up
 const BRAND_RIGHT = 12 // Inset from map column right edge
+/** Flow → frame top-left so the caret/⋮⋮ land on the I-bar (block chrome only). */
+const BLOCK_CREATE_OFFSET_X = 26 // contentFit pl-0.5 (2) + TipTap ⋮⋮ gutter pl-6 (24)
+const BLOCK_CREATE_OFFSET_Y = 4 // contentFit paddingTop only (legacy 20 assumed chat p-1 + extra)
 // Stable key-code arrays — new array literals each render make RF's useKeyPress loop (Max update depth).
 const MULTI_SELECT_KEYS = ['Shift', 'Meta', 'Control'] // Shift/Cmd/Ctrl+click adds to selection
 const SELECTION_BOX_KEYS = ['Shift'] // Shift+drag draws a selection box
@@ -5828,10 +5833,15 @@ function BoardFlowInner({
   const createBlockAtFlowPosition = useCallback(async (
     flowX: number,
     flowY: number,
-    opts?: { html?: string; blockType?: BlockTypeId } // Seed content + Turn into kind (empty text if omitted)
+    opts?: {
+      html?: string
+      blockType?: BlockTypeId
+      propertyType?: import('@/lib/blocks/property').PropertyTypeId // Turn into → Property seed
+    } // Seed content + Turn into kind (empty text if omitted)
   ): Promise<string | null> => {
-    const cursorOffsetX = 40 // p-1+px-3 (16) + TipTap handle gutter (24) — caret sits on the old I-bar
-    const cursorOffsetY = 20 // p-1 + pt padding to first line
+    const cursorOffsetX = BLOCK_CREATE_OFFSET_X // Caret X = I-bar (not legacy p-1+px-3 = 40)
+    // First-line Y; property strip sits above the text so spawn higher by PROPERTY_GROUP_H
+    const cursorOffsetY = BLOCK_CREATE_OFFSET_Y + (opts?.propertyType ? PROPERTY_GROUP_H : 0)
     const itemPosition = { x: flowX - cursorOffsetX, y: flowY - cursorOffsetY }
     setIBarPosition(null) // Clear pre-create cursor
     iBarPositionRef.current = null // Sync ref now so menu onClose doesn't re-arm capture
@@ -5856,6 +5866,7 @@ function BoardFlowInner({
         position: itemPosition, // Spawn aligned to I-bar
         fadeIn: true, // Autofocus TipTap once the panel mounts
         ...(opts?.blockType ? { blockType: opts.blockType } : {}),
+        ...(opts?.propertyType ? { propertyType: opts.propertyType } : {}),
       }),
     }
 
@@ -5960,6 +5971,14 @@ function BoardFlowInner({
           iBarInputRef.current.value = ''
           if (document.activeElement === iBarInputRef.current) iBarInputRef.current.blur()
         }
+        return
+      }
+
+      if (action === 'turnInto' && payload?.propertyType && pos) {
+        await createBlockAtFlowPosition(pos.x, pos.y, {
+          html: '<p></p>',
+          propertyType: payload.propertyType, // New frame with property chrome at top
+        })
         return
       }
 
@@ -6778,6 +6797,86 @@ function BoardFlowInner({
     [frameActionTargets, nodes, setNodes, takeSnapshot]
   )
 
+  // Turn into → Property: stamp propertyType on focused frame(s) (top icon + connection handle).
+  // First-time apply shifts the frame up so block text stays on its prior board Y (I-bar / line).
+  const handleTurnIntoProperty = useCallback(
+    async (propertyType: import('@/lib/blocks/property').PropertyTypeId) => {
+      const targets = frameActionTargets()
+      if (targets.length === 0) return
+      takeSnapshot?.()
+      const ids = new Set(targets.map((n) => n.id))
+      const patchMeta = (meta: Record<string, unknown>, nextPos?: { x: number; y: number }) => {
+        const out: Record<string, unknown> = { ...meta, propertyType }
+        if (nextPos) out.position = nextPos // Keep placement in sync with RF node
+        return out
+      }
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (!ids.has(n.id)) return n
+          const pm = n.data?.promptMessage
+          if (!pm) return n
+          const prevMeta = { ...((pm.metadata as Record<string, unknown>) || {}) }
+          const firstProperty = !prevMeta.propertyType // Strip is new → compensate Y
+          const nextPos = firstProperty
+            ? { x: n.position.x, y: n.position.y - PROPERTY_GROUP_H }
+            : n.position
+          return {
+            ...n,
+            position: nextPos,
+            data: {
+              ...n.data,
+              promptMessage: {
+                ...pm,
+                metadata: patchMeta(prevMeta, firstProperty ? nextPos : undefined),
+              },
+            },
+          }
+        })
+      )
+      setRightClickedNode((prev) => {
+        if (!prev || !ids.has(prev.id)) return prev
+        const pm = prev.data?.promptMessage
+        if (!pm) return prev
+        const prevMeta = { ...((pm.metadata as Record<string, unknown>) || {}) }
+        const firstProperty = !prevMeta.propertyType
+        const nextPos = firstProperty
+          ? { x: prev.position.x, y: prev.position.y - PROPERTY_GROUP_H }
+          : prev.position
+        return {
+          ...prev,
+          position: nextPos,
+          data: {
+            ...prev.data,
+            promptMessage: {
+              ...pm,
+              metadata: patchMeta(prevMeta, firstProperty ? nextPos : undefined),
+            },
+          },
+        }
+      })
+      const supabase = createClient()
+      for (const n of targets) {
+        const msgId = n.data?.promptMessage?.id as string | undefined
+        if (!msgId) continue
+        const live = nodes.find((x) => x.id === n.id) || n
+        const pm = live.data?.promptMessage
+        const prevMeta = { ...((pm?.metadata as Record<string, unknown>) || {}) }
+        const firstProperty = !prevMeta.propertyType
+        const nextPos = firstProperty
+          ? { x: live.position.x, y: live.position.y - PROPERTY_GROUP_H }
+          : undefined
+        const meta = patchMeta(prevMeta, nextPos)
+        try {
+          await supabase.from('messages').update({ metadata: meta }).eq('id', msgId)
+        } catch (err) {
+          console.error('Failed to save frame property type:', err)
+        }
+      }
+      setRightClickedNode(null)
+    },
+    [frameActionTargets, nodes, setNodes, takeSnapshot]
+  )
+
   // Pin selected frames to the board (not draggable)
   const handleToggleBoardLock = useCallback(() => {
     const targets = frameActionTargets()
@@ -6893,7 +6992,9 @@ function BoardFlowInner({
           void handleUngroupBlocks()
           break
         case 'turnInto':
-          if (payload?.blockType) {
+          if (payload?.propertyType) {
+            void handleTurnIntoProperty(payload.propertyType) // Property pane → frame top chrome
+          } else if (payload?.blockType) {
             // Page/Page in on a multi-selection → snapshot to a new page; else single-frame promote
             const relevantSelected = nodes.filter(
               (n) => n.selected && (n.type === 'chatPanel' || n.type === 'freehand' || n.type === 'shape')
@@ -6965,6 +7066,7 @@ function BoardFlowInner({
       handleUngroupBlocks,
       handleTurnInto,
       handleSelectionToBoard,
+      handleTurnIntoProperty,
       handleSetFrameShape,
       handleSetFrameColor,
       handleSetFrameBorderWeight,
@@ -7726,8 +7828,8 @@ function BoardFlowInner({
         setIBarBlockMenu(null) // Typing spawned a frame — menu is no longer pre-frame
         setIsCreatingInlineNote(true)
 
-        const cursorOffsetX = 40
-        const cursorOffsetY = 20
+        const cursorOffsetX = BLOCK_CREATE_OFFSET_X // Same as createBlockAtFlowPosition — caret on I-bar
+        const cursorOffsetY = BLOCK_CREATE_OFFSET_Y
         const notePosition = {
           x: pos.x - cursorOffsetX,
           y: pos.y - cursorOffsetY,
@@ -9185,7 +9287,10 @@ function BoardFlowInner({
 
 
       {/* I-bar + grip — empty board click (or double-click); type to create a frame, or click ⋮⋮ for the block menu (no frame required) */}
-      {iBarPosition && (
+      {iBarPosition && (() => {
+        const z = iBarViewport.zoom
+        const paneScale = z * threadComfortScale(z) // Match TipTap grip screen size (RF zoom × comfort)
+        return (
         <div
           className="absolute flex items-center"
           style={{
@@ -9193,16 +9298,16 @@ function BoardFlowInner({
             left: `${flowToPane(iBarPosition.x, iBarPosition.y, iBarViewport, boardRotation).x}px`,
             top: `${flowToPane(iBarPosition.x, iBarPosition.y, iBarViewport, boardRotation).y}px`,
             zIndex: 1000,
-            transform: `translateX(-${22 * iBarViewport.zoom}px)`, // Room for ⋮⋮ left of cursor
-            gap: `${4 * iBarViewport.zoom}px`,
+            transform: `translateX(-${24 * paneScale}px)`, // Grip (20) + gap (4) → caret sits on the flow click
+            gap: `${4 * paneScale}px`,
           }}
         >
           <button
             type="button"
             className="nodrag nopan flex items-center justify-center rounded text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-black/5 dark:hover:bg-white/10 pointer-events-auto cursor-pointer"
             style={{
-              width: `${20 * iBarViewport.zoom}px`,
-              height: `${24 * iBarViewport.zoom}px`,
+              width: `${20 * paneScale}px`,
+              height: `${24 * paneScale}px`,
             }}
             title="Block actions"
             data-tt-ibar-grip
@@ -9237,19 +9342,20 @@ function BoardFlowInner({
               })
             }}
           >
-            <GripVertical style={{ width: `${16 * iBarViewport.zoom}px`, height: `${16 * iBarViewport.zoom}px` }} />
+            <GripVertical style={{ width: `${16 * paneScale}px`, height: `${16 * paneScale}px` }} />
           </button>
-          {/* Blinking vertical line — scales with map zoom */}
+          {/* Blinking vertical line — same comfort scale as TipTap grips */}
           <div
             className="bg-gray-800 dark:bg-gray-100 pointer-events-none"
             style={{
-              width: `${1 * iBarViewport.zoom}px`,
-              height: `${18 * iBarViewport.zoom}px`,
+              width: `${1 * paneScale}px`,
+              height: `${18 * paneScale}px`,
               animation: 'blink 1s step-end infinite',
             }}
           />
         </div>
-      )}
+        )
+      })()}
 
       {/* Pre-frame block menu — I-bar ⋮⋮ click; no frame required */}
       {iBarBlockMenu &&
