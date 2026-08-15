@@ -32,7 +32,7 @@ export const BoardOpenMenu = forwardRef<HTMLSpanElement, BoardOpenMenuProps>(
         ref={ref}
         data-page-link-preview
         className={cn(
-          'tt-board-link-preview',
+          'tt-board-link-preview nodrag nopan', // Phone/RF: never start frame drag / pan from the pill
           forceVisible && 'tt-board-link-preview-force', // Visible without hovering the boardLink itself
           className
         )}
@@ -41,7 +41,10 @@ export const BoardOpenMenu = forwardRef<HTMLSpanElement, BoardOpenMenuProps>(
         {/* Toggle the in-place iframe preview */}
         <button
           type="button"
-          className={cn('tt-board-link-preview-btn', previewActive && 'tt-board-link-preview-active')}
+          className={cn(
+            'tt-board-link-preview-btn nodrag nopan',
+            previewActive && 'tt-board-link-preview-active'
+          )}
           title={previewActive ? 'Close board preview' : 'Open board preview'}
           onPointerEnter={() => actions.prefetch(boardId)} // Warm iframe before click
           onPointerDown={(e) => e.stopPropagation()}
@@ -57,7 +60,7 @@ export const BoardOpenMenu = forwardRef<HTMLSpanElement, BoardOpenMenuProps>(
         {/* Open the full Thinktable page */}
         <button
           type="button"
-          className="tt-board-link-preview-btn"
+          className="tt-board-link-preview-btn nodrag nopan"
           title="Open full board"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
@@ -72,7 +75,7 @@ export const BoardOpenMenu = forwardRef<HTMLSpanElement, BoardOpenMenuProps>(
         {notionUrl ? (
           <button
             type="button"
-            className="tt-board-link-preview-btn"
+            className="tt-board-link-preview-btn nodrag nopan"
             title="Open in Notion"
             aria-label="Open in Notion"
             onPointerDown={(e) => e.stopPropagation()}

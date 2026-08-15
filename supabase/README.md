@@ -25,10 +25,11 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260815175520_phone_board_open_menu_taps` — Phone preview/open/Notion taps on boardLink (caret skip + nodrag + selected reveal)
 - `20260815174523_customize_agent_chat_scroll_chrome` — Customize agent panel; chat scroll/return-to-bottom chrome
 - `20260815171425_property_block_header_chat_chrome` — Property header one-block + propertyBlock cells; chat brand beside thread; path/More cutoff; boards-nav pin
 - `20260815045351_phone_mode_pill_undo_cluster` — Phone mode pill (tools inside; undo/redo board-fill sibling)
-- `20260815012513_phone_zoom_swipe_frame_caret` — Phone Zoom swipe-zoom+coast; selected-frame first-tap caret
+- `20260815012513_phone_zoom_swipe_frame_caret` — Phone Zoom swipe-zoom; selected-frame first-tap caret
 - `20260815005933_frame_property_ibar_align` — Frame property chrome + I-bar create align
 - `20260815001725_menu_flyouts_always_right` — Menu flyouts always right of parent; lock card on flyout open
 - `20260815000653_turn_into_menu_frame_block_chrome` — Turn into Format/Property tabs; Block/Frame headers; menu row visibility

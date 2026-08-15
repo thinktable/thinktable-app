@@ -630,6 +630,15 @@ function TipTapContent({
           if (pe.pointerType === 'touch') return false // Phone: non-passive touchstart owns placement
           if (pe.button === 2) return false // Right-click → frame menu
           if (!isPanelSelectedRef.current) return false // Unselected: RF selects/drags
+          // Preview / open / Notion (and ⋮⋮) must receive the click — don't steal for caret
+          const target = pe.target as HTMLElement | null
+          if (
+            target?.closest?.(
+              '[data-tt-block-handle], [data-tt-insert-line], .block-actions-menu, [data-page-link-preview]'
+            )
+          ) {
+            return false
+          }
           pe.preventDefault()
           pe.stopPropagation()
           selectOnlyClickRef.current = false
@@ -815,8 +824,13 @@ function TipTapContent({
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length !== 1) return // Pinch / multi-finger → board zoom/pan
       const target = e.target as HTMLElement | null
-      if (target?.closest?.('[data-tt-block-handle], [data-tt-insert-line], .block-actions-menu')) {
-        return // ⋮⋮ / insert line own the gesture
+      // Preview / open / Notion live inside TipTap NodeViews — preventDefault here kills their click
+      if (
+        target?.closest?.(
+          '[data-tt-block-handle], [data-tt-insert-line], .block-actions-menu, [data-page-link-preview]'
+        )
+      ) {
+        return // ⋮⋮ / insert line / board open menu own the gesture
       }
       e.preventDefault() // Requires non-passive — stops iOS focus-only first tap
       e.stopPropagation() // RF d3-drag listens for touchstart on the node

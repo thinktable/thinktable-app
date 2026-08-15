@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-15T17:45:23Z`
+- Snapped at: `2026-08-15T17:55:20Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260815175520_phone_board_open_menu_taps.sql`.
+- Phone preview / open / Notion on boardLink: selected-frame caret `touchstart` skips `[data-page-link-preview]`; menu `nodrag`/`nopan`; touch devices keep the pill visible while the host frame is selected.
+- Schema unchanged.
+
+## Prior: customize agent chat scroll chrome
 
 - No DDL. Marker `20260815174523_customize_agent_chat_scroll_chrome.sql`.
 - Customize-agent panel (drafts in localStorage); chat return-to-bottom on phone content card + desktop; open chats pin to bottom; preserve scroll across phone↔desktop remounts; thread caret beside title; header agent icon only when transcript exists.

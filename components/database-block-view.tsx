@@ -102,10 +102,13 @@ export function DatabaseBlockView({ node, updateAttributes }: NodeViewProps) {
             className="!relative !left-auto !right-auto !top-auto !translate-y-0 !ml-1"
           />
         ) : notionUrl ? (
-          <span className="tt-board-link-preview !relative !left-auto !right-auto !top-auto !translate-y-0 !ml-1 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto">
+          <span
+            data-page-link-preview
+            className="tt-board-link-preview nodrag nopan !relative !left-auto !right-auto !top-auto !translate-y-0 !ml-1 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto"
+          >
             <button
               type="button"
-              className="tt-board-link-preview-btn"
+              className="tt-board-link-preview-btn nodrag nopan"
               title="Open in Notion"
               aria-label="Open in Notion"
               onPointerDown={(e) => e.stopPropagation()}

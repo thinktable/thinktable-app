@@ -1728,6 +1728,16 @@ span[data-added="true"] {
     opacity: 1;
     pointer-events: auto;
   }
+  /* Phone / touch: no hover — keep preview/open hittable while the host frame is selected */
+  @media (hover: none) {
+    .react-flow__node.selected .tt-board-link-preview,
+    .react-flow__node.selected .tt-page-link-preview,
+    .react-flow__node.selected .tt-database-block .tt-board-link-preview,
+    .react-flow__node.selected .tt-database-block .tt-page-link-preview {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
   .tt-board-link-editing .tt-board-link-preview,
   .tt-page-link-editing .tt-page-link-preview {
     opacity: 0 !important;
