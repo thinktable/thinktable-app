@@ -1662,6 +1662,14 @@ span[data-added="true"] {
   .dark .ProseMirror .tt-block-highlight {
     background-color: rgba(59, 130, 246, 0.22) !important;
   }
+  /* Property top icon row lives outside ProseMirror — same wash when that block is armed */
+  [data-tt-property-header].tt-block-highlight {
+    background-color: rgba(35, 131, 226, 0.14);
+    border-radius: 4px;
+  }
+  .dark [data-tt-property-header].tt-block-highlight {
+    background-color: rgba(59, 130, 246, 0.22);
+  }
 
   /* Preview chrome: semi-transparent, icon-only pill; left is set in JS so it stays inside the frame
      when an unlocked frame is narrower than the boardLink (title would otherwise clip the menu).
@@ -2010,6 +2018,77 @@ span[data-added="true"] {
   .ProseMirror .tt-image-block-media:hover .tt-image-block-replace {
     display: inline-flex;
     align-items: center;
+  }
+
+  /* propertyBlock — Turn into Property (type icon + Empty cell; frame still has top icon) */
+  .ProseMirror .tt-property-block {
+    position: relative;
+    margin: 2px 0;
+    width: max-content; /* Hug icon + Empty cell (100% was cyclic on unresized frames) */
+    min-width: 160px;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  .ProseMirror .react-renderer.node-propertyBlock {
+    width: max-content;
+    min-width: 160px;
+    max-width: 100%;
+  }
+  .ProseMirror:not([data-single-line="true"]) .tt-property-block,
+  .ProseMirror:not([data-single-line="true"]) .react-renderer.node-propertyBlock {
+    width: 100%; /* Resized frame: cell stretches with the box */
+  }
+  .ProseMirror .tt-property-block-row {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-width: 160px;
+    min-height: 28px;
+  }
+  .ProseMirror .tt-property-block-icon {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    color: #6b7280;
+  }
+  .dark .ProseMirror .tt-property-block-icon {
+    color: #9ca3af;
+  }
+  .ProseMirror .tt-property-block-cell {
+    flex: 1 1 auto;
+    min-width: 140px; /* Icon + Empty placeholder inside the box */
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #f9fafb;
+    box-sizing: border-box;
+  }
+  .dark .ProseMirror .tt-property-block-cell {
+    border-color: #374151;
+    background: #1f2937;
+  }
+  .ProseMirror .tt-property-block-input {
+    width: 100%;
+    border: none;
+    background: transparent;
+    outline: none;
+    font: inherit;
+    font-size: 14px;
+    line-height: 1.7;
+    color: inherit;
+  }
+  .ProseMirror .tt-property-block-input::placeholder {
+    color: #9ca3af;
+  }
+  .dark .ProseMirror .tt-property-block-input::placeholder {
+    color: #6b7280;
   }
 
   /* Turn into — Notion-like block type chrome */

@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-15T04:53:51Z`
+- Snapped at: `2026-08-15T17:14:38Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260815171425_property_block_header_chat_chrome.sql`.
+- Property types: top icons are one strip block (single ⋮⋮); Turn into → Property yields `propertyBlock` cell atoms; chat brand sits beside thread picker; path uses cutoff-able space before More; boards-nav pin survives reload.
+- Schema unchanged.
+
+## Prior: phone mode pill undo cluster
 
 - No DDL. Marker `20260815045351_phone_mode_pill_undo_cluster.sql`.
 - Phone pill: mode dropdown + tools in one rounded pill; undo/redo board-fill sibling tucks under the tools right cap; Draw six icons pack evenly; hide-pill removed.

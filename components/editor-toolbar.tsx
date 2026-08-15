@@ -81,6 +81,7 @@ import { usePhoneModeMenu } from './phone-mode-menu-context' // Phone pill drill
 import { useAiEditSession } from '@/lib/ai/edit-session' // Top-bar AI content mask toggle
 import { htmlHasAiOrigin } from '@/lib/ai/wrap-ai-html' // Detect AI-origin spans in frame HTML
 import { LegoBrickIcon } from './lego-brick-icon' // Frame-group lock: two bricks, top one stud back
+import { TOOLBAR_MENU_PLACEMENT } from '@/lib/menu-placement' // Actions-style: under the trigger, never over the board path
 
 interface EditorToolbarProps {
   editor: Editor | null
@@ -426,7 +427,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const compactLabelsRef = useRef(false) // Hysteresis so the title animation does not thrash at the threshold
   const [toolbarLayoutReady, setToolbarLayoutReady] = useState(false) // Hide tools until first measure so names don’t paint then collapse
   const toolbarLayoutReadyRef = useRef(false) // Same flag for checkVisibility without a stale closure
+  const measuredModeRef = useRef<string | null>(null) // Last fitted pill mode — switch is a first-pass like Actions load
   const phoneToolsRef = useRef(false) // Hysteresis for overflow→pill so it doesn’t thrash at the threshold
+  const hiddenItemsRef = useRef<Set<string>>(new Set()) // Last overflow set — restored cluster when items move
   const [toolbarAnimate, setToolbarAnimate] = useState(false) // Enable title transitions only after the first correct layout
   const [boardSearch, setBoardSearch] = useState('') // Actions-bar live search over frame title + body
   const [boardSearchOpen, setBoardSearchOpen] = useState(false) // Icon-only until click; then the field slides out
@@ -928,6 +931,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     return () => clearTimeout(timeoutId)
   }, [fillColor, borderColor, borderStyle, borderWeight, clickedEdge, reactFlowInstance])
 
+  // Close leftover Filter/Capture/… menus when switching Actions / Layout / Draw / View
+  useEffect(() => {
+    setOpenDropdown(null) // Don’t leave a previous mode’s panel parked over the path
+  }, [editMenuPillMode])
+
   // Track which items should be hidden based on available space (Google Docs style)
   useLayoutEffect(() => {
     if (!toolbarRef.current) return
@@ -952,17 +960,22 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       }
 
       const rightSectionRect = rightSection.getBoundingClientRect()
-      const leftW = leftChrome?.getBoundingClientRect().width ?? 0 // Menu + board path
       const rightW = rightSectionRect.width // Share / copy / favorite / more / AI
+      const moreMenuWidth = 32 + 8 // Overflow More button (h-7 w-7 + gap) — always reserved so hide/show doesn’t thrash
+      const PATH_GAP = 8 // Air between path glyphs and the centered undo cluster
+      const hamEl = leftChrome?.querySelector('[data-nav-logo-trigger]') as HTMLElement | null // Menu icon; path starts after it
+      const hamRight = hamEl?.getBoundingClientRect().right ?? toolbarRect.left + 40 // Path origin in viewport px
+      const hamW = hamEl?.getBoundingClientRect().width ?? 40 // Menu icon only — leftover left chrome is the path
+      const pathBox = leftChrome?.querySelector('[data-board-path]') as HTMLElement | null // Live crumbs + hidden full/min rows
+      const pathFull = pathBox?.querySelector('[data-path-full]') as HTMLElement | null // Hidden full-title row
+      const pathMin = pathBox?.querySelector('[data-path-min]') as HTMLElement | null // Hidden icon-minimum row (current icon whole)
+      const naturalPath = pathFull?.scrollWidth || pathBox?.scrollWidth || 0 // Uncapped crumbs; simple titles use the live box
+      const minPathW = Math.max(64, pathMin?.scrollWidth || 64) // Cutoff-able path: ancestor icons + current icon, never mid-icon clip
+      const barCenter = toolbarRect.left + toolbarRect.width / 2 // True board center
+      const barW = toolbarRect.width // Map-column width this pass
+      const leftW = hamW + minPathW // Reserve cutoff path on shrink and expand — live crush delayed More; live extend delayed return
       const sideInset = Math.max(leftW, rightW) // Symmetric inset so the cluster can sit on the board center
-
-      // Calculate widths of fixed elements (More menu)
-      // More menu appears when items are hidden, so we need to account for it in calculations
-      // Always reserve More when deciding overflow / phone — dropping it would grow availableWidth and thrash
-      const moreMenuWidth = 32 + 8 // Overflow More button (h-7 w-7 + gap)
-
-      // Max cluster width that still fits on the true board center without covering title or Share
-      const availableWidth = toolbarRect.width - 2 * sideInset - moreMenuWidth - 16
+      const availableWidth = barW - 2 * sideInset - moreMenuWidth - 16 // Max cluster width on the true board center
 
       // Icon-only widths (after all titles have condensed)
       const iconGroups = editMenuPillMode === 'insert'
@@ -1044,7 +1057,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       const sumGroups = (groups: { width: number }[]) => groups.reduce((sum, item) => sum + item.width + 8, 0) // +8 gap/slash
       const fullTotal = sumGroups(fullGroups) // Filter/ink + remaining titles
       const midTotal = sumGroups(midGroups) // Filter/ink icons; remaining titles
-      const firstPass = !toolbarLayoutReadyRef.current // First fit has no hysteresis — load already collapsed if needed
+      const modeSwitch = measuredModeRef.current !== null && measuredModeRef.current !== editMenuPillMode // Layout/Draw/View must fit like Actions, not inherit Actions’ titles
+      const firstPass = !toolbarLayoutReadyRef.current || modeSwitch // Mode change: no hysteresis from the previous bar
+      if (modeSwitch) setToolbarAnimate(false) // Skip 0fr↔1fr tween so new titles don’t paint expanded then collapse
       const expandSlop = firstPass ? 0 : 24 // Extra room before titles expand again — keeps later animation from flickering
       const wasEarly = firstPass ? false : compactEarlyLabelsRef.current // Last early-collapse decision
       const wasRest = firstPass ? false : compactLabelsRef.current // Last remaining-title collapse
@@ -1102,28 +1117,30 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         if (prev.size === newHiddenItems.size && [...newHiddenItems].every((id) => prev.has(id))) return prev
         return newHiddenItems
       })
+      const unhiding = hiddenItemsRef.current.size > newHiddenItems.size || (wasPhone && !nextPhone) // Tools coming back this pass
+      const hiding = hiddenItemsRef.current.size < newHiddenItems.size // Tools leaving for More this pass
+      hiddenItemsRef.current = newHiddenItems // Keep overflow set in sync for the next pass
 
-      const PATH_GAP = 8 // Air between path glyphs and the centered undo cluster
-      const hamEl = leftChrome?.querySelector('[data-nav-logo-trigger]') as HTMLElement | null // Menu icon; path starts after it
-      const centerEl = toolbar.querySelector('[data-toolbar-center]') as HTMLElement | null // Board-centered undo/tools
-      const hamRight = hamEl?.getBoundingClientRect().right ?? toolbarRect.left + 40 // Path origin in viewport px
       const shareLeft = rightSectionRect.left // Share cluster; phone path runs to here
-      const pathBox = leftChrome?.querySelector('[data-board-path]') as HTMLElement | null // Live crumbs + hidden full-title row
+      const centerEl = toolbar.querySelector('[data-toolbar-center]') as HTMLElement | null // Board-centered undo/tools
       if (centerEl) centerEl.style.transform = '' // Clear any leftover slide from before tools stayed centered
-      const clusterW = centerEl?.getBoundingClientRect().width ?? 70 // Layout width of the centered cluster
-      const barCenter = toolbarRect.left + toolbarRect.width / 2 // True board center
-      const centeredLeft = barCenter - clusterW / 2 // Undo’s left while centered
-      const pathFull = pathBox?.querySelector('[data-path-full]') as HTMLElement | null // Hidden full-title row
-      const naturalPath = pathFull?.scrollWidth ?? 0 // Uncapped path width without expanding the live crumbs
+      const liveClusterW = centerEl?.getBoundingClientRect().width ?? 70 // DOM cluster — still the pre-setState size this pass
+      const centeredLeft = barCenter - liveClusterW / 2 // Undo’s left while centered
+      if (bar) bar.style.setProperty('--tt-path-min', `${minPathW}px`) // Path box never shrinks through the current icon
       if (nextPhone) { // Tools + undo have left the bar — path can run to Share
-        const pathMax = Math.max(64, Math.floor(shareLeft - PATH_GAP - hamRight)) // Title uses the empty bar
+        const pathMax = Math.max(minPathW, Math.floor(shareLeft - PATH_GAP - hamRight)) // Title uses the empty bar; icon stays whole
         if (bar) bar.style.setProperty('--tt-path-max', `${pathMax}px`)
         setHideUndoMoreSlash((prev) => (prev === true ? prev : true)) // Nothing after undo on the bar
+        measuredModeRef.current = editMenuPillMode // This mode is fitted — next switch is a fresh first-pass
         toolbarLayoutReadyRef.current = true
         setToolbarLayoutReady(true)
         return
       }
-      const pathMax = Math.max(64, Math.floor(centeredLeft - PATH_GAP - hamRight)) // Truncate against centered undo
+      const restoredClusterW = sumGroups(itemGroups.filter((item) => !newHiddenItems.has(item.id))) + (newHiddenItems.size > 0 ? moreMenuWidth : 0) // Cluster after this pass’s overflow
+      const restoredLeft = barCenter - restoredClusterW / 2 // Cap against tools that will paint, not the still-stale live cluster
+      const labelsChanging = nextEarly !== wasEarly || nextRest !== wasRest // Title collapse/expand this pass — live width is the other mode’s chrome
+      const capLeft = hiding || unhiding || modeSwitch || labelsChanging ? restoredLeft : centeredLeft // Mode switch: Draw’s live width would let the path run under Actions
+      const pathMax = Math.max(minPathW, Math.floor(capLeft - PATH_GAP - hamRight)) // Floor so overflow-hidden never clips the current icon
       if (bar) bar.style.setProperty('--tt-path-max', `${pathMax}px`)
       const truncated = naturalPath > pathMax + 1 // Full titles need more than the centered lane
       const hideable = itemGroups.filter((item) => item.id !== 'undoRedo') // Undo/redo never fold
@@ -1131,6 +1148,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       const nextHideSlash = allFolded && truncated // Desktop: slash goes when colliding
       setHideUndoMoreSlash((prev) => (prev === nextHideSlash ? prev : nextHideSlash))
 
+      measuredModeRef.current = editMenuPillMode // This mode is fitted — next switch is a fresh first-pass
       toolbarLayoutReadyRef.current = true
       setToolbarLayoutReady(true) // Reveal only after compact/hidden match this column width
     }
@@ -1320,7 +1338,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <ToolbarTitle show={!compactEarlyLabels}>Filter</ToolbarTitle>
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-48">
+                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-48">
                   <DropdownMenuLabel className="text-xs font-normal text-gray-500">Filter</DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <div className="px-2 py-2 text-xs text-gray-400">No filters yet</div>
@@ -1341,7 +1359,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <ToolbarTitle show={!compactEarlyLabels}>Sort</ToolbarTitle>
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-48">
+                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-48">
                   <DropdownMenuLabel className="text-xs font-normal text-gray-500">Sort</DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <div className="px-2 py-2 text-xs text-gray-400">No sorts yet</div>
@@ -1462,7 +1480,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <ToolbarTitle show={!compactLabels}>Layout</ToolbarTitle>
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
+                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="min-w-0 w-fit p-1">
                   <DropdownMenuItem
                     onClick={() => setArrowDirection('down')}
                     className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'down' && 'bg-gray-100')}
@@ -1589,7 +1607,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                             <ToolbarTitle show={!compactEarlyLabels}>Pencil</ToolbarTitle>
                           </Button>
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
+                        <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="min-w-0 w-fit p-1">
                           {DRAW_INK.map((ink) => (
                             <DropdownMenuItem
                               key={ink.id}
@@ -1630,7 +1648,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                             <ToolbarTitle show={!compactEarlyLabels}>Highlighter</ToolbarTitle>
                           </Button>
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
+                        <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="min-w-0 w-fit p-1">
                           {DRAW_INK.map((ink) => (
                             <DropdownMenuItem
                               key={ink.id}
@@ -1757,7 +1775,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                   <ToolbarTitle show={!compactLabels}>Board</ToolbarTitle>
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-40">
+              <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-40">
                 {/* Rule Header Section */}
                 <DropdownMenuLabel className="px-2 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400">
                   Rule
@@ -1860,7 +1878,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <span className="text-sm">H₂</span>
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-32">
+                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-32">
                   <DropdownMenuItem
                     onClick={() => editor?.chain().focus().setParagraph().run()}
                     disabled={!editor}
@@ -1912,7 +1930,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     <List className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-40">
+                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-40">
                   <DropdownMenuItem
                     onClick={() => editor?.chain().focus().toggleBulletList().run()}
                     disabled={!editor}
@@ -2032,7 +2050,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                         <span className="text-xs font-semibold">A</span>
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-48">
+                    <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-48">
                     <DropdownMenuLabel>Text Color</DropdownMenuLabel>
                     <DropdownMenuSeparator />
                     <div className="grid grid-cols-4 gap-2 p-2">
@@ -2265,7 +2283,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     )}
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-36">
+                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-36">
                   <DropdownMenuItem
                     onClick={() => editor?.chain().focus().setTextAlign('left').run()}
                     disabled={!editor}
@@ -2345,7 +2363,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     )
                   })()}
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-48">
+                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-48">
                   <div className="px-2 py-1.5">
                     <input
                       type="color"
@@ -2406,7 +2424,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     )
                   })()}
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-48">
+                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-48">
                   <div className="px-2 py-1.5">
                     <input
                       type="color"
@@ -2451,7 +2469,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-40">
+                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-40">
                   <DropdownMenuLabel className="text-xs font-normal text-gray-500 pl-2 py-1.5">Thickness</DropdownMenuLabel>
                   <DropdownMenuRadioGroup value={borderWeight.toString()} onValueChange={(value) => setBorderWeight(parseInt(value))}>
                     <DropdownMenuRadioItem value="1" className="pl-8 text-xs">1px</DropdownMenuRadioItem>
@@ -2496,7 +2514,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-40">
+                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-40">
                   <DropdownMenuLabel className="text-xs font-normal text-gray-500 pl-2 py-1.5">Thread Style</DropdownMenuLabel>
                   {/* Line Style Options */}
                   <DropdownMenuRadioGroup 
@@ -2570,7 +2588,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     {arrowDirection === 'right' && <ArrowRight className="h-4 w-4" />}
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="min-w-0 w-fit p-1">
+                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="min-w-0 w-fit p-1">
                   <DropdownMenuItem
                     onClick={() => setArrowDirection('down')}
                     className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'down' && 'bg-gray-100')}
@@ -2618,7 +2636,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
               <MoreVertical className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-56">
             {/* Show hidden items in more menu - different items based on edit menu mode */}
             {editMenuPillMode === 'insert' ? (
               <>

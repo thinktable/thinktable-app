@@ -6,10 +6,13 @@ import { EditPanel } from './sticky-prompt-panel'
 import { useReactFlowContext } from './react-flow-context'
 import { PillSelect } from './pill-select'
 import { PhoneModeMenuProvider } from './phone-mode-menu-context' // Phone: mode dropdown + tools in the pill
+import { useSidebarContext } from './sidebar-context' // phoneDockTight: hide tools while landscape keyboard is up
 import { useUserPreference } from '@/lib/hooks/use-user-preferences'
 import { createClient } from '@/lib/supabase/client'
+import { cn } from '@/lib/utils'
 
 export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conversationId?: string; projectId?: string }) {
+  const { phoneDockTight } = useSidebarContext() // Landscape + keyboard: hide top bar / pill so the Ask row can sit in the strip
   const [inputHeight, setInputHeight] = useState(52) // Default height
   const [maxWidth, setMaxWidth] = useState(768) // Default max-w-3xl (768px)
   const [isCentered, setIsCentered] = useState(false) // Whether input should be centered
@@ -311,8 +314,11 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
   return (
     <PhoneModeMenuProvider>
     <>
-      {/* Edit panel - always visible at top */}
-      <div>
+      {/* Edit panel — hide while landscape keyboard leaves no room under the top bar */}
+      <div
+        className={phoneDockTight ? 'invisible pointer-events-none' : undefined}
+        aria-hidden={phoneDockTight}
+      >
         <EditPanel conversationId={conversationId} projectId={projectId} />
       </div>
       
@@ -320,7 +326,11 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
       <div 
         ref={pillSelectRef}
         data-edit-menu-context
-        className="absolute inset-x-0 z-20 opacity-100 pointer-events-none"
+        className={cn(
+          'absolute inset-x-0 z-20 pointer-events-none',
+          phoneDockTight ? 'invisible opacity-0' : 'opacity-100' // Same strip as the Ask row when the keyboard is up
+        )}
+        aria-hidden={phoneDockTight}
         style={{
           top: '56px', // Just below the 52px top bar (no show/close pill)
         }}

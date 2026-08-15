@@ -92,7 +92,7 @@ export function isBlockContentEmpty(content: string | undefined | null): boolean
   if (!content) return true
   if (content === '<p></p>' || content === '<p><br></p>') return true
   // boardLink / legacy pageLink / databaseBlock / imageBlock store payload in attrs — stripping tags looks empty
-  if (/data-type=["'](?:boardLink|pageLink|databaseBlock|imageBlock)["']/i.test(content)) return false
+  if (/data-type=["'](?:boardLink|pageLink|databaseBlock|imageBlock|propertyBlock)["']/i.test(content)) return false
   // TipTap often stores spaces as &nbsp; / &#160; / U+00A0 — treat those as empty too
   const plain = content
     .replace(/<[^>]*>/g, ' ') // Drop tags; leftover is typed text only

@@ -359,14 +359,14 @@ function PathSegmentMenu({
           className={cn(
             'inline-flex items-center gap-1 rounded px-0.5 -mx-0.5 text-left transition-colors hover:bg-gray-100 dark:hover:bg-gray-800',
             isLast
-              ? 'min-w-0 max-w-full text-gray-900 dark:text-gray-100' // Current board; CSS ellipsis if still cutoff
+              ? 'min-w-0 max-w-full text-gray-900 dark:text-gray-100' // Current board; title ellipsizes — icon stays flex-shrink-0
               : 'flex-shrink-0 text-gray-400 dark:text-gray-500 font-normal' // Ancestors: full name or icon-only
           )}
           title={segment.title}
           aria-label={segment.title}
         >
           <PathPageIcon icon={segment.icon} hasContent={segment.hasContent} />
-          {!iconOnly && <span className={isLast ? 'truncate' : undefined}>{segment.title}</span>}
+          {!iconOnly && <span className={isLast ? 'min-w-0 truncate' : undefined}>{segment.title}</span>}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -653,6 +653,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
   const [iconOnlyAncestors, setIconOnlyAncestors] = useState(false) // Drop ancestor titles when the cap is tight
   const pathBoxRef = useRef<HTMLDivElement>(null) // Capped path box (--tt-path-max)
   const pathFullRef = useRef<HTMLSpanElement>(null) // Hidden full-label row for compact measure
+  const pathMinRef = useRef<HTMLSpanElement>(null) // Hidden icon-minimum row — current icon stays whole
 
   useLayoutEffect(() => {
     const box = pathBoxRef.current
@@ -749,7 +750,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
             ref={pathBoxRef}
             data-board-path
             className="relative min-w-0 flex-shrink-0 overflow-hidden text-sm font-medium text-gray-900 dark:text-gray-100"
-            style={{ maxWidth: 'var(--tt-path-max, none)' }} // Measured px to undo/Share; none until then so names aren’t pre-cut
+            style={{ maxWidth: 'var(--tt-path-max, none)', minWidth: 'var(--tt-path-min, 0px)' }} // Cap against tools; never narrower than the current icon
           >
             {pathReady && showBoardPath && path ? (
               <>
@@ -768,6 +769,25 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
                         <span className="inline-flex items-center gap-1 px-0.5">
                           <PathPageIcon icon={slot.segment.icon} hasContent={slot.segment.hasContent} />
                           <span>{slot.segment.title}</span>
+                        </span>
+                      )}
+                    </span>
+                  ))}
+                </span>
+                <span
+                  ref={pathMinRef}
+                  data-path-min
+                  aria-hidden
+                  className="pointer-events-none absolute left-0 top-0 -z-10 flex w-max items-center whitespace-nowrap opacity-0" // Ancestor icons + current icon; toolbar overflow uses this width
+                >
+                  {pathSlots.map((slot, index) => (
+                    <span key={slot.type === 'ellipsis' ? 'ellipsis' : slot.segment.id} className="inline-flex items-center flex-shrink-0">
+                      {index > 0 && <PathSlash />}
+                      {slot.type === 'ellipsis' ? (
+                        <span className="px-0.5">...</span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-0.5">
+                          <PathPageIcon icon={slot.segment.icon} hasContent={slot.segment.hasContent} />
                         </span>
                       )}
                     </span>

@@ -6,6 +6,7 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import type { BlockTypeId } from '@/components/block-actions-menu'
 import { looksLikeImageSrc } from '@/lib/tiptap/image-block'
+import type { PropertyTypeId } from '@/lib/blocks/property' // Turn into → Property cell
 
 const editorsByHostId = new Map<string, Editor>() // host **frame** RF id → TipTap editor (⋮⋮ drop targets)
 
@@ -71,7 +72,8 @@ export function isHandleBlockType(name: string): boolean {
     name === 'columns' ||
     name === 'boardLink' || // Linked-page block (inline/title) gets the ⋮⋮ grip too
     name === 'databaseBlock' || // Notion database block gets the ⋮⋮ grip too
-    name === 'imageBlock' // Image (placeholder or <img>) gets the ⋮⋮ grip too
+    name === 'imageBlock' || // Image (placeholder or <img>) gets the ⋮⋮ grip too
+    name === 'propertyBlock' // Property cell (icon + Empty) gets the ⋮⋮ grip too
   )
 }
 
@@ -313,6 +315,23 @@ export function turnEditorBlockInto(
     return turnEditorBlockInto(editor, next, blockType)
   }
 
+  // Property cell is an atom — unwrap the value (if any) then apply the target type
+  if (typeName === 'propertyBlock') {
+    const seed = String(block.node.attrs.value || '').trim() // Empty cell → blank paragraph
+    editor
+      .chain()
+      .focus()
+      .deleteRange({ from, to })
+      .insertContentAt(from, {
+        type: 'paragraph',
+        content: seed ? [{ type: 'text', text: seed }] : [],
+      } as JSONContent)
+      .run()
+    const next = findEditorBlockAtPos(editor, from + 1)
+    if (!next) return true
+    return turnEditorBlockInto(editor, next, blockType)
+  }
+
   editor.chain().focus().setTextSelection({ from: from + 1, to: Math.max(from + 1, to - 1) }).run()
 
   const clearLists = () => {
@@ -474,6 +493,40 @@ export function turnEditorBlockInto(
     default:
       return false
   }
+}
+
+/**
+ * Replace the selected editor **block** with a property cell (type icon + Empty box).
+ * Frame-top property chrome is stamped separately via metadata.propertyType.
+ */
+export function turnEditorBlockIntoProperty(
+  editor: Editor,
+  block: EditorBlockRef,
+  propertyType: PropertyTypeId
+): boolean {
+  if (!editor || editor.isDestroyed) return false // Unmounted editor — nothing to convert
+  const { from, to, typeName, node } = block
+  // Already a property cell — just switch the type (keep any typed value)
+  if (typeName === 'propertyBlock') {
+    return editor
+      .chain()
+      .focus()
+      .command(({ tr }) => {
+        tr.setNodeMarkup(from, undefined, { ...node.attrs, propertyType }) // Same cell, new type glyph
+        return true
+      })
+      .run()
+  }
+  // Replace this block with an empty property cell (placeholder Empty — do not seed from old text)
+  return editor
+    .chain()
+    .focus()
+    .deleteRange({ from, to })
+    .insertContentAt(from, {
+      type: 'propertyBlock',
+      attrs: { propertyType, value: '' },
+    } as JSONContent)
+    .run()
 }
 
 /** HTML for a content-block range (extract onto the map as its own card). */

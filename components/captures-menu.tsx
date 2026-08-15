@@ -35,6 +35,7 @@ import {
   takeBoardCapture,
 } from '@/lib/captures' // Local capture/presentation store
 import { cn } from '@/lib/utils' // Class merge
+import { TOOLBAR_MENU_PLACEMENT } from '@/lib/menu-placement' // Under the trigger, never over the board path
 import { ToolbarTitle } from './toolbar-title' // Animated icon-adjacent title
 
 type CapturesMenuProps = {
@@ -145,8 +146,7 @@ export function CapturesMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        align="end"
-        sideOffset={8}
+        {...TOOLBAR_MENU_PLACEMENT} // Match Automations — start/bottom so a 340px panel doesn’t cover the path
         className="relative w-[340px] rounded-xl border-gray-200 p-0 shadow-md overflow-hidden"
         onCloseAutoFocus={(e) => e.preventDefault()}
         onKeyDown={(e) => e.stopPropagation()} // Don't let board shortcuts eat typing

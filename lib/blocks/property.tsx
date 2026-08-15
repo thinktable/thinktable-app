@@ -1,5 +1,5 @@
-// Frame property metadata — Turn into → Property sets `metadata.propertyType` on the host frame.
-// The frame then shows a property-type icon at the top (mirrors Notion connections at the bottom).
+// Frame property metadata — Turn into → Property sets `metadata.propertyType` on the host frame
+// (top icon) and replaces the **block** with a propertyBlock cell (type icon + Empty box).
 
 import type { ReactNode } from 'react'
 import {

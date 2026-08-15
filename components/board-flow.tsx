@@ -101,6 +101,7 @@ import {
 } from '@/lib/blocks' // blocks, groups (page-body ensure is promote-only — not cold load)
 import { transformHtmlToBlockType } from '@/lib/blocks/turn-into' // Seed empty-frame HTML for I-bar Turn into
 import { PROPERTY_GROUP_H } from '@/lib/blocks/property' // Top property strip height — I-bar spawn offset
+import { propertyBlockHtml } from '@/lib/tiptap/property-block' // I-bar Turn into → Property seeds icon + Empty cell
 import { absFlowPosition, nodeFlowSize, useBlockGroupDrag } from './use-block-group-drag' // Drag attach/detach between groups / page
 import { useFrameNestStackDrag, isStackCollapsedMeta } from './use-frame-nest-stack-drag' // Edge-snap → stack reveal
 import { minStackIndex } from '@/lib/frame-side-stacks' // Per-side stack z-order
@@ -5854,7 +5855,9 @@ function BoardFlowInner({
       if (document.activeElement === iBarInputRef.current) iBarInputRef.current.blur()
     }
 
-    const html = opts?.html ?? '<p></p>' // Empty paragraph unless Turn into seeded a type
+    const html =
+      opts?.html ??
+      (opts?.propertyType ? propertyBlockHtml(opts.propertyType) : '<p></p>') // Property spawn = icon + Empty cell
     const messageId = generateUUID() // Client id so the RF node and DB row match
 
     const optimisticMessage = {
@@ -5976,7 +5979,7 @@ function BoardFlowInner({
 
       if (action === 'turnInto' && payload?.propertyType && pos) {
         await createBlockAtFlowPosition(pos.x, pos.y, {
-          html: '<p></p>',
+          html: propertyBlockHtml(payload.propertyType), // Icon + Empty cell (frame top icon via metadata)
           propertyType: payload.propertyType, // New frame with property chrome at top
         })
         return
@@ -6797,7 +6800,7 @@ function BoardFlowInner({
     [frameActionTargets, nodes, setNodes, takeSnapshot]
   )
 
-  // Turn into → Property: stamp propertyType on focused frame(s) (top icon + connection handle).
+  // Turn into → Property: stamp propertyType on focused frame(s) (top icon only).
   // First-time apply shifts the frame up so block text stays on its prior board Y (I-bar / line).
   const handleTurnIntoProperty = useCallback(
     async (propertyType: import('@/lib/blocks/property').PropertyTypeId) => {

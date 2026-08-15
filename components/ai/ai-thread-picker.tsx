@@ -1,15 +1,18 @@
 'use client'
 
-// Thread title dropdown + page filter (All / This board) for universal AI history
+// Thread title dropdown with All / This board filter inside the same menu
 import { useEffect, useState } from 'react' // State
 import type { AiThread } from '@/lib/ai/types' // Thread type
 import { cn } from '@/lib/utils' // className merge
-import { ChevronDown, Filter } from 'lucide-react' // Icons
+import { Check, ChevronDown, Filter } from 'lucide-react' // Icons
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu' // Menu chrome
 
@@ -60,66 +63,70 @@ export function AiThreadPicker({
   }, [filter, boardId, refreshKey]) // Refetch deps
 
   return (
-    <div className="flex items-center gap-1 min-w-0">
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            className="flex items-center gap-1 min-w-0 rounded-md px-1.5 py-1 text-sm font-medium text-gray-900 dark:text-gray-100 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
-            title="Chat sessions"
-          >
-            <span className="truncate">{thread?.title || 'New AI chat'}</span>
-            <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-gray-500 dark:text-gray-400" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-64 max-h-80 overflow-y-auto">
-          <DropdownMenuItem onClick={onNew}>New AI chat</DropdownMenuItem>
-          <DropdownMenuSeparator />
-          {loading && (
-            <div className="px-2 py-1.5 text-xs text-gray-500">Loading…</div>
-          )}
-          {!loading && threads.length === 0 && (
-            <div className="px-2 py-1.5 text-xs text-gray-500">No chats yet</div>
-          )}
-          {threads.map((t) => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex w-full max-w-full min-w-0 items-center gap-1 overflow-hidden rounded-md px-1.5 py-1 text-sm font-medium text-gray-900 dark:text-gray-100 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
+          title={thread?.title || 'Chat sessions'} // Full title on hover when truncated
+        >
+          <span className="min-w-0 flex-1 truncate text-left">
+            {thread?.title || 'New AI chat'}
+          </span>
+          <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-gray-500 dark:text-gray-400" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-64 max-h-80 overflow-y-auto">
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger className="gap-2">
+            <Filter className="h-3.5 w-3.5 text-gray-500 dark:text-gray-400" />
+            <span className="flex-1">
+              {filter === 'board' ? 'This board' : 'All chats'}
+            </span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-44">
             <DropdownMenuItem
-              key={t.id}
-              onClick={() => onSelect(t)}
-              className={cn(thread?.id === t.id && 'bg-black/[0.04] dark:bg-white/[0.06]')}
+              onSelect={(e) => {
+                e.preventDefault() // Keep chat list open while filter refreshes
+                onFilterChange('all')
+              }}
+              className={cn(filter === 'all' && 'bg-black/[0.04] dark:bg-white/[0.06]')}
             >
-              <span className="truncate">{t.title}</span>
+              <span className="flex-1">All chats</span>
+              {filter === 'all' && <Check className="h-3.5 w-3.5" />}
             </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
-            title={filter === 'board' ? 'Showing this board' : 'Showing all chats'}
-            aria-label="Filter chats by page"
-          >
-            <Filter className="h-3.5 w-3.5" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-44">
+            <DropdownMenuItem
+              onSelect={(e) => {
+                e.preventDefault() // Keep chat list open while filter refreshes
+                onFilterChange('board')
+              }}
+              disabled={!boardId}
+              className={cn(filter === 'board' && 'bg-black/[0.04] dark:bg-white/[0.06]')}
+            >
+              <span className="flex-1">This board</span>
+              {filter === 'board' && <Check className="h-3.5 w-3.5" />}
+            </DropdownMenuItem>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={onNew}>New AI chat</DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {loading && (
+          <div className="px-2 py-1.5 text-xs text-gray-500">Loading…</div>
+        )}
+        {!loading && threads.length === 0 && (
+          <div className="px-2 py-1.5 text-xs text-gray-500">No chats yet</div>
+        )}
+        {threads.map((t) => (
           <DropdownMenuItem
-            onClick={() => onFilterChange('all')}
-            className={cn(filter === 'all' && 'bg-black/[0.04] dark:bg-white/[0.06]')}
+            key={t.id}
+            onClick={() => onSelect(t)}
+            className={cn(thread?.id === t.id && 'bg-black/[0.04] dark:bg-white/[0.06]')}
           >
-            All chats
+            <span className="truncate">{t.title}</span>
           </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={() => onFilterChange('board')}
-            disabled={!boardId}
-            className={cn(filter === 'board' && 'bg-black/[0.04] dark:bg-white/[0.06]')}
-          >
-            This board
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

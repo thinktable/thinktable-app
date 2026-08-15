@@ -75,6 +75,14 @@ export function watchMenuSafeRect(cb: () => void): () => void {
   }
 }
 
+/** Top-bar tool dropdowns — same as Actions (Filter / Automations): under the trigger, never over the board path. */
+export const TOOLBAR_MENU_PLACEMENT = {
+  align: 'start' as const, // Grow right from the glyph, not left across the path
+  side: 'bottom' as const, // Stay under the 52px bar
+  sideOffset: 8, // Clear the bar like Automations (default 4px still sits on the path)
+  sticky: 'always' as const, // Tall Capture/Present panels must not flip up over the path
+}
+
 /** Radix collisionPadding matching getMenuSafeRect (viewport insets). */
 export function getMenuCollisionPadding(): { top: number; left: number; right: number; bottom: number } {
   const s = getMenuSafeRect() // Same chrome exclusions

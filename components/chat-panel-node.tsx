@@ -44,6 +44,10 @@ import {
   PROPERTY_GROUP_H,
   type PropertyTypeId,
 } from '@/lib/blocks/property' // Turn into → Property → top chrome
+import {
+  readPropertyBlockTypesFromDoc,
+  readPropertyBlockTypesFromHtml,
+} from '@/lib/tiptap/property-block' // Top icons follow propertyBlock order in the frame
 import { NotionMarkIcon } from '@/components/notion-mark-icon' // Logo at bottom of a Notion-connected frame
 import { createPortal } from 'react-dom'
 import {
@@ -398,33 +402,33 @@ function formatResponseContent(content: string): string {
 }
 
 /** Notion (and later connectors) at the bottom of a frame — icon only, no ⋮⋮. */
-/** Top strip: property-type icon + blue connection handle (same affordance as edge indicators). */
+/** Top strip: type icons in document order — one **block** (⋮⋮ comes from TipTapBlockHandles). */
 function FramePropertyGroup({
-  propertyType,
+  types,
   className,
 }: {
-  propertyType: PropertyTypeId // Frame metadata.propertyType
+  types: PropertyTypeId[] // Same sequence as property blocks in the frame
   className?: string
 }) {
-  const label = propertyTypeLabel(propertyType) // Title / aria for the type glyph
+  if (types.length === 0) return null // No property cells → no top chrome
   return (
     <div
       data-tt-property-header
-      className={cn('flex h-7 items-center gap-1.5 pl-6', className)} // Same left inset as block text (gutter)
+      className={cn('flex h-7 w-full items-center gap-1.5', className)} // Full-width Y band like other blocks
     >
-      <span
-        className="flex h-5 w-5 items-center justify-center text-gray-500"
-        title={label}
-        aria-label={`Property · ${label}`}
-      >
-        {propertyTypeIcon(propertyType, 'h-4 w-4')}
-      </span>
-      {/* Blue connection handle — arms the frame’s top connection point (same as edge indicators) */}
-      <ConnectionIndicator
-        side="top"
-        className="nodrag nopan relative z-[30] h-2.5 w-2.5 shrink-0 cursor-crosshair rounded-full border border-white bg-blue-500 shadow-sm hover:bg-blue-600"
-        style={{ position: 'relative', left: 'auto', top: 'auto', transform: 'none' }}
-      />
+      {types.map((type, i) => {
+        const label = propertyTypeLabel(type) // Title / aria for this glyph
+        return (
+          <span
+            key={`${type}-${i}`} // Duplicate types are allowed (two Number cells, etc.)
+            className="flex h-5 w-5 shrink-0 items-center justify-center text-gray-500"
+            title={label}
+            aria-label={`Property · ${label}`}
+          >
+            {propertyTypeIcon(type, 'h-4 w-4')}
+          </span>
+        )
+      })}
     </div>
   )
 }
@@ -763,6 +767,29 @@ function TipTapContent({
       }
     },
   })
+
+  // Top icons = propertyBlock types in doc order (live; reorder / add / delete updates the strip)
+  const [propertyTypes, setPropertyTypes] = useState<PropertyTypeId[]>(() => {
+    const fromHtml = readPropertyBlockTypesFromHtml(content) // Seed from saved HTML before TipTap mounts
+    if (fromHtml.length > 0) return fromHtml
+    return propertyType ? [propertyType] : [] // Legacy: frame metadata only, no cells yet
+  })
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return
+    const sync = () => {
+      const fromDoc = readPropertyBlockTypesFromDoc(editor.state.doc) // Walk blocks top → bottom
+      const next =
+        fromDoc.length > 0 ? fromDoc : propertyType ? [propertyType] : [] // Keep metadata fallback
+      setPropertyTypes((prev) =>
+        prev.length === next.length && prev.every((t, i) => t === next[i]) ? prev : next
+      )
+    }
+    sync()
+    editor.on('update', sync) // Turn into / ⋮⋮ reorder / delete
+    return () => {
+      editor.off('update', sync)
+    }
+  }, [editor, propertyType])
 
   // Editable only when this frame is selected (and share role allows). Unselected = no iOS text loupe.
   useEffect(() => {
@@ -1177,11 +1204,6 @@ function TipTapContent({
       {/* Notion-style format popup — outside highlight edge, stays open with selection */}
       {editor ? <SelectionFormatPopupAnchor editor={editor} containerRef={containerRef} /> : null}
 
-      {/* Property chrome at top — type icon + connection handle (mirrors Notion footer) */}
-      {propertyType && enableBlockHandles && !isFlashcard && !showFrameShimmer && (
-        <FramePropertyGroup propertyType={propertyType} />
-      )}
-
       {/* Apply shimmer animation to prompt text when response is loading (not for flashcards) */}
       <div
         className={cn(
@@ -1192,6 +1214,10 @@ function TipTapContent({
       >
         {editor ? (
           <div className={cn(enableBlockHandles && showFrameShimmer && 'pl-6')}>
+            {/* Property icon list is one **block** (⋮⋮ from TipTapBlockHandles, same as cells below) */}
+            {propertyTypes.length > 0 && enableBlockHandles && !isFlashcard && !showFrameShimmer && (
+              <FramePropertyGroup types={propertyTypes} />
+            )}
             {/* Gutter on the content layer while the shell still overlays (parent skips pl-6) */}
             <TipTapBlockHandles
               editor={editor}
@@ -1813,7 +1839,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       console.error('Failed to save Notion connection:', err)
     }
   }, [promptMessage, setNodes, id, supabase])
-  // Turn into → Property: stamp propertyType on the host frame (top icon + connection handle).
+  // Turn into → Property: stamp propertyType on the host frame (top icon only).
   // First-time apply shifts the frame up by PROPERTY_GROUP_H so block text stays where it was.
   const handlePropertyTurnInto = useCallback(
     async (nextType: PropertyTypeId) => {

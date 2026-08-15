@@ -53,6 +53,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     setAiMapDockLiftPx,
     setAiMapDockLeftPx,
     setAiChatHasTranscript,
+    setPhoneDockTight,
     closeSidebar,
   } = useSidebarContext()
   const { addPendingEdits } = useAiEditSession()
@@ -69,6 +70,8 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   const [savedSnapshots, setSavedSnapshots] = useState<AiContextSnapshot[]>([]) // Library
   // Phone: lift dock above the soft keyboard via visualViewport inset
   const [keyboardInset, setKeyboardInset] = useState(0)
+  const [dockMaxHeight, setDockMaxHeight] = useState<number | null>(null) // Cap so the dock cannot grow over the top bar
+  const [dockCompact, setDockCompact] = useState(false) // Hide transcript + thread chrome when the strip is short
   const mapDockRef = useRef<HTMLDivElement>(null) // Outer shell (keyboard inset)
   const mapDockContentRef = useRef<HTMLDivElement>(null) // Inner max-w-lg — left edge Free nav aligns to
   const [mapRoot, setMapRoot] = useState<HTMLElement | null>(null) // BoardFlow root — phone dock host
@@ -197,27 +200,47 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     if (isMobileMode && isChatSidebarOpen) closeSidebar()
   }, [isMobileMode, isChatSidebarOpen, closeSidebar])
 
-  // Phone dock: track how much of the layout viewport the keyboard covers
-  useEffect(() => {
+  // Phone dock: keyboard inset + height cap so landscape+keyboard cannot cover the top bar
+  useLayoutEffect(() => {
     if (!isChatSidebarOpen || !isMobileMode) {
-      setKeyboardInset(0)
+      setKeyboardInset(0) // Desktop / closed: no lift
+      setDockMaxHeight(null) // No cap
+      setDockCompact(false) // Show transcript + chrome when there is room
+      setPhoneDockTight(false) // Restore the top bar / mode pill
       return
     }
-    const vv = window.visualViewport
-    if (!vv) return
+    const TOP_CHROME_H = 96 // 52px top bar + mode pill at 56px — both sit in the same short landscape strip
+    const COMPOSER_FLOOR = 72 // Ask row + padding — keep this fully on screen or iOS yanks it over the tools
+    const DOCK_GAP = 8 // Air between the top chrome and the dock
+    const EXTRAS_MIN = 148 // Transcript + thread chrome + composer
+    const KEYBOARD_OPEN_PX = 80 // Treat as keyboard-up (ignore tiny address-bar insets)
     const update = () => {
-      // Covered height below the visual viewport (keyboard / browser chrome)
-      const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
+      window.scrollTo(0, 0) // iOS focus-scroll must not drag the board under the dock
+      const vv = window.visualViewport
+      const vvHeight = vv?.height ?? window.innerHeight // Visible strip (keyboard excluded)
+      const vvTop = vv?.offsetTop ?? 0 // Layout Y of the visual viewport top
+      const inset = Math.max(0, window.innerHeight - vvHeight - vvTop) // Keyboard / chrome below the visual viewport
       setKeyboardInset(inset)
+      const keyboardOpen = inset >= KEYBOARD_OPEN_PX // Landscape squeeze only matters with the keyboard up
+      const tight = keyboardOpen && vvHeight < TOP_CHROME_H + COMPOSER_FLOOR + DOCK_GAP // Cannot stack tools + Ask row
+      setPhoneDockTight(tight) // Hide top bar / pill so the composer can occupy that strip
+      const reservedTop = tight ? vvTop : vvTop + TOP_CHROME_H // Tight: full strip; else stay below bar + pill
+      const available = Math.max(COMPOSER_FLOOR, vvTop + vvHeight - reservedTop - DOCK_GAP) // Room above the keyboard
+      setDockMaxHeight(Math.round(available)) // Never grow into the top bar (or past the visual strip)
+      setDockCompact(available < EXTRAS_MIN) // Drop transcript + chrome when they would force an overlap
     }
     update()
-    vv.addEventListener('resize', update)
-    vv.addEventListener('scroll', update)
+    const vv = window.visualViewport
+    vv?.addEventListener('resize', update)
+    vv?.addEventListener('scroll', update)
+    window.addEventListener('resize', update)
     return () => {
-      vv.removeEventListener('resize', update)
-      vv.removeEventListener('scroll', update)
+      vv?.removeEventListener('resize', update)
+      vv?.removeEventListener('scroll', update)
+      window.removeEventListener('resize', update)
+      setPhoneDockTight(false) // Bar back if this effect tears down mid-keyboard
     }
-  }, [isChatSidebarOpen, isMobileMode])
+  }, [isChatSidebarOpen, isMobileMode, setPhoneDockTight])
 
   // Phone: publish dock+keyboard lift + left so Free nav sits above and flush with the composer
   // useLayoutEffect + geometric left so Free nav snaps aligned on the same frame (no lag)
@@ -266,6 +289,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     isMobileMode,
     isChatSidebarOpen,
     keyboardInset,
+    dockCompact,
     setAiMapDockLiftPx,
     setAiMapDockLeftPx,
     messages.length,
@@ -499,7 +523,12 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
           aria-hidden={!isChatSidebarOpen}
           style={{
             bottom: isChatSidebarOpen ? keyboardInset : 0, // Sit just above the soft keyboard when open
-            paddingBottom: 'max(8px, env(safe-area-inset-bottom))',
+            maxHeight: isChatSidebarOpen && dockMaxHeight != null ? dockMaxHeight : undefined, // Stay below the top bar in a short visual viewport
+            overflow: isChatSidebarOpen && dockMaxHeight != null ? 'hidden' : undefined, // Clip extras rather than paint over tools
+            paddingBottom:
+              isChatSidebarOpen && keyboardInset >= 80
+                ? 8 // Keyboard already clears the home indicator — don’t spend the short landscape strip on safe-area
+                : 'max(8px, env(safe-area-inset-bottom))',
             // Closed: opacity 0 only — visibility:hidden / display:none blocks iOS keyboard on focus()
             opacity: isChatSidebarOpen ? 1 : 0,
             pointerEvents: isChatSidebarOpen ? 'auto' : 'none',
@@ -513,7 +542,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
               isChatSidebarOpen ? 'pointer-events-auto' : 'pointer-events-none'
             )}
           >
-            {(isChatSidebarOpen && (hasTranscript || showLoadPlaceholder)) && (
+            {(isChatSidebarOpen && !dockCompact && (hasTranscript || showLoadPlaceholder)) && (
               <div
                 className={cn(
                   'relative rounded-xl min-h-[40px]', // Response box — ticks pin here, not in the composer
@@ -537,7 +566,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                 </div>
               </div>
             )}
-            {isChatSidebarOpen && (
+            {isChatSidebarOpen && !dockCompact && (
               // Mid chrome: own rounded board-fill card — not fused to transcript or prompt
               <div
                 className={cn(
@@ -545,7 +574,17 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                   'bg-gray-50 dark:bg-[#0f0f0f]' // Board-fill card only — no border
                 )}
               >
-                <div className="flex-1 min-w-0 bg-transparent">
+                {/* Brand left of thread select while chat is open (map toggle hides) */}
+                <button
+                  type="button"
+                  onClick={() => setPersonalizeOpen(true)}
+                  className="flex-shrink-0 rounded-full overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 opacity-90 hover:opacity-100 transition-opacity"
+                  title="Personalize Thinktable AI"
+                  aria-label="Personalize Thinktable AI"
+                >
+                  <ThinktableBrandMark drawingUrl={logoDrawing} size={28} />
+                </button>
+                <div className="flex-1 min-w-0 overflow-hidden bg-transparent">
                   <AiThreadPicker
                     boardId={conversationId}
                     thread={thread}
@@ -609,18 +648,32 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
         style={{ width: CHAT_SIDEBAR_WIDTH }}
       >
         <header className="flex-shrink-0 flex items-center justify-between gap-2 px-3 h-11">
-          <AiThreadPicker
-            boardId={conversationId}
-            thread={thread}
-            filter={filter}
-            onFilterChange={setFilter}
-            onSelect={(t) => {
-              setThread(t)
-              setMode(isSelectableAiMode(t.mode) ? t.mode : 'ask')
-            }}
-            onNew={handleNew}
-            refreshKey={refreshKey}
-          />
+          {/* Brand left of thread select while chat is open (map toggle hides) */}
+          <div className="flex items-center gap-1.5 min-w-0 flex-1">
+            <button
+              type="button"
+              onClick={() => setPersonalizeOpen(true)}
+              className="flex-shrink-0 rounded-full overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 opacity-90 hover:opacity-100 transition-opacity"
+              title="Personalize Thinktable AI"
+              aria-label="Personalize Thinktable AI"
+            >
+              <ThinktableBrandMark drawingUrl={logoDrawing} size={28} />
+            </button>
+            <div className="min-w-0 flex-1 overflow-hidden">
+              <AiThreadPicker
+                boardId={conversationId}
+                thread={thread}
+                filter={filter}
+                onFilterChange={setFilter}
+                onSelect={(t) => {
+                  setThread(t)
+                  setMode(isSelectableAiMode(t.mode) ? t.mode : 'ask')
+                }}
+                onNew={handleNew}
+                refreshKey={refreshKey}
+              />
+            </div>
+          </div>
 
           <div className="flex items-center gap-0.5 flex-shrink-0">
             <button

@@ -37,10 +37,12 @@ import {
   setEditorBlockHighlight,
   setEditorBlockHighlightRanges,
   turnEditorBlockInto,
+  turnEditorBlockIntoProperty,
   unregisterHostEditor,
   wrapJsonForInsert,
   type EditorBlockRef,
 } from '@/lib/tiptap/block-selection'
+import { collectPropertyBlocks } from '@/lib/tiptap/property-block' // Top icon row is one block; ⋮⋮ arms all property cells
 import { setAiBlockSelection } from '@/lib/ai/selection-bridge' // Live block pills in AI composer (⋮⋮ only)
 import { htmlToPlain } from '@/lib/ai/context-pack' // Block hover preview from HTML
 import {
@@ -56,6 +58,9 @@ type HandleLayout = {
   firstLineH: number // First-line box height (local px) — grip centers vertically on the first line
   lineCenter: number // Vertical center of the FIRST rendered text line (local px) — where the grip sits
   block: EditorBlockRef
+  propertyHeader?: boolean // Top icon list — one block; from/to span all property cells
+  insertFrom?: number // Add-block hairline above (header uses first cell)
+  insertTo?: number // Add-block hairline below (header uses last cell)
 }
 
 type TipTapBlockHandlesProps = {
@@ -70,11 +75,71 @@ type TipTapBlockHandlesProps = {
   notionConnected?: boolean // Notion-connected frame → slimmer block ⋮⋮ menu
 }
 
+/** Measure grip Y from the top property-icon row (one block for the whole list). */
+function layoutForPropertyHeader(
+  container: HTMLElement,
+  block: EditorBlockRef,
+  insertFrom: number,
+  insertTo: number
+): HandleLayout | null {
+  const header = container.querySelector('[data-tt-property-header]') as HTMLElement | null
+  if (!header) return null // Strip not mounted
+  const fr = header.getBoundingClientRect()
+  if (fr.height <= 0) return null
+  const mid = screenToLocal(container, (fr.left + fr.right) / 2, (fr.top + fr.bottom) / 2)
+  const firstLineH = Math.min(Math.max(14, fr.height), 28) // Same band as a one-line block
+  return {
+    top: mid.y - firstLineH / 2,
+    height: firstLineH,
+    firstLineH,
+    lineCenter: mid.y,
+    block, // Range covering all property cells so drag/menu act on the list
+    propertyHeader: true,
+    insertFrom, // Hairline above the first property cell
+    insertTo, // Hairline below the last property cell
+  }
+}
+
+/** One EditorBlockRef spanning every propertyBlock (the top icon list as a single block). */
+function propertyHeaderBlock(editor: Editor): { block: EditorBlockRef; insertFrom: number; insertTo: number } | null {
+  const blocks = collectPropertyBlocks(editor)
+  if (blocks.length === 0) return null
+  const first = blocks[0]
+  const last = blocks[blocks.length - 1]
+  return {
+    block: {
+      from: first.from,
+      to: last.to, // Inclusive of the last property cell
+      node: first.node,
+      typeName: 'propertyBlock',
+    },
+    insertFrom: first.from,
+    insertTo: last.to,
+  }
+}
+
 type DropLine = { top: number; left: number; width: number } // Viewport dashed insert marker
 const GRIP_W = 20 // Matches ⋮⋮ `w-5` — insert line uses the same width
 const HANDLE_GUTTER = 24 // Text starts here (row `pl-6`), in local px — where the ⋮⋮ column lives
 const GRIP_H = 24 // ⋮⋮ button height (`h-6`) — used to vertically center it on the first line
 const GUTTER_EDGE_PAD = 6 // Extra gutter height so top/bottom hairlines stay inside the hover group
+
+/** Nearest positioned ancestor — absolute ⋮⋮ `top`/`left` are in this box (the pl-6 gutter wrapper). */
+function positionedAncestor(el: HTMLElement): HTMLElement {
+  let n: HTMLElement | null = el
+  while (n) {
+    const p = getComputedStyle(n).position
+    if (p === 'relative' || p === 'absolute' || p === 'fixed' || p === 'sticky') return n
+    n = n.parentElement
+  }
+  return el
+}
+
+/** Layout root for ⋮⋮ Y — not PM’s parent (that sits below the property-icon row). */
+function gripLayoutRoot(editor: Editor): HTMLElement | null {
+  const flow = editor.view.dom.parentElement
+  return flow ? positionedAncestor(flow) : null
+}
 
 /** True when a TipTap block range contains an aiPending mark. */
 function blockHasAiPending(editor: Editor, block: EditorBlockRef): boolean {
@@ -168,8 +233,9 @@ function layoutForBlock(
           (el.querySelector?.('.tt-database-block-label') as HTMLElement | null))
       : null
     const imageRow = el?.querySelector?.('.tt-image-block-row') as HTMLElement | null
+    const propertyRow = el?.querySelector?.('.tt-property-block-row') as HTMLElement | null
     const pageLabel = el?.querySelector?.('.tt-board-link-label') as HTMLElement | null
-    const textEl = dbHeader || imageRow || pageLabel || el
+    const textEl = dbHeader || imageRow || propertyRow || pageLabel || el
 
     // Always pin to first-line mid via screen→local on the layout root (rotation-safe)
     if (textEl) {
@@ -181,7 +247,8 @@ function layoutForBlock(
       if (fr && fr.height > 0) {
         const isDb = !!(dbHeader || el?.classList?.contains?.('tt-database-block'))
         const isImage = !!(imageRow || el?.classList?.contains?.('tt-image-block'))
-        const useTop = isDb || isImage || fr.height > firstLineH * 2
+        const isProperty = !!(propertyRow || el?.classList?.contains?.('tt-property-block'))
+        const useTop = isDb || isImage || isProperty || fr.height > firstLineH * 2
         const midY = useTop ? fr.top + Math.min(firstLineH, fr.height) / 2 : (fr.top + fr.bottom) / 2
         lineCenter = screenToLocal(root, (fr.left + fr.right) / 2, midY).y
         if (!(Number.isFinite(lh) && lh > 0)) {
@@ -255,6 +322,9 @@ export function TipTapBlockHandles({
   const [selection, setSelection] = useState<EditorBlockRef[]>([])
   const selectionRef = useRef<EditorBlockRef[]>([]) // Latest selection for click handlers
   selectionRef.current = selection
+  // Top icon row armed as ONE block — selection still lists every property cell for drag/delete,
+  // but grips/wash stay on the header only (not a ⋮⋮ per cell). Cleared with the selection.
+  const [propertyHeaderArmed, setPropertyHeaderArmed] = useState(false)
   const anchorRef = useRef<EditorBlockRef | null>(null) // Anchor block for Shift range-select
   // Keep latest layouts in refs so transaction refresh doesn’t need stale state
   const hoverRef = useRef<HandleLayout | null>(null)
@@ -293,6 +363,7 @@ export function TipTapBlockHandles({
   const clearBlockSelection = useCallback(() => {
     if (editor) setEditorBlockHighlight(editor, null) // Wipe single + multi wash
     setSelection([])
+    setPropertyHeaderArmed(false) // Header is not a separate selection — drop with the cells
     anchorRef.current = null
     setMenu(null)
     if (hostNodeId) setAiBlockSelection(null) // Drop AI block pill when disarmed
@@ -312,10 +383,17 @@ export function TipTapBlockHandles({
   // Apply a multi-block selection: update state + paint the multi-range wash.
   // Only ⋮⋮ handle selection publishes a block pill — I-bar/caret alone stays "Selected frame".
   // Same-frame multi-block still publishes ONE AI context pill (not one per block).
+  // `asPropertyHeader`: top icon row — keep cell refs for actions, wash/grip on the header only.
   const applySelection = useCallback(
-    (blocks: EditorBlockRef[]) => {
+    (blocks: EditorBlockRef[], opts?: { asPropertyHeader?: boolean }) => {
+      const asHeader = !!opts?.asPropertyHeader
       setSelection(blocks)
-      if (editor) setEditorBlockHighlightRanges(editor, blocks.map((b) => ({ from: b.from, to: b.to })))
+      setPropertyHeaderArmed(asHeader)
+      if (editor) {
+        // Header wash is a class on [data-tt-property-header] — do not paint every cell
+        if (asHeader) setEditorBlockHighlight(editor, null)
+        else setEditorBlockHighlightRanges(editor, blocks.map((b) => ({ from: b.from, to: b.to })))
+      }
       if (!hostNodeId) return
       if (blocks.length === 0) {
         setAiBlockSelection(null)
@@ -364,7 +442,7 @@ export function TipTapBlockHandles({
   useEffect(() => {
     if (!editor || !enabled || editor.isDestroyed) return
     const dom = editor.view.dom
-    const container = dom.parentElement
+    const container = gripLayoutRoot(editor)
     if (!container) return
     const frame = frameForEditor(dom)
 
@@ -396,6 +474,18 @@ export function TipTapBlockHandles({
         ) {
           setHover(null)
           return
+        }
+      }
+
+      const headerEl = container.querySelector('[data-tt-property-header]') as HTMLElement | null
+      if (headerEl) {
+        const hr = headerEl.getBoundingClientRect()
+        if (clientY >= hr.top && clientY <= hr.bottom) {
+          const group = propertyHeaderBlock(editor) // Top icon list = one block
+          if (group) {
+            setHover(layoutForPropertyHeader(container, group.block, group.insertFrom, group.insertTo))
+            return
+          }
         }
       }
 
@@ -440,7 +530,7 @@ export function TipTapBlockHandles({
   // Keep a handle beside the block that owns the caret (cursor placed → handle stays without hover)
   useEffect(() => {
     if (!editor || !enabled || editor.isDestroyed) return
-    const container = editor.view.dom.parentElement
+    const container = gripLayoutRoot(editor)
     if (!container) return
 
     // Same block + ~same geometry → keep prior layout object (avoids RO/transaction setState thrash)
@@ -548,14 +638,33 @@ export function TipTapBlockHandles({
   )
 
   const openForBlock = useCallback(
-    (block: EditorBlockRef, clientX: number, clientY: number) => {
+    (block: EditorBlockRef, clientX: number, clientY: number, asPropertyHeader = false) => {
       if (!editor) return
+      if (asPropertyHeader) {
+        const props = collectPropertyBlocks(editor) // Arm every property cell (the list is one block)
+        if (props.length === 0) return
+        applySelection(props, { asPropertyHeader: true }) // One header ⋮⋮ — not a grip per cell
+        anchorRef.current = props[0]
+        const blockType = refineListBlockType(editor, props[0])
+        setMenu({ ...menuPlacement(clientX, clientY), block: props[0], blockType })
+        const container = gripLayoutRoot(editor)
+        const group = propertyHeaderBlock(editor)
+        const layout =
+          container && group
+            ? layoutForPropertyHeader(container, group.block, group.insertFrom, group.insertTo)
+            : null
+        if (layout) {
+          setHover(layout)
+          setFocusLayout(layout)
+        }
+        return
+      }
       // Arm this block for a follow-up ⋮⋮ drag (selection persists after the menu closes)
-      applySelection([block])
+      applySelection([block]) // Cell / text block — clears propertyHeaderArmed
       anchorRef.current = block
       const blockType = refineListBlockType(editor, block)
       setMenu({ ...menuPlacement(clientX, clientY), block, blockType })
-      const container = editor.view.dom.parentElement
+      const container = gripLayoutRoot(editor)
       const layout = container ? layoutForBlock(editor, container, block) : null
       if (layout) {
         setHover(layout)
@@ -837,7 +946,8 @@ export function TipTapBlockHandles({
         : [menu.block]
 
       if (action === 'turnInto' && payload?.propertyType) {
-        onPropertyTurnInto?.(payload.propertyType) // Stamp propertyType on the host frame
+        for (const b of ordered) turnEditorBlockIntoProperty(editor, b, payload.propertyType) // Block → icon + Empty cell
+        onPropertyTurnInto?.(payload.propertyType) // Stamp propertyType on the host frame (top icon)
         clearBlockSelection()
         return
       }
@@ -879,7 +989,7 @@ export function TipTapBlockHandles({
   // Grip click: plain = arm block + actions menu; Shift/⌘ = multi-select.
   // Unselected frame: do not steal the click — RF selects the frame first.
   const onGripClick = useCallback(
-    (e: React.MouseEvent, block: EditorBlockRef) => {
+    (e: React.MouseEvent, block: EditorBlockRef, asPropertyHeader = false) => {
       const start = gripPointerRef.current
       gripPointerRef.current = null
       if (start?.dragged) return // Drag moved this block — don't open the menu
@@ -888,6 +998,15 @@ export function TipTapBlockHandles({
       e.stopPropagation()
       e.preventDefault()
       if (!editor) return
+      if (asPropertyHeader) {
+        // Top icon list is one block — ⋮⋮ again closes the menu like any other block
+        if (menu) {
+          setMenu(null)
+          return
+        }
+        openForBlock(block, e.clientX, e.clientY, true)
+        return
+      }
       if (e.shiftKey) {
         const anchor = anchorRef.current ?? block
         applySelection(collectBlocksBetween(anchor, block)) // All blocks in between (same frame)
@@ -924,10 +1043,20 @@ export function TipTapBlockHandles({
     [editor, applySelection, collectBlocksBetween, openForBlock, menuPlacement, isPanelSelected, menu]
   )
 
+  // Blue wash on the top icon list when that block is armed / hovered
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return
+    const el = gripLayoutRoot(editor)?.querySelector('[data-tt-property-header]')
+    if (!el) return
+    const on = propertyHeaderArmed || !!hover?.propertyHeader
+    el.classList.toggle('tt-block-highlight', on)
+    return () => el.classList.remove('tt-block-highlight')
+  }, [editor, propertyHeaderArmed, hover?.propertyHeader])
+
   if (!editor || !enabled) return null
 
   // Grips render for every selected block (persistent wash) + the hovered/caret/menu block.
-  const container = editor.view.dom.parentElement
+  const container = gripLayoutRoot(editor)
   // Local→screen scale (RF zoom × frameScale) measured off the container; grips live in local px
   // inside these transforms, so counter-scaling by 1/scale keeps them a constant SCREEN size
   // (like the portaled actions menu). `rfZoom` in deps forces this to re-measure on zoom.
@@ -937,15 +1066,17 @@ export function TipTapBlockHandles({
   // Horizontal: keep the grip CENTERED in the gutter — midway between the frame's left edge (local 0)
   // and the block's text left (local HANDLE_GUTTER).
   const gutterCenterLeft = HANDLE_GUTTER / 2 - GRIP_W / 2 // Left so the grip's center sits at gutter mid
-  const gripLayouts = new Map<number, HandleLayout>() // keyed by block.from (dedupe)
+  const gripLayouts = new Map<string | number, HandleLayout>() // keyed by block.from (header = 'property-header')
   if (container) {
     for (const b of selection) {
-            // Re-measure fresh from live DOM
+      // Header mode: cells stay in `selection` for menu/drag, but only the top-row ⋮⋮ paints
+      if (propertyHeaderArmed && b.typeName === 'propertyBlock') continue
       const gl = layoutForBlock(editor, container, b)
       if (gl) gripLayouts.set(b.from, gl)
     }
     for (const b of aiPendingBlocks) {
       if (gripLayouts.has(b.from)) continue
+      if (propertyHeaderArmed && b.typeName === 'propertyBlock') continue
       const gl = layoutForBlock(editor, container, b)
       if (gl) gripLayouts.set(b.from, gl)
     }
@@ -956,14 +1087,29 @@ export function TipTapBlockHandles({
       : focusLayout
         ? focusLayout
         : null
-  if (hoverLayout && !gripLayouts.has(hoverLayout.block.from) && container) {
-    // Refresh Y from live DOM
-    const fresh = layoutForBlock(editor, container, hoverLayout.block)
-    if (fresh) gripLayouts.set(fresh.block.from, fresh)
+  if (hoverLayout?.propertyHeader && container) {
+    const group = propertyHeaderBlock(editor)
+    if (group) {
+      const fresh = layoutForPropertyHeader(container, group.block, group.insertFrom, group.insertTo)
+      if (fresh) gripLayouts.set('property-header', fresh)
+    }
+  } else if (hoverLayout && !gripLayouts.has(hoverLayout.block.from) && container) {
+    // Don't park a cell grip from caret/hover while the header owns the property list
+    if (!(propertyHeaderArmed && hoverLayout.block.typeName === 'propertyBlock')) {
+      const fresh = layoutForBlock(editor, container, hoverLayout.block)
+      if (fresh) gripLayouts.set(fresh.block.from, fresh)
+    }
   }
   if (menu && container && !gripLayouts.has(menu.block.from)) {
-    const ml = layoutForBlock(editor, container, menu.block)
-    if (ml) gripLayouts.set(menu.block.from, ml)
+    if (!(propertyHeaderArmed && menu.block.typeName === 'propertyBlock')) {
+      const ml = layoutForBlock(editor, container, menu.block)
+      if (ml) gripLayouts.set(ml.block.from, ml)
+    }
+  }
+  const group = propertyHeaderBlock(editor)
+  if (container && group && (propertyHeaderArmed || hover?.propertyHeader) && !gripLayouts.has('property-header')) {
+    const hl = layoutForPropertyHeader(container, group.block, group.insertFrom, group.insertTo)
+    if (hl) gripLayouts.set('property-header', hl)
   }
   // Menu count reflects the group when the menu block is part of a multi-selection
   const menuCount =
@@ -973,12 +1119,14 @@ export function TipTapBlockHandles({
 
   return (
     <>
-      {Array.from(gripLayouts.values()).map((gl) => {
+      {Array.from(gripLayouts.entries()).map(([gripKey, gl]) => {
         // Skip grips whose range no longer exists in the doc (e.g. after Turn into Board)
         const docSize = editor.state.doc.content.size
         if (gl.block.from < 0 || gl.block.from >= docSize || gl.block.to > docSize) return null
         // nodrag only when this block is armed — otherwise RF must receive the pointer to drag the frame
-        const armed = isPanelSelected && isBlockArmed(gl.block)
+        const armed =
+          isPanelSelected &&
+          (gl.propertyHeader ? propertyHeaderArmed : isBlockArmed(gl.block))
         const aiPending = blockHasAiPending(editor, gl.block)
         // First-line band only — do NOT grow with wrapped multi-line text (add lines stay by the ⋮⋮)
         const lineH = Math.max(gl.firstLineH || GRIP_H, GRIP_H)
@@ -989,9 +1137,11 @@ export function TipTapBlockHandles({
         const gripRoot = container
         const uniformScale = gripRoot ? elementUniformScale(gripRoot) : 1
         const gripChromeScale = 1 / Math.max(1, Math.sqrt(uniformScale))
+        const insertAbove = gl.insertFrom ?? gl.block.from
+        const insertBelow = gl.insertTo ?? gl.block.to
         const grip = (
           <div
-            key={gl.block.from}
+            key={gripKey}
             data-tt-gutter-hover
             data-tt-block-handle
             className="group/gutter absolute z-[59] pointer-events-auto"
@@ -1015,7 +1165,7 @@ export function TipTapBlockHandles({
                     'opacity-0 group-hover/gutter:opacity-100'
                   )}
                   onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => onInsertLineClick(e, gl.block.from)}
+                  onClick={(e) => onInsertLineClick(e, insertAbove)}
                 >
                   <span
                     className={cn(
@@ -1038,7 +1188,7 @@ export function TipTapBlockHandles({
                     'opacity-0 group-hover/gutter:opacity-100'
                   )}
                   onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => onInsertLineClick(e, gl.block.to)}
+                  onClick={(e) => onInsertLineClick(e, insertBelow)}
                 >
                   <span
                     className={cn(
@@ -1078,7 +1228,7 @@ export function TipTapBlockHandles({
                     : 'Drag to move frame · click to select frame'
               }
               onPointerDown={(e) => onGripPointerDown(e, gl.block)}
-              onClick={(e) => onGripClick(e, gl.block)}
+              onClick={(e) => onGripClick(e, gl.block, gl.propertyHeader)}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter' && e.key !== ' ') return
                 if (!isPanelSelected) return
@@ -1086,7 +1236,8 @@ export function TipTapBlockHandles({
                 openForBlock(
                   gl.block,
                   e.currentTarget.getBoundingClientRect().right,
-                  e.currentTarget.getBoundingClientRect().top
+                  e.currentTarget.getBoundingClientRect().top,
+                  gl.propertyHeader
                 )
               }}
             >

@@ -38,6 +38,21 @@ function persistChatSidebarOpen(open: boolean) {
 /** localStorage key — restore the same AI thread after reload. */
 export const TT_CHAT_THREAD_ID_KEY = 'thinktable-chat-thread-id'
 
+/** localStorage — click-pinned boards nav so reload keeps the menu open. */
+export const TT_BOARDS_NAV_PINNED_KEY = 'thinktable-boards-nav-pinned'
+
+/** Read whether the boards nav was click-pinned (SSR-safe → closed). */
+function getStoredBoardsNavPinned(): boolean {
+  if (typeof window === 'undefined') return false // Server: stay closed until client
+  return localStorage.getItem(TT_BOARDS_NAV_PINNED_KEY) === 'true' // Persist pin across reload
+}
+
+/** Remember boards-nav pin so reload restores the popup. */
+function persistBoardsNavPinned(pinned: boolean) {
+  if (typeof window === 'undefined') return // No storage on server
+  localStorage.setItem(TT_BOARDS_NAV_PINNED_KEY, pinned ? 'true' : 'false') // Client restore
+}
+
 interface SidebarContextType {
   isMobileMode: boolean // True when window is too small (minimap auto-hides)
   setIsMobileMode: (value: boolean) => void
@@ -65,6 +80,9 @@ interface SidebarContextType {
   /** Phone: left inset so Free nav aligns with the AI dock’s left edge when jumped. */
   aiMapDockLeftPx: number | null
   setAiMapDockLeftPx: (px: number | null) => void
+  /** Phone landscape + keyboard: visual viewport is too short for top bar + composer — hide tools while typing. */
+  phoneDockTight: boolean
+  setPhoneDockTight: (value: boolean) => void
 }
 
 const SidebarContext = createContext<SidebarContextType | undefined>(undefined)
@@ -85,6 +103,7 @@ export function SidebarContextProvider({
   const [aiMapDockLiftPx, setAiMapDockLiftPx] = useState(0) // Phone: lift Free nav above AI dock
   const [aiMapDockLeftPx, setAiMapDockLeftPx] = useState<number | null>(null) // Phone: align Free nav to dock left
   const [aiChatHasTranscript, setAiChatHasTranscript] = useState(false) // Chat box has messages (vs input-only)
+  const [phoneDockTight, setPhoneDockTight] = useState(false) // Hide top bar / mode pill when landscape keyboard leaves no strip
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Delayed-close handle for left nav
   const isSidebarPinnedRef = useRef(false) // Latest pin for scheduleClose without stale closure
   const isMobileModeRef = useRef(false) // Latest mobile flag for sync focus in toggle
@@ -117,6 +136,12 @@ export function SidebarContextProvider({
     isChatOpenRef.current = nextOpen // Sync before children measure on the next commit
     setIsChatSidebarOpen(nextOpen)
     if (!narrow) persistChatSidebarOpen(storedOpen) // Backfill cookie so the next SSR already has the column
+    const storedPinned = getStoredBoardsNavPinned() // Last click-pin on the boards menu
+    if (storedPinned) {
+      isSidebarPinnedRef.current = true // scheduleClose must see pin before paint
+      setIsSidebarPinned(true) // Menu button stays pressed
+      setIsSidebarOpen(true) // Popup visible on first paint
+    }
     setLogoDrawingState(getStoredLogoDrawing()) // Custom logo PNG
     setChatChromeReady(true) // Next commit: column is final; top bar may measure
   }, [])
@@ -142,6 +167,7 @@ export function SidebarContextProvider({
 
   const closeSidebar = useCallback(() => {
     cancelCloseSidebar() // Clear any queued delay
+    persistBoardsNavPinned(false) // Reload should not reopen after an explicit close
     setIsSidebarPinned(false) // Explicit close clears click-pin
     setIsSidebarOpen(false) // Hide immediately
   }, [cancelCloseSidebar])
@@ -160,9 +186,11 @@ export function SidebarContextProvider({
     cancelCloseSidebar()
     setIsSidebarPinned((pinned) => {
       if (pinned) {
+        persistBoardsNavPinned(false) // Unpin: next reload stays closed
         setIsSidebarOpen(false) // Second click: unpin and hide
         return false
       }
+      persistBoardsNavPinned(true) // Pin: next reload reopens the menu
       setIsSidebarOpen(true) // First click: open and pin across leave/page switch
       return true
     })
@@ -219,6 +247,8 @@ export function SidebarContextProvider({
         setAiMapDockLiftPx,
         aiMapDockLeftPx,
         setAiMapDockLeftPx,
+        phoneDockTight,
+        setPhoneDockTight,
       }}
     >
       {children}
@@ -253,6 +283,8 @@ export function useSidebarContext() {
       setAiMapDockLiftPx: () => {},
       aiMapDockLeftPx: null as number | null,
       setAiMapDockLeftPx: () => {},
+      phoneDockTight: false,
+      setPhoneDockTight: () => {},
     }
   }
   return context

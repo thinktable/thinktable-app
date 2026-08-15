@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dropdown-menu' // Anchored panel under the Zap control
 import { AutomationEditorModal } from './automation-editor-modal' // + New automation window
 import { cn } from '@/lib/utils' // Class merge
+import { TOOLBAR_MENU_PLACEMENT } from '@/lib/menu-placement' // Under the trigger, never over the board path
 import { ToolbarTitle } from './toolbar-title' // Animated icon-adjacent title
 
 // One listed automation: trigger glyph → action glyph + title/body
@@ -129,8 +130,7 @@ export function AutomationsMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        align="start"
-        sideOffset={8} // Sit just under the toolbar
+        {...TOOLBAR_MENU_PLACEMENT} // Same as Filter: start/bottom/8px, no flip over the path
         className="w-[300px] rounded-xl border-gray-200 p-0 shadow-md" // Spec: white rounded panel
         onCloseAutoFocus={(e) => e.preventDefault()} // Don't yank focus back onto the Zap
         onKeyDown={(e) => e.stopPropagation()} // Don't let board shortcuts eat typing

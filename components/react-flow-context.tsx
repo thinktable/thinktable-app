@@ -1,7 +1,7 @@
 'use client'
 
 // Context for sharing React Flow instance with components outside ReactFlowProvider
-import { createContext, useContext, useState, useRef, useCallback, useEffect, ReactNode } from 'react'
+import { createContext, useContext, useState, useRef, useCallback, useEffect, useLayoutEffect, ReactNode } from 'react'
 import { ReactFlowInstance } from 'reactflow'
 import { createClient } from '@/lib/supabase/client'
 import { usePathname } from 'next/navigation'
@@ -66,6 +66,44 @@ interface ReactFlowContextType {
 
 const ReactFlowContext = createContext<ReactFlowContextType | undefined>(undefined)
 
+/** localStorage — last Actions/Layout/Draw/View so reload keeps that tool set. */
+const TT_PILL_MODE_KEY = 'thinktable-edit-menu-pill-mode'
+
+/** localStorage — last armed Draw tool (pencil/lasso/…) so reload keeps it toggled. */
+const TT_DRAW_TOOL_KEY = 'thinktable-draw-tool'
+
+const PILL_MODES = ['home', 'insert', 'draw', 'view'] as const // Valid pill values (Actions = home)
+type EditMenuPillMode = (typeof PILL_MODES)[number] // Matches context editMenuPillMode
+const DRAW_TOOLS = ['lasso', 'pencil', 'highlighter', 'eraser'] as const // Valid Draw tools (null = none)
+type StoredDrawTool = (typeof DRAW_TOOLS)[number] // Armed Draw tool persisted across reload
+
+/** Read last pill; SSR-safe → Actions. */
+function getStoredPillMode(): EditMenuPillMode {
+  if (typeof window === 'undefined') return 'home' // Server HTML always starts on Actions
+  const saved = localStorage.getItem(TT_PILL_MODE_KEY) // Last mode the user picked
+  return PILL_MODES.includes(saved as EditMenuPillMode) ? (saved as EditMenuPillMode) : 'home' // Ignore junk
+}
+
+/** Remember the pill so the next load shows the same tools. */
+function persistPillMode(mode: EditMenuPillMode) {
+  if (typeof window === 'undefined') return // No storage on server
+  localStorage.setItem(TT_PILL_MODE_KEY, mode) // Client restore on remount / reload
+}
+
+/** Read last Draw tool; SSR-safe → none. */
+function getStoredDrawTool(): StoredDrawTool | null {
+  if (typeof window === 'undefined') return null // Server: nothing armed
+  const saved = localStorage.getItem(TT_DRAW_TOOL_KEY) // Last toggled Draw tool
+  return DRAW_TOOLS.includes(saved as StoredDrawTool) ? (saved as StoredDrawTool) : null // Ignore junk / empty
+}
+
+/** Remember the armed Draw tool (or clear when deselected). */
+function persistDrawTool(tool: StoredDrawTool | null) {
+  if (typeof window === 'undefined') return // No storage on server
+  if (tool) localStorage.setItem(TT_DRAW_TOOL_KEY, tool) // Keep it armed after reload
+  else localStorage.removeItem(TT_DRAW_TOOL_KEY) // Deselect → next load has no Draw tool
+}
+
 export function ReactFlowContextProvider({ children, conversationId, projectId }: { children: ReactNode; conversationId?: string; projectId?: string }) {
   const pathname = usePathname() // Track route changes to reload preferences
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null)
@@ -80,7 +118,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
   // Initialize with consistent defaults to avoid hydration mismatch, then load from Supabase
   const [lineStyle, setLineStyle] = useState<'solid' | 'dotted'>('solid')
   const [arrowDirection, setArrowDirection] = useState<'down' | 'up' | 'left' | 'right'>('down')
-  const [editMenuPillMode, setEditMenuPillMode] = useState<'home' | 'insert' | 'draw' | 'view'>('home') // Edit menu pill mode state
+  const [editMenuPillMode, setEditMenuPillModeState] = useState<'home' | 'insert' | 'draw' | 'view'>('home') // SSR: Actions; layout restore before paint
   const [viewMode, setViewMode] = useState<'linear' | 'canvas'>('canvas') // View mode state
   const [boardRule, setBoardRule] = useState<'wide' | 'college' | 'narrow'>('college') // Board rule state (default: college)
   const [boardStyle, setBoardStyle] = useState<'none' | 'dotted' | 'lined' | 'grid'>('dotted') // Board style state (default: college dotted)
@@ -92,7 +130,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
   const [flashcardMode, setFlashcardMode] = useState<'flashcard' | 'quiz' | null>(null) // Flashcard study mode (null = off)
   const [selectedTag, setSelectedTag] = useState<string | null>(null) // Selected flashcard tag for filtering navigation
   const [isDrawing, setIsDrawing] = useState<boolean>(false) // Drawing mode state (default: selection mode)
-  const [drawTool, setDrawTool] = useState<'lasso' | 'pencil' | 'highlighter' | 'eraser' | null>(null) // Current drawing tool (default: none)
+  const [drawTool, setDrawToolState] = useState<'lasso' | 'pencil' | 'highlighter' | 'eraser' | null>(null) // SSR: none; restore armed tool before paint
   const [drawShape, setDrawShape] = useState<'rectangle' | 'circle' | 'line' | 'arrow' | 'round-rectangle' | 'hexagon' | 'diamond' | 'arrow-rectangle' | 'cylinder' | 'triangle' | 'parallelogram' | 'plus'>('rectangle') // Current shape (default: rectangle)
   const [snapEnabled, setSnapEnabled] = useState<boolean>(false) // Snap to grid/helper lines enabled state (default: disabled)
   
@@ -112,6 +150,30 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
   const toggleSelectedTag = useCallback((tagId: string | null) => {
     setSelectedTag((current) => current === tagId ? null : tagId)
   }, [])
+
+  // Persist pill so reload / board remount keeps Actions vs Layout vs Draw vs View
+  const setEditMenuPillMode = useCallback((mode: EditMenuPillMode) => {
+    persistPillMode(mode) // Remember before the next load
+    setEditMenuPillModeState(mode) // Swap the tool set immediately
+  }, [])
+
+  // Persist the armed Draw tool; pencil is the only tool that enables freehand
+  const setDrawTool = useCallback((tool: StoredDrawTool | null) => {
+    persistDrawTool(tool) // Remember (or clear) for reload
+    setDrawToolState(tool) // Arm / disarm on the bar
+  }, [])
+
+  // Restore pill + Draw tool before first paint (skip embed — no toolbar, must not arm Freehand)
+  useLayoutEffect(() => {
+    if (pathname?.startsWith('/embed/')) return // Nested preview iframe stays selection-only
+    const mode = getStoredPillMode() // Last Actions / Layout / Draw / View
+    setEditMenuPillModeState(mode) // Same tool set as last session
+    if (mode !== 'draw') return // Other modes: don’t arm a Draw tool or capture the board
+    const tool = getStoredDrawTool() // Last toggled Draw tool, if any
+    if (!tool) return // Draw bar with nothing selected
+    setDrawToolState(tool) // Re-toggle that tool on the Draw bar
+    setIsDrawing(tool === 'pencil') // Only freehand captures the board
+  }, [pathname])
 
   // Refs to track conversationId and loading state without triggering save effects
   // conversationIdRef: Tracks current board ID for saves (updated when conversationId changes, but doesn't trigger saves)
