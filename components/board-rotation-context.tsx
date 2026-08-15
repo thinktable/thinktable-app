@@ -31,12 +31,14 @@ type BoardRotationContextValue = {
   setRotationAroundPanePoint: (nextDeg: number, paneX: number, paneY: number, nextZoom?: number) => void // Orbit a pane pixel
   setRotationAroundViewCenter: (nextDeg: number, opts?: { snap?: boolean }) => void // Icon scrub / slider / reset
   resetRotation: () => void // Snap heading to 0 around the view center
-  setScrollMode: (on: boolean) => void // Free-nav Scroll vs Zoom (wheel); two-finger is always pan+pinch
+  setScrollMode: (on: boolean) => void // Free-nav Scroll vs Zoom: wheel + phone two-finger pan/swipe-zoom; pinch always zooms
 }
 
 const BoardRotationContext = createContext<BoardRotationContextValue | null>(null)
 
 type GestureLike = Event & { rotation?: number; scale?: number; clientX?: number; clientY?: number } // Safari GestureEvent
+
+const SWIPE_ZOOM_SENS = 0.0025 // log2(zoom) per px of mid travel — near trackpad wheel 0.002
 
 type TwistGesture = {
   startDist: number
@@ -47,11 +49,15 @@ type TwistGesture = {
   rotateArmed: boolean // False until the fingers clearly twist (pinch stays zoom-only)
   zoomLocked: boolean // True once this gesture is a pinch — ignore later twist
   armOffset: number // dDeg at arm time so heading doesn’t jump
-  lastMidX: number // Previous two-finger midpoint — pan by the delta
+  lastMidX: number // Previous two-finger midpoint — pan / swipe-zoom by the delta
   lastMidY: number
-  lastT: number // performance.now() of last sample — pan velocity
-  vx: number // Midpoint px / ms (for coast after lift)
+  lastT: number // performance.now() of last sample — velocity
+  vx: number // Midpoint px / ms (Scroll coast)
   vy: number
+  swipeLog: number // Accumulated log2 zoom from Zoom-nav mid travel (on top of pinch)
+  vz: number // log2(zoom) / ms from swipe — Zoom coast after lift
+  lastPaneX: number // Midpoint in pane coords — Zoom inertia pivots here
+  lastPaneY: number
 }
 
 function isIosTouch(): boolean {
@@ -164,7 +170,7 @@ export function BoardRotationProvider({ children }: { children: ReactNode }) {
       inertiaRaf = 0
     }
 
-    const startInertia = (ivx: number, ivy: number) => {
+    const startPanInertia = (ivx: number, ivy: number) => {
       stopInertia()
       let vx = ivx
       let vy = ivy
@@ -185,6 +191,32 @@ export function BoardRotationProvider({ children }: { children: ReactNode }) {
       inertiaRaf = requestAnimationFrame(step)
     }
 
+    // Zoom-nav swipe coast — keep decaying scale around the last midpoint (trackpad momentum)
+    const startZoomInertia = (ivz: number, paneX: number, paneY: number) => {
+      stopInertia()
+      let vz = ivz
+      let prev = performance.now()
+      const step = (now: number) => {
+        const dt = Math.min(32, now - prev)
+        prev = now
+        vz *= Math.exp(-0.0045 * dt) // Same decay curve as pan coast
+        if (Math.abs(vz) < 0.00002) {
+          inertiaRaf = 0
+          return
+        }
+        const vp = instance.getViewport()
+        const nextZoom = Math.min(2, Math.max(0.1, vp.zoom * Math.pow(2, vz * dt)))
+        if (nextZoom === vp.zoom) {
+          inertiaRaf = 0
+          return
+        }
+        const next = viewportKeepingPanePoint(paneX, paneY, vp, rotationRef.current, rotationRef.current, nextZoom)
+        instance.setViewport(next)
+        inertiaRaf = requestAnimationFrame(step)
+      }
+      inertiaRaf = requestAnimationFrame(step)
+    }
+
     const applyTwist = (dDeg: number, scaleRatio: number, paneX: number, paneY: number, zoom: number, g: TwistGesture, vp: { x: number; y: number; zoom: number }) => {
       const raw = pinchTwistRawHeading(g.startRot, dDeg, scaleRatio, g) // Zoom-only until a committed twist
       const { heading, stuckAtZero } = twistSnapHeading(raw, rotationRef.current, g.stuckAtZero)
@@ -197,7 +229,7 @@ export function BoardRotationProvider({ children }: { children: ReactNode }) {
       setRotation(heading)
     }
 
-    // Pinch always zooms; two fingers moving together always pan (then coast on lift)
+    // Pinch always zooms. Scroll nav: mid travel pans (+ coast). Zoom nav: mid travel zooms (+ coast) like trackpad.
     const applyTwoFinger = (ax: number, ay: number, bx: number, by: number) => {
       if (!pinch) return
       const dx = bx - ax
@@ -205,31 +237,54 @@ export function BoardRotationProvider({ children }: { children: ReactNode }) {
       const dist = Math.hypot(dx, dy) || 1
       const midX = (ax + bx) / 2
       const midY = (ay + by) / 2
-      const panX = midX - pinch.lastMidX // Content follows the two-finger midpoint
-      const panY = midY - pinch.lastMidY
+      const midDx = midX - pinch.lastMidX
+      const midDy = midY - pinch.lastMidY
+      const scrollNav = scrollModeRef.current // true = pan; false = swipe-zoom
+      const panX = scrollNav ? midDx : 0 // Zoom nav never slides the board
+      const panY = scrollNav ? midDy : 0
       const now = performance.now()
       const dt = Math.max(1, now - pinch.lastT)
       const alpha = 0.4 // Smooth velocity so a noisy last frame doesn’t over-coast
-      pinch.vx = pinch.vx * (1 - alpha) + (panX / dt) * alpha
-      pinch.vy = pinch.vy * (1 - alpha) + (panY / dt) * alpha
+      // Dominant axis of mid travel → zoom (two fingers in one direction)
+      const travel = Math.abs(midDy) >= Math.abs(midDx) ? midDy : midDx
+      const dLog = scrollNav ? 0 : -travel * SWIPE_ZOOM_SENS // Fingers up/left = zoom in
+      if (scrollNav) {
+        pinch.vx = pinch.vx * (1 - alpha) + (panX / dt) * alpha
+        pinch.vy = pinch.vy * (1 - alpha) + (panY / dt) * alpha
+        pinch.vz = 0
+      } else {
+        pinch.vx = 0
+        pinch.vy = 0
+        pinch.swipeLog += dLog // Stack on pinch scale so parallel swipe zooms like the wheel
+        pinch.vz = pinch.vz * (1 - alpha) + (dLog / dt) * alpha
+      }
       pinch.lastMidX = midX
       pinch.lastMidY = midY
       pinch.lastT = now
       const el = flowEl()
       if (!el) return
       const rect = el.getBoundingClientRect()
+      const paneX = midX - rect.left
+      const paneY = midY - rect.top
+      pinch.lastPaneX = paneX
+      pinch.lastPaneY = paneY
       const vp = instance.getViewport()
-      const panned = { x: vp.x + panX, y: vp.y + panY, zoom: vp.zoom } // Pan first, then zoom around the new midpoint
+      const panned = { x: vp.x + panX, y: vp.y + panY, zoom: vp.zoom } // Pan first (Scroll only)
       const angle = Math.atan2(dy, dx)
       const dDeg = ((angle - pinch.startAngle) * 180) / Math.PI
-      const nextZoom = Math.min(2, Math.max(0.1, pinch.startZoom * (dist / pinch.startDist)))
-      applyTwist(dDeg, dist / pinch.startDist, midX - rect.left, midY - rect.top, nextZoom, pinch, panned)
+      const pinchZoom = pinch.startZoom * (dist / pinch.startDist) // Spread/pinch distance
+      const nextZoom = Math.min(2, Math.max(0.1, pinchZoom * Math.pow(2, pinch.swipeLog)))
+      applyTwist(dDeg, dist / pinch.startDist, paneX, paneY, nextZoom, pinch, panned)
     }
 
     const beginPinch = (ax: number, ay: number, bx: number, by: number) => {
       stopInertia() // New gesture owns the camera
       const dx = bx - ax
       const dy = by - ay
+      const midX = (ax + bx) / 2
+      const midY = (ay + by) / 2
+      const el = flowEl()
+      const rect = el?.getBoundingClientRect()
       pinch = {
         startDist: Math.hypot(dx, dy) || 1,
         startAngle: Math.atan2(dy, dx),
@@ -239,16 +294,25 @@ export function BoardRotationProvider({ children }: { children: ReactNode }) {
         rotateArmed: false,
         zoomLocked: false, // Pinch-zoom must not arm rotate mid-gesture
         armOffset: 0,
-        lastMidX: (ax + bx) / 2,
-        lastMidY: (ay + by) / 2,
+        lastMidX: midX,
+        lastMidY: midY,
         lastT: performance.now(),
         vx: 0,
         vy: 0,
+        swipeLog: 0, // Zoom-nav mid travel starts at identity
+        vz: 0,
+        lastPaneX: rect ? midX - rect.left : 0,
+        lastPaneY: rect ? midY - rect.top : 0,
       }
     }
 
     const endTwoFinger = () => {
-      if (pinch && Math.hypot(pinch.vx, pinch.vy) > 0.06) startInertia(pinch.vx, pinch.vy) // Flick → coast; slow lift → stop
+      if (!pinch) return
+      if (scrollModeRef.current) {
+        if (Math.hypot(pinch.vx, pinch.vy) > 0.06) startPanInertia(pinch.vx, pinch.vy) // Flick → pan coast
+      } else if (Math.abs(pinch.vz) > 0.00005) {
+        startZoomInertia(pinch.vz, pinch.lastPaneX, pinch.lastPaneY) // Flick → zoom coast
+      }
       pinch = null
     }
 
@@ -331,6 +395,10 @@ export function BoardRotationProvider({ children }: { children: ReactNode }) {
       lastT: 0,
       vx: 0,
       vy: 0,
+      swipeLog: 0, // Phone Zoom-nav only; Safari uses GestureEvent scale
+      vz: 0,
+      lastPaneX: 0,
+      lastPaneY: 0,
     })
 
     // Mac Safari trackpad: GestureEvent is the only rotate API. It does not use capture

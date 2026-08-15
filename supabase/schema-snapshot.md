@@ -1,13 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-15T00:59:33Z`
+- Snapped at: `2026-08-15T01:25:13Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260815012513_phone_zoom_swipe_frame_caret.sql`.
+- Phone Zoom nav: two-finger parallel swipe zooms (no pan) with trackpad-like coast; Scroll nav still pans + coasts; pinch still zooms.
+- Selected-frame caret: phone non-passive `touchstart` + desktop `pointerdown` place I-bar on first press.
+- Schema unchanged.
+
+## Prior: frame property ibar align
 
 - No DDL. Marker `20260815005933_frame_property_ibar_align.sql`.
 - Turn into → Property: persist `metadata.propertyType`; frame top property icon + blue connection handle (arms top connection point); I-bar create offsets match block chrome (X=26 / Y=4); first-time property shifts Y by strip height; note-fade-in opacity-only.

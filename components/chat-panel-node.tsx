@@ -619,6 +619,32 @@ function TipTapContent({
         ...(singleLineUntilEnter ? { 'data-single-line': 'true' } : {}), // CSS nowrap until Enter
       },
       handleDOMEvents: {
+        // Desktop / pen: claim the gesture when selected (phone uses non-passive touchstart below —
+        // PM registers touchstart as passive, so preventDefault there is a no-op).
+        pointerdown: (view: any, event: Event) => {
+          const pe = event as PointerEvent
+          if (pe.pointerType === 'touch') return false // Phone: non-passive touchstart owns placement
+          if (pe.button === 2) return false // Right-click → frame menu
+          if (!isPanelSelectedRef.current) return false // Unselected: RF selects/drags
+          pe.preventDefault()
+          pe.stopPropagation()
+          selectOnlyClickRef.current = false
+          try {
+            const hit = view.posAtCoords({ left: pe.clientX, top: pe.clientY })
+            if (hit != null && hit.pos >= 0) {
+              const sel = TextSelection.near(view.state.doc.resolve(hit.pos))
+              view.dispatch(view.state.tr.setSelection(sel).scrollIntoView())
+            }
+            view.focus()
+          } catch {
+            try {
+              view.focus()
+            } catch {
+              /* ignore */
+            }
+          }
+          return true
+        },
         mousedown: (view: any, event: Event) => {
           const mouseEvent = event as MouseEvent
           // Right-click: skip PM I-bar. Do NOT stopPropagation/preventDefault — Chrome
@@ -635,6 +661,7 @@ function TipTapContent({
           selectOnlyClickRef.current = false
           // Selected frame: keep pointer inside the editor so RF does not start a frame drag
           mouseEvent.stopPropagation()
+          mouseEvent.preventDefault() // Sync with pointerdown — own caret placement
 
           // Temporary reveal: click a hazed span to clear blur until click-away / blur
           const hazeTarget = (mouseEvent.target as HTMLElement | null)?.closest?.(
@@ -647,8 +674,21 @@ function TipTapContent({
             hazeTarget.classList.add('tt-haze-revealed') // Reveal this hazed block temporarily
           }
 
-          // Don’t override selection here — PM places the I-bar; container click confirms via posAtCoords
-          return false
+          try {
+            const hit = view.posAtCoords({ left: mouseEvent.clientX, top: mouseEvent.clientY })
+            if (hit != null && hit.pos >= 0) {
+              const sel = TextSelection.near(view.state.doc.resolve(hit.pos))
+              view.dispatch(view.state.tr.setSelection(sel).scrollIntoView())
+            }
+            view.focus()
+          } catch {
+            try {
+              view.focus()
+            } catch {
+              /* ignore */
+            }
+          }
+          return true
         },
         contextmenu: (_view: any, event: Event) => {
           event.preventDefault() // Block native Cut/Copy so the frame menu can show
@@ -739,6 +779,40 @@ function TipTapContent({
       }
     }
   }, [editor, canEdit, isPanelSelected])
+
+  // Phone: PM registers touchstart as {passive:true}, so handleDOMEvents cannot preventDefault.
+  // Non-passive capture listener claims the tap → I-bar on first finger press (not second).
+  useEffect(() => {
+    if (!editor || editor.isDestroyed || !isPanelSelected || !canEdit) return
+    const dom = editor.view.dom as HTMLElement
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return // Pinch / multi-finger → board zoom/pan
+      const target = e.target as HTMLElement | null
+      if (target?.closest?.('[data-tt-block-handle], [data-tt-insert-line], .block-actions-menu')) {
+        return // ⋮⋮ / insert line own the gesture
+      }
+      e.preventDefault() // Requires non-passive — stops iOS focus-only first tap
+      e.stopPropagation() // RF d3-drag listens for touchstart on the node
+      selectOnlyClickRef.current = false
+      const t = e.touches[0]
+      try {
+        const hit = editor.view.posAtCoords({ left: t.clientX, top: t.clientY })
+        if (hit != null && hit.pos >= 0) {
+          const sel = TextSelection.near(editor.state.doc.resolve(hit.pos))
+          editor.view.dispatch(editor.state.tr.setSelection(sel).scrollIntoView())
+        }
+        editor.view.focus()
+      } catch {
+        try {
+          editor.view.focus()
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    dom.addEventListener('touchstart', onTouchStart, { passive: false, capture: true })
+    return () => dom.removeEventListener('touchstart', onTouchStart, { capture: true })
+  }, [editor, isPanelSelected, canEdit])
 
   // Register editor on mount and cleanup on unmount
   useEffect(() => {
@@ -1042,23 +1116,19 @@ function TipTapContent({
       return
     }
     e.stopPropagation()
-
-    const clientX = e.clientX
-    const clientY = e.clientY
-    setTimeout(() => {
-      if (editor.isDestroyed) return
-      try {
-        // Always resolve against click coords so empty lines get the caret (not doc start/end)
-        const posResult = editor.view.posAtCoords({ left: clientX, top: clientY })
-        if (posResult != null && posResult.pos >= 0) {
-          editor.chain().focus().setTextSelection(posResult.pos).run()
-          return
-        }
-      } catch {
-        /* fall through */
+    if (editor.isDestroyed) return
+    // Sync in this tap — setTimeout(0) broke iOS: first tap focused nothing, second placed I-bar
+    try {
+      // Always resolve against click coords so empty lines get the caret (not doc start/end)
+      const posResult = editor.view.posAtCoords({ left: e.clientX, top: e.clientY })
+      if (posResult != null && posResult.pos >= 0) {
+        editor.chain().focus().setTextSelection(posResult.pos).run()
+        return
       }
-      editor.commands.focus()
-    }, 0)
+    } catch {
+      /* fall through */
+    }
+    editor.commands.focus()
   }, [editor, isPanelSelected])
 
   // Extract 'inline' from className if present to apply inline-block display
@@ -1093,6 +1163,8 @@ function TipTapContent({
         // Unselected → grab (drag frame); selected → text caret; flashcards keep pointer
         isFlashcard ? 'cursor-pointer' : isPanelSelected ? 'cursor-text' : 'cursor-grab',
         !isPanelSelected && 'tt-frame-unselected', // CSS: no text select / callout until selected
+        // Selected: nodrag on the whole editor chrome so padding taps don't start RF drag either
+        isPanelSelected && !isFlashcard && 'nodrag nopan',
         isInline && 'inline-block',
         otherClasses
       )}
@@ -1132,7 +1204,11 @@ function TipTapContent({
               onPropertyTurnInto={onPropertyTurnInto}
               notionConnected={notionConnected} // Notion-connected frames get a slimmer block ⋮⋮ menu
             />
-            <EditorContent editor={editor} className="block w-full" />
+            <EditorContent
+              editor={editor}
+              // Selected: nodrag so phone pointerdown doesn't start RF frame drag (I-bar on first tap)
+              className={cn('block w-full', isPanelSelected && 'nodrag nopan')}
+            />
           </div>
         ) : null}
         {showFrameShimmer ? (
@@ -5924,13 +6000,13 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               section="prompt"
               placeholder=""
               isFlashcard={isFlashcard}
-              isPanelSelected={!!selected && !dragging} // Mid-drag: treat as unselected so ⋮⋮ / caret stay off
+              isPanelSelected={!!selected} // Keep editable on tap — !dragging was flipping off mid-gesture (I-bar needed 2 taps)
               suspendContentSync={!!dragging} // Keep databaseBlock NodeView mounted while the frame moves
               forceContentSyncKey={aiForceSyncKey} // AI eye / remove / save swaps content even while focused
               isLoading={false}
               onBlur={handleEditorBlur}
               onEditorActiveChange={handleEditorActiveChange}
-              enableBlockHandles={isBlock && !isFlashcard} // ⋮⋮ on each TipTap block, not this frame
+              enableBlockHandles={isBlock && !isFlashcard && !dragging} // Hide ⋮⋮ mid-drag; caret stays available
               singleLineUntilEnter={isBlock && !isFlashcard && !wrapActive} // nowrap until Enter; wrap mode (locked/unlocked) soft-wraps
               hostNodeId={id}
               conversationId={conversationId}

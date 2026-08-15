@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260815012513_phone_zoom_swipe_frame_caret` — Phone Zoom swipe-zoom+coast; selected-frame first-tap caret
 - `20260815005933_frame_property_ibar_align` — Frame property chrome + I-bar create align
 - `20260815001725_menu_flyouts_always_right` — Menu flyouts always right of parent; lock card on flyout open
 - `20260815000653_turn_into_menu_frame_block_chrome` — Turn into Format/Property tabs; Block/Frame headers; menu row visibility
