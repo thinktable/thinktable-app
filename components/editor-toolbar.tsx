@@ -1117,8 +1117,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         if (prev.size === newHiddenItems.size && [...newHiddenItems].every((id) => prev.has(id))) return prev
         return newHiddenItems
       })
-      const unhiding = hiddenItemsRef.current.size > newHiddenItems.size || (wasPhone && !nextPhone) // Tools coming back this pass
-      const hiding = hiddenItemsRef.current.size < newHiddenItems.size // Tools leaving for More this pass
       hiddenItemsRef.current = newHiddenItems // Keep overflow set in sync for the next pass
 
       const shareLeft = rightSectionRect.left // Share cluster; phone path runs to here
@@ -1136,10 +1134,14 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         setToolbarLayoutReady(true)
         return
       }
-      const restoredClusterW = sumGroups(itemGroups.filter((item) => !newHiddenItems.has(item.id))) + (newHiddenItems.size > 0 ? moreMenuWidth : 0) // Cluster after this pass’s overflow
+      const CLUSTER_PAD = 24 // Glyph/padding slack — titledToolWidth undershoots “Tidy up”/etc. and lets the path run under tools
+      const restoredClusterW =
+        sumGroups(itemGroups.filter((item) => !newHiddenItems.has(item.id))) +
+        (newHiddenItems.size > 0 ? moreMenuWidth : 0) +
+        CLUSTER_PAD // Prefer over-truncate vs overlapping the centered cluster
       const restoredLeft = barCenter - restoredClusterW / 2 // Cap against tools that will paint, not the still-stale live cluster
-      const labelsChanging = nextEarly !== wasEarly || nextRest !== wasRest // Title collapse/expand this pass — live width is the other mode’s chrome
-      const capLeft = hiding || unhiding || modeSwitch || labelsChanging ? restoredLeft : centeredLeft // Mode switch: Draw’s live width would let the path run under Actions
+      // Further-left of live vs planned: chat close unhides/expands titles while liveClusterW is still narrow (path would run under Tidy up)
+      const capLeft = Math.min(centeredLeft, restoredLeft)
       const pathMax = Math.max(minPathW, Math.floor(capLeft - PATH_GAP - hamRight)) // Floor so overflow-hidden never clips the current icon
       if (bar) bar.style.setProperty('--tt-path-max', `${pathMax}px`)
       const truncated = naturalPath > pathMax + 1 // Full titles need more than the centered lane
@@ -1154,6 +1156,16 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     }
 
     checkVisibility() // After chat restore + path ready; still before paint on that commit
+
+    // Chat column open/close: flex width + 200ms title tween settle after the first layout pass
+    let settleTimer = 0
+    let raf2 = 0
+    const raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        checkVisibility() // Map column width after chat unmount/mount
+        settleTimer = window.setTimeout(checkVisibility, 220) // After ToolbarTitle 0fr↔1fr
+      })
+    })
 
     const resizeObserver = new ResizeObserver(() => {
       checkVisibility() // Sync — rAF would paint expanded titles for a frame then collapse
@@ -1171,6 +1183,9 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     window.addEventListener('resize', checkVisibility)
 
     return () => {
+      window.cancelAnimationFrame(raf1)
+      window.cancelAnimationFrame(raf2)
+      window.clearTimeout(settleTimer)
       resizeObserver.disconnect()
       attrObserver?.disconnect()
       window.removeEventListener('resize', checkVisibility)

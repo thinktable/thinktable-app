@@ -6,7 +6,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 're
 import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Search, MoreVertical, MoreHorizontal, Trash2, SquarePen, Pencil, ChevronDown, FolderPlus, File, FileText, Folder, FolderOpen, Loader2, Share2, UserPlus, CornerUpLeft, Sparkles, Clock, HelpCircle, LogOut, ChevronRight as ChevronRightIcon, Settings } from 'lucide-react'
+import { Plus, Search, MoreVertical, MoreHorizontal, Trash2, SquarePen, Pencil, ChevronDown, FolderPlus, File, FileText, Folder, FolderOpen, Loader2, Share2, UserPlus, CornerUpLeft, Sparkles, HelpCircle, LogOut, ChevronRight as ChevronRightIcon, Settings } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { SettingsPanel } from '@/components/settings-panel'
@@ -2658,10 +2658,8 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                           {profile?.subscription_tier === 'pro' ? 'Plus' : profile?.subscription_tier === 'enterprise' ? 'Enterprise' : 'Free'}
                         </p>
                       </div>
-                      {/* Spacer for Upgrade button when it exists */}
-                      {profile?.subscription_tier !== 'pro' && profile?.subscription_tier !== 'enterprise' && (
-                        <div className="w-[70px] flex-shrink-0" />
-                      )}
+                      {/* Spacer for Upgrade / Help button beside profile */}
+                      <div className="w-[70px] flex-shrink-0" />
                     </button>
                   </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
@@ -2689,14 +2687,17 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                     </div>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator className="mx-2" />
-                  <DropdownMenuItem>
-                    <Sparkles className="h-4 w-4 mr-2" />
-                    Upgrade plan
-                  </DropdownMenuItem>
-                  <DropdownMenuItem>
-                    <Clock className="h-4 w-4 mr-2" />
-                    Personalization
-                  </DropdownMenuItem>
+                  {profile?.subscription_tier !== 'pro' && profile?.subscription_tier !== 'enterprise' && (
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setUpgradeOpen(true)
+                        closeSidebar()
+                      }}
+                    >
+                      <Sparkles className="h-4 w-4 mr-2" />
+                      Upgrade plan
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem onClick={() => {
                     setSettingsOpen(true)
                     closeSidebar()
@@ -2705,19 +2706,22 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                     Settings
                   </DropdownMenuItem>
                   <DropdownMenuSeparator className="mx-2" />
-                  <DropdownMenuItem>
-                    <HelpCircle className="h-4 w-4 mr-2" />
-                    Help
-                    <ChevronRightIcon className="h-4 w-4 ml-auto" />
-                  </DropdownMenuItem>
+                  {/* Help lives on the profile button when upgraded; keep it in the menu for free users */}
+                  {profile?.subscription_tier !== 'pro' && profile?.subscription_tier !== 'enterprise' && (
+                    <DropdownMenuItem>
+                      <HelpCircle className="h-4 w-4 mr-2" />
+                      Help
+                      <ChevronRightIcon className="h-4 w-4 ml-auto" />
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem onClick={handleLogout}>
                     <LogOut className="h-4 w-4 mr-2" />
                     Log out
                   </DropdownMenuItem>
                 </DropdownMenuContent>
                 </DropdownMenu>
-                {/* Upgrade button - only show for non-subscribed users, positioned absolutely inside profile button area */}
-                {profile?.subscription_tier !== 'pro' && profile?.subscription_tier !== 'enterprise' && (
+                {/* Free: Upgrade button; upgraded: Help in the same spot */}
+                {profile?.subscription_tier !== 'pro' && profile?.subscription_tier !== 'enterprise' ? (
                   <button
                     type="button"
                     className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1.5 h-auto text-xs font-medium bg-white dark:bg-white text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-[#1f1f1f] rounded-md transition-colors flex-shrink-0 z-10"
@@ -2735,6 +2739,24 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                     }}
                   >
                     Upgrade
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1.5 h-auto text-xs font-medium bg-white dark:bg-white text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-[#1f1f1f] rounded-md transition-colors flex-shrink-0 z-10"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      e.preventDefault()
+                      closeSidebar()
+                    }}
+                    onMouseDown={(e) => {
+                      e.stopPropagation()
+                    }}
+                    onPointerDown={(e) => {
+                      e.stopPropagation()
+                    }}
+                  >
+                    Help
                   </button>
                 )}
               </div>

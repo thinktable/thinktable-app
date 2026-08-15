@@ -20,7 +20,10 @@ import {
   Box,
   TextCursorInput,
   Scan,
+  Mic,
+  Check,
 } from 'lucide-react'
+import { useVoiceDictation } from '@/hooks/use-voice-dictation'
 import type { AiModeId } from '@/lib/ai/modes'
 import { AI_SKILLS, type AiSkill } from '@/lib/ai/skills'
 import { AI_CONNECTORS } from '@/lib/ai/connectors'
@@ -267,6 +270,31 @@ export function AiComposer({
   const plusBtnRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const menuSearchRef = useRef<HTMLInputElement>(null)
+
+  // Cursor-style voice memo → append transcript when user hits check
+  const voice = useVoiceDictation({
+    onTranscript: (text) => {
+      setInput((prev) => {
+        const trimmed = prev.trimEnd()
+        if (!trimmed) return text
+        return `${trimmed} ${text}`
+      })
+      requestAnimationFrame(() => textareaRef.current?.focus())
+    },
+  })
+
+  // Escape cancels an in-progress voice memo (not mid-transcribe)
+  useEffect(() => {
+    if (!voice.listening || voice.transcribing) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        voice.cancel()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [voice.listening, voice.transcribing, voice.cancel])
 
   const placePlusMenu = () => {
     const btn = plusBtnRef.current
@@ -677,209 +705,310 @@ export function AiComposer({
       )}
 
       <form onSubmit={onSubmit} className="relative w-full">
-        {/* items-center keeps + / text / Ask / send on one vertical midline */}
-        <div className="flex items-center gap-1 pl-1 pr-1 py-1">
-          {/* + skills / context / connection menu (portaled — escapes overflow-hidden shell) */}
-          <div className="relative flex-shrink-0">
+        {!voice.listening && !voice.transcribing ? (
+          /* items-center keeps + / text / Ask / mic / send on one vertical midline */
+          <div className="flex items-center gap-1 pl-1 pr-1 py-1">
+            <div className="relative flex-shrink-0">
+              <button
+                ref={plusBtnRef}
+                type="button"
+                className={cn(
+                  'h-8 w-8 rounded-full flex items-center justify-center transition-colors',
+                  'text-gray-600 dark:text-gray-300',
+                  'hover:bg-black/[0.06] dark:hover:bg-white/[0.08]',
+                  plusOpen && 'bg-black/[0.08] dark:bg-white/[0.12]'
+                )}
+                title="Add skills, files, connections"
+                aria-expanded={plusOpen}
+                aria-haspopup="dialog"
+                onClick={() => {
+                  if (!plusOpen) placePlusMenu()
+                  setPlusOpen((o) => !o)
+                }}
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+
+              {plusOpen &&
+                menuPos &&
+                typeof document !== 'undefined' &&
+                createPortal(
+                  <div
+                    ref={menuRef}
+                    role="dialog"
+                    aria-label="Skills and context"
+                    style={{
+                      position: 'fixed',
+                      left: menuPos.left,
+                      bottom: menuPos.bottom,
+                      zIndex: 80,
+                    }}
+                    className={cn(
+                      'w-[min(320px,calc(100vw-48px))]',
+                      'rounded-xl border border-black/10 dark:border-white/10',
+                      'bg-white dark:bg-[#1a1a1a] shadow-xl',
+                      'overflow-hidden'
+                    )}
+                  >
+                    <div className="px-3 pt-3 pb-2 border-b border-black/5 dark:border-white/10">
+                      <div className="flex items-center gap-2 rounded-md px-2 py-1.5 bg-black/[0.04] dark:bg-white/[0.06]">
+                        <Search className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                        <input
+                          ref={menuSearchRef}
+                          value={menuQuery}
+                          onChange={(e) => setMenuQuery(e.target.value)}
+                          placeholder="Search skills, context, chats…"
+                          className="w-full bg-transparent text-sm outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500 text-gray-900 dark:text-gray-100"
+                        />
+                      </div>
+                    </div>
+
+                    <ul className="py-1 max-h-[220px] overflow-y-auto">
+                      {filteredSkills.length === 0 && (
+                        <li className="px-3 py-2 text-xs text-gray-400">No matching skills</li>
+                      )}
+                      {filteredSkills.map((s) => {
+                        const Icon = s.icon
+                        return (
+                          <li key={s.id}>
+                            <button
+                              type="button"
+                              onClick={() => pickSkill(s)}
+                              className="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                            >
+                              <Icon className="h-4 w-4 mt-0.5 flex-shrink-0 text-gray-500 dark:text-gray-400" />
+                              <span className="min-w-0 flex flex-col gap-0.5">
+                                <span className="text-sm font-medium text-gray-900 dark:text-gray-50">
+                                  {s.name}
+                                </span>
+                                <span className="text-xs text-gray-500 dark:text-gray-400 leading-snug">
+                                  {s.description}
+                                </span>
+                              </span>
+                            </button>
+                          </li>
+                        )
+                      })}
+                    </ul>
+
+                    <div className="border-t border-black/5 dark:border-white/10 py-1">
+                      {(!menuQuery.trim() ||
+                        'file'.includes(menuQuery.trim().toLowerCase()) ||
+                        menuQuery.trim().toLowerCase().includes('file')) && (
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-800 dark:text-gray-200 hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                        >
+                          <Paperclip className="h-4 w-4 text-gray-500" />
+                          File
+                        </button>
+                      )}
+                      {(!menuQuery.trim() ||
+                        'connection'.includes(menuQuery.trim().toLowerCase()) ||
+                        menuQuery.trim().toLowerCase().includes('connect') ||
+                        menuQuery.trim().toLowerCase().includes('notion')) && (
+                        <button
+                          type="button"
+                          onClick={openNotionConnect}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-800 dark:text-gray-200 hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                        >
+                          <Link2 className="h-4 w-4 text-gray-500" />
+                          <span className="flex-1 text-left">Connection</span>
+                          <span className="text-xs text-gray-400 truncate max-w-[120px]">
+                            {AI_CONNECTORS.find((c) => c.enabled)?.name || 'Notion'}
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                  </div>,
+                  document.body
+                )}
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                onChange={(e) => void onFilePicked(e)}
+              />
+            </div>
+
+            <Textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  void onSubmit(e as unknown as React.FormEvent)
+                }
+              }}
+              onDragOver={handleDragOver}
+              onDrop={(e) => void handleDrop(e)}
+              rows={1}
+              placeholder={
+                dropActive || attaching
+                  ? attaching
+                    ? 'Attaching context…'
+                    : 'Drop to attach as context'
+                  : selectableMode === 'edit'
+                    ? 'Describe edits for this board…'
+                    : 'Ask anything…'
+              }
+              disabled={false}
+              className={cn(
+                'block min-h-[32px] max-h-[200px] resize-none border-0 bg-transparent shadow-none',
+                'text-base leading-5 sm:text-sm flex-1 self-center',
+                'placeholder:text-gray-400 dark:placeholder:text-gray-500',
+                'focus-visible:ring-0 focus-visible:ring-offset-0',
+                'px-1 py-[6px]'
+              )}
+            />
+
             <button
-              ref={plusBtnRef}
               type="button"
               className={cn(
-                'h-8 w-8 rounded-full flex items-center justify-center transition-colors',
-                'text-gray-600 dark:text-gray-300',
+                'h-8 px-2 rounded-lg text-xs font-medium flex-shrink-0',
+                'text-gray-800 dark:text-gray-100',
                 'hover:bg-black/[0.06] dark:hover:bg-white/[0.08]',
-                plusOpen && 'bg-black/[0.08] dark:bg-white/[0.12]'
+                'focus-visible:outline-none'
               )}
-              title="Add skills, files, connections"
-              aria-expanded={plusOpen}
-              aria-haspopup="dialog"
-              onClick={() => {
-                if (!plusOpen) placePlusMenu()
-                setPlusOpen((o) => !o)
-              }}
+              title={
+                selectableMode === 'edit'
+                  ? 'Edit — click for Ask'
+                  : 'Ask — click for Edit'
+              }
+              aria-label={
+                selectableMode === 'edit' ? 'Switch to Ask' : 'Switch to Edit'
+              }
+              onClick={() => onModeChange(selectableMode === 'edit' ? 'ask' : 'edit')}
             >
-              <Plus className="h-4 w-4" />
+              {selectableMode === 'edit' ? 'Edit' : 'Ask'}
             </button>
 
-            {plusOpen &&
-              menuPos &&
-              typeof document !== 'undefined' &&
-              createPortal(
-                <div
-                  ref={menuRef}
-                  role="dialog"
-                  aria-label="Skills and context"
-                  style={{
-                    position: 'fixed',
-                    left: menuPos.left,
-                    bottom: menuPos.bottom,
-                    zIndex: 80,
-                  }}
-                  className={cn(
-                    'w-[min(320px,calc(100vw-48px))]',
-                    'rounded-xl border border-black/10 dark:border-white/10',
-                    'bg-white dark:bg-[#1a1a1a] shadow-xl',
-                    'overflow-hidden'
-                  )}
-                >
-                  <div className="px-3 pt-3 pb-2 border-b border-black/5 dark:border-white/10">
-                    <div className="flex items-center gap-2 rounded-md px-2 py-1.5 bg-black/[0.04] dark:bg-white/[0.06]">
-                      <Search className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
-                      <input
-                        ref={menuSearchRef}
-                        value={menuQuery}
-                        onChange={(e) => setMenuQuery(e.target.value)}
-                        placeholder="Search skills, context, chats…"
-                        className="w-full bg-transparent text-sm outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500 text-gray-900 dark:text-gray-100"
-                      />
-                    </div>
-                  </div>
-
-                  <ul className="py-1 max-h-[220px] overflow-y-auto">
-                    {filteredSkills.length === 0 && (
-                      <li className="px-3 py-2 text-xs text-gray-400">No matching skills</li>
-                    )}
-                    {filteredSkills.map((s) => {
-                      const Icon = s.icon
-                      return (
-                        <li key={s.id}>
-                          <button
-                            type="button"
-                            onClick={() => pickSkill(s)}
-                            className="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
-                          >
-                            <Icon className="h-4 w-4 mt-0.5 flex-shrink-0 text-gray-500 dark:text-gray-400" />
-                            <span className="min-w-0 flex flex-col gap-0.5">
-                              <span className="text-sm font-medium text-gray-900 dark:text-gray-50">
-                                {s.name}
-                              </span>
-                              <span className="text-xs text-gray-500 dark:text-gray-400 leading-snug">
-                                {s.description}
-                              </span>
-                            </span>
-                          </button>
-                        </li>
-                      )
-                    })}
-                  </ul>
-
-                  <div className="border-t border-black/5 dark:border-white/10 py-1">
-                    {(!menuQuery.trim() ||
-                      'file'.includes(menuQuery.trim().toLowerCase()) ||
-                      menuQuery.trim().toLowerCase().includes('file')) && (
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-800 dark:text-gray-200 hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
-                      >
-                        <Paperclip className="h-4 w-4 text-gray-500" />
-                        File
-                      </button>
-                    )}
-                    {(!menuQuery.trim() ||
-                      'connection'.includes(menuQuery.trim().toLowerCase()) ||
-                      menuQuery.trim().toLowerCase().includes('connect') ||
-                      menuQuery.trim().toLowerCase().includes('notion')) && (
-                      <button
-                        type="button"
-                        onClick={openNotionConnect}
-                        className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-800 dark:text-gray-200 hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
-                      >
-                        <Link2 className="h-4 w-4 text-gray-500" />
-                        <span className="flex-1 text-left">Connection</span>
-                        <span className="text-xs text-gray-400 truncate max-w-[120px]">
-                          {AI_CONNECTORS.find((c) => c.enabled)?.name || 'Notion'}
-                        </span>
-                      </button>
-                    )}
-                  </div>
-                </div>,
-                document.body
+            <button
+              type="button"
+              disabled={!voice.supported || isLoading}
+              className={cn(
+                'h-8 w-8 rounded-md flex-shrink-0 flex items-center justify-center transition-colors',
+                'text-gray-600 dark:text-gray-300 hover:bg-black/[0.06] dark:hover:bg-white/[0.08]',
+                'focus-visible:outline-none',
+                (!voice.supported || isLoading) && 'opacity-40 cursor-not-allowed'
               )}
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="hidden"
-              onChange={(e) => void onFilePicked(e)}
-            />
-          </div>
-
-          <Textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                void onSubmit(e as unknown as React.FormEvent)
+              title={
+                !voice.supported
+                  ? 'Voice input not supported in this browser'
+                  : voice.error || 'Voice input'
               }
-            }}
-            onDragOver={handleDragOver}
-            onDrop={(e) => void handleDrop(e)}
-            rows={1}
-            placeholder={
-              dropActive || attaching
-                ? attaching
-                  ? 'Attaching context…'
-                  : 'Drop to attach as context'
-                : selectableMode === 'edit'
-                  ? 'Describe edits for this board…'
-                  : 'Ask anything…'
-            }
-            disabled={false}
-            className={cn(
-              // block (not flex) + matched line-height so placeholder sits on the control midline
-              'block min-h-[32px] max-h-[200px] resize-none border-0 bg-transparent shadow-none',
-              // 16px on touch — Safari auto-zooms focused fields under 16px
-              'text-base leading-5 sm:text-sm flex-1 self-center',
-              'placeholder:text-gray-400 dark:placeholder:text-gray-500',
-              'focus-visible:ring-0 focus-visible:ring-offset-0',
-              'px-1 py-[6px]'
-            )}
-          />
+              aria-label="Start voice input"
+              onClick={() => void voice.start()}
+            >
+              <Mic className="h-4 w-4" />
+            </button>
 
-          {/* Ask ↔ Edit — same click-toggle pattern as nav Scroll ↔ Zoom */}
-          <button
-            type="button"
-            className={cn(
-              'h-8 px-2 rounded-lg text-xs font-medium flex-shrink-0',
-              'text-gray-800 dark:text-gray-100',
-              'hover:bg-black/[0.06] dark:hover:bg-white/[0.08]',
-              'focus-visible:outline-none'
-            )}
-            title={
-              selectableMode === 'edit'
-                ? 'Edit — click for Ask'
-                : 'Ask — click for Edit'
-            }
-            aria-label={
-              selectableMode === 'edit' ? 'Switch to Ask' : 'Switch to Edit'
-            }
-            onClick={() => onModeChange(selectableMode === 'edit' ? 'ask' : 'edit')}
-          >
-            {selectableMode === 'edit' ? 'Edit' : 'Ask'}
-          </button>
+            <Button
+              type="submit"
+              disabled={isLoading || !input.trim()}
+              size="icon"
+              className={cn(
+                'h-8 w-8 rounded-md flex-shrink-0',
+                input.trim()
+                  ? 'bg-[#2383e2] hover:bg-[#1a6fc9] text-white'
+                  : 'bg-[#cbd5e1] dark:bg-gray-700 text-gray-600'
+              )}
+            >
+              {isLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ArrowUp className="h-4 w-4" />
+              )}
+            </Button>
+          </div>
+        ) : (
+          /* Cursor-style strip: draft above, + · waveform · timer · X · check */
+          <div className="flex flex-col gap-0.5 pl-1 pr-1 py-1">
+            {input.trim() ? (
+              <div className="px-2 pt-1 text-sm leading-5 text-gray-800 dark:text-gray-100 whitespace-pre-wrap break-words max-h-[120px] overflow-y-auto">
+                {input}
+              </div>
+            ) : null}
+            <div className="flex items-center gap-1.5 min-h-[40px]">
+              <button
+                type="button"
+                className={cn(
+                  'h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0',
+                  'text-gray-600 dark:text-gray-300',
+                  'hover:bg-black/[0.06] dark:hover:bg-white/[0.08]'
+                )}
+                title="Add skills, files, connections"
+                aria-label="Add"
+                onClick={() => {
+                  if (!plusOpen) placePlusMenu()
+                  setPlusOpen((o) => !o)
+                }}
+              >
+                <Plus className="h-4 w-4" />
+              </button>
 
-          <Button
-            type="submit"
-            disabled={isLoading || !input.trim()}
-            size="icon"
-            className={cn(
-              'h-8 w-8 rounded-md flex-shrink-0',
-              input.trim()
-                ? 'bg-[#2383e2] hover:bg-[#1a6fc9] text-white'
-                : 'bg-[#cbd5e1] dark:bg-gray-700 text-gray-600'
-            )}
-          >
-            {isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <ArrowUp className="h-4 w-4" />
-            )}
-          </Button>
-        </div>
+              <div
+                className="flex-1 flex items-center justify-center gap-[2px] h-8 min-w-0 px-1"
+                aria-hidden
+              >
+                {voice.levels.map((level, i) => (
+                  <span
+                    key={i}
+                    className="w-[2px] rounded-full bg-gray-400/85 dark:bg-gray-500 flex-shrink-0"
+                    style={{ height: `${Math.round(4 + level * 20)}px` }}
+                  />
+                ))}
+              </div>
+
+              <span className="text-xs tabular-nums text-gray-500 dark:text-gray-400 flex-shrink-0 min-w-[2rem] text-right">
+                {voice.elapsedLabel}
+              </span>
+
+              <button
+                type="button"
+                disabled={voice.transcribing}
+                className={cn(
+                  'h-8 w-8 rounded-md flex items-center justify-center flex-shrink-0',
+                  'text-gray-600 dark:text-gray-300',
+                  'hover:bg-black/[0.06] dark:hover:bg-white/[0.08]',
+                  voice.transcribing && 'opacity-40 cursor-not-allowed'
+                )}
+                title="Cancel voice input"
+                aria-label="Cancel voice input"
+                onClick={() => voice.cancel()}
+              >
+                <X className="h-4 w-4" />
+              </button>
+
+              <button
+                type="button"
+                disabled={voice.transcribing}
+                className={cn(
+                  'h-8 w-8 rounded-md flex items-center justify-center flex-shrink-0',
+                  'text-gray-800 dark:text-gray-100',
+                  'hover:bg-black/[0.06] dark:hover:bg-white/[0.08]',
+                  voice.transcribing && 'opacity-70 cursor-wait'
+                )}
+                title={voice.transcribing ? 'Transcribing…' : 'Insert transcription'}
+                aria-label={voice.transcribing ? 'Transcribing' : 'Insert transcription'}
+                onClick={() => void voice.confirm()}
+              >
+                {voice.transcribing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Check className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+          </div>
+        )}
       </form>
+      {voice.error ? (
+        <p className="px-2 pb-1 text-[11px] text-red-600 dark:text-red-400">{voice.error}</p>
+      ) : null}
     </div>
   )
 }

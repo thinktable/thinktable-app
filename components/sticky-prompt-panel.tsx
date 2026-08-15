@@ -720,8 +720,8 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
             boxSizing: 'border-box', // Ensure padding is included in height
           }}
         >
-          {/* Left chrome — menu + board path; shrink-0 so the title isn’t crushed by the flex bar */}
-          <div data-top-bar-left data-path-ready={pathReady || !pathKey ? 'true' : undefined} className="relative z-20 flex items-center flex-shrink-0">
+          {/* Left chrome — menu + board path; no z-boost so absolute tools stay above if the path cap races */}
+          <div data-top-bar-left data-path-ready={pathReady || !pathKey ? 'true' : undefined} className="relative flex items-center flex-shrink-0">
           {/* Menu icon — hover opens; click pins open until clicked again (survives page switch) */}
           <div
             data-nav-logo-trigger
