@@ -111,3 +111,4 @@
 20260814205759_board_reload_perf_cold_load.sql
 20260814222457_phone_chat_dock_visible.sql
 20260815000653_turn_into_menu_frame_block_chrome.sql
+20260815001725_menu_flyouts_always_right.sql

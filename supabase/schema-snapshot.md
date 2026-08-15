@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-15T00:06:53Z`
+- Snapped at: `2026-08-15T00:17:25Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260815001725_menu_flyouts_always_right.sql`.
+- Menu placement: flyouts (Turn into / Color / Shape / Board in / …) always open to the **right** of the parent card; main card locks under the pointer once a flyout is open (no left-side hover thrash).
+- Schema unchanged.
+
+## Prior: turn into menu frame block chrome
 
 - No DDL. Marker `20260815000653_turn_into_menu_frame_block_chrome.sql`.
 - Block/frame menus: Turn into Format / Property tabs (compact one-pane flyout); Block vs Frame headers; hide Turn into on frame menu; hide Present from here on block ⋮⋮ menu.

@@ -564,6 +564,9 @@ export function BlockActionsMenu({
         anchorY: y, // Grip / click Y
         openLeft, // Prefer the side that misses the frame
         preferredFlyoutTop: row?.getBoundingClientRect().top, // Color / Connections hug their row
+        // Lock the card once a flyout is open so left-side Turn into doesn't slide the
+        // hovered row out from under the cursor (hover thrash / menu glitch).
+        fromExisting: openSubmenu != null,
       })
     place() // Before paint so the first frame is already in-bounds
     return watchMenuSafeRect(place) // Window + phone keyboard move the chat dock

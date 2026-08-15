@@ -131,7 +131,8 @@ export type ApplyMenuPlacementOpts = {
 
 /**
  * Measure a fixed/absolute menu + its `[data-tt-menu-flyout]` children and park them
- * inside the safe rect, shrinking height and flipping/shifting for submenus.
+ * inside the safe rect. Submenus always open to the RIGHT of the parent card; the main
+ * card may slide left on first place so the strip fits, then stays locked under the pointer.
  */
 export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOpts): void {
   const safe = getMenuSafeRect() // Chrome-free window
@@ -159,55 +160,41 @@ export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOp
 
   const clusterH = Math.max(menuMaxH, flyoutMaxH, nestedMaxH) // Tallest card in the cluster
   const existing = opts.fromExisting ? root.getBoundingClientRect() : null // First-paint box (translate already applied)
+  // Lock Y when a flyout is attaching — shifting the card under the pointer closes Turn into on hover.
   const top = clampStart(
     existing ? existing.top : opts.anchorY, // Cursor menus stay where CSS put them; grip menus use the click Y
-    clusterH,
+    existing ? menuMaxH : clusterH, // Existing: only keep the main card in-lane; flyout clamps on its own
     safe.top,
     safe.bottom
-  ) // Keep the whole stack in the vertical lane
+  ) // Keep the main card in the vertical lane
 
   type Side = 'left' | 'right' // Flyout parks on this side of the menu
   type Cand = { menuLeft: number; flyoutSide: Side; nestedSide: Side; score: number } // One horizontal layout
 
-  const cands: Cand[] = [] // Try left-of-anchor and right-of-anchor, flyout away then toward
-  const sides: Array<{ menuLeft: number; away: Side }> = existing
-    ? [
-        {
-          menuLeft: existing.left, // Keep the CSS first-paint X (above-click / centered)
-          away: existing.left + menuW / 2 > (safe.left + safe.right) / 2 ? 'left' : 'right', // Open the flyout toward leftover space
-        },
-      ]
-    : [
-        { menuLeft: opts.anchorX - GAP - menuW, away: 'left' }, // Menu to the left of the anchor (openLeft)
-        { menuLeft: opts.anchorX + GAP, away: 'right' }, // Menu to the right of the anchor
-      ]
+  // Submenus always open to the RIGHT of the parent card (Turn into / Color / Shape / Board in / …).
+  const flyoutSide: Side = 'right'
+  const nestedSide: Side = 'right'
+  const extra = (flyoutW ? GAP + flyoutW : 0) + (nestedW ? GAP + nestedW : 0) // Width added by right-side submenus
+  const clusterW = menuW + extra // Total strip when flyouts sit beside the menu
 
-  for (const s of sides) {
-    for (const flyoutSide of [s.away, s.away === 'left' ? 'right' : 'left'] as Side[]) {
-      const nestedSide: Side = flyoutSide // Nested continues in the same direction first
-      const extra = (flyoutW ? GAP + flyoutW : 0) + (nestedW ? GAP + nestedW : 0) // Width added by submenus
-      const clusterW = menuW + extra // Total strip width when submenus sit beside the menu
-      let menuLeft = s.menuLeft // Start from the preferred menu origin
-      if (flyoutSide === 'left') {
-        const clusterLeft = menuLeft - extra // Strip grows leftward
-        if (clusterLeft < safe.left) menuLeft += safe.left - clusterLeft // Slide right so the flyout stays in-window
-      } else {
-        const clusterRight = menuLeft + menuW + extra // Strip grows rightward
-        if (clusterRight > safe.right) menuLeft -= clusterRight - safe.right // Slide left so the flyout stays in-window
-      }
-      menuLeft = clampStart(menuLeft, menuW, safe.left, safe.right) // Menu itself must stay in the lane
-      const clusterBox = box(
-        flyoutSide === 'left' ? menuLeft - extra : menuLeft, // Left edge of the strip
-        top,
-        Math.min(clusterW, safe.width), // Don't score overflow past the lane
-        clusterH
-      )
-      const towardPenalty = flyoutSide !== s.away ? 1 : 0 // Prefer opening away from the anchor / selected content
-      const sidePenalty =
-        existing || (s.menuLeft < opts.anchorX) === opts.openLeft ? 0 : 50_000 // Prefer the caller's openLeft unless we kept CSS paint
-      const score = avoidScore(clusterBox, avoid) + towardPenalty + sidePenalty // Covering selection is the main cost
-      cands.push({ menuLeft, flyoutSide, nestedSide, score }) // Keep
+  const cands: Cand[] = [] // Try left-of-anchor and right-of-anchor for the main card only
+  const menuLeftPrefs: number[] = existing
+    ? [existing.left] // Keep the card under the pointer once a flyout is open
+    : [opts.anchorX - GAP - menuW, opts.anchorX + GAP] // openLeft then open-right
+
+  for (const pref of menuLeftPrefs) {
+    let menuLeft = pref // Start from the preferred menu origin
+    // When not locked under the pointer, slide the card left so the right-side strip fits.
+    if (!existing && extra > 0) {
+      const clusterRight = menuLeft + menuW + extra // Strip grows rightward
+      if (clusterRight > safe.right) menuLeft -= clusterRight - safe.right // Make room on the right
     }
+    menuLeft = clampStart(menuLeft, menuW, safe.left, safe.right) // Menu itself must stay in the lane
+    const clusterBox = box(menuLeft, top, Math.min(clusterW, safe.width), clusterH) // Score the right-growing strip
+    const sidePenalty =
+      existing || (pref < opts.anchorX) === opts.openLeft ? 0 : 50_000 // Prefer the caller's openLeft unless we kept CSS paint
+    const score = avoidScore(clusterBox, avoid) + sidePenalty // Covering selection is the main cost
+    cands.push({ menuLeft, flyoutSide, nestedSide, score }) // Keep
   }
 
   cands.sort((a, b) => a.score - b.score) // Best (least coverage / closest to preference) first
@@ -227,8 +214,7 @@ export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOp
   }
 
   if (flyout) {
-    const flyoutLeft =
-      best.flyoutSide === 'left' ? best.menuLeft - GAP - flyoutW : best.menuLeft + menuW + GAP // Beside the menu
+    const flyoutLeft = best.menuLeft + menuW + GAP // Always to the right of the menu
     const clampedFlyoutLeft = clampStart(flyoutLeft, flyoutW, safe.left, safe.right) // Stay in-window even if that overlaps the menu
     const prefFlyoutTop = opts.preferredFlyoutTop ?? top // Row-align Color / Connections; else share the cluster top
     const flyoutTop = clampStart(prefFlyoutTop, flyoutMaxH, safe.top, safe.bottom) // Vertical clamp for the flyout alone
@@ -239,8 +225,7 @@ export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOp
 
   if (nested && flyout) {
     const flyoutBox = flyout.getBoundingClientRect() // After the flyout has been placed
-    const nestedLeft =
-      best.nestedSide === 'left' ? flyoutBox.left - GAP - nestedW : flyoutBox.right + GAP // Continue past Turn into
+    const nestedLeft = flyoutBox.right + GAP // Always continue to the right of Turn into
     const clampedNestedLeft = clampStart(nestedLeft, nestedW, safe.left, safe.right) // Stay in-window
     const nestedTop = clampStart(flyoutBox.top, nestedMaxH, safe.top, safe.bottom) // Align with Turn into, then clamp
     setRelativeTo(nested, flyout, clampedNestedLeft, nestedTop) // Nested is a child of the Turn into flyout
