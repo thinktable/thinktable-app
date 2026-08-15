@@ -116,3 +116,4 @@
 20260815012513_phone_zoom_swipe_frame_caret.sql
 20260815045351_phone_mode_pill_undo_cluster.sql
 20260815171425_property_block_header_chat_chrome.sql
+20260815174523_customize_agent_chat_scroll_chrome.sql

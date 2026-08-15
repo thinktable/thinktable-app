@@ -11,6 +11,7 @@ import {
 import { ThinktableBrandMark, PersonalizeAiModal } from './personalize-ai-modal' // Brand
 import { AiThreadPicker, type AiThreadFilter } from './ai/ai-thread-picker' // History
 import { AiTranscript } from './ai/ai-transcript' // Turns
+import { CustomizeAgentPanel } from './ai/customize-agent-panel' // Brand → customize agent
 import {
   AiTranscriptPlaceholder,
   ChatLoadStage,
@@ -21,14 +22,20 @@ import { AiComposer, regenerateAfterEdit } from './ai/ai-composer' // Composer
 import { AiPromptBars } from './ai/ai-prompt-bars' // Compact prompt stack / phone list
 import type { AiContextSnapshot, AiMessage, AiThread } from '@/lib/ai/types' // Types
 import { isSelectableAiMode } from '@/lib/ai/modes'
+import {
+  loadAgentDrafts,
+  saveAgentDrafts,
+  WORKSPACE_AGENT_ID,
+} from '@/lib/ai/agents' // Personalize → custom agent icon
 import { useAiEditSession, buildFramePendingEdit, buildCreateFramePendingEdit, buildCreateThreadPendingEdit } from '@/lib/ai/edit-session'
 import { htmlToPlain } from '@/lib/ai/context-pack' // Plain excerpts for snapshots
 import { createClient } from '@/lib/supabase/client' // Snapshot frame load
 import { cn } from '@/lib/utils' // cn
 import {
+  ArrowDown,
   ChevronsRight,
   MessageSquarePlus,
-  Pencil,
+  Settings2,
 } from 'lucide-react' // Icons
 
 interface ChatSidebarProps {
@@ -57,8 +64,11 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     closeSidebar,
   } = useSidebarContext()
   const { addPendingEdits } = useAiEditSession()
-  const [personalizeOpen, setPersonalizeOpen] = useState(false) // Logo modal
-  const [hoverBrand, setHoverBrand] = useState(false) // Personalize pill
+  const [personalizeOpen, setPersonalizeOpen] = useState(false) // Logo draw modal
+  const [personalizeDraftId, setPersonalizeDraftId] = useState<string | null>(null) // Which agent gets the icon
+  const [customizeOpen, setCustomizeOpen] = useState(false) // Brand → customize panel
+  const [agentIconRevision, setAgentIconRevision] = useState(0) // Reload custom icons after Done
+  const [hoverBrand, setHoverBrand] = useState(false) // Customize pill on empty state
   const [thread, setThread] = useState<AiThread | null>(null) // Active thread
   const [filter, setFilter] = useState<AiThreadFilter>('all') // History filter
   const [messages, setMessages] = useState<AiMessage[]>([]) // Transcript
@@ -78,6 +88,32 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
 
   const [threadHydrated, setThreadHydrated] = useState(false) // False until restore finishes (SSR + client match)
   const [loadedThreadId, setLoadedThreadId] = useState<string | null>(null) // Thread whose messages are in state
+  const [showReturnToBottom, setShowReturnToBottom] = useState(false) // Transcript scrolled away from bottom
+  const transcriptScrollRef = useRef<HTMLDivElement>(null) // Phone content card or desktop sidebar scroller
+  const scrolledOpenThreadRef = useRef<string | null>(null) // Which thread we already pinned to bottom on open
+  /** Distance from bottom — survives phone↔desktop remounts on resize */
+  const scrollAnchorRef = useRef<{ threadId: string; fromBottom: number } | null>(null)
+  const activeThreadIdRef = useRef<string | null>(null) // Latest thread id for scroll capture in listeners
+  activeThreadIdRef.current = thread?.id ?? null
+
+  /** Read the live transcript scroller (desktop column or phone card). */
+  const getTranscriptScroller = useCallback((): HTMLElement | null => {
+    return (
+      transcriptScrollRef.current ??
+      (document.querySelector('[data-ai-transcript-scroll]') as HTMLElement | null)
+    )
+  }, [])
+
+  /** Apply a saved from-bottom offset onto the current scroller. */
+  const restoreTranscriptScroll = useCallback(() => {
+    const anchor = scrollAnchorRef.current
+    const threadId = activeThreadIdRef.current
+    if (!anchor || !threadId || anchor.threadId !== threadId) return
+    const root = getTranscriptScroller()
+    if (!root) return
+    root.scrollTop = Math.max(0, root.scrollHeight - root.clientHeight - anchor.fromBottom)
+    setShowReturnToBottom(anchor.fromBottom > 64)
+  }, [getTranscriptScroller])
 
   // Publish whether the chat box (transcript) has messages — Free nav fill depends on it
   useEffect(() => {
@@ -91,6 +127,56 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     return () => setAiChatHasTranscript(false) // Clear on unmount
   }, [messages.length, threadHydrated, thread?.id, loadedThreadId, setAiChatHasTranscript])
 
+  // Show return-to-bottom only when a chat has turns and the scroller is not at the end
+  useEffect(() => {
+    if (messages.length === 0) {
+      setShowReturnToBottom(false) // Empty “New AI chat” — never show
+      return
+    }
+    const root = getTranscriptScroller()
+    if (!root) {
+      setShowReturnToBottom(false)
+      return
+    }
+    let raf = 0
+    const update = () => {
+      const gap = root.scrollHeight - root.scrollTop - root.clientHeight
+      const threadId = activeThreadIdRef.current
+      if (threadId) scrollAnchorRef.current = { threadId, fromBottom: Math.max(0, gap) }
+      setShowReturnToBottom(gap > 64) // Past a small threshold → offer jump down
+    }
+    const onScroll = () => {
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        update()
+      })
+    }
+    update()
+    root.addEventListener('scroll', onScroll, { passive: true })
+    const ro = new ResizeObserver(onScroll) // Streaming / layout growth
+    ro.observe(root)
+    if (root.firstElementChild) ro.observe(root.firstElementChild)
+    return () => {
+      // Capture from this node — ref may already point elsewhere mid phone↔desktop swap
+      const threadId = activeThreadIdRef.current
+      if (threadId) {
+        const fromBottom = Math.max(0, root.scrollHeight - root.scrollTop - root.clientHeight)
+        scrollAnchorRef.current = { threadId, fromBottom }
+      }
+      root.removeEventListener('scroll', onScroll)
+      ro.disconnect()
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [messages.length, streamingId, isMobileMode, isChatSidebarOpen, dockCompact, getTranscriptScroller])
+
+  // Phone↔desktop (or dock compact) remounts a new scroller at top — restore prior offset
+  useLayoutEffect(() => {
+    if (messages.length === 0) return
+    restoreTranscriptScroll()
+    const raf = requestAnimationFrame(() => restoreTranscriptScroll())
+    return () => cancelAnimationFrame(raf)
+  }, [isMobileMode, isChatSidebarOpen, dockCompact, messages.length, restoreTranscriptScroll])
   // Restore the last active thread once on mount (same chat after reload)
   useEffect(() => {
     if (typeof window === 'undefined') { // SSR guard
@@ -131,7 +217,48 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     persistActiveThreadId(thread?.id ?? null) // Persist select / clear on new
   }, [thread?.id, threadHydrated])
 
+  /** Brand mark → customize agent panel (not the draw modal). */
+  const openCustomize = useCallback(() => {
+    setCustomizeOpen(true)
+  }, [])
+
+  /** Draw modal for a draft — workspace agent writes the shared brand mark. */
+  const openPersonalizeForDraft = useCallback((draftId: string) => {
+    setPersonalizeDraftId(draftId)
+    setPersonalizeOpen(true)
+  }, [])
+
+  /** Route Done: shared logo vs per-agent iconDrawing in localStorage. */
+  const handleDrawingChange = useCallback(
+    (url: string | null) => {
+      const target = personalizeDraftId
+      if (!target || target === WORKSPACE_AGENT_ID) {
+        setLogoDrawing(url) // Workspace brand everywhere
+      } else {
+        const drafts = loadAgentDrafts()
+        saveAgentDrafts(
+          drafts.map((d) => (d.id === target ? { ...d, iconDrawing: url } : d))
+        )
+        setAgentIconRevision((n) => n + 1) // Panel reloads custom icons
+      }
+    },
+    [personalizeDraftId, setLogoDrawing]
+  )
+
+  /** Seed the personalize canvas: shared brand or that draft's icon. */
+  const personalizeDrawingUrl =
+    personalizeDraftId && personalizeDraftId !== WORKSPACE_AGENT_ID
+      ? loadAgentDrafts().find((d) => d.id === personalizeDraftId)?.iconDrawing ?? null
+      : logoDrawing
+
+  // Leaving chat closes customize so reopen lands on the transcript
   useEffect(() => {
+    if (!isChatSidebarOpen) setCustomizeOpen(false)
+  }, [isChatSidebarOpen])
+
+  useEffect(() => {
+    scrolledOpenThreadRef.current = null // New selection must pin to bottom again after load
+    scrollAnchorRef.current = null // Don't restore the previous chat's offset
     if (!thread?.id) {
       setMessages([])
       setLoadedThreadId(null) // New chat — nothing to restore
@@ -313,6 +440,15 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     root.scrollTo({ top: root.scrollTop + delta, behavior: 'smooth' }) // Only the transcript, not the page
   }, [])
 
+  /** Jump the transcript (desktop column or phone content card) to the latest turn. */
+  const scrollTranscriptToBottom = useCallback(() => {
+    const root = getTranscriptScroller()
+    if (!root) return
+    root.scrollTo({ top: root.scrollHeight, behavior: 'smooth' })
+    const threadId = activeThreadIdRef.current
+    if (threadId) scrollAnchorRef.current = { threadId, fromBottom: 0 }
+  }, [getTranscriptScroller])
+
   const handleEditUserMessage = useCallback(
     async (messageId: string, content: string) => {
       const res = await fetch(`/api/ai/messages/${messageId}`, {
@@ -425,6 +561,25 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   ) // Restore only — don’t cover a live first send
   const loadPhase = useChatLoadReveal(chatLoading) // Placeholder out, then content in
   const showLoadPlaceholder = loadPhase === 'placeholder' || loadPhase === 'out' // Keep phone card during fade-out
+
+  // Opening a chat: jump to the latest turn once the transcript is painted
+  useLayoutEffect(() => {
+    if (!thread?.id || loadedThreadId !== thread.id || messages.length === 0) return
+    if (loadPhase !== 'in' && loadPhase !== 'shown') return // Wait until ChatLoadStage mounts content
+    if (scrolledOpenThreadRef.current === thread.id) return // One jump per open
+    const root = getTranscriptScroller()
+    if (!root) return
+    const pin = () => {
+      root.scrollTop = root.scrollHeight // Instant — opening should land at bottom
+      scrollAnchorRef.current = { threadId: thread.id, fromBottom: 0 }
+      setShowReturnToBottom(false)
+    }
+    pin()
+    scrolledOpenThreadRef.current = thread.id
+    // Second frame: markdown / images may grow height after first paint
+    const raf = requestAnimationFrame(pin)
+    return () => cancelAnimationFrame(raf)
+  }, [thread?.id, loadedThreadId, messages.length, loadPhase, getTranscriptScroller])
 
   if (!isChatSidebarOpen && !isMobileMode) return null // Desktop: unmount when closed; phone: keep dock mounted for same-tap focus
 
@@ -542,6 +697,24 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
               isChatSidebarOpen ? 'pointer-events-auto' : 'pointer-events-none'
             )}
           >
+            {customizeOpen ? (
+              <div
+                className={cn(
+                  'rounded-xl overflow-hidden max-h-[min(70vh,560px)]',
+                  'bg-gray-50 dark:bg-[#0f0f0f]',
+                  'border border-black/10 dark:border-white/10 shadow-lg'
+                )}
+              >
+                <CustomizeAgentPanel
+                  open={customizeOpen}
+                  onClose={() => setCustomizeOpen(false)}
+                  sharedDrawingUrl={logoDrawing}
+                  onRequestPersonalize={openPersonalizeForDraft}
+                  iconRevision={agentIconRevision}
+                />
+              </div>
+            ) : (
+              <>
             {(isChatSidebarOpen && !dockCompact && (hasTranscript || showLoadPlaceholder)) && (
               <div
                 className={cn(
@@ -550,7 +723,11 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                   'border border-black/10 dark:border-white/10 shadow-sm'
                 )}
               >
-                <div data-ai-transcript-scroll className="max-h-[32vh] overflow-y-auto px-3 py-2 pr-12">
+                <div
+                  ref={transcriptScrollRef}
+                  data-ai-transcript-scroll
+                  className="max-h-[32vh] overflow-y-auto px-3 py-2 pr-12"
+                >
                   <ChatLoadStage phase={loadPhase} placeholder={<AiTranscriptPlaceholder />}>
                     {hasTranscript ? (
                       <AiTranscript
@@ -564,6 +741,20 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                 <div className="absolute right-2 top-1/2 -translate-y-1/2 z-10">
                   <AiPromptBars orientation="horizontal" {...promptBarProps} />
                 </div>
+                {/* Return to bottom — floats at the bottom of the phone content card */}
+                {showReturnToBottom && (
+                  <div className="absolute bottom-2 left-0 right-0 z-10 flex justify-center pointer-events-none">
+                    <button
+                      type="button"
+                      onClick={scrollTranscriptToBottom}
+                      className="pointer-events-auto h-9 w-9 rounded-full flex items-center justify-center bg-white dark:bg-[#1f1f1f] border border-gray-300 dark:border-[#2f2f2f] shadow-lg hover:bg-gray-50 dark:hover:bg-[#2a2a2a] transition-colors"
+                      title="Return to bottom"
+                      aria-label="Return to bottom"
+                    >
+                      <ArrowDown className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+                    </button>
+                  </div>
+                )}
               </div>
             )}
             {isChatSidebarOpen && !dockCompact && (
@@ -577,10 +768,10 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                 {/* Brand left of thread select while chat is open (map toggle hides) */}
                 <button
                   type="button"
-                  onClick={() => setPersonalizeOpen(true)}
+                  onClick={openCustomize}
                   className="flex-shrink-0 rounded-full overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 opacity-90 hover:opacity-100 transition-opacity"
-                  title="Personalize Thinktable AI"
-                  aria-label="Personalize Thinktable AI"
+                  title="Customize Thinktable AI"
+                  aria-label="Customize Thinktable AI"
                 >
                   <ThinktableBrandMark drawingUrl={logoDrawing} size={28} />
                 </button>
@@ -621,13 +812,18 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
             <div className="rounded-xl overflow-hidden bg-white dark:bg-[#202020] border border-black/10 dark:border-white/10 shadow-lg">
               <div className="px-1 pt-1">{composer}</div>
             </div>
+              </>
+            )}
           </div>
         </div>
         <PersonalizeAiModal
           open={personalizeOpen}
-          onOpenChange={setPersonalizeOpen}
-          drawingUrl={logoDrawing}
-          onDrawingChange={setLogoDrawing}
+          onOpenChange={(open) => {
+            setPersonalizeOpen(open)
+            if (!open) setPersonalizeDraftId(null)
+          }}
+          drawingUrl={personalizeDrawingUrl}
+          onDrawingChange={handleDrawingChange}
         />
       </>
     )
@@ -647,18 +843,30 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
         )}
         style={{ width: CHAT_SIDEBAR_WIDTH }}
       >
+        {customizeOpen ? (
+          <CustomizeAgentPanel
+            open={customizeOpen}
+            onClose={() => setCustomizeOpen(false)}
+            sharedDrawingUrl={logoDrawing}
+            onRequestPersonalize={openPersonalizeForDraft}
+            iconRevision={agentIconRevision}
+          />
+        ) : (
+          <>
         <header className="flex-shrink-0 flex items-center justify-between gap-2 px-3 h-11">
-          {/* Brand left of thread select while chat is open (map toggle hides) */}
+          {/* Brand only when transcript exists — empty state already has the big icon */}
           <div className="flex items-center gap-1.5 min-w-0 flex-1">
-            <button
-              type="button"
-              onClick={() => setPersonalizeOpen(true)}
-              className="flex-shrink-0 rounded-full overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 opacity-90 hover:opacity-100 transition-opacity"
-              title="Personalize Thinktable AI"
-              aria-label="Personalize Thinktable AI"
-            >
-              <ThinktableBrandMark drawingUrl={logoDrawing} size={28} />
-            </button>
+            {hasTranscript && (
+              <button
+                type="button"
+                onClick={openCustomize}
+                className="flex-shrink-0 rounded-full overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 opacity-90 hover:opacity-100 transition-opacity"
+                title="Customize Thinktable AI"
+                aria-label="Customize Thinktable AI"
+              >
+                <ThinktableBrandMark drawingUrl={logoDrawing} size={28} />
+              </button>
+            )}
             <div className="min-w-0 flex-1 overflow-hidden">
               <AiThreadPicker
                 boardId={conversationId}
@@ -697,91 +905,107 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
           </div>
         </header>
 
-        <div data-ai-transcript-scroll className="flex-1 min-h-0 overflow-y-auto px-4 py-6 pr-8">
-          <ChatLoadStage phase={loadPhase} placeholder={<AiTranscriptPlaceholder />}>
-            {!hasTranscript ? (
-            <div className="flex flex-col items-start gap-5 max-w-[280px] mx-auto mt-6">
-              <div
-                className="flex items-center gap-2.5"
-                onMouseEnter={() => setHoverBrand(true)}
-                onMouseLeave={() => setHoverBrand(false)}
-              >
-                <button
-                  type="button"
-                  onClick={() => setPersonalizeOpen(true)}
-                  className="rounded-full overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                  title="Personalize Thinktable AI"
-                  aria-label="Personalize Thinktable AI"
-                >
-                  <ThinktableBrandMark drawingUrl={logoDrawing} size={52} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPersonalizeOpen(true)}
-                  className={cn(
-                    'flex items-center gap-1.5 h-8 px-3 rounded-full text-xs font-medium',
-                    'bg-black/[0.06] dark:bg-white/[0.08] text-gray-700 dark:text-gray-200',
-                    'border border-black/5 dark:border-white/10',
-                    'hover:bg-black/[0.1] dark:hover:bg-white/[0.12] transition-all',
-                    hoverBrand
-                      ? 'opacity-100 translate-x-0'
-                      : 'opacity-0 -translate-x-1 pointer-events-none'
-                  )}
-                  tabIndex={hoverBrand ? 0 : -1}
-                  aria-hidden={!hoverBrand}
-                >
-                  <Pencil className="h-3 w-3" />
-                  Personalize
-                </button>
-              </div>
-
-              <div>
-                <h2 className="text-xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">
-                  What&apos;s on your mind?
-                </h2>
-                <p className="mt-1.5 text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-                  Ask in the sidebar. Drag a reply onto the page as a frame, or onto the input as context.
-                </p>
-              </div>
-
-              {savedSnapshots.length > 0 && (
-                <div className="w-full mt-2">
-                  <div className="text-[11px] uppercase tracking-wide text-gray-400 mb-1 px-1">
-                    Context snapshots
-                  </div>
-                  <ul className="flex flex-col gap-0.5">
-                    {savedSnapshots.slice(0, 5).map((s) => (
-                      <li key={s.id}>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setAttachedSnapshots((prev) =>
-                              prev.some((x) => x.id === s.id) ? prev : [...prev, s]
-                            )
-                          }
-                          className="w-full text-left text-xs px-2 py-1.5 rounded-md text-gray-600 dark:text-gray-300 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] truncate"
-                        >
-                          {s.name}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          ) : (
-            <AiTranscript
-              messages={messages}
-              streamingId={streamingId}
-              onEditUserMessage={handleEditUserMessage}
-            />
-          )}
-          </ChatLoadStage>
-
+        <div className="relative flex-1 min-h-0 flex flex-col">
           <div
-            data-chat-return-slot
-            className="flex justify-center items-center min-h-[44px] mt-4"
-          />
+            ref={transcriptScrollRef}
+            data-ai-transcript-scroll
+            className="flex-1 min-h-0 overflow-y-auto px-4 py-6 pr-8"
+          >
+            <ChatLoadStage phase={loadPhase} placeholder={<AiTranscriptPlaceholder />}>
+              {!hasTranscript ? (
+              <div className="flex flex-col items-start gap-5 max-w-[280px] mx-auto mt-6">
+                <div
+                  className="flex items-center gap-2.5"
+                  onMouseEnter={() => setHoverBrand(true)}
+                  onMouseLeave={() => setHoverBrand(false)}
+                >
+                  <button
+                    type="button"
+                    onClick={openCustomize}
+                    className="rounded-full overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                    title="Customize Thinktable AI"
+                    aria-label="Customize Thinktable AI"
+                  >
+                    <ThinktableBrandMark drawingUrl={logoDrawing} size={52} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openCustomize}
+                    className={cn(
+                      'flex items-center gap-1.5 h-8 px-3 rounded-full text-xs font-medium',
+                      'bg-black/[0.06] dark:bg-white/[0.08] text-gray-700 dark:text-gray-200',
+                      'border border-black/5 dark:border-white/10',
+                      'hover:bg-black/[0.1] dark:hover:bg-white/[0.12] transition-all',
+                      hoverBrand
+                        ? 'opacity-100 translate-x-0'
+                        : 'opacity-0 -translate-x-1 pointer-events-none'
+                    )}
+                    tabIndex={hoverBrand ? 0 : -1}
+                    aria-hidden={!hoverBrand}
+                  >
+                    <Settings2 className="h-3 w-3" />
+                    Customize
+                  </button>
+                </div>
+
+                <div>
+                  <h2 className="text-xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">
+                    What&apos;s on your mind?
+                  </h2>
+                  <p className="mt-1.5 text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
+                    Ask in the sidebar. Drag a reply onto the page as a frame, or onto the input as context.
+                  </p>
+                </div>
+
+                {savedSnapshots.length > 0 && (
+                  <div className="w-full mt-2">
+                    <div className="text-[11px] uppercase tracking-wide text-gray-400 mb-1 px-1">
+                      Context snapshots
+                    </div>
+                    <ul className="flex flex-col gap-0.5">
+                      {savedSnapshots.slice(0, 5).map((s) => (
+                        <li key={s.id}>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setAttachedSnapshots((prev) =>
+                                prev.some((x) => x.id === s.id) ? prev : [...prev, s]
+                              )
+                            }
+                            className="w-full text-left text-xs px-2 py-1.5 rounded-md text-gray-600 dark:text-gray-300 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] truncate"
+                          >
+                            {s.name}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <AiTranscript
+                messages={messages}
+                streamingId={streamingId}
+                onEditUserMessage={handleEditUserMessage}
+              />
+            )}
+            </ChatLoadStage>
+          </div>
+
+          {/* Transcript jump — only when scrolled up in a chat that has turns (not empty New AI chat) */}
+          {showReturnToBottom && (
+            <div className="absolute bottom-3 left-0 right-0 z-10 flex justify-center pointer-events-none">
+              <button
+                type="button"
+                onClick={scrollTranscriptToBottom}
+                className="pointer-events-auto h-9 w-9 rounded-full flex items-center justify-center bg-white dark:bg-[#1f1f1f] border border-gray-300 dark:border-[#2f2f2f] shadow-lg hover:bg-gray-50 dark:hover:bg-[#2a2a2a] transition-colors"
+                title="Return to bottom"
+                aria-label="Return to bottom"
+              >
+                <ArrowDown className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="absolute right-2 top-1/2 -translate-y-1/2 z-10 pointer-events-auto">
@@ -793,13 +1017,18 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
             <div className="px-1 pt-1">{composer}</div>
           </div>
         </div>
+          </>
+        )}
       </aside>
 
       <PersonalizeAiModal
         open={personalizeOpen}
-        onOpenChange={setPersonalizeOpen}
-        drawingUrl={logoDrawing}
-        onDrawingChange={setLogoDrawing}
+        onOpenChange={(open) => {
+          setPersonalizeOpen(open)
+          if (!open) setPersonalizeDraftId(null)
+        }}
+        drawingUrl={personalizeDrawingUrl}
+        onDrawingChange={handleDrawingChange}
       />
     </div>
   )

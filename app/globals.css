@@ -2065,14 +2065,20 @@ span[data-added="true"] {
     gap: 6px;
     height: 28px;
     padding: 0 8px;
-    border: 1px solid #e5e7eb;
+    border: 1px solid transparent; /* Visible only when frame selected + block hovered */
     border-radius: 6px;
     background: #f9fafb;
     box-sizing: border-box;
   }
   .dark .ProseMirror .tt-property-block-cell {
-    border-color: #374151;
     background: #1f2937;
+  }
+  /* Frame selected (no tt-frame-unselected) + hover this property block → cell border */
+  :not(.tt-frame-unselected) .ProseMirror .tt-property-block:hover .tt-property-block-cell {
+    border-color: #e5e7eb;
+  }
+  .dark :not(.tt-frame-unselected) .ProseMirror .tt-property-block:hover .tt-property-block-cell {
+    border-color: #374151;
   }
   .ProseMirror .tt-property-block-input {
     width: 100%;

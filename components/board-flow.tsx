@@ -445,11 +445,12 @@ function PointerConnectionLine({
 
 // Return to bottom — portals into the right chat sidebar above the prompt
 function ReturnToBottomButton({ onClick, isVisible }: { onClick: () => void; isVisible: boolean }) {
-  const { isChatSidebarOpen } = useSidebarContext()
+  const { isChatSidebarOpen, aiChatHasTranscript } = useSidebarContext()
   const [slot, setSlot] = useState<Element | null>(null)
 
   useEffect(() => {
-    if (!isChatSidebarOpen) {
+    // AI chat owns return-to-bottom when a transcript is open; empty New AI chat stays clear
+    if (!isChatSidebarOpen || aiChatHasTranscript) {
       setSlot(null)
       return
     }
@@ -457,9 +458,9 @@ function ReturnToBottomButton({ onClick, isVisible }: { onClick: () => void; isV
     find()
     const id = window.setInterval(find, 200) // Slot mounts with chat sidebar
     return () => window.clearInterval(id)
-  }, [isChatSidebarOpen])
+  }, [isChatSidebarOpen, aiChatHasTranscript])
 
-  if (!isChatSidebarOpen || !slot) return null // Lives inside chat column only
+  if (!isChatSidebarOpen || aiChatHasTranscript || !slot) return null // Lives inside chat column only
 
   return createPortal(
     <div

@@ -67,13 +67,16 @@ export function AiThreadPicker({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex w-full max-w-full min-w-0 items-center gap-1 overflow-hidden rounded-md px-1.5 py-1 text-sm font-medium text-gray-900 dark:text-gray-100 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
+          className="flex w-full max-w-full min-w-0 items-center rounded-md px-1.5 py-1 text-sm font-medium text-gray-900 dark:text-gray-100 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
           title={thread?.title || 'Chat sessions'} // Full title on hover when truncated
         >
-          <span className="min-w-0 flex-1 truncate text-left">
-            {thread?.title || 'New AI chat'}
+          {/* Title + caret as one group so the chevron sits beside the name, not at the far right */}
+          <span className="inline-flex max-w-full min-w-0 items-center gap-1">
+            <span className="min-w-0 truncate text-left">
+              {thread?.title || 'New AI chat'}
+            </span>
+            <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-gray-500 dark:text-gray-400" />
           </span>
-          <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-gray-500 dark:text-gray-400" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64 max-h-80 overflow-y-auto">

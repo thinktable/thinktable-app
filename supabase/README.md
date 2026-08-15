@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260815174523_customize_agent_chat_scroll_chrome` — Customize agent panel; chat scroll/return-to-bottom chrome
 - `20260815171425_property_block_header_chat_chrome` — Property header one-block + propertyBlock cells; chat brand beside thread; path/More cutoff; boards-nav pin
 - `20260815045351_phone_mode_pill_undo_cluster` — Phone mode pill (tools inside; undo/redo board-fill sibling)
 - `20260815012513_phone_zoom_swipe_frame_caret` — Phone Zoom swipe-zoom+coast; selected-frame first-tap caret
