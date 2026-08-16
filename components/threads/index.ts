@@ -29,5 +29,7 @@ export {
   threadStyleFromAlgorithm,
   isSharpThreadAlgorithm,
   threadComfortScale,
+  frameScreenChromeScale,
+  FRAME_SCREEN_CHROME_BOOST,
   type ThreadStylePref,
 } from './constants'

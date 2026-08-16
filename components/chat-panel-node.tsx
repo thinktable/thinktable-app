@@ -7,7 +7,7 @@ import {
   useIsNearThreadConnection,
   ConnectionIndicator,
   INDICATOR_OUTSET,
-  threadComfortScale,
+  frameScreenChromeScale,
 } from '@/components/threads' // Miro: DOM indicators arm edge connection points; proximity while dragging
 
 
@@ -73,7 +73,10 @@ const isContentEmpty = (content: string | undefined | null) => {
   return stripped.length === 0
 }
 
-const BLOCK_HANDLE_GUTTER_W = 24 // TipTap ⋮⋮ gutter (pl-6)
+const BLOCK_HANDLE_GUTTER_W = 24 // TipTap ⋮⋮ column inside the blue adjust strip
+/** Extra air between blue adjust ring and fill (beyond ⋮⋮ / property band) — × screenChromeScale */
+const ADJUST_CONTENT_GAP_Y = 6 // Top/bottom band air
+const ADJUST_CONTENT_GAP_X = 1 // L/R — tighter than T/B
 const BOARD_LINK_ICON_W = 22 // Title emoji / page icon column
 const BOARD_OPEN_MENU_W = 52 // Open-menu pill ≈ preview + open (Notion adds a bit more)
 const BLOCK_THREE_CHARS_W = 28 // ~3ch of body text for plain frames
@@ -556,6 +559,7 @@ function TipTapContent({
   onPropertyTypesChange,
   contentPadLeft = 0, // contentFit paddingLeft — ⋮⋮ centers in the blue gutter past this pad
   frameScale = 1, // Locked-resize CSS scale — grips remeasure when it changes
+  handleGutterFlow = 0, // Blue L/R gutter width (flow px) — ⋮⋮ local left compensates contentFit scale
 }: {
   content: string
   className?: string
@@ -596,6 +600,7 @@ function TipTapContent({
   onPropertyTypesChange?: (types: PropertyTypeId[]) => void // Live types for host chrome bands
   contentPadLeft?: number // contentFit padL — grip centering past the fill edge
   frameScale?: number // Locked-resize scale — ⋮⋮ remeasure (CSS transform skips RO)
+  handleGutterFlow?: number // Adjust-box L gutter (flow px); grips inverse-scale into it
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { setActiveEditor } = useEditorContext()
@@ -1275,6 +1280,7 @@ function TipTapContent({
               onNotionConnection={onNotionConnection}
               contentPadLeft={contentPadLeft}
               frameScale={frameScale}
+              handleGutterFlow={handleGutterFlow}
             />
             <EditorContent
               editor={editor}
@@ -2591,19 +2597,25 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const showFrameChrome = Boolean(isBlock && (selected || dragging) && !isThreadConnecting)
   const hasPropBand = Boolean(showFrameChrome && chromePropertyTypes.length > 0)
   const hasConnBand = Boolean(showFrameChrome && notionConnected && isBlock && !isFlashcard)
-  // ⋮⋮ + bands sit in panel chrome, but grips mount inside the CSS-scaled contentFit — so when
-  // locked resize applies frameScale, L/R gutters must grow by the same factor or the grips
-  // spill past the blue adjust box. Property / connections ROWS stay screen-sized (not × frameScale).
+  // Screen-relative L/R gutter fits the ⋮⋮ (zoom comfort) — not × frameScale (that left empty
+  // blue pad when grips counter-scaled). Grips use localGutter = adjustChromeX/chromeScale so
+  // after contentFit CSS scale they still sit centered in this strip.
   const chromeScale =
     isBlock && isUserResized && frameScale !== 1 ? Math.max(0.15, frameScale) : 1
   // Cell radius is 6px inside contentFit’s CSS scale; fill + blue ring are outside — keep them matched
   const frameCornerRadius = frameShape ? 0 : FRAME_CORNER_RADIUS * chromeScale
+  // Band height + L/R strip: ⋮⋮/property column + extra blue→content air (screen-relative)
+  const screenChromeScale = frameScreenChromeScale(rfZoom || 1)
+  // ⋮⋮ column only — grips size/center here (flush to fill); blue box is wider by ADJUST_CONTENT_GAP
+  const handleGutterFlow = showFrameChrome
+    ? Math.round(BLOCK_HANDLE_GUTTER_W * screenChromeScale)
+    : 0
   const adjustChromeX = showFrameChrome
-    ? Math.round(BLOCK_HANDLE_GUTTER_W * chromeScale)
-    : 0 // Even side gutters when selected (scaled with content so ⋮⋮ stays inside blue)
-  // Band height is screen-comfort sized — does not grow when the frame is locked-resized larger
-  const screenChromeScale = threadComfortScale(rfZoom || 1)
-  const chromeBandH = Math.round(CONNECTIONS_GROUP_H * screenChromeScale) // Property / connections strip
+    ? Math.round((BLOCK_HANDLE_GUTTER_W + ADJUST_CONTENT_GAP_X) * screenChromeScale)
+    : 0 // Blue→fill = handle column + extra gap (tighter on L/R)
+  const chromeBandH = Math.round(
+    (CONNECTIONS_GROUP_H + ADJUST_CONTENT_GAP_Y) * screenChromeScale
+  ) // Property / connections strip + T/B blue→content air
   const chromePadX = Math.round(BLOCK_FRAME_PAD_X * chromeScale) // Band inset matches scaled fill pad
   // T/B bands only while selected — even empty strips keep the blue box balanced
   const adjustChromeYTop = showFrameChrome ? chromeBandH : 0
@@ -4365,15 +4377,15 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const emptyLineHug = growsWithLine && isBlockContentEmpty(promptContent)
   const hasBlockContent = isBlock && !isBlockContentEmpty(promptContent) // Lock only when a content block exists
   // Shared screen-relative scale for selection chrome: resize handles, blue lines, connection
-  // indicators, rotate/free/wrap. Comfort vs board zoom only — does NOT grow with frame width.
-  const frameUiScale = screenChromeScale // Same 1/max(1,√zoom) as threads / ⋮⋮
+  // indicators, rotate/free/wrap. Boosted frameScreenChromeScale — not bare thread comfort.
+  const frameUiScale = screenChromeScale
   const frameChromeScale = frameUiScale // Rotate · lock · wrap icons stay screen-sized
   const frameIndicatorSize = 8 * frameUiScale // Connection simulator dots (slightly under resize corners)
   // Sit outside the blue edge — scales with zoom comfort so gap tracks the indicator
   const frameIndicatorOut = INDICATOR_OUTSET * frameUiScale
-  // Gap is already in flow px (indicator out + radius + pad) — do NOT × frameChromeScale again
-  // (that squared the offset on expand and parked rotate/free/wrap far below the blue box)
-  const frameChromeGapY = frameIndicatorOut + frameIndicatorSize / 2 + 8 // Clear bottom simulator + pad
+  // Clear bottom simulator, then the same air as blue→block on the ⋮⋮ side (handle gutter)
+  const frameChromeGapY =
+    frameIndicatorOut + frameIndicatorSize / 2 + adjustChromeX
   const frameHandleSize = 7 * frameUiScale // Corner resize dots — screen-relative
   const frameLineW = Math.max(1, frameUiScale) // Blue selection stroke
   const frameLineHit = Math.max(4, 5 * frameUiScale) // Line hit target thickness
@@ -5996,7 +6008,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       {hasPropBand && (
         <div
           data-tt-frame-chrome-top
-          className="nodrag nopan absolute z-[2] flex items-center"
+          className="nodrag nopan absolute z-[2] flex items-end" // Sit on the fill (extra band air is above)
           style={{
             top: 0,
             left: adjustChromeX + chromePadX,
@@ -6008,7 +6020,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           <div
             style={{
               transform: screenChromeScale !== 1 ? `scale(${screenChromeScale})` : undefined,
-              transformOrigin: 'left center',
+              transformOrigin: 'left bottom',
             }}
           >
             <FramePropertyGroup types={chromePropertyTypes} />
@@ -6019,7 +6031,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       {hasConnBand && (
         <div
           data-tt-frame-chrome-bottom
-          className="nodrag nopan absolute z-[2] flex items-center"
+          className="nodrag nopan absolute z-[2] flex items-start" // Sit on the fill (extra band air is below)
           style={{
             bottom: 0,
             left: adjustChromeX + chromePadX,
@@ -6030,7 +6042,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           <div
             style={{
               transform: screenChromeScale !== 1 ? `scale(${screenChromeScale})` : undefined,
-              transformOrigin: 'left center',
+              transformOrigin: 'left top',
             }}
           >
             <FrameConnectionsGroup
@@ -6266,6 +6278,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               chromeBandsOutside // Suppress in-fill strips — host paints only while selected
               contentPadLeft={isBlock ? BLOCK_FRAME_PAD_X : 0}
               frameScale={frameScale}
+              handleGutterFlow={handleGutterFlow}
               onPropertyTypesChange={setChromePropertyTypes}
               boardInTargets={(() => {
                 const convs =

@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260816045221_frame_screen_chrome_fit_gaps` — Frame screen chrome boost + blue→content gaps + even add-block hairlines
 - `20260816040622_screen_relative_frame_chrome` — Screen-relative frame chrome (handles/indicators/rotate/wrap/property/conn/⋮⋮)
 - `20260816033714_frame_resize_chrome_connection_indicators` — Frame resize 1:1 chrome (square ring); connection simulators outset; no frame-drag on indicator press
 - `20260816031355_connections_properties_block_handles` — Connections strip ⋮⋮ + no add-block hairlines on property/connections grips

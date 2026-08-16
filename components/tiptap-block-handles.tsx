@@ -13,7 +13,7 @@ import { createClient } from '@/lib/supabase/client' // Persist a new map card f
 import { isBlockContentEmpty, newBlockMetadata } from '@/lib/blocks' // Canonical isBlock metadata + empty check
 import { bodyHtmlWithoutBoardTitle } from '@/lib/blocks/turn-into' // Title line ≠ board body block
 import { cn } from '@/lib/utils'
-import { elementUniformScale, screenToLocal } from '@/lib/dom-transform' // Rotation-safe local↔screen
+import { screenToLocal } from '@/lib/dom-transform' // Rotation-safe screen→local (frame rotate)
 import {
   BlockActionsMenu,
   type BlockActionId,
@@ -83,6 +83,8 @@ type TipTapBlockHandlesProps = {
   contentPadLeft?: number
   /** Host locked-resize scale — CSS transform skips ResizeObserver; re-measure when it changes */
   frameScale?: number
+  /** Blue adjust L gutter width in flow px — local ⋮⋮ left = this / frameScale so it fits after CSS scale */
+  handleGutterFlow?: number
 }
 
 /** Measure grip Y from the top property-icon row (one block for the whole list). */
@@ -245,25 +247,6 @@ function collectAiPendingBlocks(editor: Editor): EditorBlockRef[] {
   return out
 }
 
-/** Prev/next handle-blocks in doc order so add-lines can share the mid-gap Y. */
-function adjacentHandleBlocks(
-  editor: Editor,
-  block: EditorBlockRef
-): { prev: EditorBlockRef | null; next: EditorBlockRef | null } {
-  const list: EditorBlockRef[] = []
-  editor.state.doc.descendants((node, pos) => {
-    const name = node.type.name
-    if (name === 'bulletList' || name === 'orderedList' || name === 'taskList') return true // Walk into lists
-    if (!isHandleBlockType(name)) return true
-    list.push({ from: pos, to: pos + node.nodeSize, node, typeName: name })
-    if (name === 'listItem' || name === 'taskItem') return false // Item is the unit
-    return true
-  })
-  const i = list.findIndex((b) => b.from === block.from)
-  if (i < 0) return { prev: null, next: null }
-  return { prev: list[i - 1] ?? null, next: list[i + 1] ?? null }
-}
-
 /** Resolve the DOM element for a ProseMirror block (handles sit beside this). */
 function blockDom(editor: Editor, block: EditorBlockRef): HTMLElement | null {
   const node = editor.view.nodeDOM(block.from)
@@ -417,10 +400,12 @@ export function TipTapBlockHandles({
   onNotionConnection,
   contentPadLeft = 0, // Match host contentFit pad so ⋮⋮ centers in the blue-box gutter
   frameScale = 1, // Locked resize CSS scale — force re-measure (RO ignores transform)
+  handleGutterFlow = 0, // Host adjustChromeX — inverse-scale local left so ⋮⋮ fits the blue gutter
 }: TipTapBlockHandlesProps) {
   const { screenToFlowPosition } = useReactFlow() // Drop-on-page → flow coords for a new frame
   const rfZoom = useStore((s) => s.transform[2] || 1) // Live zoom — re-render on board zoom so grips can counter-scale to a constant screen size
   void frameScale // Re-render + remeasure when host locked-resize scale changes (transform ≠ layout)
+  void handleGutterFlow // Re-render when blue gutter / screen chrome scale changes
   const queryClient = useQueryClient() // Refetch messages after extract
   const [hover, setHover] = useState<HandleLayout | null>(null) // Handle beside hovered block
   const [aiPendingBlocks, setAiPendingBlocks] = useState<EditorBlockRef[]>([]) // Blocks with rainbow AI edits
@@ -1294,18 +1279,19 @@ export function TipTapBlockHandles({
 
   // Grips render for every selected block (persistent wash) + the hovered/caret/menu block.
   const container = gripLayoutRoot(editor)
-  // Local→screen scale (RF zoom × frameScale) measured off the container; grips live in local px
-  // inside these transforms, so counter-scaling by comfort(scale) keeps them screen-relative
-  // (same curve as threads / resize chrome). `rfZoom` in deps forces re-measure on zoom.
-  void rfZoom // Referenced so zoom changes re-render this component (measurement below reads live DOM)
-  const localToScreen = container ? elementUniformScale(container) : 1 // Rotation-safe (not AABB height ratio)
+  // `rfZoom` / handleGutterFlow / frameScale in render deps so grips remeasure when chrome scale changes
+  void rfZoom
   // Horizontal: ⋮⋮ centered in the LEFT chrome strip (outside the filled frame).
   // Absolute grips are positioned in the content box (inside contentFit pad), so subtract
   // contentPadLeft to measure from the fill’s left edge — otherwise the pad pulls grips
   // toward the fill and they look off-center in the blue gutter (worse after resize scale).
-  // Gutter runs from -(padL+HANDLE_GUTTER)…-padL relative to the content-box origin.
+  // When the host passes handleGutterFlow (screen-sized blue gutter), use localGutter =
+  // flow/frameScale so after contentFit CSS scale the ⋮⋮ still sits inside that strip.
+  const contentCssScale = Math.max(0.15, frameScale || 1)
+  const localGutter =
+    handleGutterFlow > 0 ? handleGutterFlow / contentCssScale : HANDLE_GUTTER
   const gutterCenterLeft =
-    -contentPadLeft - HANDLE_GUTTER + (HANDLE_GUTTER / 2 - GRIP_W / 2)
+    -contentPadLeft - localGutter + (localGutter / 2 - GRIP_W / 2)
   const gripLayouts = new Map<string | number, HandleLayout>() // keyed by block.from (headers = named keys)
   if (container) {
     for (const b of selection) {
@@ -1396,37 +1382,37 @@ export function TipTapBlockHandles({
               ? propertyHeaderArmed
               : isBlockArmed(gl.block))
         const aiPending = gl.connectionsHeader ? false : blockHasAiPending(editor, gl.block)
-        const gripTop = gl.lineCenter - GRIP_H / 2
-        const gripBottom = gl.lineCenter + GRIP_H / 2
-        // Neighbor mid-gap so this block’s below and the next block’s above share one Y.
-        // First/last: sit INSERT_GAP outside the ⋮⋮ (fill pad), never clamp into the grip (that hid add-above).
-        // Property / connections chrome strips have no TipTap neighbors — no shared mid-gap.
-        const neighbors =
-          gl.propertyHeader || gl.connectionsHeader
-            ? { prev: null, next: null }
-            : adjacentHandleBlocks(editor, gl.block)
-        const prevLayout =
-          neighbors.prev && container ? layoutForBlock(editor, container, neighbors.prev) : null
-        const nextLayout =
-          neighbors.next && container ? layoutForBlock(editor, container, neighbors.next) : null
-        const insertAboveY = prevLayout
-          ? (prevLayout.blockBottom + gl.blockTop) / 2
-          : Math.min(gl.blockTop, gripTop - INSERT_GAP)
-        const insertBelowY = nextLayout
-          ? (gl.blockBottom + nextLayout.blockTop) / 2
-          : Math.max(gl.blockBottom, gripBottom + INSERT_GAP)
+        // Screen-relative icon: flow size ≈ GRIP_W × (handleGutterFlow/HANDLE_GUTTER).
+        // Divide out contentFit frameScale so locked resize does not inflate the ⋮⋮ past the blue gutter.
+        const screenFactor =
+          handleGutterFlow > 0 ? handleGutterFlow / HANDLE_GUTTER : 1 / Math.max(1, Math.sqrt(rfZoom || 1))
+        const gripChromeScale = screenFactor / contentCssScale
+        // Layout ⋮⋮ hit box stays GRIP_H; insert Y uses the *visual* extent after counter-scale
+        // so hairlines keep screen-constant distance when frameScale / zoom change.
+        const gripLayoutTop = gl.lineCenter - GRIP_H / 2
+        const gripLayoutBottom = gl.lineCenter + GRIP_H / 2
+        const visualGripTop = gl.lineCenter - (GRIP_H * gripChromeScale) / 2
+        const visualGripBottom = gl.lineCenter + (GRIP_H * gripChromeScale) / 2
+        // Insert gap + hit band in local px so after CSS scale they match screen chrome (same as ⋮⋮)
+        const localInsertGap = INSERT_GAP * gripChromeScale
+        const localInsertHit = Math.max(4, INSERT_HIT * gripChromeScale)
+        // Equal air above/below the visual ⋮⋮ — do NOT mix mid-gap on one side with grip±gap on
+        // the other (that parked the hairlines unevenly around the handle).
+        const insertAboveY = visualGripTop - localInsertGap
+        const insertBelowY = visualGripBottom + localInsertGap
         // Gutter may extend into fill pad (negative top) so the first add-above can paint
-        const gutterTop = Math.max(-FILL_PAD_Y, Math.min(insertAboveY - INSERT_HIT / 2, gripTop))
-        const gutterBottom = Math.max(insertBelowY + INSERT_HIT / 2, gripBottom)
+        const localFillPadY = FILL_PAD_Y * gripChromeScale
+        const gutterTop = Math.max(
+          -localFillPadY,
+          Math.min(insertAboveY - localInsertHit / 2, gripLayoutTop)
+        )
+        const gutterBottom = Math.max(insertBelowY + localInsertHit / 2, gripLayoutBottom)
         const gutterH = gutterBottom - gutterTop
         // Top edge of the ⋮⋮ in gutter space — do NOT also translateY(-50%) (that parked grips
         // on the block’s top edge, especially visible after frameScale resize).
-        const gripTopInGutter = gripTop - gutterTop
-        const insertAboveTop = insertAboveY - gutterTop - INSERT_HIT / 2
-        const insertBelowTop = insertBelowY - gutterTop - INSERT_HIT / 2
-        // Comfort vs local→screen (RF zoom × frameScale): zoomed/scaled out → ride with content;
-        // zoomed/scaled in → counter-scale so ⋮⋮ stays screen-relative (same as resize chrome).
-        const gripChromeScale = 1 / Math.max(1, Math.sqrt(localToScreen || 1))
+        const gripTopInGutter = gripLayoutTop - gutterTop
+        const insertAboveTop = insertAboveY - gutterTop - localInsertHit / 2
+        const insertBelowTop = insertBelowY - gutterTop - localInsertHit / 2
         const insertAbove = gl.insertFrom ?? gl.block.from
         const insertBelow = gl.insertTo ?? gl.block.to
         // Property / connections chrome strips — ⋮⋮ only, no between-block hairlines
@@ -1456,7 +1442,7 @@ export function TipTapBlockHandles({
                     'nodrag nopan cursor-pointer',
                     'opacity-0 group-hover/gutter:opacity-100'
                   )}
-                  style={{ top: insertAboveTop, height: INSERT_HIT }}
+                  style={{ top: insertAboveTop, height: localInsertHit }}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => onInsertLineClick(e, insertAbove)}
                 >
@@ -1483,7 +1469,7 @@ export function TipTapBlockHandles({
                     'nodrag nopan cursor-pointer',
                     'opacity-0 group-hover/gutter:opacity-100'
                   )}
-                  style={{ top: insertBelowTop, height: INSERT_HIT }}
+                  style={{ top: insertBelowTop, height: localInsertHit }}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => onInsertLineClick(e, insertBelow)}
                 >

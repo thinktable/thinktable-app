@@ -1,7 +1,7 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-16T04:06:22Z`
+- Snapped at: `2026-08-16T04:52:21Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
@@ -9,8 +9,14 @@
 
 ## This save
 
+- No DDL. Marker `20260816045221_frame_screen_chrome_fit_gaps.sql`.
+- Frame chrome: larger `frameScreenChromeScale` (1.4×, soft zoom^0.35); blue→content gaps (Y 6 / X 1); adjust box fits screen ⋮⋮; rotate/free/wrap gap = indicator + gutter; add-block hairlines even about visual ⋮⋮.
+- Schema unchanged.
+
+## Prior: screen relative frame chrome
+
 - No DDL. Marker `20260816040622_screen_relative_frame_chrome.sql`.
-- Frame selection chrome is screen-relative (`threadComfortScale(zoom)`): resize handles, indicators, rotate/free/wrap, property/connections rows; ⋮⋮ comfort vs zoom×frameScale. Does not grow with frame width. Gap under chrome is flow px only (no double scale).
+- Frame selection chrome is screen-relative: resize handles, indicators, rotate/free/wrap, property/connections rows; ⋮⋮ comfort vs zoom×frameScale.
 - Schema unchanged.
 
 ## Prior: frame resize chrome connection indicators

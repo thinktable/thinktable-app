@@ -55,3 +55,17 @@ export function threadComfortScale(zoom: number): number {
   const z = Math.max(0.01, zoom) // Guard against 0 / negative store values
   return 1 / Math.max(1, Math.sqrt(z)) // max(1,√z) → no counter-scale below 100%
 }
+
+/** Base boost so frame chrome (handles / ⋮⋮ gutter / rotate) reads at a usable screen size. */
+export const FRAME_SCREEN_CHROME_BOOST = 1.4
+
+/**
+ * Screen-relative scale for frame selection chrome (resize dots, indicators, gutters,
+ * property/conn bands, rotate/free/wrap, ⋮⋮). Softer than thread √ comfort + boost —
+ * pure 1× thread comfort felt too small on the board.
+ */
+export function frameScreenChromeScale(zoom: number): number {
+  const z = Math.max(0.01, zoom) // Guard against 0 / negative store values
+  const comfort = 1 / Math.max(1, Math.pow(z, 0.35)) // Milder than √ so zoom-in does not crush chrome
+  return comfort * FRAME_SCREEN_CHROME_BOOST
+}
