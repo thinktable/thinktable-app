@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260816030739_frame_property_cell_chrome` — Frame property cell chrome (select/hover/I-bar; scale-aligned ⋮⋮)
 - `20260815183526_ai_composer_voice_dictation` — AI composer voice-to-text (Whisper; skip BlackHole/virtual mics)
 - `20260815175520_phone_board_open_menu_taps` — Phone preview/open/Notion taps on boardLink (caret skip + nodrag + selected reveal)
 - `20260815174523_customize_agent_chat_scroll_chrome` — Customize agent panel; chat scroll/return-to-bottom chrome

@@ -29,8 +29,8 @@ function FrameShimmerNodeInner({ data }: NodeProps<FrameShimmerNodeData>) {
       <FrameContentShimmer
         hasText={hasText}
         barCount={data?.barCount || 2}
-        withGutter={false} // Left inset lives in matchFramePad (gutter + pl-0.5) so Tailwind pl-6 can’t override
-        matchFramePad={hasText} // Same pl-0.5 / gutter / pr-4 / 4px vertical as the real frame
+        withGutter={false} // Left inset lives in matchFramePad (padX/Y; ⋮⋮ outside fill)
+        matchFramePad={hasText} // Same BLOCK_FRAME_PAD_X/Y as the real frame contentFit
         className="h-full w-full"
       />
     </div>

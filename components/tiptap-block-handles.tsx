@@ -57,6 +57,8 @@ type HandleLayout = {
   height: number
   firstLineH: number // First-line box height (local px) — grip centers vertically on the first line
   lineCenter: number // Vertical center of the FIRST rendered text line (local px) — where the grip sits
+  blockTop: number // Full block box top (local px) — add-block hairlines share a neighbor mid-gap
+  blockBottom: number // Full block box bottom (local px) — wrapped lines / tall atoms included
   block: EditorBlockRef
   propertyHeader?: boolean // Top icon list — one block; from/to span all property cells
   insertFrom?: number // Add-block hairline above (header uses first cell)
@@ -73,6 +75,10 @@ type TipTapBlockHandlesProps = {
   onPageTurnInto?: (blockType: 'board' | 'boardIn', boardInParentId?: string | null) => void
   onPropertyTurnInto?: (propertyType: PropertyTypeId) => void // Turn into → Property
   notionConnected?: boolean // Notion-connected frame → slimmer block ⋮⋮ menu
+  /** contentFit paddingLeft — absolute grips originate inside the padded content box, not the fill edge */
+  contentPadLeft?: number
+  /** Host locked-resize scale — CSS transform skips ResizeObserver; re-measure when it changes */
+  frameScale?: number
 }
 
 /** Measure grip Y from the top property-icon row (one block for the whole list). */
@@ -82,7 +88,12 @@ function layoutForPropertyHeader(
   insertFrom: number,
   insertTo: number
 ): HandleLayout | null {
-  const header = container.querySelector('[data-tt-property-header]') as HTMLElement | null
+  // Header may live in the panel’s top chrome band (outside the fill) — search the host frame.
+  const frame = container.closest('.react-flow__node') as HTMLElement | null
+  const header = (
+    frame?.querySelector('[data-tt-property-header]') ||
+    container.querySelector('[data-tt-property-header]')
+  ) as HTMLElement | null
   if (!header) return null // Strip not mounted
   const fr = header.getBoundingClientRect()
   if (fr.height <= 0) return null
@@ -93,6 +104,8 @@ function layoutForPropertyHeader(
     height: firstLineH,
     firstLineH,
     lineCenter: mid.y,
+    blockTop: mid.y - firstLineH / 2, // Icon strip is a single band — no wrapped-line box
+    blockBottom: mid.y + firstLineH / 2,
     block, // Range covering all property cells so drag/menu act on the list
     propertyHeader: true,
     insertFrom, // Hairline above the first property cell
@@ -122,7 +135,9 @@ type DropLine = { top: number; left: number; width: number } // Viewport dashed 
 const GRIP_W = 20 // Matches ⋮⋮ `w-5` — insert line uses the same width
 const HANDLE_GUTTER = 24 // Text starts here (row `pl-6`), in local px — where the ⋮⋮ column lives
 const GRIP_H = 24 // ⋮⋮ button height (`h-6`) — used to vertically center it on the first line
-const GUTTER_EDGE_PAD = 6 // Extra gutter height so top/bottom hairlines stay inside the hover group
+const INSERT_HIT = 8 // Add-block hit strip (px) — hairline centered in this band
+const INSERT_GAP = 4 // First/last offset from ⋮⋮ (fill pad); neighbors use the shared mid-gap instead
+const FILL_PAD_Y = 4 // Host contentFit BLOCK_FRAME_PAD_Y — first/last hairline may sit in that pad
 
 /** Nearest positioned ancestor — absolute ⋮⋮ `top`/`left` are in this box (the pl-6 gutter wrapper). */
 function positionedAncestor(el: HTMLElement): HTMLElement {
@@ -186,6 +201,25 @@ function collectAiPendingBlocks(editor: Editor): EditorBlockRef[] {
   return out
 }
 
+/** Prev/next handle-blocks in doc order so add-lines can share the mid-gap Y. */
+function adjacentHandleBlocks(
+  editor: Editor,
+  block: EditorBlockRef
+): { prev: EditorBlockRef | null; next: EditorBlockRef | null } {
+  const list: EditorBlockRef[] = []
+  editor.state.doc.descendants((node, pos) => {
+    const name = node.type.name
+    if (name === 'bulletList' || name === 'orderedList' || name === 'taskList') return true // Walk into lists
+    if (!isHandleBlockType(name)) return true
+    list.push({ from: pos, to: pos + node.nodeSize, node, typeName: name })
+    if (name === 'listItem' || name === 'taskItem') return false // Item is the unit
+    return true
+  })
+  const i = list.findIndex((b) => b.from === block.from)
+  if (i < 0) return { prev: null, next: null }
+  return { prev: list[i - 1] ?? null, next: list[i + 1] ?? null }
+}
+
 /** Resolve the DOM element for a ProseMirror block (handles sit beside this). */
 function blockDom(editor: Editor, block: EditorBlockRef): HTMLElement | null {
   const node = editor.view.nodeDOM(block.from)
@@ -237,10 +271,15 @@ function layoutForBlock(
     const pageLabel = el?.querySelector?.('.tt-board-link-label') as HTMLElement | null
     const textEl = dbHeader || imageRow || propertyRow || pageLabel || el
 
-    // Always pin to first-line mid via screen→local on the layout root (rotation-safe)
-    if (textEl) {
-      const lh = parseFloat(getComputedStyle(textEl).lineHeight)
-      const fr = topmostClientRect(textEl)
+    // Prefer the atom’s chrome row box (stable under frameScale) over Range ink fragments.
+    const rowBox = propertyRow || dbHeader || imageRow || pageLabel
+    const fr = rowBox
+      ? rowBox.getBoundingClientRect()
+      : textEl
+        ? topmostClientRect(textEl)
+        : null
+    if (textEl || fr) {
+      const lh = textEl ? parseFloat(getComputedStyle(textEl).lineHeight) : NaN
       let firstLineH =
         Number.isFinite(lh) && lh > 0 ? lh : fr && fr.height > 0 ? Math.min(fr.height, 28) : 22
       let lineCenter: number
@@ -248,21 +287,48 @@ function layoutForBlock(
         const isDb = !!(dbHeader || el?.classList?.contains?.('tt-database-block'))
         const isImage = !!(imageRow || el?.classList?.contains?.('tt-image-block'))
         const isProperty = !!(propertyRow || el?.classList?.contains?.('tt-property-block'))
-        const useTop = isDb || isImage || isProperty || fr.height > firstLineH * 2
-        const midY = useTop ? fr.top + Math.min(firstLineH, fr.height) / 2 : (fr.top + fr.bottom) / 2
+        // DB / image: pin to the TOP chrome band (tall atoms). Property + text: true vertical center
+        // of the measured box — top-band + lineHeight sat the ⋮⋮ on the cell’s top after resize.
+        const midY =
+          isDb || isImage
+            ? fr.top + Math.min(firstLineH, fr.height) / 2
+            : (fr.top + fr.bottom) / 2
         lineCenter = screenToLocal(root, (fr.left + fr.right) / 2, midY).y
-        if (!(Number.isFinite(lh) && lh > 0)) {
-          firstLineH = Math.min(Math.max(14, fr.height), 28)
+        if (isProperty || pageLabel) {
+          // Row box height in local px (frameScale-safe) — keep firstLineH in sync with the cell
+          const localH = Math.abs(
+            screenToLocal(root, fr.left, fr.bottom).y - screenToLocal(root, fr.left, fr.top).y
+          )
+          if (localH > 0) firstLineH = Math.min(Math.max(14, localH), 40)
+        } else if (!(Number.isFinite(lh) && lh > 0) || !(isDb || isImage)) {
+          // Text grips: first-line height from the glyph rect (local), not a tall line-box
+          const localH = Math.abs(
+            screenToLocal(root, fr.left, fr.bottom).y - screenToLocal(root, fr.left, fr.top).y
+          )
+          if (localH > 0) firstLineH = Math.min(Math.max(14, localH), 28)
         }
       } else {
         const start = editor.view.coordsAtPos(block.from + 1)
         lineCenter = screenToLocal(root, start.left, (start.top + start.bottom) / 2).y
       }
+      const bandTop = lineCenter - firstLineH / 2 // First-line top — fallback if the node has no box
+      const bandBottom = lineCenter + firstLineH / 2
+      let blockTop = bandTop
+      let blockBottom = bandBottom
+      if (el) {
+        const br = el.getBoundingClientRect() // Full block (wrapped lines / tall atoms) — neighbor mid-gap
+        if (br.height > 0) {
+          blockTop = screenToLocal(root, br.left, br.top).y
+          blockBottom = screenToLocal(root, br.left, br.bottom).y
+        }
+      }
       return {
-        top: lineCenter - firstLineH / 2,
+        top: bandTop,
         height: firstLineH,
         firstLineH,
         lineCenter,
+        blockTop,
+        blockBottom,
         block,
       }
     }
@@ -279,6 +345,8 @@ function layoutForBlock(
       height,
       firstLineH: Math.min(height, 28),
       lineCenter,
+      blockTop: top,
+      blockBottom: top + height,
       block,
     }
   } catch {
@@ -301,9 +369,12 @@ export function TipTapBlockHandles({
   onPageTurnInto,
   onPropertyTurnInto,
   notionConnected = false,
+  contentPadLeft = 0, // Match host contentFit pad so ⋮⋮ centers in the blue-box gutter
+  frameScale = 1, // Locked resize CSS scale — force re-measure (RO ignores transform)
 }: TipTapBlockHandlesProps) {
   const { screenToFlowPosition } = useReactFlow() // Drop-on-page → flow coords for a new frame
   const rfZoom = useStore((s) => s.transform[2] || 1) // Live zoom — re-render on board zoom so grips can counter-scale to a constant screen size
+  void frameScale // Re-render + remeasure when host locked-resize scale changes (transform ≠ layout)
   const queryClient = useQueryClient() // Refetch messages after extract
   const [hover, setHover] = useState<HandleLayout | null>(null) // Handle beside hovered block
   const [aiPendingBlocks, setAiPendingBlocks] = useState<EditorBlockRef[]>([]) // Blocks with rainbow AI edits
@@ -374,9 +445,11 @@ export function TipTapBlockHandles({
     setMenu(null)
   }, [])
 
-  // Frame deselected → drop any armed block selection (no block drag without a selected frame)
+  // Frame deselected → drop hover/caret grips and any armed block selection
   useEffect(() => {
     if (isPanelSelected) return
+    setHover(null) // No ⋮⋮ on unselected frame hover
+    setFocusLayout(null)
     clearBlockSelection()
   }, [isPanelSelected, clearBlockSelection])
 
@@ -438,9 +511,11 @@ export function TipTapBlockHandles({
     [editor]
   )
 
-  // Show handle when pointer Y is in a block’s band — anywhere across the full frame width
+  // Show handle when pointer Y is in a block’s band — anywhere across the full frame width.
+  // Only while the host **frame** is selected (unselected hover must not paint ⋮⋮).
   useEffect(() => {
     if (!editor || !enabled || editor.isDestroyed) return
+    if (!isPanelSelected) return // Unselected: never arm hover grips
     const dom = editor.view.dom
     const container = gripLayoutRoot(editor)
     if (!container) return
@@ -477,7 +552,7 @@ export function TipTapBlockHandles({
         }
       }
 
-      const headerEl = container.querySelector('[data-tt-property-header]') as HTMLElement | null
+      const headerEl = frame.querySelector('[data-tt-property-header]') as HTMLElement | null
       if (headerEl) {
         const hr = headerEl.getBoundingClientRect()
         if (clientY >= hr.top && clientY <= hr.bottom) {
@@ -525,11 +600,16 @@ export function TipTapBlockHandles({
       frame.removeEventListener('mousemove', onMove)
       frame.removeEventListener('mouseleave', onLeave)
     }
-  }, [editor, enabled, menu])
+  }, [editor, enabled, menu, isPanelSelected])
 
-  // Keep a handle beside the block that owns the caret (cursor placed → handle stays without hover)
+  // Keep a handle beside the block that owns the caret (cursor placed → handle stays without hover).
+  // Also re-measure on TipTap transactions / RO so grips stay glued after typing / zoom.
   useEffect(() => {
     if (!editor || !enabled || editor.isDestroyed) return
+    if (!isPanelSelected) {
+      setFocusLayout(null) // No caret grip on an unselected frame
+      return
+    }
     const container = gripLayoutRoot(editor)
     if (!container) return
 
@@ -540,7 +620,9 @@ export function TipTapBlockHandles({
       prev.block.from === next.block.from &&
       Math.abs(prev.top - next.top) < 0.5 &&
       Math.abs(prev.height - next.height) < 0.5 &&
-      Math.abs(prev.lineCenter - next.lineCenter) < 0.5
+      Math.abs(prev.lineCenter - next.lineCenter) < 0.5 &&
+      Math.abs(prev.blockTop - next.blockTop) < 0.5 &&
+      Math.abs(prev.blockBottom - next.blockBottom) < 0.5
 
     const syncFocus = () => {
       if (menu) return
@@ -608,7 +690,7 @@ export function TipTapBlockHandles({
       editor.off('transaction', refreshLayouts)
       ro.disconnect()
     }
-  }, [editor, enabled, menu])
+  }, [editor, enabled, menu, isPanelSelected, frameScale])
 
   // Outside click: dismiss menu + clear armed block selection (unless clicking another grip / the menu)
   useEffect(() => {
@@ -1046,7 +1128,9 @@ export function TipTapBlockHandles({
   // Blue wash on the top icon list when that block is armed / hovered
   useEffect(() => {
     if (!editor || editor.isDestroyed) return
-    const el = gripLayoutRoot(editor)?.querySelector('[data-tt-property-header]')
+    const el =
+      frameForEditor(editor.view.dom).querySelector('[data-tt-property-header]') ||
+      gripLayoutRoot(editor)?.querySelector('[data-tt-property-header]')
     if (!el) return
     const on = propertyHeaderArmed || !!hover?.propertyHeader
     el.classList.toggle('tt-block-highlight', on)
@@ -1054,6 +1138,8 @@ export function TipTapBlockHandles({
   }, [editor, propertyHeaderArmed, hover?.propertyHeader])
 
   if (!editor || !enabled) return null
+  // Unselected frames never paint ⋮⋮ (hover / caret / AI pending) — only when the blue adjust box is up
+  if (!isPanelSelected) return null
 
   // Grips render for every selected block (persistent wash) + the hovered/caret/menu block.
   const container = gripLayoutRoot(editor)
@@ -1063,9 +1149,13 @@ export function TipTapBlockHandles({
   void rfZoom // Referenced so zoom changes re-render this component (measurement below reads live DOM)
   const localToScreen = container ? elementUniformScale(container) : 1 // Rotation-safe (not AABB height ratio)
   void localToScreen
-  // Horizontal: keep the grip CENTERED in the gutter — midway between the frame's left edge (local 0)
-  // and the block's text left (local HANDLE_GUTTER).
-  const gutterCenterLeft = HANDLE_GUTTER / 2 - GRIP_W / 2 // Left so the grip's center sits at gutter mid
+  // Horizontal: ⋮⋮ centered in the LEFT chrome strip (outside the filled frame).
+  // Absolute grips are positioned in the content box (inside contentFit pad), so subtract
+  // contentPadLeft to measure from the fill’s left edge — otherwise the pad pulls grips
+  // toward the fill and they look off-center in the blue gutter (worse after resize scale).
+  // Gutter runs from -(padL+HANDLE_GUTTER)…-padL relative to the content-box origin.
+  const gutterCenterLeft =
+    -contentPadLeft - HANDLE_GUTTER + (HANDLE_GUTTER / 2 - GRIP_W / 2)
   const gripLayouts = new Map<string | number, HandleLayout>() // keyed by block.from (header = 'property-header')
   if (container) {
     for (const b of selection) {
@@ -1128,15 +1218,33 @@ export function TipTapBlockHandles({
           isPanelSelected &&
           (gl.propertyHeader ? propertyHeaderArmed : isBlockArmed(gl.block))
         const aiPending = blockHasAiPending(editor, gl.block)
-        // First-line band only — do NOT grow with wrapped multi-line text (add lines stay by the ⋮⋮)
-        const lineH = Math.max(gl.firstLineH || GRIP_H, GRIP_H)
-        const firstLineTop = gl.lineCenter - lineH / 2
-        const gutterTop = firstLineTop - GUTTER_EDGE_PAD
-        const gutterH = lineH + GUTTER_EDGE_PAD * 2
-        const gripTopInGutter = gl.lineCenter - gutterTop
-        const gripRoot = container
-        const uniformScale = gripRoot ? elementUniformScale(gripRoot) : 1
-        const gripChromeScale = 1 / Math.max(1, Math.sqrt(uniformScale))
+        const gripTop = gl.lineCenter - GRIP_H / 2
+        const gripBottom = gl.lineCenter + GRIP_H / 2
+        // Neighbor mid-gap so this block’s below and the next block’s above share one Y.
+        // First/last: sit INSERT_GAP outside the ⋮⋮ (fill pad), never clamp into the grip (that hid add-above).
+        const neighbors = gl.propertyHeader ? { prev: null, next: null } : adjacentHandleBlocks(editor, gl.block)
+        const prevLayout =
+          neighbors.prev && container ? layoutForBlock(editor, container, neighbors.prev) : null
+        const nextLayout =
+          neighbors.next && container ? layoutForBlock(editor, container, neighbors.next) : null
+        const insertAboveY = prevLayout
+          ? (prevLayout.blockBottom + gl.blockTop) / 2
+          : Math.min(gl.blockTop, gripTop - INSERT_GAP)
+        const insertBelowY = nextLayout
+          ? (gl.blockBottom + nextLayout.blockTop) / 2
+          : Math.max(gl.blockBottom, gripBottom + INSERT_GAP)
+        // Gutter may extend into fill pad (negative top) so the first add-above can paint
+        const gutterTop = Math.max(-FILL_PAD_Y, Math.min(insertAboveY - INSERT_HIT / 2, gripTop))
+        const gutterBottom = Math.max(insertBelowY + INSERT_HIT / 2, gripBottom)
+        const gutterH = gutterBottom - gutterTop
+        // Top edge of the ⋮⋮ in gutter space — do NOT also translateY(-50%) (that parked grips
+        // on the block’s top edge, especially visible after frameScale resize).
+        const gripTopInGutter = gripTop - gutterTop
+        const insertAboveTop = insertAboveY - gutterTop - INSERT_HIT / 2
+        const insertBelowTop = insertBelowY - gutterTop - INSERT_HIT / 2
+        // Comfort vs BOARD zoom only — do NOT fold frameScale into this (locked resize scales
+        // content; grips must ride with the block, not shrink against it).
+        const gripChromeScale = 1 / Math.max(1, Math.sqrt(rfZoom || 1))
         const insertAbove = gl.insertFrom ?? gl.block.from
         const insertBelow = gl.insertTo ?? gl.block.to
         const grip = (
@@ -1160,21 +1268,25 @@ export function TipTapBlockHandles({
                   title="Add block"
                   aria-label="Add block above"
                   className={cn(
-                    'group/insert absolute left-0 right-0 top-0 z-[1] h-3',
+                    'group/insert absolute left-0 right-0 z-[1]',
                     'nodrag nopan cursor-pointer',
                     'opacity-0 group-hover/gutter:opacity-100'
                   )}
+                  style={{ top: insertAboveTop, height: INSERT_HIT }}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => onInsertLineClick(e, insertAbove)}
                 >
                   <span
                     className={cn(
-                      'pointer-events-none absolute left-1/2 top-0 h-px w-3 -translate-x-1/2 rounded-full',
+                      'pointer-events-none absolute left-1/2 top-1/2 h-px w-3 rounded-full',
                       'bg-gray-200 transition-colors group-hover/insert:bg-black/35',
                       'dark:bg-gray-600 dark:group-hover/insert:bg-white/40'
                     )}
                     aria-hidden
-                    style={{ transform: `translateX(-50%) scale(${gripChromeScale})` }}
+                    style={{
+                      transform: `translate(-50%, -50%) scale(${gripChromeScale})`,
+                      transformOrigin: 'center',
+                    }}
                   />
                 </button>
                 <button
@@ -1183,21 +1295,25 @@ export function TipTapBlockHandles({
                   title="Add block"
                   aria-label="Add block below"
                   className={cn(
-                    'group/insert absolute left-0 right-0 bottom-0 z-[1] h-3',
+                    'group/insert absolute left-0 right-0 z-[1]',
                     'nodrag nopan cursor-pointer',
                     'opacity-0 group-hover/gutter:opacity-100'
                   )}
+                  style={{ top: insertBelowTop, height: INSERT_HIT }}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => onInsertLineClick(e, insertBelow)}
                 >
                   <span
                     className={cn(
-                      'pointer-events-none absolute left-1/2 bottom-0 h-px w-3 -translate-x-1/2 rounded-full',
+                      'pointer-events-none absolute left-1/2 top-1/2 h-px w-3 rounded-full',
                       'bg-gray-200 transition-colors group-hover/insert:bg-black/35',
                       'dark:bg-gray-600 dark:group-hover/insert:bg-white/40'
                     )}
                     aria-hidden
-                    style={{ transform: `translateX(-50%) scale(${gripChromeScale})` }}
+                    style={{
+                      transform: `translate(-50%, -50%) scale(${gripChromeScale})`,
+                      transformOrigin: 'center',
+                    }}
                   />
                 </button>
               </>
@@ -1217,8 +1333,9 @@ export function TipTapBlockHandles({
               )}
               style={{
                 top: gripTopInGutter,
-                transform: `translateY(-50%) scale(${gripChromeScale})`,
-                transformOrigin: 'center',
+                // Scale about center so board-zoom comfort does not shift the mid-line lock
+                transform: `scale(${gripChromeScale})`,
+                transformOrigin: 'center center',
               }}
               title={
                 armed

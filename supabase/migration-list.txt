@@ -1,7 +1,7 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-08-15T18:35:26Z
+# snapped_at=2026-08-16T03:07:39Z
 # postgres=17.6.1.052 gotrue=v2.195.0 rest=v13.0.5 storage=v1.68.1
 # Remote applied (via Supabase MCP / Management API on thinkable):
 # 20251124231547 create_saas_schema
@@ -119,3 +119,4 @@
 20260815174523_customize_agent_chat_scroll_chrome.sql
 20260815175520_phone_board_open_menu_taps.sql
 20260815183526_ai_composer_voice_dictation.sql
+20260816030739_frame_property_cell_chrome.sql

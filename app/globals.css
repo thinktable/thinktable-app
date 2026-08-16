@@ -183,7 +183,7 @@
 .tt-frame-shimmer {
   width: 100%;
   height: 100%;
-  border-radius: 1rem; /* Match frame rounded-2xl — size comes from the cached RF box or explicit hug class */
+  border-radius: 6px; /* Match property cell / frame fill (rounded-md) */
   pointer-events: none; /* Loading only — never steal drag/select */
   background: linear-gradient(
     90deg,
@@ -226,9 +226,9 @@
   }
 }
 
-/* RF shell only — same inset as frame contentFit (pl-0.5 + ⋮⋮ gutter + pr-4 + 4px vertical) */
+/* RF shell only — same inset as frame contentFit (padX 6 / padY 4; ⋮⋮ outside fill) */
 .tt-frame-shimmer-frame-pad {
-  padding: 4px 16px 4px 26px; /* 2px + 24px left; 16px right — don’t stack with Tailwind pl-6 */
+  padding: 4px 6px; /* Match chat-panel-node BLOCK_FRAME_PAD_Y / _X */
   box-sizing: border-box;
 }
 
@@ -1446,44 +1446,64 @@ span[data-added="true"] {
   }
 
   /* Connected selection rectangle — RF line controls meet the corner dots.
-     Stroke/hit thickness come from --tt-frame-line-* on the panel (scales with frame size). */
+     Hit box stays centered on the edge (RF translate ±50%); the blue STROKE is painted at
+     the hit-box center so it stays on the frame edge when --tt-frame-line-hit grows.
+     (border-top/left on a tall hit box sat at the outer rim and floated past the corner dots.) */
   .react-flow__node-chatPanel .react-flow__resize-control.line,
   .react-flow__node-chatPanel .tt-frame-resize-line {
     border: none !important;
-    background: transparent !important;
+    background-color: transparent !important;
+    background-repeat: no-repeat !important;
+    background-position: center !important;
+    box-sizing: border-box !important;
     z-index: 55 !important;
   }
   .react-flow__node-chatPanel .react-flow__resize-control.line.top,
   .react-flow__node-chatPanel .tt-frame-resize-line.top {
-    border-top: var(--tt-frame-line-w, 1.5px) solid #3b82f6 !important;
     height: var(--tt-frame-line-hit, 6px) !important;
+    background-image: linear-gradient(#3b82f6, #3b82f6) !important;
+    background-size: 100% var(--tt-frame-line-w, 1.5px) !important;
   }
   .react-flow__node-chatPanel .react-flow__resize-control.line.bottom,
   .react-flow__node-chatPanel .tt-frame-resize-line.bottom {
-    border-bottom: var(--tt-frame-line-w, 1.5px) solid #3b82f6 !important;
     height: var(--tt-frame-line-hit, 6px) !important;
+    background-image: linear-gradient(#3b82f6, #3b82f6) !important;
+    background-size: 100% var(--tt-frame-line-w, 1.5px) !important;
   }
   .react-flow__node-chatPanel .react-flow__resize-control.line.left,
   .react-flow__node-chatPanel .tt-frame-resize-line.left {
-    border-left: var(--tt-frame-line-w, 1.5px) solid #3b82f6 !important;
     width: var(--tt-frame-line-hit, 6px) !important;
+    background-image: linear-gradient(#3b82f6, #3b82f6) !important;
+    background-size: var(--tt-frame-line-w, 1.5px) 100% !important;
   }
   .react-flow__node-chatPanel .react-flow__resize-control.line.right,
   .react-flow__node-chatPanel .tt-frame-resize-line.right {
-    border-right: var(--tt-frame-line-w, 1.5px) solid #3b82f6 !important;
     width: var(--tt-frame-line-hit, 6px) !important;
+    background-image: linear-gradient(#3b82f6, #3b82f6) !important;
+    background-size: var(--tt-frame-line-w, 1.5px) 100% !important;
+  }
+  /* Rounded adjust ring paints the stroke — keep line controls as invisible hit targets only */
+  .react-flow__node-chatPanel .tt-frame-resize-line-hit.top,
+  .react-flow__node-chatPanel .tt-frame-resize-line-hit.bottom,
+  .react-flow__node-chatPanel .tt-frame-resize-line-hit.left,
+  .react-flow__node-chatPanel .tt-frame-resize-line-hit.right {
+    background-image: none !important;
   }
   .dark .react-flow__node-chatPanel .react-flow__resize-control.line.top,
   .dark .react-flow__node-chatPanel .tt-frame-resize-line.top,
   .dark .react-flow__node-chatPanel .react-flow__resize-control.line.bottom,
-  .dark .react-flow__node-chatPanel .tt-frame-resize-line.bottom {
-    border-color: #60a5fa !important;
-  }
+  .dark .react-flow__node-chatPanel .tt-frame-resize-line.bottom,
   .dark .react-flow__node-chatPanel .react-flow__resize-control.line.left,
   .dark .react-flow__node-chatPanel .tt-frame-resize-line.left,
   .dark .react-flow__node-chatPanel .react-flow__resize-control.line.right,
   .dark .react-flow__node-chatPanel .tt-frame-resize-line.right {
-    border-color: #60a5fa !important;
+    background-image: linear-gradient(#60a5fa, #60a5fa) !important;
+  }
+  .dark .react-flow__node-chatPanel .tt-frame-resize-line-hit.top,
+  .dark .react-flow__node-chatPanel .tt-frame-resize-line-hit.bottom,
+  .dark .react-flow__node-chatPanel .tt-frame-resize-line-hit.left,
+  .dark .react-flow__node-chatPanel .tt-frame-resize-line-hit.right {
+    background-image: none !important;
   }
 
   /* Item corner resize handles — circular dots; size from --tt-frame-handle on the panel */
@@ -2074,21 +2094,26 @@ span[data-added="true"] {
     align-items: center;
     gap: 6px;
     height: 28px;
-    padding: 0 8px;
+    padding: 0 8px 0 4px; /* Tighter left so the type icon sits nearer the cell edge */
     border: 1px solid transparent; /* Visible only when frame selected + block hovered */
     border-radius: 6px;
-    background: #f9fafb;
+    background: transparent; /* No fill — sits on the frame wash */
     box-sizing: border-box;
   }
   .dark .ProseMirror .tt-property-block-cell {
-    background: #1f2937;
+    background: transparent;
   }
-  /* Frame selected (no tt-frame-unselected) + hover this property block → cell border */
-  :not(.tt-frame-unselected) .ProseMirror .tt-property-block:hover .tt-property-block-cell {
+  /* Hover border only on a selected frame. Bare `:not(.tt-frame-unselected)` matches body/html
+     and always painted — gate with the host shell class instead. */
+  .ProseMirror .tt-property-block:hover .tt-property-block-cell {
     border-color: #e5e7eb;
   }
-  .dark :not(.tt-frame-unselected) .ProseMirror .tt-property-block:hover .tt-property-block-cell {
+  .dark .ProseMirror .tt-property-block:hover .tt-property-block-cell {
     border-color: #374151;
+  }
+  .tt-frame-unselected .ProseMirror .tt-property-block:hover .tt-property-block-cell,
+  .tt-frame-unselected .ProseMirror .tt-property-block-cell {
+    border-color: transparent; /* Unselected hover must not reveal the cell chrome */
   }
   .ProseMirror .tt-property-block-input {
     width: 100%;

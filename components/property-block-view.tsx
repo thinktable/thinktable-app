@@ -19,8 +19,21 @@ export function PropertyBlockView({ node, updateAttributes, selected, editor }: 
   const stored = typeof node.attrs.value === 'string' ? node.attrs.value : '' // Persisted cell text
   const [draft, setDraft] = useState(stored) // Local while typing so each keystroke isn't a TipTap attr write
   const label = propertyTypeLabel(propertyType) // aria / title for the type glyph
-  // Frame deselected → TipTap editable=false; keep the native input from stealing clicks / re-focusing
-  const canEditCell = !!editor?.isEditable
+  // Frame deselected → TipTap editable=false; keep the native input from stealing clicks / re-focusing.
+  // Host `setOptions({ editable })` fires no transaction, so a one-shot `editor.isEditable` read goes
+  // stale until the next doc change — that left the cell inert (no hover border, first click lost).
+  const [canEditCell, setCanEditCell] = useState(() => !!editor?.isEditable)
+
+  useEffect(() => {
+    const dom = editor?.view?.dom as HTMLElement | undefined
+    if (!dom) return
+    const sync = () => setCanEditCell(!!editor?.isEditable)
+    sync() // Catch a toggle that landed before this effect ran
+    // PM mirrors `editable` onto the editor DOM's contenteditable — observe that instead of polling
+    const mo = new MutationObserver(sync)
+    mo.observe(dom, { attributes: true, attributeFilter: ['contenteditable'] })
+    return () => mo.disconnect()
+  }, [editor])
 
   useEffect(() => {
     setDraft(stored) // Remote / Turn-into attr updates win over a stale draft
@@ -45,7 +58,20 @@ export function PropertyBlockView({ node, updateAttributes, selected, editor }: 
     >
       {/* First-line band the ⋮⋮ grip measures (same idea as imageBlock / databaseBlock) */}
       <div className="tt-property-block-row">
-        <div className="tt-property-block-cell">
+        <div
+          className="tt-property-block-cell"
+          onPointerDown={(e) => {
+            if (!canEditCell) return // Unselected: let RF select the frame
+            if ((e.target as HTMLElement).closest('.tt-property-block-input')) return // Input handles itself
+            // Icon / cell padding is still the cell — claim it before PM turns this into a
+            // NodeSelection, and put the caret in the value so one click lands the I-bar
+            e.stopPropagation()
+            e.preventDefault()
+            const input = e.currentTarget.querySelector('input') as HTMLInputElement | null
+            input?.focus()
+            input?.setSelectionRange(input.value.length, input.value.length)
+          }}
+        >
           <span
             className="tt-property-block-icon"
             title={label}
@@ -55,7 +81,12 @@ export function PropertyBlockView({ node, updateAttributes, selected, editor }: 
           </span>
           <input
             type="text"
-            className="tt-property-block-input"
+            className={cn(
+              'tt-property-block-input',
+              // Only the input ignores hits while unselected — the cell/row stay hoverable so the
+              // border still paints, and the select click falls through to PM instead of focusing here
+              !canEditCell && 'pointer-events-none'
+            )}
             value={draft}
             placeholder="Empty"
             aria-label={`${label} value`}
@@ -65,9 +96,16 @@ export function PropertyBlockView({ node, updateAttributes, selected, editor }: 
               if (!canEditCell) return // Let the event reach RF so the frame selects
               e.stopPropagation() // Selected: don't start frame drag from the cell
             }}
+            onMouseDown={(e) => {
+              // Belt-and-suspenders if pointer-events is overridden: never focus while unselected
+              if (!canEditCell) {
+                e.preventDefault()
+                return
+              }
+            }}
             onClick={(e) => {
               if (!canEditCell) return
-              e.stopPropagation() // Keep caret in the cell
+              e.stopPropagation() // Keep caret in the cell (second click while selected)
             }}
             onChange={(e) => setDraft(e.target.value)} // Type into the cell
             onBlur={commit} // Persist on leave

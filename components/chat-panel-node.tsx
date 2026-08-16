@@ -5,7 +5,6 @@ import { NodeProps, Handle, Position, useReactFlow, useStore, useStoreApi, NodeR
 import {
   useIsThreadConnecting,
   useIsNearThreadConnection,
-  INDICATOR_OUTSET,
   ConnectionIndicator,
 } from '@/components/threads' // Miro: DOM indicators arm edge connection points; proximity while dragging
 
@@ -59,7 +58,7 @@ import {
 import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Strip blank lines on frame deselect
 import { setAiTextSelection } from '@/lib/ai/selection-bridge' // Live highlighted-text pills in AI composer
 import { BlockActionsMenu, type BoardInTarget } from '@/components/block-actions-menu'
-import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
 import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, ScanText, WrapText } from 'lucide-react' // Rotate + fit-to-text / wrap
 import { useAiEditSession } from '@/lib/ai/edit-session' // Pending rainbow / review focus
 
@@ -76,7 +75,12 @@ const BLOCK_HANDLE_GUTTER_W = 24 // TipTap ⋮⋮ gutter (pl-6)
 const BOARD_LINK_ICON_W = 22 // Title emoji / page icon column
 const BOARD_OPEN_MENU_W = 52 // Open-menu pill ≈ preview + open (Notion adds a bit more)
 const BLOCK_THREE_CHARS_W = 28 // ~3ch of body text for plain frames
-const BLOCK_MIN_FRAME_H = 40 // Keep a usable box when shrinking
+const BLOCK_MIN_FRAME_H = 32 // One line (~24) + equal 4px content pads — hug the block, don't float chrome
+const BLOCK_FRAME_PAD_Y = 4 // Top/bottom inset inside the fill
+const BLOCK_FRAME_PAD_X = 6 // Slightly more L/R than T/B (property cell ↔ frame edge)
+const BLOCK_FRAME_PAD = BLOCK_FRAME_PAD_X // Default / band inset = horizontal pad
+/** Property cell radius at scale 1 — fill + blue adjust ring live outside CSS scale, so multiply by chromeScale */
+const FRAME_CORNER_RADIUS = 6
 const CONNECTIONS_GROUP_H = 28 // h-7 footer strip — hug spacer + pinned group when the free frame clips
 const DATABASE_BLOCK_HTML_RE = /data-type=["']databaseBlock["']/i // TipTap Notion DB atom in frame HTML
 const MIN_DATABASE_FRAME_W = 240 // Below this a DB frame is a collapsed stub (grip + title only)
@@ -92,12 +96,13 @@ function isCollapsedDatabaseFrameSize(width: number, height: number): boolean {
   return width < MIN_DATABASE_FRAME_W || height < MIN_DATABASE_FRAME_H
 }
 
-/** Min frame width: boardLink → grip+icon+menu; plain text → grip+3 letters. */
-function blockMinFrameWidth(html: string): number {
+/** Min frame width: boardLink → (optional grip)+icon+menu; plain text → (optional grip)+3 letters. */
+function blockMinFrameWidth(html: string, withGutter = true): number {
+  const gutter = withGutter ? BLOCK_HANDLE_GUTTER_W : 0 // Unselected frames omit the ⋮⋮ column
   if (/data-type="boardLink"/i.test(html || '')) {
-    return BLOCK_HANDLE_GUTTER_W + BOARD_LINK_ICON_W + BOARD_OPEN_MENU_W
+    return gutter + BOARD_LINK_ICON_W + BOARD_OPEN_MENU_W
   }
-  return BLOCK_HANDLE_GUTTER_W + BLOCK_THREE_CHARS_W
+  return gutter + BLOCK_THREE_CHARS_W
 }
 
 const BLOCK_MIN_FRAME_W = BLOCK_HANDLE_GUTTER_W + BOARD_LINK_ICON_W + BOARD_OPEN_MENU_W // Default / boardLink floor
@@ -147,7 +152,7 @@ function contentSizeFromAabb(
  */
 function measureNaturalContentWidth(contentFit: HTMLElement): number {
   const cs = getComputedStyle(contentFit)
-  const padL = parseFloat(cs.paddingLeft) || 0 // Content-box left pad (pl-0.5 on blocks)
+  const padL = parseFloat(cs.paddingLeft) || 0 // Content-box left pad (BLOCK_FRAME_PAD on blocks)
   const pm = contentFit.querySelector('.ProseMirror') as HTMLElement | null
   if (!pm) return Math.max(1, contentFit.scrollWidth)
   // Gutter = the ⋮⋮ column pad on the handles row that actually wraps the editor.
@@ -214,10 +219,11 @@ function measureNaturalContentWidth(contentFit: HTMLElement): number {
     }
     maxLine = Math.max(maxLine, rangeWidth(child)) // Longest real text line
   }
-  // Right margin mirrors the frame-left → ⋮⋮ icon inset so both gaps read equal (Notion-style):
-  // width = [left pad + gutter] (where text starts) + text + [same inset on the right].
-  const iconInset = padL + GRIP_ICON_INSET // frame-left → ⋮⋮ glyph-left
-  return Math.ceil(Math.max(1, padL + gutter + maxLine + iconInset))
+  // Right margin: equal to padL when there is no ⋮⋮ gutter (gutter lives in select chrome).
+  // With an in-fill gutter, mirror frame-left→⋮⋮ icon. Honor live paddingRight.
+  const padR = parseFloat(cs.paddingRight) || 0
+  const rightInset = gutter > 0 ? Math.max(padR, padL + GRIP_ICON_INSET) : Math.max(padR, padL)
+  return Math.ceil(Math.max(1, padL + gutter + maxLine + rightInset))
 }
 
 /** Unscaled content height — prefer scrollHeight so clipped/wrapped overflow still counts. */
@@ -249,17 +255,18 @@ function clipFadeMaskStyle(
   return { WebkitMaskImage: one, maskImage: one }
 }
 
-// Visual frame = unscaled content × frameScale + 1px border each side (border-box)
+// Visual frame = unscaled content × frameScale. Do NOT add a phantom +2 border — selected
+// frames use borderWidth 0 (blue adjust chrome), so +2 left slack under the content and the
+// left/right connection indicators sat below the ⋮⋮ / text midline.
 function scaledFrameSize(
   intrinsic: { width: number; height: number },
   scale: number,
   minWidth = BLOCK_LOCKED_MIN_W,
 ) {
   const safeScale = Math.max(0.15, scale) // Same floor as locked corner-drag
-  const border = 2 // Card border occupies layout width/height
   return {
-    width: Math.max(minWidth, Math.ceil(intrinsic.width * safeScale) + border),
-    height: Math.max(BLOCK_MIN_FRAME_H, Math.ceil(intrinsic.height * safeScale) + border),
+    width: Math.max(minWidth, Math.ceil(intrinsic.width * safeScale)),
+    height: Math.max(BLOCK_MIN_FRAME_H, Math.ceil(intrinsic.height * safeScale)),
   }
 }
 
@@ -457,7 +464,10 @@ function FrameConnectionsGroup({
     <>
       <div
         data-tt-notion-footer
-        className={cn('flex h-7 items-center pl-6', className)} // Same left inset as block text (gutter)
+        className={cn(
+          'flex h-7 items-center', // Host band supplies horizontal inset (align with fill content)
+          className
+        )}
       >
         <button
           type="button"
@@ -523,7 +533,8 @@ function TipTapContent({
   onBlur,
   onEditorActiveChange,
   fontScale,
-  enableBlockHandles = false, // ⋮⋮ on each TipTap **block** (not this **frame**)
+  enableBlockHandles = false, // Keep ⋮⋮ gutter (`pl-6`) for **blocks** — must not flip mid-drag
+  showBlockHandles = true, // Paint/arm ⋮⋮ grips; false while RF frame-dragging (gutter stays)
   singleLineUntilEnter = false, // Unresized blocks: one visual line per TipTap block
   hostNodeId,
   conversationId,
@@ -538,6 +549,10 @@ function TipTapContent({
   onPropertyTurnInto,
   pinConnectionsToFrame = false, // Free-frame clip: hug spacer only; real group is pinned to the frame
   loadCrossfade = false, // Board load: keep the shell overlay and fade it out; new frames skip this
+  chromeBandsOutside = false, // Host paints property / connections in adjust chrome (selected only)
+  onPropertyTypesChange,
+  contentPadLeft = 0, // contentFit paddingLeft — ⋮⋮ centers in the blue gutter past this pad
+  frameScale = 1, // Locked-resize CSS scale — grips remeasure when it changes
 }: {
   content: string
   className?: string
@@ -558,7 +573,8 @@ function TipTapContent({
   onBlur?: () => void
   onEditorActiveChange?: (isActive: boolean) => void // Called when editor is focused or has selection
   fontScale?: number // Font scale factor for resized panels (defaults to 1)
-  enableBlockHandles?: boolean
+  enableBlockHandles?: boolean // Gutter + property/Notion chrome for frames that own TipTap blocks
+  showBlockHandles?: boolean // False mid-drag so ⋮⋮ unmount without collapsing `pl-6`
   singleLineUntilEnter?: boolean // Unresized map blocks: grow width; Enter starts a new line
   hostNodeId?: string
   conversationId?: string // Page id — ⋮⋮ extract a block onto the page
@@ -573,6 +589,10 @@ function TipTapContent({
   onPropertyTurnInto?: (propertyType: PropertyTypeId) => void // ⋮⋮ Turn into → Property
   pinConnectionsToFrame?: boolean
   loadCrossfade?: boolean // Fade the load shell out as TipTap fades in (skip for fadeIn creates)
+  chromeBandsOutside?: boolean // Host paints property / connections in adjust chrome
+  onPropertyTypesChange?: (types: PropertyTypeId[]) => void // Live types for host chrome bands
+  contentPadLeft?: number // contentFit padL — grip centering past the fill edge
+  frameScale?: number // Locked-resize scale — ⋮⋮ remeasure (CSS transform skips RO)
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { setActiveEditor } = useEditorContext()
@@ -799,6 +819,10 @@ function TipTapContent({
       editor.off('update', sync)
     }
   }, [editor, propertyType])
+  // Host paints property icons in the blue-box top band when selected
+  useEffect(() => {
+    onPropertyTypesChange?.(propertyTypes)
+  }, [propertyTypes, onPropertyTypesChange])
 
   // Editable only when this frame is selected (and share role allows). Unselected = no iOS text loupe.
   useEffect(() => {
@@ -1221,32 +1245,34 @@ function TipTapContent({
       {/* Apply shimmer animation to prompt text when response is loading (not for flashcards) */}
       <div
         className={cn(
-          'relative w-full', // Match frame width — gutter + editor share one row
-          enableBlockHandles && !showFrameShimmer && 'pl-6', // Real blocks need ⋮⋮ gutter; shimmer handles its own
+          'relative w-full overflow-visible', // Grips sit in the panel’s left chrome (negative left)
           isLoading && !isFlashcard && 'shimmer'
         )}
       >
         {editor ? (
-          <div className={cn(enableBlockHandles && showFrameShimmer && 'pl-6')}>
-            {/* Property icon list is one **block** (⋮⋮ from TipTapBlockHandles, same as cells below) */}
-            {propertyTypes.length > 0 && enableBlockHandles && !isFlashcard && !showFrameShimmer && (
-              <FramePropertyGroup types={propertyTypes} />
-            )}
-            {/* Gutter on the content layer while the shell still overlays (parent skips pl-6) */}
+          <div>
+            {/* Unselected: icons stay in the fill. Selected: host paints them in the top chrome band. */}
+            {!chromeBandsOutside &&
+              propertyTypes.length > 0 &&
+              enableBlockHandles &&
+              !isFlashcard &&
+              !showFrameShimmer && <FramePropertyGroup types={propertyTypes} />}
+            {/* ⋮⋮ paints outside the fill (negative left into panel chrome); no pl-6 inside the frame */}
             <TipTapBlockHandles
               editor={editor}
-              enabled={enableBlockHandles && !isFlashcard}
-              isPanelSelected={!!isPanelSelected} // Frame must be selected (and not mid-drag) before ⋮⋮ can arm a block
+              enabled={enableBlockHandles && showBlockHandles && !isFlashcard}
+              isPanelSelected={!!isPanelSelected}
               hostNodeId={hostNodeId}
               conversationId={conversationId}
               boardInTargets={boardInTargets}
               onPageTurnInto={onPageTurnInto}
               onPropertyTurnInto={onPropertyTurnInto}
-              notionConnected={notionConnected} // Notion-connected frames get a slimmer block ⋮⋮ menu
+              notionConnected={notionConnected}
+              contentPadLeft={contentPadLeft}
+              frameScale={frameScale}
             />
             <EditorContent
               editor={editor}
-              // Selected: nodrag so phone pointerdown doesn't start RF frame drag (I-bar on first tap)
               className={cn('block w-full', isPanelSelected && 'nodrag nopan')}
             />
           </div>
@@ -1254,17 +1280,15 @@ function TipTapContent({
         {showFrameShimmer ? (
           <div
             className={cn(
-              editor && 'absolute inset-0 z-[1]', // Sit on top of TipTap so the shell can dissolve
-              shimmerExiting && 'tt-board-load-fade-out' // Fade out as board contents are visible
+              editor && 'absolute inset-0 z-[1]',
+              shimmerExiting && 'tt-board-load-fade-out'
             )}
             aria-hidden={!!editor}
           >
             <FrameContentShimmer
               hasText={shimmerHasText}
               barCount={shimmerBarCountFromHtml(content)}
-              withGutter={shimmerHasText}
-              // Empty in-flow shell only (no editor yet): one-line hug. Absolute overlays keep
-              // width/height 100% so they cover the real frame during load crossfade.
+              withGutter={false} // Gutter is panel chrome, not inside the fill shell
               style={
                 !editor && !shimmerHasText
                   ? { width: BLOCK_LOCKED_MIN_W, height: BLOCK_MIN_FRAME_H, minWidth: BLOCK_LOCKED_MIN_W }
@@ -1273,17 +1297,20 @@ function TipTapContent({
             />
           </div>
         ) : null}
-        {/* Connections group: in-flow for hug; spacer only when pinned to the free-frame box */}
-        {notionConnected && enableBlockHandles && !isFlashcard && !showFrameShimmer && (
-          pinConnectionsToFrame ? (
-            <div className="h-7" aria-hidden data-tt-notion-hug /> // Keep lock-hug height while the visible group rides the frame
+        {/* Connections: unselected stay in the fill; selected → host bottom chrome band */}
+        {!chromeBandsOutside &&
+          notionConnected &&
+          enableBlockHandles &&
+          !isFlashcard &&
+          !showFrameShimmer &&
+          (pinConnectionsToFrame ? (
+            <div className="h-7" aria-hidden data-tt-notion-hug />
           ) : (
             <FrameConnectionsGroup
               notionSync={notionSync}
               onNotionConnection={onNotionConnection}
             />
-          )
-        )}
+          ))}
       </div>
     </div>
   )
@@ -1959,6 +1986,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const [clipPreviewReady, setClipPreviewReady] = useState(false) // True after hover dwell — delayed full-content peek
   const [rotation, setRotation] = useState(0) // Degrees of item rotation (persisted in message metadata)
   const [frameShape, setFrameShape] = useState<FrameShapeType | null>(null) // Silhouette (null = default frame)
+  const [chromePropertyTypes, setChromePropertyTypes] = useState<PropertyTypeId[]>([]) // Live types for top adjust-chrome band
   const isResizingRef = useRef(false) // Track if currently resizing
   const contentFitRef = useRef<HTMLDivElement>(null) // Inner unscaled content wrapper for intrinsic measure
   const frameScaleRef = useRef(1) // Latest scale — resize-end must not close over a stale render
@@ -2553,6 +2581,50 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const showAdjustFrame = Boolean(selected && isBlock && !isThreadConnecting && !dragging && !pressing)
   // Transient blue outline while the frame is being moved (not a real selection)
   const showDragBorderOnly = Boolean(dragging && isBlock)
+  // Blue-box L/R gutters when selected. Property / connections bands sit OUTSIDE the fill
+  // — only while selected (hide entirely when the frame is idle).
+  const showFrameChrome = Boolean(isBlock && (selected || dragging) && !isThreadConnecting)
+  const hasPropBand = Boolean(showFrameChrome && chromePropertyTypes.length > 0)
+  const hasConnBand = Boolean(showFrameChrome && notionConnected && isBlock && !isFlashcard)
+  // ⋮⋮ + bands sit in panel chrome, but grips mount inside the CSS-scaled contentFit — so when
+  // locked resize applies frameScale, chrome gutters/bands must grow by the same factor or the
+  // grips (and scaled content) spill past the blue adjust box while Notion icons stay tiny.
+  const chromeScale =
+    isBlock && isUserResized && frameScale !== 1 ? Math.max(0.15, frameScale) : 1
+  // Cell radius is 6px inside contentFit’s CSS scale; fill + blue ring are outside — keep them matched
+  const frameCornerRadius = frameShape ? 0 : FRAME_CORNER_RADIUS * chromeScale
+  const adjustChromeX = showFrameChrome
+    ? Math.round(BLOCK_HANDLE_GUTTER_W * chromeScale)
+    : 0 // Even side gutters when selected (scaled with content)
+  const chromeBandH = Math.round(CONNECTIONS_GROUP_H * chromeScale) // Property / connections strip
+  const chromePadX = Math.round(BLOCK_FRAME_PAD_X * chromeScale) // Band inset matches scaled fill pad
+  // T/B bands only while selected — even empty strips keep the blue box balanced
+  const adjustChromeYTop = showFrameChrome ? chromeBandH : 0
+  const adjustChromeYBottom = showFrameChrome ? chromeBandH : 0
+  // Keep the filled frame glued to the board when chrome / bands appear (grow left/up)
+  const frameChromeOffsetRef = useRef<{ x: number; y: number } | null>(null)
+  useLayoutEffect(() => {
+    if (!isBlock) return
+    const nextX = adjustChromeX
+    const nextY = adjustChromeYTop
+    if (frameChromeOffsetRef.current === null) {
+      frameChromeOffsetRef.current = { x: 0, y: 0 }
+    }
+    const dx = nextX - frameChromeOffsetRef.current.x
+    const dy = nextY - frameChromeOffsetRef.current.y
+    if (dx === 0 && dy === 0) return
+    frameChromeOffsetRef.current = { x: nextX, y: nextY }
+    const setNodesFunc = getSetNodes()
+    if (!setNodesFunc) return
+    setNodesFunc((nds: any[]) =>
+      nds.map((n) =>
+        n.id === id
+          ? { ...n, position: { x: n.position.x - dx, y: n.position.y - dy } }
+          : n
+      )
+    )
+    updateNodeInternals(id)
+  }, [isBlock, id, adjustChromeX, adjustChromeYTop, getSetNodes, updateNodeInternals])
   // Stack lines: one per adjust-box side that has a mate further out on that side’s tree
   const stackMeta = (promptMessage?.metadata || {}) as Record<string, unknown>
   const stackGapSides = useStore((s) => {
@@ -2575,11 +2647,12 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     }
     return sides
   })
-  // Indicators: selected frame (idle), OR nearby snap target while connecting — never during frame drag
+  // Indicators: selected frame (idle), OR nearby snap target while connecting — never during frame drag / mid-press
   const showIndicators =
     isBlock &&
     !isFlashcard &&
     !dragging &&
+    !pressing && // Mid-press hides indicator chrome; resize corners stay (showAdjustFrame)
     ((selected && !isThreadConnecting) || (isThreadConnecting && isNearThreadSnap))
 
   // Invisible edge connection point — idle: no hit/cursor; while selected, source can be armed by indicator
@@ -2593,12 +2666,11 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     cursor: 'default',
   }) as React.CSSProperties
 
-  // Outer indicator (DOM only) placement — outset scales with frame UI size
+  // Outer indicator (DOM only) placement — center sits just outside the blue edge
   const connectionIndicatorStyle = (
     side: 'left' | 'right' | 'top' | 'bottom',
-    uiScale = 1
+    out: number // Distance from frame edge to indicator center (flow px)
   ): React.CSSProperties => {
-    const out = INDICATOR_OUTSET * uiScale
     if (side === 'left') return { left: -out, top: '50%', transform: 'translate(-50%, -50%)' }
     if (side === 'right') return { right: -out, top: '50%', transform: 'translate(50%, -50%)' }
     if (side === 'top') return { top: -out, left: '50%', transform: 'translate(-50%, -50%)' }
@@ -3236,15 +3308,16 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     let colToPersist: number | undefined // New wrap column width to store (unlocked-wrap resize sets the point)
     if (!unlocked && wrapping) {
       // Locked wrap: hug WIDTH to the scaled FIXED columns (no reflow) + HEIGHT to wrapped content.
-      if (colW != null) width = Math.round(colW * Math.max(0.15, finalScale)) + 2
-      height = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(intrinsic.height * Math.max(0.15, finalScale)) + 2)
+      // No +2 border — selected adjust chrome uses borderWidth 0 (same as scaledFrameSize).
+      if (colW != null) width = Math.round(colW * Math.max(0.15, finalScale))
+      height = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(intrinsic.height * Math.max(0.15, finalScale)))
     } else if (!unlocked) {
       const hugged = scaledFrameSize(intrinsic, finalScale, minW) // Nowrap: snap to scaled text
       width = hugged.width
       height = hugged.height
     } else if (wrapping) {
       // Unlocked wrap: the dragged width IS the new wrap point — remember it (unscaled columns).
-      colToPersist = Math.max(1, Math.floor((width - 2) / Math.max(0.15, finalScale)))
+      colToPersist = Math.max(1, Math.floor(width / Math.max(0.15, finalScale)))
       setWrapColWidth(colToPersist)
     }
     // Unlocked (wrap or nowrap): keep the user's dragged box — a frame shorter than its
@@ -3295,9 +3368,16 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       const colW = wrapColWidthRef.current
       if (frameTextWrapRef.current && colW != null) {
         // Locked WRAP: derive the box from the FIXED column width × scale so NO character reflows —
-        // the wrapped text just scales up/down (columns stay constant, +2 border).
-        width = Math.round(colW * nextScale) + 2
-        height = Math.max(BLOCK_MIN_FRAME_H, Math.round(intrinsicSizeRef.current.height * nextScale) + 2)
+        // the wrapped text just scales up/down (columns stay constant; no phantom border).
+        width = Math.round(colW * nextScale)
+        height = Math.max(BLOCK_MIN_FRAME_H, Math.round(intrinsicSizeRef.current.height * nextScale))
+      } else {
+        // Locked nowrap: hug the blue box to scaled content during the gesture (same as resize-end).
+        // Using RF's raw drag size left a larger empty frame with the block stuck top-left so
+        // connection/resize chrome no longer lined up with the ⋮⋮.
+        const hugged = scaledFrameSize(intrinsicSizeRef.current, nextScale, minW)
+        width = hugged.width
+        height = hugged.height
       }
     }
     pendingResizeRef.current = { width, height, scale: nextScale } // Latest sample wins
@@ -3465,7 +3545,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     // hug HEIGHT only to the wrapped content. Wrap persists through lock.
     if (frameTextWrap && resizeDimensions) {
       const keepW = resizeDimensions.width // Same width the wrap had when unlocked
-      const wrapH = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(naturalH * Math.max(0.15, frameScale)) + 2)
+      const wrapH = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(naturalH * Math.max(0.15, frameScale)))
       const nextDims = { width: keepW, height: wrapH }
       setResizeDimensions(nextDims)
       setIsUserResized(true)
@@ -3542,7 +3622,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     // only capture a fresh one the first time wrap is turned on and none exists yet.
     let col = wrapColWidth
     if (next && col == null) {
-      col = Math.max(1, Math.floor((box.width - 2) / s))
+      col = Math.max(1, Math.floor(box.width / s))
       setWrapColWidth(col)
     }
     void persistFrameMeta({
@@ -3558,12 +3638,12 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       requestAnimationFrame(() => requestAnimationFrame(() => {
         const cf = contentFitRef.current
         if (!cf) return
-        const height = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(measureNaturalContentHeight(cf) * s) + 2)
+        const height = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(measureNaturalContentHeight(cf) * s))
         setResizeDimensions((prev) => {
           const base = prev ?? box
           const width = next // Wrap-on: restore stored columns × scale; Wrap-off: hug to nowrap content
-            ? (col != null ? Math.round(col * s) + 2 : base.width)
-            : Math.max(blockMinFrameWidth(promptContent), Math.ceil(measureNaturalContentWidth(cf) * s) + 2)
+            ? (col != null ? Math.round(col * s) : base.width)
+            : Math.max(blockMinFrameWidth(promptContent), Math.ceil(measureNaturalContentWidth(cf) * s))
           return { width, height }
         })
       }))
@@ -3577,7 +3657,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   useEffect(() => {
     if (!isBlock || frameUnlocked || !isUserResized || pagePreviewOpen || dragging) return
     if (!intrinsicMeasured || isResizingRef.current) return
-    const minW = blockMinFrameWidth(promptContent)
+    const minW = blockMinFrameWidth(promptContent, false) // Fill hug — no ⋮⋮ column inside the frame
     const natural = scaledFrameSize(intrinsicSize, frameScale, minW)
     // Never hug a databaseBlock frame down to the remount stub — that persists as a permanent clip.
     if (
@@ -3589,8 +3669,14 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     let next = natural
     let changed = true
     setResizeDimensions((prev) => {
-      // Wrap keeps its fixed width (text stays wrapped at that width); nowrap hugs width to content.
-      const width = frameTextWrap && prev ? prev.width : natural.width
+      // Wrap keeps fixed columns × scale (not a stale prev.width that still had +2 border).
+      // Nowrap hugs width to content.
+      const width =
+        frameTextWrap && wrapColWidth != null
+          ? Math.round(wrapColWidth * Math.max(0.15, frameScale))
+          : frameTextWrap && prev
+            ? prev.width
+            : natural.width
       // Hug height to content too (was: keep the taller box until a manual resize)
       const height = natural.height
       next = { width, height }
@@ -3635,6 +3721,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     intrinsicSize,
     frameScale,
     frameTextWrap,
+    wrapColWidth,
     persistFrameMeta,
     promptContent,
   ])
@@ -4263,27 +4350,33 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const [currentZoom, setCurrentZoom] = useState(reactFlowInstance?.getViewport().zoom ?? 1)
   // Frames hug the longest TipTap line until corner-resized (match `isBlock`, not isBlockMeta alone)
   const usesFitContent = isBlock // Empty user-only bodies without isBlock still hug
-  const frameMinW = blockMinFrameWidth(promptContent) // Grip+icon+menu, or grip+3ch for plain text
+  const frameMinW = blockMinFrameWidth(promptContent, false) // Frame fill only — ⋮⋮ lives in select chrome, not inside the fill
   const growsWithLine = usesFitContent && !isUserResized && !pagePreviewOpen // Line runs until Enter / corner resize
   // Empty unresized: explicit px (not max-content) — CSS % children used to inflate ~120×160 boxes
   const emptyLineHug = growsWithLine && isBlockContentEmpty(promptContent)
   const hasBlockContent = isBlock && !isBlockContentEmpty(promptContent) // Lock only when a content block exists
   // Shared size-with-frame scale for selection chrome: resize handles, blue lines, connection
-  // indicators, and rotate/lock/wrap. Small frames shrink; large grow ~linear (was √ + 2.25 cap — too timid).
+  // indicators, and rotate/lock/wrap. Small frames shrink; large grow √ (0.85^→4× floated indicators).
   const FRAME_UI_REF_W = 78 // Natural chrome row width — scale=1 near this / 0.7
-  const FRAME_UI_MAX_FIT = 4 // Allow large frames to get substantially bigger chrome
+  const FRAME_UI_MAX_FIT = 2.25 // Cap so resized frames don't get oversized/offset chrome
+  // Live resize box wins — itemBoxSize lags while isResizingRef blocks the RO
   const frameUiHostW =
-    itemBoxSize.width || panelRef.current?.offsetWidth || resizeDimensions?.width || BLOCK_LOCKED_MIN_W
+    (isUserResized && resizeDimensions?.width) ||
+    itemBoxSize.width ||
+    panelRef.current?.offsetWidth ||
+    BLOCK_LOCKED_MIN_W
   const rawFrameUiFit = (frameUiHostW * 0.7) / FRAME_UI_REF_W
   const frameUiScale =
     rawFrameUiFit <= 1
       ? Math.max(0.55, rawFrameUiFit) // Floor so tiny frames keep a grabable handle
-      : Math.min(FRAME_UI_MAX_FIT, Math.pow(rawFrameUiFit, 0.85)) // Near-linear growth on big frames
+      : Math.min(FRAME_UI_MAX_FIT, Math.sqrt(rawFrameUiFit)) // Gentle √ growth on big frames
   // Rotate/lock/wrap also eases vs board zoom (handles/lines ride the viewport already)
   const frameChromeZoom = 1 / Math.max(1, Math.pow(rfZoom || 1, 0.35))
   const frameChromeScale = frameChromeZoom * frameUiScale
-  const frameChromeGapY = INDICATOR_OUTSET * frameUiScale + 8 // Clear scaled bottom connection indicator
   const frameIndicatorSize = 10 * frameUiScale // Matches h-2.5 at scale 1
+  // Center on the blue selection edge (same as corner dots) — not floated outside
+  const frameIndicatorOut = 0
+  const frameChromeGapY = frameIndicatorSize / 2 + 8 // Clear half the bottom indicator + pad
   const frameHandleSize = 10 * frameUiScale // Corner resize dots
   const frameLineW = Math.max(1, 1.5 * frameUiScale) // Blue selection stroke
   const frameLineHit = Math.max(4, 6 * frameUiScale) // Line hit target thickness
@@ -4297,19 +4390,33 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     isUserResized &&
     !!resizeDimensions &&
     !pagePreviewOpen // Free frame may hide overflow when not wrapping
-  const huggedSize = scaledFrameSize(intrinsicSize, frameScale, frameMinW) // Scaled text + border
+  const huggedSize = scaledFrameSize(intrinsicSize, frameScale, frameMinW) // Scaled content (no phantom border)
   const applyFrameScale = isBlock && isUserResized && frameScale !== 1 // Layout spacer + CSS scale
   const scaledLayoutW = Math.ceil(intrinsicSize.width * Math.max(0.15, frameScale)) // Visual content width (no border)
   const scaledLayoutH = Math.ceil(intrinsicSize.height * Math.max(0.15, frameScale)) // Visual content height (no border)
   const unlockedResized = wrapUnlocked || clipUnlocked // Free-resized frame (wrap or nowrap-clip)
-  const unlockedInnerW = resizeDimensions ? Math.max(1, resizeDimensions.width - 2) : null // Frame inner (visual)
-  const unlockedInnerH = resizeDimensions ? Math.max(1, resizeDimensions.height - 2) : null
+  // Selected/adjust chrome forces borderWidth 0 — do not subtract a phantom 2px or content clips
+  // and the blue box looks larger than the block (⋮⋮ / text sit above the left connection mid).
+  const panelBorderBox =
+    showAdjustFrame ||
+    showDragBorderOnly ||
+    frameShape ||
+    Math.abs(rotation) > 0.5 ||
+    (isBorderNone && !showEmptyFrameBorder)
+      ? 0
+      : 2 * (parseFloat(String(data.borderWeight)) || 1) // borderWeight is typed as a string ('2px')
+  const unlockedInnerW = resizeDimensions
+    ? Math.max(1, resizeDimensions.width - panelBorderBox)
+    : null
+  const unlockedInnerH = resizeDimensions
+    ? Math.max(1, resizeDimensions.height - panelBorderBox)
+    : null
   // Unlocked frame smaller than its visual content → blocks are clipped (nowrap: both axes; wrap: height only)
   const overflowRight =
-    clipUnlocked && resizeDimensions!.width + 2 < huggedSize.width // Nowrap may hide trailing glyphs
+    clipUnlocked && unlockedInnerW! < huggedSize.width // Nowrap may hide trailing glyphs
   const overflowBottom =
-    (clipUnlocked && resizeDimensions!.height + 2 < huggedSize.height) ||
-    (wrapUnlocked && resizeDimensions!.height + 2 < huggedSize.height) // Short frame cuts lower blocks
+    (clipUnlocked && unlockedInnerH! < huggedSize.height) ||
+    (wrapUnlocked && unlockedInnerH! < huggedSize.height) // Short frame cuts lower blocks
   const contentOverflows = overflowRight || overflowBottom
   // Hover dwell can arm a preview — hide immediately while dragging / page preview / connecting
   const clipPreviewEligible =
@@ -4322,7 +4429,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const clipBoxH =
     unlockedInnerH != null
       ? pinConnectionsToFrame
-        ? Math.max(1, unlockedInnerH - CONNECTIONS_GROUP_H) // Leave a strip for the pinned group
+        ? Math.max(1, unlockedInnerH - adjustChromeYBottom) // Leave a strip for the scaled pinned group
         : unlockedInnerH
       : undefined
   // Soften chopped edges while clipped (removed during hover preview)
@@ -4492,11 +4599,11 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     }
   })
 
-  // Horizontal chrome around TipTap text: padding + border + optional ⋮⋮ gutter
+  // Horizontal chrome around TipTap text: L/R content pads (+ border buffer); ⋮⋮ is outside the fill
   const blockWidthChrome = useCallback(() => {
-    // Blocks: pl-0.5 (2) + pr-4 (16) + border (2) + buffer (10) + pl-6 gutter (24)
+    // Blocks: BLOCK_FRAME_PAD_X×2 + border (2) + buffer (10)
     // Non-blocks: px-3 (24) + border (2) + buffer (10) + p-1 (8)
-    return usesFitContent ? 2 + 16 + 2 + 10 + 24 : 24 + 2 + 10 + 8
+    return usesFitContent ? BLOCK_FRAME_PAD_X * 2 + 2 + 10 : 24 + 2 + 10 + 8
   }, [usesFitContent])
 
   // Measure longest TipTap line as nowrap (Enter = new block, not wrap)
@@ -5329,14 +5436,14 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           !isProjectBoard && promptMessage?.id && isFramePending(promptMessage.id) ? 'true' : undefined
         }
         className={cn(
-          'group nopan border relative cursor-grab active:cursor-grabbing overflow-visible transition-[opacity,box-shadow,background-color,border-color] duration-300', // nopan: right-click opens frame menu, not board pan
+          'group nopan border relative cursor-grab active:cursor-grabbing overflow-visible transition-[opacity,box-shadow,background-color,border-color] duration-300', // overflow-visible: ⋮⋮ in left chrome; nopan: right-click opens frame menu
           // When rotated, fill lives on the inner shell only (avoids upright+rotated double shape)
-          !frameShape && !isContentRotated && 'rounded-2xl',
-          !isFillTransparent && !frameShape && !isContentRotated && 'backdrop-blur-sm',
-          // Always show blue border when selected, otherwise use custom border color or default theme-based color
-          // Selection uses the connected resize rectangle (not a rounded card border)
+          !frameShape && !isContentRotated && !isBlock && 'rounded-2xl',
+          !isFillTransparent && !frameShape && !isContentRotated && !isBlock && 'backdrop-blur-sm',
+          // Selection uses the connected resize rectangle — panel border must be 0 so handles
+          // sit on the outer edge (a 1px empty/custom border inset the padding box and floated chrome).
           selected && isBlock
-            ? (data.borderColor || showEmptyFrameBorder ? '' : 'border-transparent') // Style owns empty/custom border; else transparent under resize rect
+            ? 'border-transparent'
             : selected
               ? 'border-blue-500 dark:border-blue-400'
               : (data.borderColor || frameShape || showEmptyFrameBorder ? '' : 'border-transparent'), // Empty → grey via style; styled/shape → style; else transparent
@@ -5355,59 +5462,78 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             'tt-ai-pending-frame'
         )}
       style={{
-        // Rotated: outer = AABB so blue adjust box covers content; unrotated: hug / resize as before
+        // Selected: even L/R gutters. T/B bands always host property / connections outside the fill.
         width: pagePreviewOpen
           ? '520px'
           : isContentRotated
-            ? `${displayBox.width}px`
+            ? `${displayBox.width + adjustChromeX * 2}px`
             : isUserResized && resizeDimensions
-              ? `${resizeDimensions.width}px`
+              ? `${resizeDimensions.width + adjustChromeX * 2}px`
               : emptyLineHug
-                ? `${frameMinW}px` // One-line empty hug — avoid max-content + % child cycle
+                ? `${frameMinW + adjustChromeX * 2}px`
                 : growsWithLine
                   ? 'max-content'
-                  : `${panelWidthToUse}px`,
+                  : `${panelWidthToUse + adjustChromeX * 2}px`,
         height: pagePreviewOpen
           ? '420px'
           : isContentRotated
-            ? `${displayBox.height}px`
+            ? `${displayBox.height + adjustChromeYTop + adjustChromeYBottom}px`
             : isUserResized && resizeDimensions
-              ? `${resizeDimensions.height}px`
+              ? `${resizeDimensions.height + adjustChromeYTop + adjustChromeYBottom}px`
               : emptyLineHug
-                ? `${BLOCK_MIN_FRAME_H}px` // Match I-bar / one TipTap line
+                ? `${BLOCK_MIN_FRAME_H + adjustChromeYTop + adjustChromeYBottom}px`
                 : growsWithLine
                   ? 'fit-content'
                   : undefined,
         minWidth: pagePreviewOpen
           ? '520px'
           : isContentRotated
-            ? `${displayBox.width}px` // Lock outer to measured/tight AABB (no 200px floor widening)
+            ? `${displayBox.width + adjustChromeX * 2}px`
             : usesFitContent
-              ? `${frameMinW}px`
+              ? `${frameMinW + adjustChromeX * 2}px`
               : isFlashcard
                 ? '300px'
                 : '200px',
         minHeight: pagePreviewOpen ? '420px' : '0px',
-        maxWidth: isContentRotated ? `${displayBox.width}px` : undefined, // Prevent width ballooning past AABB
-        maxHeight: isContentRotated ? `${displayBox.height}px` : undefined,
+        maxWidth: isContentRotated
+          ? `${displayBox.width + adjustChromeX * 2}px`
+          : undefined,
+        maxHeight: isContentRotated
+          ? `${displayBox.height + adjustChromeYTop + adjustChromeYBottom}px`
+          : undefined,
+        // Bands outside the fill: property (top) / connections (bottom); L/R gutters when selected
+        paddingTop: adjustChromeYTop || undefined,
+        paddingRight: adjustChromeX || undefined,
+        paddingBottom: adjustChromeYBottom || undefined,
+        paddingLeft: adjustChromeX || undefined,
+        boxSizing: 'border-box',
         opacity: isInitialShrinkComplete ? 1 : 0,
-        // Rotated: outer is transparent shell (fill on inner) — kills upright ghost under rotated card
+        // Fill always paints on the inner frame shell (shape-capable surface) — not here
         backgroundColor:
-          frameShape || isContentRotated ? 'transparent' : panelBackgroundColor,
+          frameShape || isContentRotated || isBlock ? 'transparent' : panelBackgroundColor,
         borderColor:
-          frameShape || isContentRotated
+          // Blue adjust / drag rect owns the outline — keep panel border off so chrome isn't inset
+          showAdjustFrame || showDragBorderOnly || frameShape || isContentRotated
             ? 'transparent'
             : data.borderColor
-              ? data.borderColor // Keep custom border visible while selected (Color menu feedback)
+              ? data.borderColor // Custom border when idle
               : showEmptyFrameBorder
                 ? emptyFrameBorderColor // Thin grey outline for blank frames
                 : 'transparent',
         borderStyle:
-          frameShape || isContentRotated || (isBorderNone && !showEmptyFrameBorder)
+          showAdjustFrame ||
+          showDragBorderOnly ||
+          frameShape ||
+          isContentRotated ||
+          (isBorderNone && !showEmptyFrameBorder)
             ? 'none'
             : ((data.borderStyle as React.CSSProperties['borderStyle']) || 'solid'), // Color / empty chrome → solid
         borderWidth:
-          frameShape || isContentRotated || (isBorderNone && !showEmptyFrameBorder)
+          showAdjustFrame ||
+          showDragBorderOnly ||
+          frameShape ||
+          isContentRotated ||
+          (isBorderNone && !showEmptyFrameBorder)
             ? 0
             : (data.borderWeight || 1), // 1px for empty chrome or when a border color is set
         ['--tt-frame-ui-scale' as string]: frameUiScale,
@@ -5415,6 +5541,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         ['--tt-frame-line-hit' as string]: `${frameLineHit}px`,
         ['--tt-frame-handle' as string]: `${frameHandleSize}px`,
         ['--tt-frame-handle-border' as string]: `${Math.max(1, 1.5 * frameUiScale)}px`,
+        ['--tt-frame-radius' as string]: `${frameCornerRadius}px`, // Fill + blue ring; tracks scaled property cell
       }}
       onPointerDownCapture={(e) => {
         const t = e.target as HTMLElement | null
@@ -5501,13 +5628,24 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       {showDragBorderOnly && (
         <div
           aria-hidden
-          className={cn(
-            'pointer-events-none absolute inset-0 z-[20]',
-            !frameShape && 'rounded-2xl'
-          )}
+          className="pointer-events-none absolute inset-0 z-[20]"
           style={{
+            borderRadius: frameCornerRadius || undefined, // Same live radius as fill / property cell
             boxShadow: `inset 0 0 0 ${frameLineW}px #3b82f6`, // Same blue as selection chrome, no hit target
             // Upright AABB outline — don't clip to rotated silhouette
+            clipPath: !isContentRotated ? shapeClip : undefined,
+          }}
+        />
+      )}
+
+      {/* Selected frames: rounded blue ring (RF line controls stay for hit/resize but paint is off) */}
+      {showAdjustFrame && !frameShape && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 z-[19]"
+          style={{
+            borderRadius: frameCornerRadius, // Match property cell (6 × chromeScale)
+            boxShadow: `inset 0 0 0 ${frameLineW}px #3b82f6`,
             clipPath: !isContentRotated ? shapeClip : undefined,
           }}
         />
@@ -5520,8 +5658,11 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             <NodeResizeControl
               key={`line-${position}`} // Side line that joins the four corners
               position={position}
-              variant="line" // RF line control (rectangle edges that meet the corner dots)
-              className="nodrag nopan tt-frame-resize-line" // nodrag: resize must not start frame drag
+              variant="line" // Hit target only — stroke painted by the rounded ring above
+              className={cn(
+                'nodrag nopan tt-frame-resize-line', // nodrag: resize must not start frame drag
+                !frameShape && 'tt-frame-resize-line-hit' // Hit only — rounded ring paints the stroke
+              )}
               minWidth={frameMinW}
               minHeight={BLOCK_MIN_FRAME_H}
               keepAspectRatio={!frameUnlocked && hasBlockContent}
@@ -5573,7 +5714,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                   : 'cursor-crosshair hover:bg-blue-600'
               )}
               style={{
-                ...connectionIndicatorStyle(side, frameUiScale), // Outset scales with frame
+                ...connectionIndicatorStyle(side, frameIndicatorOut), // Center on blue edge midpoints
                 width: frameIndicatorSize, // Dot grows/shrinks with frame size
                 height: frameIndicatorSize,
               }}
@@ -5853,16 +5994,66 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         </>
       )}
 
-      {/* Single text body — when rotated, one centered shell holds fill + shape + blocks (no double card). */}
+      {/* Property icons — above the fill, inset to match fill content (not flush to fill’s left edge) */}
+      {hasPropBand && (
+        <div
+          data-tt-frame-chrome-top
+          className="nodrag nopan absolute z-[2] flex items-center"
+          style={{
+            top: 0,
+            left: adjustChromeX + chromePadX,
+            right: adjustChromeX + chromePadX,
+            height: adjustChromeYTop,
+          }}
+        >
+          {/* Scale icons with frameScale — bands live outside the CSS-scaled contentFit */}
+          <div
+            style={{
+              transform: chromeScale !== 1 ? `scale(${chromeScale})` : undefined,
+              transformOrigin: 'left center',
+            }}
+          >
+            <FramePropertyGroup types={chromePropertyTypes} />
+          </div>
+        </div>
+      )}
+      {/* Connections — below the fill, same horizontal inset as properties / cell */}
+      {hasConnBand && (
+        <div
+          data-tt-frame-chrome-bottom
+          className="nodrag nopan absolute z-[2] flex items-center"
+          style={{
+            bottom: 0,
+            left: adjustChromeX + chromePadX,
+            right: adjustChromeX + chromePadX,
+            height: adjustChromeYBottom,
+          }}
+        >
+          <div
+            style={{
+              transform: chromeScale !== 1 ? `scale(${chromeScale})` : undefined,
+              transformOrigin: 'left center',
+            }}
+          >
+            <FrameConnectionsGroup
+              notionSync={notionSync}
+              onNotionConnection={handleNotionConnection}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Single text body — when rotated, one centered shell holds fill + shape + blocks (no double card).
+          This shell IS the shape-capable frame surface: same fill + radius selected or not. */}
       <div
         className={cn(
-          'relative z-[1]', // Above shape backdrop
-          !frameShape && 'rounded-2xl',
+          'relative z-[1] w-full h-full', // Above shape backdrop; fills the padded content box
           !isFillTransparent && !frameShape && 'backdrop-blur-sm',
           !isBlock && 'p-1',
           pagePreviewOpen && 'flex flex-col h-full min-h-0',
+          // Clip content inside the fill; ⋮⋮ paints in the panel’s left chrome (overflow visible on panel)
           unlockedResized && !showClipPreview && !isContentRotated
-            ? cn('h-full overflow-hidden', pinConnectionsToFrame && 'flex flex-col') // Clip content; connections strip stays
+            ? cn('overflow-hidden', pinConnectionsToFrame && 'flex flex-col')
             : 'overflow-visible',
           promptMessage?.metadata?.fadeIn === true &&
             isBlockContentEmpty(promptContent) &&
@@ -5870,7 +6061,15 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           isContentRotated && 'absolute'
         )}
         style={{
-          backgroundColor: frameShape ? 'transparent' : responseAreaBackgroundColor,
+          // Always paint fill here — never swap to a text-only pill when selected
+          backgroundColor: frameShape ? 'transparent' : responseAreaBackgroundColor || panelBackgroundColor,
+          // Live radius: property cells sit inside CSS scale (6px grows); fill must match
+          borderRadius: frameCornerRadius || undefined,
+          // Empty-frame outline on the fill shell (panel border is off while adjust chrome is on)
+          boxShadow:
+            showEmptyFrameBorder && !frameShape
+              ? `inset 0 0 0 1px ${emptyFrameBorderColor}`
+              : undefined,
           clipPath: frameShape && !showClipPreview ? shapeClip : undefined,
           ...(isContentRotated
             ? {
@@ -5899,8 +6098,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         {showClipPreview && resizeDimensions && (
           <div
             aria-hidden
-            className="pointer-events-none absolute left-0 top-0 rounded-2xl -z-[1]"
+            className="pointer-events-none absolute left-0 top-0 -z-[1]"
             style={{
+              borderRadius: frameCornerRadius || undefined, // Same as fill so hover-unclip corners don’t snap square
               width: Math.max(resizeDimensions.width, huggedSize.width),
               height: Math.max(resizeDimensions.height, huggedSize.height),
               backgroundColor: responseAreaBackgroundColor || panelBackgroundColor,
@@ -5976,11 +6176,18 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                   : isUserResized || !growsWithLine || emptyLineHug
                     ? 'w-full' // Fill explicit empty hug / resized box for full-row clicks
                     : 'w-max',
-              // Blocks: horizontal pad only in class; equal tight vertical pad via style (avoids asymmetric leftovers)
-              isBlock ? 'pr-4 pl-0.5' : 'px-3 py-3'
+              // Blocks: padX > padY slightly so L/R of the property cell breathe vs the fill edge
+              isBlock ? undefined : 'px-3 py-3'
             )}
             style={{
-              ...(isBlock ? { paddingTop: 4, paddingBottom: 4 } : {}), // Equal 4px top/bottom — less than legacy pt-4/pb-4
+              ...(isBlock
+                ? {
+                    paddingTop: BLOCK_FRAME_PAD_Y,
+                    paddingBottom: BLOCK_FRAME_PAD_Y,
+                    paddingLeft: BLOCK_FRAME_PAD_X,
+                    paddingRight: BLOCK_FRAME_PAD_X,
+                  }
+                : {}),
               lineHeight: '1.7', // Stable typography — height-based line-height broke lock-to-text
               ...(wrapContentWidth != null ? { width: wrapContentWidth, maxWidth: wrapContentWidth } : {}), // Soft-wrap inside frame
               ...(applyFrameScale
@@ -6046,7 +6253,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               isLoading={false}
               onBlur={handleEditorBlur}
               onEditorActiveChange={handleEditorActiveChange}
-              enableBlockHandles={isBlock && !isFlashcard && !dragging} // Hide ⋮⋮ mid-drag; caret stays available
+              enableBlockHandles={isBlock && !isFlashcard} // TipTap blocks; ⋮⋮ gutter only while selected
+              showBlockHandles={!dragging} // Hide ⋮⋮ grips mid-drag only; caret stays available
               singleLineUntilEnter={isBlock && !isFlashcard && !wrapActive} // nowrap until Enter; wrap mode (locked/unlocked) soft-wraps
               hostNodeId={id}
               conversationId={conversationId}
@@ -6057,6 +6265,10 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               onPropertyTurnInto={handlePropertyTurnInto}
               pinConnectionsToFrame={pinConnectionsToFrame}
               loadCrossfade={promptMessage?.metadata?.fadeIn !== true} // Load: dissolve the shell; new frames use note-fade-in
+              chromeBandsOutside // Suppress in-fill strips — host paints only while selected
+              contentPadLeft={isBlock ? BLOCK_FRAME_PAD_X : 0}
+              frameScale={frameScale}
+              onPropertyTypesChange={setChromePropertyTypes}
               boardInTargets={(() => {
                 const convs =
                   (queryClient.getQueryData(['conversations']) as
@@ -6094,15 +6306,28 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             </BoardLinkProvider>
           </div>
           </div>
-          {pinConnectionsToFrame && (
+          {showFrameChrome && pinConnectionsToFrame && !hasConnBand && (
             <div
-              className="flex-shrink-0 pl-0.5" // Match contentFit left pad; group adds the ⋮⋮ gutter
-              style={{ backgroundColor: frameShape ? 'transparent' : responseAreaBackgroundColor }} // Cover clipped text in the reserved strip
+              className="flex-shrink-0"
+              style={{
+                paddingLeft: chromePadX, // Match scaled fill content inset when pinned in-flow
+                height: chromeBandH,
+                display: 'flex',
+                alignItems: 'center',
+                backgroundColor: frameShape ? 'transparent' : responseAreaBackgroundColor,
+              }}
             >
-              <FrameConnectionsGroup
-                notionSync={notionSync}
-                onNotionConnection={handleNotionConnection}
-              />
+              <div
+                style={{
+                  transform: chromeScale !== 1 ? `scale(${chromeScale})` : undefined,
+                  transformOrigin: 'left center',
+                }}
+              >
+                <FrameConnectionsGroup
+                  notionSync={notionSync}
+                  onNotionConnection={handleNotionConnection}
+                />
+              </div>
             </div>
           )}
           </>

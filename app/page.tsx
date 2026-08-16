@@ -3,9 +3,16 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useEffect, useState } from 'react'
+import { Menu } from 'lucide-react' // Overflow: Help · Developer · Pricing
 import { BoardFlow } from '@/components/board-flow'
 import { ReactFlowContextProvider } from '@/components/react-flow-context'
 import { EditorProvider } from '@/components/editor-context'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 
 // Homepage - displays public homepage board (read-only)
 // To edit: Navigate to /board/[homepage-board-id] as system user
@@ -41,34 +48,50 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {/* Navigation - sticky banner matching dashboard top bar height (52px) */}
+      {/* Logo · Get started · menu (Help / Developer / Pricing) — phone + desktop */}
       <nav className="sticky top-0 z-50 h-[52px] bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b border-border">
-        <div className="container mx-auto h-full px-6 flex justify-between items-center">
-        <Link href="/" className="flex items-center gap-2 opacity-80 hover:opacity-100 transition-opacity">
-          <Image
-            src="/thinktable-logo.svg"
-            alt="ThinkTable"
-            width={24}
-            height={24}
-            className="h-6 w-6"
-            priority
-          />
-          <span className="text-xl font-semibold text-foreground leading-6">ThinkTable</span>
-        </Link>
-        <div className="flex items-center gap-4">
-          <Link href="/product" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-            Product
+        <div className="container mx-auto h-full px-4 min-[900px]:px-6 flex justify-between items-center">
+          <Link href="/" className="opacity-80 hover:opacity-100 transition-opacity" aria-label="ThinkTable">
+            <Image
+              src="/thinktable-logo.svg"
+              alt="ThinkTable"
+              width={24}
+              height={24}
+              className="h-6 w-6"
+              priority
+            />
           </Link>
-          <Link href="/login" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-            Login
-          </Link>
-          <Link 
-            href="/signup" 
-            className="bg-primary text-primary-foreground px-4 h-8 rounded-lg hover:opacity-90 transition-opacity text-sm font-medium flex items-center justify-center"
-          >
-            Get Started
-          </Link>
-        </div>
+
+          <div className="flex items-center gap-2">
+            <Link
+              href="/login"
+              className="bg-primary text-primary-foreground px-3 min-[900px]:px-4 h-8 rounded-lg hover:opacity-90 transition-opacity text-sm font-medium flex items-center justify-center"
+            >
+              Get started
+            </Link>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                  aria-label="Menu"
+                >
+                  <Menu className="h-5 w-5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[160px]">
+                <DropdownMenuItem asChild>
+                  <Link href="/help">Help</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/developer">Developer</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/pricing">Pricing</Link>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
       </nav>
 
@@ -95,7 +118,7 @@ export default function Home() {
         <EditorProvider>
           <ReactFlowContextProvider conversationId={homepageBoardId}>
             <div className="h-[calc(100vh-52px)] relative">
-              <BoardFlow conversationId={homepageBoardId} />
+              <BoardFlow conversationId={homepageBoardId} hideMapChrome />
             </div>
           </ReactFlowContextProvider>
         </EditorProvider>

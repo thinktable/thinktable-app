@@ -187,7 +187,7 @@ const MINIMAP_EXPAND_MS = 220 // Shared open/close/load height tween (expand-up)
 const FREE_NAV_WIDTH = MINIMAP_WIDTH // Same width as the minimap so the column stack lines up
 const BRAND_RIGHT = 12 // Inset from map column right edge
 /** Flow → frame top-left so the caret/⋮⋮ land on the I-bar (block chrome only). */
-const BLOCK_CREATE_OFFSET_X = 26 // contentFit pl-0.5 (2) + TipTap ⋮⋮ gutter pl-6 (24)
+const BLOCK_CREATE_OFFSET_X = 6 // contentFit BLOCK_FRAME_PAD_X (⋮⋮ lives outside the fill)
 const BLOCK_CREATE_OFFSET_Y = 4 // contentFit paddingTop only (legacy 20 assumed chat p-1 + extra)
 // Stable key-code arrays — new array literals each render make RF's useKeyPress loop (Max update depth).
 const MULTI_SELECT_KEYS = ['Shift', 'Meta', 'Control'] // Shift/Cmd/Ctrl+click adds to selection
@@ -487,10 +487,12 @@ function BoardFlowInner({
   conversationId,
   searchParams,
   embedded = false,
+  hideMapChrome = false, // Public / landing: no Free nav or minimap
 }: {
   conversationId?: string
   searchParams: ReturnType<typeof useSearchParams> | null
   embedded?: boolean // True when rendered as page-within-page preview
+  hideMapChrome?: boolean // Hide Free nav + minimap (pre-login homepage)
 }) {
   const { canEdit } = useBoardAccess() // RLS is authority; UI mirrors for viewers
   const { resolvedTheme } = useTheme()
@@ -520,8 +522,8 @@ function BoardFlowInner({
 
   // Initialize with consistent defaults to avoid hydration mismatch
   // Then update from localStorage in useEffect after hydration
-  const [isScrollMode, setIsScrollMode] = useState(false) // false = Zoom, true = Scroll
-  const [mapPointerTool, setMapPointerTool] = useState<'select' | 'pan'>('select') // Drag-select default; pan via nav toggle
+  const [isScrollMode, setIsScrollMode] = useState(true) // true = Scroll (wheel pans); false = Zoom
+  const [mapPointerTool, setMapPointerTool] = useState<'select' | 'pan'>('pan') // Pan default; select via nav toggle
   const [viewMode, setViewModeState] = useState<'linear' | 'canvas'>('canvas')
   
   // Linear mode navigation state
@@ -9040,7 +9042,7 @@ function BoardFlowInner({
       </ReactFlow>
     {/* Minimap + Free nav + brand — outside RF, absolute on BoardFlow root */}
       {/* Column stack: Free nav above minimap (no absolute overlap cutting corners) */}
-      {!embedded && (
+      {!embedded && !hideMapChrome && (
        <>
        <div
          className="z-10 flex flex-col items-stretch"
@@ -9614,7 +9616,7 @@ function BoardFlowInner({
       )}
 
       {/* Map menu — right-click Free nav / minimap (Shown / Hidden / Hover) */}
-      {!embedded && minimapContextMenuPosition && (
+      {!embedded && !hideMapChrome && minimapContextMenuPosition && (
         <div
           data-map-menu
           className="fixed z-[100] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] py-1 min-w-[180px]"
@@ -9740,9 +9742,11 @@ function BoardFlowInner({
 function BoardFlowWithSearchParams({
   conversationId,
   embedded,
+  hideMapChrome,
 }: {
   conversationId?: string
   embedded?: boolean
+  hideMapChrome?: boolean
 }) {
   const searchParams = useSearchParams()
   return (
@@ -9750,6 +9754,7 @@ function BoardFlowWithSearchParams({
       conversationId={conversationId}
       searchParams={searchParams}
       embedded={embedded}
+      hideMapChrome={hideMapChrome}
     />
   )
 }
@@ -9757,16 +9762,22 @@ function BoardFlowWithSearchParams({
 export function BoardFlow({
   conversationId,
   embedded = false,
+  hideMapChrome = false, // Public homepage: strip Free nav + minimap only
 }: {
   conversationId?: string
   embedded?: boolean // Page-within-page: strip outer chrome
+  hideMapChrome?: boolean // Pre-login homepage: no Free nav / minimap
 }) {
   return (
     <BoardEmbedProvider embedded={embedded}>
       <ReactFlowProvider>
         <BoardRotationProvider>
           <Suspense fallback={<div className="h-full w-full flex items-center justify-center">Loading...</div>}>
-            <BoardFlowWithSearchParams conversationId={conversationId} embedded={embedded} />
+            <BoardFlowWithSearchParams
+              conversationId={conversationId}
+              embedded={embedded}
+              hideMapChrome={hideMapChrome}
+            />
           </Suspense>
         </BoardRotationProvider>
       </ReactFlowProvider>

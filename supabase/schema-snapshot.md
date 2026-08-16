@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-15T18:35:26Z`
+- Snapped at: `2026-08-16T03:07:39Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260816030739_frame_property_cell_chrome.sql`.
+- Frame property cell chrome: fill radius matches property cell; adjust gutters/bands scale with `frameScale`; ⋮⋮ centers in gutter and tracks resize; property/connections only while selected; empty-cell first click selects the frame; hover border only when selected; `PropertyBlockView` watches `contenteditable` so selected hover/I-bar work on first interaction; homepage nav Get started + overflow menu.
+- Schema unchanged.
+
+## Prior: AI composer voice dictation
 
 - No DDL. Marker `20260815183526_ai_composer_voice_dictation.sql`.
 - AI composer voice-to-text: mic left of send; Cursor-style waveform + timer + cancel/confirm; PCM→WAV → Whisper (`/api/ai/transcribe`); prefer physical mics over BlackHole/virtual devices.
