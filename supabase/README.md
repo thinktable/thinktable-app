@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260816033714_frame_resize_chrome_connection_indicators` — Frame resize 1:1 chrome (square ring); connection simulators outset; no frame-drag on indicator press
 - `20260816031355_connections_properties_block_handles` — Connections strip ⋮⋮ + no add-block hairlines on property/connections grips
 - `20260816030739_frame_property_cell_chrome` — Frame property cell chrome (select/hover/I-bar; scale-aligned ⋮⋮)
 - `20260815183526_ai_composer_voice_dictation` — AI composer voice-to-text (Whisper; skip BlackHole/virtual mics)

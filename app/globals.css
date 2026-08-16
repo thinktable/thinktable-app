@@ -1482,7 +1482,7 @@ span[data-added="true"] {
     background-image: linear-gradient(#3b82f6, #3b82f6) !important;
     background-size: var(--tt-frame-line-w, 1.5px) 100% !important;
   }
-  /* Rounded adjust ring paints the stroke — keep line controls as invisible hit targets only */
+  /* Square adjust ring paints the stroke — keep line controls as invisible hit targets only */
   .react-flow__node-chatPanel .tt-frame-resize-line-hit.top,
   .react-flow__node-chatPanel .tt-frame-resize-line-hit.bottom,
   .react-flow__node-chatPanel .tt-frame-resize-line-hit.left,

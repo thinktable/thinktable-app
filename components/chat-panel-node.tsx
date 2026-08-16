@@ -6,6 +6,7 @@ import {
   useIsThreadConnecting,
   useIsNearThreadConnection,
   ConnectionIndicator,
+  INDICATOR_OUTSET,
 } from '@/components/threads' // Miro: DOM indicators arm edge connection points; proximity while dragging
 
 
@@ -79,7 +80,7 @@ const BLOCK_MIN_FRAME_H = 32 // One line (~24) + equal 4px content pads — hug 
 const BLOCK_FRAME_PAD_Y = 4 // Top/bottom inset inside the fill
 const BLOCK_FRAME_PAD_X = 6 // Slightly more L/R than T/B (property cell ↔ frame edge)
 const BLOCK_FRAME_PAD = BLOCK_FRAME_PAD_X // Default / band inset = horizontal pad
-/** Property cell radius at scale 1 — fill + blue adjust ring live outside CSS scale, so multiply by chromeScale */
+/** Property cell radius at scale 1 — fill lives outside CSS scale so multiply by chromeScale; adjust ring stays square */
 const FRAME_CORNER_RADIUS = 6
 const CONNECTIONS_GROUP_H = 28 // h-7 footer strip — hug spacer + pinned group when the free frame clips
 const DATABASE_BLOCK_HTML_RE = /data-type=["']databaseBlock["']/i // TipTap Notion DB atom in frame HTML
@@ -2650,12 +2651,14 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     }
     return sides
   })
-  // Indicators: selected frame (idle), OR nearby snap target while connecting — never during frame drag / mid-press
+  // Indicators: selected frame (idle), OR nearby snap target while connecting — never during frame drag.
+  // Mid-press on the *body* hides them (`pressing`); press on the indicator itself is excluded so
+  // the simulator stays mounted and can arm the thread instead of RF frame-dragging.
   const showIndicators =
     isBlock &&
     !isFlashcard &&
     !dragging &&
-    !pressing && // Mid-press hides indicator chrome; resize corners stay (showAdjustFrame)
+    !pressing && // Body mid-press hides simulators; resize corners stay (onFrameChrome exclusion)
     ((selected && !isThreadConnecting) || (isThreadConnecting && isNearThreadSnap))
 
   // Invisible edge connection point — idle: no hit/cursor; while selected, source can be armed by indicator
@@ -4359,9 +4362,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const emptyLineHug = growsWithLine && isBlockContentEmpty(promptContent)
   const hasBlockContent = isBlock && !isBlockContentEmpty(promptContent) // Lock only when a content block exists
   // Shared size-with-frame scale for selection chrome: resize handles, blue lines, connection
-  // indicators, and rotate/lock/wrap. Small frames shrink; large grow √ (0.85^→4× floated indicators).
+  // indicators. 1:1 with outer blue-box width (no √ damping); floor keeps tiny frames grabable.
   const FRAME_UI_REF_W = 78 // Natural chrome row width — scale=1 near this / 0.7
-  const FRAME_UI_MAX_FIT = 2.25 // Cap so resized frames don't get oversized/offset chrome
   // Live resize box wins — itemBoxSize lags while isResizingRef blocks the RO
   const frameUiHostW =
     (isUserResized && resizeDimensions?.width) ||
@@ -4369,20 +4371,17 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     panelRef.current?.offsetWidth ||
     BLOCK_LOCKED_MIN_W
   const rawFrameUiFit = (frameUiHostW * 0.7) / FRAME_UI_REF_W
-  const frameUiScale =
-    rawFrameUiFit <= 1
-      ? Math.max(0.55, rawFrameUiFit) // Floor so tiny frames keep a grabable handle
-      : Math.min(FRAME_UI_MAX_FIT, Math.sqrt(rawFrameUiFit)) // Gentle √ growth on big frames
+  const frameUiScale = Math.max(0.75, rawFrameUiFit) // Linear 1:1 with frame width; floor 0.75
   // Rotate/lock/wrap also eases vs board zoom (handles/lines ride the viewport already)
   const frameChromeZoom = 1 / Math.max(1, Math.pow(rfZoom || 1, 0.35))
   const frameChromeScale = frameChromeZoom * frameUiScale
-  const frameIndicatorSize = 10 * frameUiScale // Matches h-2.5 at scale 1
-  // Center on the blue selection edge (same as corner dots) — not floated outside
-  const frameIndicatorOut = 0
-  const frameChromeGapY = frameIndicatorSize / 2 + 8 // Clear half the bottom indicator + pad
-  const frameHandleSize = 10 * frameUiScale // Corner resize dots
-  const frameLineW = Math.max(1, 1.5 * frameUiScale) // Blue selection stroke
-  const frameLineHit = Math.max(4, 6 * frameUiScale) // Line hit target thickness
+  const frameIndicatorSize = 8 * frameUiScale // Connection simulator dots (slightly under resize corners)
+  // Sit outside the blue edge — scales 1:1 with frame so big frames keep the same gap look
+  const frameIndicatorOut = INDICATOR_OUTSET * frameUiScale
+  const frameChromeGapY = frameIndicatorOut + frameIndicatorSize / 2 + 8 // Clear bottom simulator + pad
+  const frameHandleSize = 7 * frameUiScale // Corner resize dots — compact but still 1:1 with frame
+  const frameLineW = Math.max(1, frameUiScale) // Blue selection stroke
+  const frameLineHit = Math.max(4, 5 * frameUiScale) // Line hit target thickness
   const wrapActive =
     isBlock && frameTextWrap && isUserResized && !!resizeDimensions && !pagePreviewOpen // Soft-wrap in a fixed width (locked or unlocked)
   const wrapUnlocked = wrapActive && frameUnlocked // Unlocked wrap: fixed width + free/clip height
@@ -5544,13 +5543,14 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         ['--tt-frame-line-hit' as string]: `${frameLineHit}px`,
         ['--tt-frame-handle' as string]: `${frameHandleSize}px`,
         ['--tt-frame-handle-border' as string]: `${Math.max(1, 1.5 * frameUiScale)}px`,
-        ['--tt-frame-radius' as string]: `${frameCornerRadius}px`, // Fill + blue ring; tracks scaled property cell
+        ['--tt-frame-radius' as string]: `${frameCornerRadius}px`, // Fill radius only — adjust ring is square
       }}
       onPointerDownCapture={(e) => {
         const t = e.target as HTMLElement | null
-        // Resize / rotate chrome / grips must stay mounted — `pressing` would unmount them mid-gesture
+        // Resize / rotate / grips / connection simulators must stay mounted — `pressing`
+        // would unmount them mid-gesture (indicator unmount → RF treats the press as frame drag)
         const onFrameChrome = !!t?.closest?.(
-          '.react-flow__resize-control, [data-frame-chrome], [data-tt-block-handle], [data-tt-insert-line], .block-actions-menu'
+          '.react-flow__resize-control, [data-frame-chrome], [data-tt-block-handle], [data-tt-insert-line], .block-actions-menu, [data-tt-connection-indicator]'
         )
         if (!onFrameChrome) {
           // Hide selection chrome until mouseup — gesture may become a drag (blue box only)
@@ -5633,7 +5633,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           aria-hidden
           className="pointer-events-none absolute inset-0 z-[20]"
           style={{
-            borderRadius: frameCornerRadius || undefined, // Same live radius as fill / property cell
+            borderRadius: 0, // Square adjust chrome — fill keeps rounded corners
             boxShadow: `inset 0 0 0 ${frameLineW}px #3b82f6`, // Same blue as selection chrome, no hit target
             // Upright AABB outline — don't clip to rotated silhouette
             clipPath: !isContentRotated ? shapeClip : undefined,
@@ -5641,13 +5641,13 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         />
       )}
 
-      {/* Selected frames: rounded blue ring (RF line controls stay for hit/resize but paint is off) */}
+      {/* Selected frames: square blue ring (RF line controls stay for hit/resize but paint is off) */}
       {showAdjustFrame && !frameShape && (
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0 z-[19]"
           style={{
-            borderRadius: frameCornerRadius, // Match property cell (6 × chromeScale)
+            borderRadius: 0, // Square resize outline — fill / property cell keep rounded corners
             boxShadow: `inset 0 0 0 ${frameLineW}px #3b82f6`,
             clipPath: !isContentRotated ? shapeClip : undefined,
           }}
@@ -5661,10 +5661,10 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             <NodeResizeControl
               key={`line-${position}`} // Side line that joins the four corners
               position={position}
-              variant="line" // Hit target only — stroke painted by the rounded ring above
+              variant="line" // Hit target only — stroke painted by the square ring above
               className={cn(
                 'nodrag nopan tt-frame-resize-line', // nodrag: resize must not start frame drag
-                !frameShape && 'tt-frame-resize-line-hit' // Hit only — rounded ring paints the stroke
+                !frameShape && 'tt-frame-resize-line-hit' // Hit only — square ring paints the stroke
               )}
               minWidth={frameMinW}
               minHeight={BLOCK_MIN_FRAME_H}
@@ -5717,7 +5717,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                   : 'cursor-crosshair hover:bg-blue-600'
               )}
               style={{
-                ...connectionIndicatorStyle(side, frameIndicatorOut), // Center on blue edge midpoints
+                ...connectionIndicatorStyle(side, frameIndicatorOut), // Outside blue edge (scaled outset)
                 width: frameIndicatorSize, // Dot grows/shrinks with frame size
                 height: frameIndicatorSize,
               }}

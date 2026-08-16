@@ -45,7 +45,8 @@ export function ConnectionIndicator({
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || !nodeId) return // Left button + must be inside an RF node
-    event.preventDefault() // Don't select/drag the frame
+    // Capture-friendly: stop before panel/`pressing` side-effects and RF node d3-drag
+    event.preventDefault() // Don't select/drag the frame; also suppresses mouse* for d3-drag
     event.stopPropagation()
 
     const {
@@ -255,7 +256,8 @@ export function ConnectionIndicator({
         'nodrag nopan absolute z-[30] h-2.5 w-2.5 cursor-crosshair rounded-full border border-white bg-blue-500 shadow-sm hover:bg-blue-600'
       }
       style={style}
-      onPointerDown={onPointerDown}
+      // Capture so we beat the frame panel’s pressing/unmount path and RF node drag
+      onPointerDownCapture={onPointerDown}
     />
   )
 }
