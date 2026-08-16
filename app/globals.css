@@ -1690,6 +1690,14 @@ span[data-added="true"] {
   .dark [data-tt-property-header].tt-block-highlight {
     background-color: rgba(59, 130, 246, 0.22);
   }
+  /* Connections bottom strip — same wash as property header when ⋮⋮-armed / hovered */
+  [data-tt-connections-header].tt-block-highlight {
+    background-color: rgba(35, 131, 226, 0.14);
+    border-radius: 4px;
+  }
+  .dark [data-tt-connections-header].tt-block-highlight {
+    background-color: rgba(59, 130, 246, 0.22);
+  }
 
   /* Preview chrome: semi-transparent, icon-only pill; left is set in JS so it stays inside the frame
      when an unlocked frame is narrower than the boardLink (title would otherwise clip the menu).

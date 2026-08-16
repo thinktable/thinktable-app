@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-16T03:07:39Z`
+- Snapped at: `2026-08-16T03:14:03Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260816031355_connections_properties_block_handles.sql`.
+- Connections strip gets a ⋮⋮ like the property header (Live Sync / Manual / Remove); property + connections chrome grips omit add-block hairlines.
+- Schema unchanged.
+
+## Prior: frame property cell chrome
 
 - No DDL. Marker `20260816030739_frame_property_cell_chrome.sql`.
 - Frame property cell chrome: fill radius matches property cell; adjust gutters/bands scale with `frameScale`; ⋮⋮ centers in gutter and tracks resize; property/connections only while selected; empty-cell first click selects the frame; hover border only when selected; `PropertyBlockView` watches `contenteditable` so selected hover/I-bar work on first interaction; homepage nav Get started + overflow menu.

@@ -45,6 +45,7 @@ import {
 import { collectPropertyBlocks } from '@/lib/tiptap/property-block' // Top icon row is one block; ⋮⋮ arms all property cells
 import { setAiBlockSelection } from '@/lib/ai/selection-bridge' // Live block pills in AI composer (⋮⋮ only)
 import { htmlToPlain } from '@/lib/ai/context-pack' // Block hover preview from HTML
+import { type NotionSyncMode } from '@/lib/blocks' // Connections ⋮⋮ → Live Sync / Manual
 import {
   createChildBoardForBlock,
   insertBoardTitleBlock,
@@ -61,6 +62,7 @@ type HandleLayout = {
   blockBottom: number // Full block box bottom (local px) — wrapped lines / tall atoms included
   block: EditorBlockRef
   propertyHeader?: boolean // Top icon list — one block; from/to span all property cells
+  connectionsHeader?: boolean // Bottom Notion/connectors strip — chrome-only block (no TipTap range)
   insertFrom?: number // Add-block hairline above (header uses first cell)
   insertTo?: number // Add-block hairline below (header uses last cell)
 }
@@ -74,7 +76,9 @@ type TipTapBlockHandlesProps = {
   boardInTargets?: BoardInTarget[]
   onPageTurnInto?: (blockType: 'board' | 'boardIn', boardInParentId?: string | null) => void
   onPropertyTurnInto?: (propertyType: PropertyTypeId) => void // Turn into → Property
-  notionConnected?: boolean // Notion-connected frame → slimmer block ⋮⋮ menu
+  notionConnected?: boolean // Notion-connected frame → slimmer block ⋮⋮ menu + connections strip grip
+  notionSync?: NotionSyncMode // Live Sync vs Manual — connections ⋮⋮ menu
+  onNotionConnection?: (next: { connected: boolean; sync?: NotionSyncMode }) => void // Connections ⋮⋮ actions
   /** contentFit paddingLeft — absolute grips originate inside the padded content box, not the fill edge */
   contentPadLeft?: number
   /** Host locked-resize scale — CSS transform skips ResizeObserver; re-measure when it changes */
@@ -113,6 +117,34 @@ function layoutForPropertyHeader(
   }
 }
 
+/** Measure grip Y from the bottom connections strip (Notion / connectors — chrome-only block). */
+function layoutForConnectionsHeader(
+  container: HTMLElement,
+  block: EditorBlockRef
+): HandleLayout | null {
+  // Strip may live in the panel’s bottom chrome band (outside the fill) — search the host frame.
+  const frame = container.closest('.react-flow__node') as HTMLElement | null
+  const header = (
+    frame?.querySelector('[data-tt-connections-header]') ||
+    container.querySelector('[data-tt-connections-header]')
+  ) as HTMLElement | null
+  if (!header) return null // Strip not mounted
+  const fr = header.getBoundingClientRect()
+  if (fr.height <= 0) return null
+  const mid = screenToLocal(container, (fr.left + fr.right) / 2, (fr.top + fr.bottom) / 2)
+  const firstLineH = Math.min(Math.max(14, fr.height), 28) // Same band as a one-line block
+  return {
+    top: mid.y - firstLineH / 2,
+    height: firstLineH,
+    firstLineH,
+    lineCenter: mid.y,
+    blockTop: mid.y - firstLineH / 2,
+    blockBottom: mid.y + firstLineH / 2,
+    block, // Sentinel — no TipTap range; menu is notionConnection only
+    connectionsHeader: true,
+  }
+}
+
 /** One EditorBlockRef spanning every propertyBlock (the top icon list as a single block). */
 function propertyHeaderBlock(editor: Editor): { block: EditorBlockRef; insertFrom: number; insertTo: number } | null {
   const blocks = collectPropertyBlocks(editor)
@@ -128,6 +160,18 @@ function propertyHeaderBlock(editor: Editor): { block: EditorBlockRef; insertFro
     },
     insertFrom: first.from,
     insertTo: last.to,
+  }
+}
+
+/** Sentinel block for the connections strip — not a doc range (grip key is `connections-header`). */
+function connectionsHeaderBlock(editor: Editor): EditorBlockRef | null {
+  const first = editor.state.doc.firstChild
+  if (!first) return null // Empty doc — no sentinel node to hang the type off
+  return {
+    from: 0,
+    to: 0,
+    node: first,
+    typeName: 'connectionsHeader',
   }
 }
 
@@ -369,6 +413,8 @@ export function TipTapBlockHandles({
   onPageTurnInto,
   onPropertyTurnInto,
   notionConnected = false,
+  notionSync = 'live',
+  onNotionConnection,
   contentPadLeft = 0, // Match host contentFit pad so ⋮⋮ centers in the blue-box gutter
   frameScale = 1, // Locked resize CSS scale — force re-measure (RO ignores transform)
 }: TipTapBlockHandlesProps) {
@@ -386,6 +432,12 @@ export function TipTapBlockHandles({
     blockType: BlockTypeId
     openLeft: boolean // Anchor menu to the left of the frame when there's room
   } | null>(null)
+  // Connections strip ⋮⋮ — same Live Sync / Manual / Remove menu as the Notion mark
+  const [connectionsMenu, setConnectionsMenu] = useState<{
+    x: number
+    y: number
+    openLeft: boolean
+  } | null>(null)
   const [dropLine, setDropLine] = useState<DropLine | null>(null) // Dashed insert line while dragging a content block
   const [ghost, setGhost] = useState<{ x: number; y: number; text: string; width: number } | null>(null) // Floating preview of the dragged line
   // In-frame multi-block selection (Shift = range, Cmd/Ctrl = toggle). Empty = no multi-selection.
@@ -396,6 +448,8 @@ export function TipTapBlockHandles({
   // Top icon row armed as ONE block — selection still lists every property cell for drag/delete,
   // but grips/wash stay on the header only (not a ⋮⋮ per cell). Cleared with the selection.
   const [propertyHeaderArmed, setPropertyHeaderArmed] = useState(false)
+  // Bottom connections strip armed — chrome-only (no TipTap cells). Cleared with the selection.
+  const [connectionsHeaderArmed, setConnectionsHeaderArmed] = useState(false)
   const anchorRef = useRef<EditorBlockRef | null>(null) // Anchor block for Shift range-select
   // Keep latest layouts in refs so transaction refresh doesn’t need stale state
   const hoverRef = useRef<HandleLayout | null>(null)
@@ -435,14 +489,17 @@ export function TipTapBlockHandles({
     if (editor) setEditorBlockHighlight(editor, null) // Wipe single + multi wash
     setSelection([])
     setPropertyHeaderArmed(false) // Header is not a separate selection — drop with the cells
+    setConnectionsHeaderArmed(false) // Connections strip wash / grip arm
     anchorRef.current = null
     setMenu(null)
+    setConnectionsMenu(null)
     if (hostNodeId) setAiBlockSelection(null) // Drop AI block pill when disarmed
   }, [editor, hostNodeId])
 
   // Close the actions menu only — keep the block selection so a follow-up ⋮⋮ drag can move it
   const closeMenu = useCallback(() => {
     setMenu(null)
+    setConnectionsMenu(null)
   }, [])
 
   // Frame deselected → drop hover/caret grips and any armed block selection
@@ -462,6 +519,8 @@ export function TipTapBlockHandles({
       const asHeader = !!opts?.asPropertyHeader
       setSelection(blocks)
       setPropertyHeaderArmed(asHeader)
+      setConnectionsHeaderArmed(false) // Content / property arm clears connections strip
+      setConnectionsMenu(null)
       if (editor) {
         // Header wash is a class on [data-tt-property-header] — do not paint every cell
         if (asHeader) setEditorBlockHighlight(editor, null)
@@ -522,7 +581,7 @@ export function TipTapBlockHandles({
     const frame = frameForEditor(dom)
 
     const resolveFromPoint = (clientX: number, clientY: number, target: EventTarget | null) => {
-      if (menu || draggingRef.current) return // Keep handle on the open-menu / in-drag block
+      if (menu || connectionsMenu || draggingRef.current) return // Keep handle on the open-menu / in-drag block
       const el = target as HTMLElement | null
       // Pointer on grip / gutter / add-line / menu — keep current hover (CSS shows add lines)
       if (
@@ -564,6 +623,21 @@ export function TipTapBlockHandles({
         }
       }
 
+      // Bottom connections strip — same Y-band rule as the property header
+      if (notionConnected) {
+        const connEl = frame.querySelector('[data-tt-connections-header]') as HTMLElement | null
+        if (connEl) {
+          const cr = connEl.getBoundingClientRect()
+          if (clientY >= cr.top && clientY <= cr.bottom) {
+            const sentinel = connectionsHeaderBlock(editor)
+            if (sentinel) {
+              setHover(layoutForConnectionsHeader(container, sentinel))
+              return
+            }
+          }
+        }
+      }
+
       const block = findEditorBlockAtClientY(editor, clientY)
       if (!block) {
         setHover(null)
@@ -577,7 +651,7 @@ export function TipTapBlockHandles({
     }
 
     const onLeave = (event: MouseEvent) => {
-      if (menu || draggingRef.current) return
+      if (menu || connectionsMenu || draggingRef.current) return
       const related = event.relatedTarget as HTMLElement | null
       if (
         related?.closest?.(
@@ -600,7 +674,7 @@ export function TipTapBlockHandles({
       frame.removeEventListener('mousemove', onMove)
       frame.removeEventListener('mouseleave', onLeave)
     }
-  }, [editor, enabled, menu, isPanelSelected])
+  }, [editor, enabled, menu, connectionsMenu, isPanelSelected, notionConnected])
 
   // Keep a handle beside the block that owns the caret (cursor placed → handle stays without hover).
   // Also re-measure on TipTap transactions / RO so grips stay glued after typing / zoom.
@@ -694,15 +768,22 @@ export function TipTapBlockHandles({
 
   // Outside click: dismiss menu + clear armed block selection (unless clicking another grip / the menu)
   useEffect(() => {
-    if (!menu && selection.length === 0) return // Nothing armed
+    if (!menu && !connectionsMenu && selection.length === 0 && !connectionsHeaderArmed) return
     const onDoc = (event: MouseEvent) => {
       const t = event.target as HTMLElement
-      if (t.closest?.('.block-actions-menu, [data-tt-block-handle]')) return
+      // Keep wash when clicking grips, menus, or the property / connections chrome strips
+      if (
+        t.closest?.(
+          '.block-actions-menu, [data-tt-block-handle], [data-tt-property-header], [data-tt-connections-header]'
+        )
+      ) {
+        return
+      }
       clearBlockSelection()
     }
     document.addEventListener('mousedown', onDoc, true)
     return () => document.removeEventListener('mousedown', onDoc, true)
-  }, [menu, selection.length, clearBlockSelection])
+  }, [menu, connectionsMenu, selection.length, connectionsHeaderArmed, clearBlockSelection])
 
   // Prefer opening the actions menu to the LEFT of the frame (the ⋮⋮ handle lives in the left gutter);
   // fall back to the default right-of-handle spot when there isn't room on the left.
@@ -717,6 +798,30 @@ export function TipTapBlockHandles({
       return { x: clientX, y: clientY, openLeft: false }
     },
     [editor]
+  )
+
+  /** Arm the connections strip + open Live Sync / Manual / Remove (same as the Notion mark). */
+  const openForConnections = useCallback(
+    (clientX: number, clientY: number) => {
+      if (!editor || !notionConnected) return
+      const sentinel = connectionsHeaderBlock(editor)
+      if (!sentinel) return
+      setSelection([])
+      setPropertyHeaderArmed(false)
+      setConnectionsHeaderArmed(true)
+      setMenu(null)
+      if (editor) setEditorBlockHighlight(editor, null)
+      if (hostNodeId) setAiBlockSelection(null) // Connections aren't TipTap content for AI pills
+      const place = menuPlacement(clientX, clientY)
+      setConnectionsMenu(place)
+      const container = gripLayoutRoot(editor)
+      const layout = container ? layoutForConnectionsHeader(container, sentinel) : null
+      if (layout) {
+        setHover(layout)
+        setFocusLayout(layout)
+      }
+    },
+    [editor, notionConnected, hostNodeId, menuPlacement]
   )
 
   const openForBlock = useCallback(
@@ -742,7 +847,7 @@ export function TipTapBlockHandles({
         return
       }
       // Arm this block for a follow-up ⋮⋮ drag (selection persists after the menu closes)
-      applySelection([block]) // Cell / text block — clears propertyHeaderArmed
+      applySelection([block]) // Cell / text block — clears propertyHeaderArmed + connectionsHeaderArmed
       anchorRef.current = block
       const blockType = refineListBlockType(editor, block)
       setMenu({ ...menuPlacement(clientX, clientY), block, blockType })
@@ -781,156 +886,171 @@ export function TipTapBlockHandles({
   )
 
   // Block drag only when frame + this block are selected; otherwise let RF drag the frame
-  const onGripPointerDown = useCallback((e: ReactPointerEvent, target?: EditorBlockRef) => {
-    if (e.button !== 0 || !editor) return // Left button + live editor
-    const block = target ?? (hover ?? focusLayout)?.block
-    if (!block) return
-    // Frame not selected, or block not armed via ⋮⋮ click → do not steal the pointer (RF drags the frame)
-    if (!isPanelSelected || !isBlockArmed(block)) {
-      gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
-      return // No stopPropagation / no nodrag path — frame moves
-    }
-    e.stopPropagation() // Armed block drag — never start RF frame drag from ⋮⋮
-    // Modifier+click is a multi-select gesture (handled in onClick) — don't start a drag
-    if (e.shiftKey || e.metaKey || e.ctrlKey) {
-      gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
-      return
-    }
-    gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false } // Baseline for click vs drag
-    setMenu(null) // Dismiss actions while dragging the armed block
-    const sourceHostId = hostNodeId // Frame this block currently lives in
-    const sourceFrom = block.from // Snapshot — docs shift after delete
-    const sourceTo = block.to
-    const ghostText = editor.state.doc.textBetween(sourceFrom, sourceTo, ' ').trim() || ' ' // Preview label
-    const ghostWidth = Math.max(80, Math.min(360, ghostText.length * 8)) // Approximate line width
-    setEditorBlockHighlight(editor, { from: sourceFrom, to: sourceTo }) // Keep blue wash while dragging
-
-    const onMove = (ev: PointerEvent) => {
-      const start = gripPointerRef.current
-      if (!start) return
-      const dx = ev.clientX - start.x
-      const dy = ev.clientY - start.y
-      if (!start.dragged) {
-        if (dx * dx + dy * dy <= 16) return // Still a click
-        start.dragged = true // Crossed ~4px → content-block drag
-        draggingRef.current = true // Freeze ⋮⋮ beside this line
-      }
-      setGhost({ x: ev.clientX, y: ev.clientY, text: ghostText, width: ghostWidth }) // Follow pointer
-      const hit = findHostEditorAtPoint(ev.clientX, ev.clientY)
-      if (!hit) {
-        setDropLine(null) // Over empty canvas — extract on drop
+  const onGripPointerDown = useCallback(
+    (e: ReactPointerEvent, target?: EditorBlockRef, asConnectionsHeader = false) => {
+      if (e.button !== 0 || !editor) return // Left button + live editor
+      // Connections strip: arm via click only — no TipTap range to drag
+      if (asConnectionsHeader) {
+        if (!isPanelSelected || !connectionsHeaderArmed) {
+          gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
+          return // Unarmed → RF may drag the frame
+        }
+        e.stopPropagation() // Armed — don't start frame drag from ⋮⋮
+        gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
         return
       }
-      const dropTarget = findContentBlockDropTarget(hit.editor, ev.clientY)
-      if (!dropTarget) {
-        setDropLine(null)
+      const block = target ?? (hover ?? focusLayout)?.block
+      if (!block) return
+      // Frame not selected, or block not armed via ⋮⋮ click → do not steal the pointer (RF drags the frame)
+      if (!isPanelSelected || !isBlockArmed(block)) {
+        gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
+        return // No stopPropagation / no nodrag path — frame moves
+      }
+      e.stopPropagation() // Armed block drag — never start RF frame drag from ⋮⋮
+      // Modifier+click is a multi-select gesture (handled in onClick) — don't start a drag
+      if (e.shiftKey || e.metaKey || e.ctrlKey) {
+        gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
         return
       }
-      // Hide the line if it would insert the block back into itself
-      if (hit.hostNodeId === sourceHostId && dropTarget.insertPos >= sourceFrom && dropTarget.insertPos <= sourceTo) {
-        setDropLine(null)
-        return
-      }
-      setDropLine({ top: dropTarget.lineTop, left: dropTarget.lineLeft, width: dropTarget.lineWidth }) // Dashed insert marker
-    }
+      gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false } // Baseline for click vs drag
+      setMenu(null) // Dismiss actions while dragging the armed block
+      setConnectionsMenu(null)
+      const sourceHostId = hostNodeId // Frame this block currently lives in
+      const sourceFrom = block.from // Snapshot — docs shift after delete
+      const sourceTo = block.to
+      const ghostText = editor.state.doc.textBetween(sourceFrom, sourceTo, ' ').trim() || ' ' // Preview label
+      const ghostWidth = Math.max(80, Math.min(360, ghostText.length * 8)) // Approximate line width
+      setEditorBlockHighlight(editor, { from: sourceFrom, to: sourceTo }) // Keep blue wash while dragging
 
-    const onUp = async (ev: PointerEvent) => {
-      window.removeEventListener('pointermove', onMove, true)
-      window.removeEventListener('pointerup', onUp, true)
-      const start = gripPointerRef.current
-      const didDrag = !!start?.dragged
-      draggingRef.current = false
-      setDropLine(null)
-      setGhost(null)
-      if (!didDrag) return // Click handler opens the actions menu
-      if (editor.isDestroyed) return
-
-      const hit = findHostEditorAtPoint(ev.clientX, ev.clientY)
-      const payload = jsonForEditorRange(editor, sourceFrom, sourceTo)
-      if (payload.length === 0) {
-        clearBlockSelection()
-        return
-      }
-
-      if (hit && hit.hostNodeId === sourceHostId) {
+      const onMove = (ev: PointerEvent) => {
+        const start = gripPointerRef.current
+        if (!start) return
+        const dx = ev.clientX - start.x
+        const dy = ev.clientY - start.y
+        if (!start.dragged) {
+          if (dx * dx + dy * dy <= 16) return // Still a click
+          start.dragged = true // Crossed ~4px → content-block drag
+          draggingRef.current = true // Freeze ⋮⋮ beside this line
+        }
+        setGhost({ x: ev.clientX, y: ev.clientY, text: ghostText, width: ghostWidth }) // Follow pointer
+        const hit = findHostEditorAtPoint(ev.clientX, ev.clientY)
+        if (!hit) {
+          setDropLine(null) // Over empty canvas — extract on drop
+          return
+        }
         const dropTarget = findContentBlockDropTarget(hit.editor, ev.clientY)
-        if (dropTarget) moveEditorBlockToPos(editor, sourceFrom, sourceTo, dropTarget.insertPos) // Reorder in this frame
-        clearBlockSelection()
-        return
+        if (!dropTarget) {
+          setDropLine(null)
+          return
+        }
+        // Hide the line if it would insert the block back into itself
+        if (hit.hostNodeId === sourceHostId && dropTarget.insertPos >= sourceFrom && dropTarget.insertPos <= sourceTo) {
+          setDropLine(null)
+          return
+        }
+        setDropLine({ top: dropTarget.lineTop, left: dropTarget.lineLeft, width: dropTarget.lineWidth }) // Dashed insert marker
       }
 
-      if (hit && hit.hostNodeId !== sourceHostId) {
-        const dropTarget = findContentBlockDropTarget(hit.editor, ev.clientY)
-        const insertPos = dropTarget?.insertPos ?? hit.editor.state.doc.content.size
-        let toInsert = payload // List items stay bare inside a list
+      const onUp = async (ev: PointerEvent) => {
+        window.removeEventListener('pointermove', onMove, true)
+        window.removeEventListener('pointerup', onUp, true)
+        const start = gripPointerRef.current
+        const didDrag = !!start?.dragged
+        draggingRef.current = false
+        setDropLine(null)
+        setGhost(null)
+        if (!didDrag) return // Click handler opens the actions menu
+        if (editor.isDestroyed) return
+
+        const hit = findHostEditorAtPoint(ev.clientX, ev.clientY)
+        const payload = jsonForEditorRange(editor, sourceFrom, sourceTo)
+        if (payload.length === 0) {
+          clearBlockSelection()
+          return
+        }
+
+        if (hit && hit.hostNodeId === sourceHostId) {
+          const dropTarget = findContentBlockDropTarget(hit.editor, ev.clientY)
+          if (dropTarget) moveEditorBlockToPos(editor, sourceFrom, sourceTo, dropTarget.insertPos) // Reorder in this frame
+          clearBlockSelection()
+          return
+        }
+
+        if (hit && hit.hostNodeId !== sourceHostId) {
+          const dropTarget = findContentBlockDropTarget(hit.editor, ev.clientY)
+          const insertPos = dropTarget?.insertPos ?? hit.editor.state.doc.content.size
+          let toInsert = payload // List items stay bare inside a list
+          try {
+            const $ins = hit.editor.state.doc.resolve(Math.min(insertPos, hit.editor.state.doc.content.size))
+            const inList =
+              $ins.parent.type.name === 'bulletList' ||
+              $ins.parent.type.name === 'orderedList' ||
+              $ins.parent.type.name === 'taskList'
+            if (!inList) toInsert = wrapJsonForInsert(editor, block, payload) // Doc-level needs a list wrapper
+          } catch {
+            toInsert = wrapJsonForInsert(editor, block, payload)
+          }
+          const inserted = hit.editor.chain().focus().insertContentAt(insertPos, toInsert).run()
+          if (inserted) deleteEditorBlockRange(editor, sourceFrom, sourceTo) // Leave source frame
+          clearBlockSelection()
+          return
+        }
+
+        // Drop on empty **page** → new **frame** with this block’s HTML
+        if (!conversationId) {
+          clearBlockSelection()
+          return
+        }
+        const html = htmlForEditorRange(editor, sourceFrom, sourceTo)
+        const flow = screenToFlowPosition({ x: ev.clientX, y: ev.clientY })
         try {
-          const $ins = hit.editor.state.doc.resolve(Math.min(insertPos, hit.editor.state.doc.content.size))
-          const inList =
-            $ins.parent.type.name === 'bulletList' ||
-            $ins.parent.type.name === 'orderedList' ||
-            $ins.parent.type.name === 'taskList'
-          if (!inList) toInsert = wrapJsonForInsert(editor, block, payload) // Doc-level needs a list wrapper
-        } catch {
-          toInsert = wrapJsonForInsert(editor, block, payload)
+          const supabase = createClient()
+          const { data: { user } } = await supabase.auth.getUser()
+          if (!user) {
+            clearBlockSelection()
+            return
+          }
+          const { error } = await supabase.from('messages').insert({
+            conversation_id: conversationId,
+            user_id: user.id,
+            role: 'user',
+            content: html, // This block becomes the new frame body
+            metadata: newBlockMetadata({
+              position: { x: flow.x, y: flow.y }, // Drop point
+              fadeIn: true,
+            }),
+          })
+          if (error) {
+            console.error('Error extracting content block:', error)
+            clearBlockSelection()
+            return
+          }
+          deleteEditorBlockRange(editor, sourceFrom, sourceTo) // Remove from source after persist
+          await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+          await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
+        } catch (err) {
+          console.error('Error extracting content block:', err)
         }
-        const inserted = hit.editor.chain().focus().insertContentAt(insertPos, toInsert).run()
-        if (inserted) deleteEditorBlockRange(editor, sourceFrom, sourceTo) // Leave source frame
         clearBlockSelection()
-        return
       }
 
-      // Drop on empty **page** → new **frame** with this block’s HTML
-      if (!conversationId) {
-        clearBlockSelection()
-        return
-      }
-      const html = htmlForEditorRange(editor, sourceFrom, sourceTo)
-      const flow = screenToFlowPosition({ x: ev.clientX, y: ev.clientY })
-      try {
-        const supabase = createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) {
-          clearBlockSelection()
-          return
-        }
-        const { error } = await supabase.from('messages').insert({
-          conversation_id: conversationId,
-          user_id: user.id,
-          role: 'user',
-          content: html, // This block becomes the new frame body
-          metadata: newBlockMetadata({
-            position: { x: flow.x, y: flow.y }, // Drop point
-            fadeIn: true,
-          }),
-        })
-        if (error) {
-          console.error('Error extracting content block:', error)
-          clearBlockSelection()
-          return
-        }
-        deleteEditorBlockRange(editor, sourceFrom, sourceTo) // Remove from source after persist
-        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
-        await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
-      } catch (err) {
-        console.error('Error extracting content block:', err)
-      }
-      clearBlockSelection()
-    }
-
-    window.addEventListener('pointermove', onMove, true)
-    window.addEventListener('pointerup', onUp, true)
-  }, [
-    clearBlockSelection,
-    conversationId,
-    editor,
-    focusLayout,
-    hostNodeId,
-    hover,
-    isBlockArmed,
-    isPanelSelected,
-    queryClient,
-    screenToFlowPosition,
-  ])
+      window.addEventListener('pointermove', onMove, true)
+      window.addEventListener('pointerup', onUp, true)
+    },
+    [
+      clearBlockSelection,
+      connectionsHeaderArmed,
+      conversationId,
+      editor,
+      focusLayout,
+      hostNodeId,
+      hover,
+      isBlockArmed,
+      isPanelSelected,
+      queryClient,
+      screenToFlowPosition,
+    ]
+  )
 
   // Single TipTap block → linked board: seed child board with this block's HTML, replace with boardLink
   const turnBlockIntoBoard = useCallback(
@@ -1071,7 +1191,7 @@ export function TipTapBlockHandles({
   // Grip click: plain = arm block + actions menu; Shift/⌘ = multi-select.
   // Unselected frame: do not steal the click — RF selects the frame first.
   const onGripClick = useCallback(
-    (e: React.MouseEvent, block: EditorBlockRef, asPropertyHeader = false) => {
+    (e: React.MouseEvent, block: EditorBlockRef, asPropertyHeader = false, asConnectionsHeader = false) => {
       const start = gripPointerRef.current
       gripPointerRef.current = null
       if (start?.dragged) return // Drag moved this block — don't open the menu
@@ -1080,6 +1200,15 @@ export function TipTapBlockHandles({
       e.stopPropagation()
       e.preventDefault()
       if (!editor) return
+      if (asConnectionsHeader) {
+        // Connections strip is one chrome block — ⋮⋮ again closes the menu
+        if (connectionsMenu) {
+          setConnectionsMenu(null)
+          return
+        }
+        openForConnections(e.clientX, e.clientY)
+        return
+      }
       if (asPropertyHeader) {
         // Top icon list is one block — ⋮⋮ again closes the menu like any other block
         if (menu) {
@@ -1122,7 +1251,17 @@ export function TipTapBlockHandles({
       // Arm this single block + open its menu (follow-up ⋮⋮ drag can move it)
       openForBlock(block, e.clientX, e.clientY)
     },
-    [editor, applySelection, collectBlocksBetween, openForBlock, menuPlacement, isPanelSelected, menu]
+    [
+      editor,
+      applySelection,
+      collectBlocksBetween,
+      openForBlock,
+      openForConnections,
+      menuPlacement,
+      isPanelSelected,
+      menu,
+      connectionsMenu,
+    ]
   )
 
   // Blue wash on the top icon list when that block is armed / hovered
@@ -1136,6 +1275,18 @@ export function TipTapBlockHandles({
     el.classList.toggle('tt-block-highlight', on)
     return () => el.classList.remove('tt-block-highlight')
   }, [editor, propertyHeaderArmed, hover?.propertyHeader])
+
+  // Blue wash on the bottom connections strip when that block is armed / hovered
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return
+    const el =
+      frameForEditor(editor.view.dom).querySelector('[data-tt-connections-header]') ||
+      gripLayoutRoot(editor)?.querySelector('[data-tt-connections-header]')
+    if (!el) return
+    const on = connectionsHeaderArmed || !!hover?.connectionsHeader
+    el.classList.toggle('tt-block-highlight', on)
+    return () => el.classList.remove('tt-block-highlight')
+  }, [editor, connectionsHeaderArmed, hover?.connectionsHeader])
 
   if (!editor || !enabled) return null
   // Unselected frames never paint ⋮⋮ (hover / caret / AI pending) — only when the blue adjust box is up
@@ -1156,7 +1307,7 @@ export function TipTapBlockHandles({
   // Gutter runs from -(padL+HANDLE_GUTTER)…-padL relative to the content-box origin.
   const gutterCenterLeft =
     -contentPadLeft - HANDLE_GUTTER + (HANDLE_GUTTER / 2 - GRIP_W / 2)
-  const gripLayouts = new Map<string | number, HandleLayout>() // keyed by block.from (header = 'property-header')
+  const gripLayouts = new Map<string | number, HandleLayout>() // keyed by block.from (headers = named keys)
   if (container) {
     for (const b of selection) {
       // Header mode: cells stay in `selection` for menu/drag, but only the top-row ⋮⋮ paints
@@ -1183,6 +1334,12 @@ export function TipTapBlockHandles({
       const fresh = layoutForPropertyHeader(container, group.block, group.insertFrom, group.insertTo)
       if (fresh) gripLayouts.set('property-header', fresh)
     }
+  } else if (hoverLayout?.connectionsHeader && container && notionConnected) {
+    const sentinel = connectionsHeaderBlock(editor)
+    if (sentinel) {
+      const fresh = layoutForConnectionsHeader(container, sentinel)
+      if (fresh) gripLayouts.set('connections-header', fresh)
+    }
   } else if (hoverLayout && !gripLayouts.has(hoverLayout.block.from) && container) {
     // Don't park a cell grip from caret/hover while the header owns the property list
     if (!(propertyHeaderArmed && hoverLayout.block.typeName === 'propertyBlock')) {
@@ -1201,6 +1358,19 @@ export function TipTapBlockHandles({
     const hl = layoutForPropertyHeader(container, group.block, group.insertFrom, group.insertTo)
     if (hl) gripLayouts.set('property-header', hl)
   }
+  // Armed / menu-open connections strip — keep the ⋮⋮ parked on the footer band
+  if (
+    container &&
+    notionConnected &&
+    (connectionsHeaderArmed || connectionsMenu || hover?.connectionsHeader) &&
+    !gripLayouts.has('connections-header')
+  ) {
+    const sentinel = connectionsHeaderBlock(editor)
+    if (sentinel) {
+      const hl = layoutForConnectionsHeader(container, sentinel)
+      if (hl) gripLayouts.set('connections-header', hl)
+    }
+  }
   // Menu count reflects the group when the menu block is part of a multi-selection
   const menuCount =
     menu && selection.length > 1 && selection.some((b) => b.from === menu.block.from)
@@ -1212,17 +1382,30 @@ export function TipTapBlockHandles({
       {Array.from(gripLayouts.entries()).map(([gripKey, gl]) => {
         // Skip grips whose range no longer exists in the doc (e.g. after Turn into Board)
         const docSize = editor.state.doc.content.size
-        if (gl.block.from < 0 || gl.block.from >= docSize || gl.block.to > docSize) return null
+        if (
+          !gl.connectionsHeader &&
+          (gl.block.from < 0 || gl.block.from >= docSize || gl.block.to > docSize)
+        ) {
+          return null
+        }
         // nodrag only when this block is armed — otherwise RF must receive the pointer to drag the frame
         const armed =
           isPanelSelected &&
-          (gl.propertyHeader ? propertyHeaderArmed : isBlockArmed(gl.block))
-        const aiPending = blockHasAiPending(editor, gl.block)
+          (gl.connectionsHeader
+            ? connectionsHeaderArmed
+            : gl.propertyHeader
+              ? propertyHeaderArmed
+              : isBlockArmed(gl.block))
+        const aiPending = gl.connectionsHeader ? false : blockHasAiPending(editor, gl.block)
         const gripTop = gl.lineCenter - GRIP_H / 2
         const gripBottom = gl.lineCenter + GRIP_H / 2
         // Neighbor mid-gap so this block’s below and the next block’s above share one Y.
         // First/last: sit INSERT_GAP outside the ⋮⋮ (fill pad), never clamp into the grip (that hid add-above).
-        const neighbors = gl.propertyHeader ? { prev: null, next: null } : adjacentHandleBlocks(editor, gl.block)
+        // Property / connections chrome strips have no TipTap neighbors — no shared mid-gap.
+        const neighbors =
+          gl.propertyHeader || gl.connectionsHeader
+            ? { prev: null, next: null }
+            : adjacentHandleBlocks(editor, gl.block)
         const prevLayout =
           neighbors.prev && container ? layoutForBlock(editor, container, neighbors.prev) : null
         const nextLayout =
@@ -1247,6 +1430,8 @@ export function TipTapBlockHandles({
         const gripChromeScale = 1 / Math.max(1, Math.sqrt(rfZoom || 1))
         const insertAbove = gl.insertFrom ?? gl.block.from
         const insertBelow = gl.insertTo ?? gl.block.to
+        // Property / connections chrome strips — ⋮⋮ only, no between-block hairlines
+        const showInsertLines = isPanelSelected && !gl.propertyHeader && !gl.connectionsHeader
         const grip = (
           <div
             key={gripKey}
@@ -1260,7 +1445,7 @@ export function TipTapBlockHandles({
               height: gutterH,
             }}
           >
-            {isPanelSelected ? (
+            {showInsertLines ? (
               <>
                 <button
                   type="button"
@@ -1338,18 +1523,31 @@ export function TipTapBlockHandles({
                 transformOrigin: 'center center',
               }}
               title={
-                armed
-                  ? 'Drag to move block · click for actions · Shift/⌘-click to multi-select'
-                  : isPanelSelected
-                    ? 'Click to select block · drag moves frame'
-                    : 'Drag to move frame · click to select frame'
+                gl.connectionsHeader
+                  ? armed
+                    ? 'Click for connection actions'
+                    : isPanelSelected
+                      ? 'Click to select connections · drag moves frame'
+                      : 'Drag to move frame · click to select frame'
+                  : armed
+                    ? 'Drag to move block · click for actions · Shift/⌘-click to multi-select'
+                    : isPanelSelected
+                      ? 'Click to select block · drag moves frame'
+                      : 'Drag to move frame · click to select frame'
               }
-              onPointerDown={(e) => onGripPointerDown(e, gl.block)}
-              onClick={(e) => onGripClick(e, gl.block, gl.propertyHeader)}
+              onPointerDown={(e) => onGripPointerDown(e, gl.block, !!gl.connectionsHeader)}
+              onClick={(e) => onGripClick(e, gl.block, !!gl.propertyHeader, !!gl.connectionsHeader)}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter' && e.key !== ' ') return
                 if (!isPanelSelected) return
                 e.preventDefault()
+                if (gl.connectionsHeader) {
+                  openForConnections(
+                    e.currentTarget.getBoundingClientRect().right,
+                    e.currentTarget.getBoundingClientRect().top
+                  )
+                  return
+                }
                 openForBlock(
                   gl.block,
                   e.currentTarget.getBoundingClientRect().right,
@@ -1417,6 +1615,31 @@ export function TipTapBlockHandles({
             notionConnected={notionConnected} // Slimmer ⋮⋮ when the frame is Notion-linked
             onAction={onAction}
             onClose={closeMenu}
+          />,
+          document.body
+        )}
+
+      {connectionsMenu &&
+        createPortal(
+          <BlockActionsMenu
+            variant="notionConnection"
+            x={connectionsMenu.x}
+            y={connectionsMenu.y}
+            zoom={1}
+            positionMode="fixed"
+            openLeft={connectionsMenu.openLeft}
+            notionSync={notionSync}
+            onAction={(action, payload) => {
+              if (action === 'setNotionSync') {
+                onNotionConnection?.({ connected: true, sync: payload?.notionSync ?? 'live' })
+              } else if (action === 'removeNotionConnection') {
+                onNotionConnection?.({ connected: false })
+                clearBlockSelection() // Unlink removes the strip — drop arm
+                return
+              }
+              setConnectionsMenu(null) // Keep strip armed after sync change
+            }}
+            onClose={() => setConnectionsMenu(null)}
           />,
           document.body
         )}

@@ -408,7 +408,6 @@ function formatResponseContent(content: string): string {
   return htmlParagraphs
 }
 
-/** Notion (and later connectors) at the bottom of a frame — icon only, no ⋮⋮. */
 /** Top strip: type icons in document order — one **block** (⋮⋮ comes from TipTapBlockHandles). */
 function FramePropertyGroup({
   types,
@@ -440,6 +439,7 @@ function FramePropertyGroup({
   )
 }
 
+/** Bottom strip: Notion (and later connectors) — one **block** (⋮⋮ from TipTapBlockHandles). */
 function FrameConnectionsGroup({
   notionSync,
   onNotionConnection,
@@ -454,7 +454,7 @@ function FrameConnectionsGroup({
     if (!menu) return // Nothing to dismiss
     const onDoc = (e: MouseEvent) => {
       const t = e.target as HTMLElement
-      if (t.closest?.('.block-actions-menu, [data-tt-notion-footer]')) return // Keep open on mark / menu
+      if (t.closest?.('.block-actions-menu, [data-tt-connections-header]')) return // Keep open on mark / menu
       setMenu(null) // Click away closes
     }
     document.addEventListener('mousedown', onDoc, true) // Capture so frame clicks still dismiss
@@ -463,9 +463,10 @@ function FrameConnectionsGroup({
   return (
     <>
       <div
+        data-tt-connections-header
         data-tt-notion-footer
         className={cn(
-          'flex h-7 items-center', // Host band supplies horizontal inset (align with fill content)
+          'flex h-7 w-full items-center', // Full-width Y band so ⋮⋮ hover matches property row
           className
         )}
       >
@@ -1268,6 +1269,8 @@ function TipTapContent({
               onPageTurnInto={onPageTurnInto}
               onPropertyTurnInto={onPropertyTurnInto}
               notionConnected={notionConnected}
+              notionSync={notionSync}
+              onNotionConnection={onNotionConnection}
               contentPadLeft={contentPadLeft}
               frameScale={frameScale}
             />
@@ -6198,7 +6201,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               // Clicks in frame padding (right of short/empty lines) still place the I-bar
               if (!isBlock || !selected) return
               const t = e.target as HTMLElement
-              if (t.closest?.('.ProseMirror, [data-tt-block-handle], [data-tt-insert-line], .block-actions-menu, [data-tt-notion-footer], [data-tt-property-header]')) {
+              if (t.closest?.('.ProseMirror, [data-tt-block-handle], [data-tt-insert-line], .block-actions-menu, [data-tt-connections-header], [data-tt-property-header]')) {
                 return // Editor / grip / nest / property chrome already handle these
               }
               const ed = promptEditorRef.current
