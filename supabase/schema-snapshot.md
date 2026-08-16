@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-16T04:52:21Z`
+- Snapped at: `2026-08-16T13:10:35Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260816131032_selected_frame_drag_keeps_selection.sql`.
+- Selected frame drag keeps selection (body/chrome — not text, ⋮⋮, adjust, connection simulators, or property/connection marks); mid-press hides indicators only. Phone paints every block ⋮⋮ while the frame is selected; menu placement updates.
+- Schema unchanged.
+
+## Prior: frame screen chrome fit gaps
 
 - No DDL. Marker `20260816045221_frame_screen_chrome_fit_gaps.sql`.
 - Frame chrome: larger `frameScreenChromeScale` (1.4×, soft zoom^0.35); blue→content gaps (Y 6 / X 1); adjust box fits screen ⋮⋮; rotate/free/wrap gap = indicator + gutter; add-block hairlines even about visual ⋮⋮.

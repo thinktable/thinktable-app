@@ -95,7 +95,7 @@ export function getMenuCollisionPadding(): { top: number; left: number; right: n
 }
 
 /**
- * Selected content menus should not cover: armed TipTap blocks, then selected frames.
+ * Soft obstacles: armed TipTap blocks, then selected frames.
  * `exclude` is the menu root so we never treat ourselves as an obstacle.
  */
 export function getMenuAvoidRects(exclude?: Element | null): MenuRect[] {
@@ -111,6 +111,22 @@ export function getMenuAvoidRects(exclude?: Element | null): MenuRect[] {
   return out
 }
 
+/**
+ * Hard obstacles: ⋮⋮ grips (TipTap + pre-frame I-bar). Menu must never cover these —
+ * even when it still overlaps the block text.
+ */
+export function getMenuHandleRects(exclude?: Element | null): MenuRect[] {
+  const out: MenuRect[] = [] // Collected grips
+  const push = (el: Element) => {
+    if (exclude && (exclude === el || exclude.contains(el) || el.contains(exclude))) return // Skip the menu itself
+    const r = el.getBoundingClientRect() // Screen box
+    if (r.width < 1 || r.height < 1) return // Invisible
+    out.push(boxFromDom(r)) // Keep
+  }
+  document.querySelectorAll('[data-tt-block-handle], [data-tt-ibar-grip]').forEach(push) // Frame ⋮⋮ + I-bar grip
+  return out
+}
+
 /** Clamp a size into the safe rect (shrink if the window is shorter than the menu). */
 function clampSize(natural: number, limit: number): number {
   return Math.max(0, Math.min(natural, Math.max(0, limit))) // Fit the lane even when it's shorter than a few rows
@@ -122,11 +138,25 @@ function clampStart(pref: number, size: number, min: number, max: number): numbe
   return Math.min(Math.max(pref, min), max - size) // Prefer pref, then slide
 }
 
-/** Sum of overlap with every avoid rect (lower is better). */
-function avoidScore(placed: MenuRect, avoid: MenuRect[]): number {
+/** Inflate a box by `pad` so near-misses still count as covering. */
+function inflate(r: MenuRect, pad: number): MenuRect {
+  return box(r.left - pad, r.top - pad, r.width + pad * 2, r.height + pad * 2) // Grow outward
+}
+
+const HANDLE_COVER_PENALTY = 1_000_000_000 // Any grip overlap beats every soft preference
+
+/** Soft block/frame coverage (px², GAP-padded). */
+function softAvoidScore(placed: MenuRect, avoid: MenuRect[]): number {
   let s = 0 // Accumulator
-  for (const a of avoid) s += overlapArea(placed, a) // Covering selected content is expensive
+  for (const a of avoid) s += overlapArea(placed, inflate(a, GAP)) // Prefer missing the wash
   return s
+}
+
+/** Hard grip coverage — must stay 0 whenever a clear placement exists. */
+function hardHandleScore(placed: MenuRect, handles: MenuRect[]): number {
+  let s = 0 // Accumulator
+  for (const h of handles) s += overlapArea(placed, inflate(h, GAP)) // Never cover ⋮⋮
+  return s * HANDLE_COVER_PENALTY // Dominates soft avoid + side preference
 }
 
 export type ApplyMenuPlacementOpts = {
@@ -140,11 +170,13 @@ export type ApplyMenuPlacementOpts = {
 /**
  * Measure a fixed/absolute menu + its `[data-tt-menu-flyout]` children and park them
  * inside the safe rect. Submenus always open to the RIGHT of the parent card; the main
- * card may slide left on first place so the strip fits, then stays locked under the pointer.
+ * card may slide left on first place so the strip fits, then stays locked under the pointer
+ * — except it will still shift to clear a ⋮⋮ grip.
  */
 export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOpts): void {
   const safe = getMenuSafeRect() // Chrome-free window
-  const avoid = getMenuAvoidRects(root) // Selected block / frame
+  const avoid = getMenuAvoidRects(root) // Selected block / frame (soft)
+  const handles = getMenuHandleRects(root) // ⋮⋮ grips (hard — never cover)
   const body = root.querySelector('[data-tt-menu-body]') as HTMLElement | null // Inner scroller (search chrome stays put)
   const flyout = root.querySelector('[data-tt-menu-flyout="main"]') as HTMLElement | null // Turn into / Color / Shape / …
   const nested = root.querySelector('[data-tt-menu-flyout="nested"]') as HTMLElement | null // Board in (off Turn into)
@@ -168,16 +200,9 @@ export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOp
 
   const clusterH = Math.max(menuMaxH, flyoutMaxH, nestedMaxH) // Tallest card in the cluster
   const existing = opts.fromExisting ? root.getBoundingClientRect() : null // First-paint box (translate already applied)
-  // Lock Y when a flyout is attaching — shifting the card under the pointer closes Turn into on hover.
-  const top = clampStart(
-    existing ? existing.top : opts.anchorY, // Cursor menus stay where CSS put them; grip menus use the click Y
-    existing ? menuMaxH : clusterH, // Existing: only keep the main card in-lane; flyout clamps on its own
-    safe.top,
-    safe.bottom
-  ) // Keep the main card in the vertical lane
 
   type Side = 'left' | 'right' // Flyout parks on this side of the menu
-  type Cand = { menuLeft: number; flyoutSide: Side; nestedSide: Side; score: number } // One horizontal layout
+  type Cand = { menuLeft: number; top: number; flyoutSide: Side; nestedSide: Side; score: number } // One layout
 
   // Submenus always open to the RIGHT of the parent card (Turn into / Color / Shape / Board in / …).
   const flyoutSide: Side = 'right'
@@ -185,35 +210,78 @@ export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOp
   const extra = (flyoutW ? GAP + flyoutW : 0) + (nestedW ? GAP + nestedW : 0) // Width added by right-side submenus
   const clusterW = menuW + extra // Total strip when flyouts sit beside the menu
 
-  const cands: Cand[] = [] // Try left-of-anchor and right-of-anchor for the main card only
-  const menuLeftPrefs: number[] = existing
-    ? [existing.left] // Keep the card under the pointer once a flyout is open
-    : [opts.anchorX - GAP - menuW, opts.anchorX + GAP] // openLeft then open-right
+  // Preferred origins: miss grips hard, miss block soft — left/right/above/below.
+  const originPrefs: Array<{ left: number; top: number; prefer: boolean }> = []
+  const pushOrigin = (left: number, top: number, prefer = false) => {
+    originPrefs.push({ left, top, prefer }) // Deduped below
+  }
+  if (existing) {
+    // Prefer staying under the pointer once a flyout is open — but still try clear-of-grip nudges.
+    pushOrigin(existing.left, existing.top, true)
+  } else {
+    // Caller openLeft / open-right of the grip (first paint matches BlockActionsMenu CSS).
+    pushOrigin(opts.anchorX - GAP - menuW, opts.anchorY, opts.openLeft)
+    pushOrigin(opts.anchorX + GAP, opts.anchorY, !opts.openLeft)
+  }
+  // Soft: clear of the highlighted block / selected frame.
+  for (const a of avoid) {
+    pushOrigin(a.left - GAP - menuW, existing?.top ?? opts.anchorY, opts.openLeft) // Left of block
+    pushOrigin(a.right + GAP, existing?.top ?? opts.anchorY, !opts.openLeft) // Right of block
+    pushOrigin(a.left - GAP - menuW, a.top - GAP - menuMaxH, opts.openLeft) // Above-left
+    pushOrigin(a.right + GAP, a.top - GAP - menuMaxH, !opts.openLeft) // Above-right
+    pushOrigin(a.left - GAP - menuW, a.bottom + GAP, opts.openLeft) // Below-left
+    pushOrigin(a.right + GAP, a.bottom + GAP, !opts.openLeft) // Below-right
+  }
+  // Hard: every candidate that fully clears a ⋮⋮ (required when the soft placement still hits the grip).
+  for (const h of handles) {
+    pushOrigin(h.left - GAP - menuW, existing?.top ?? opts.anchorY, opts.openLeft) // Left of grip
+    pushOrigin(h.right + GAP, existing?.top ?? opts.anchorY, !opts.openLeft) // Right of grip
+    pushOrigin(h.left - GAP - menuW, h.top - GAP - menuMaxH, opts.openLeft) // Above-left of grip
+    pushOrigin(h.right + GAP, h.top - GAP - menuMaxH, !opts.openLeft) // Above-right of grip
+    pushOrigin(h.left - GAP - menuW, h.bottom + GAP, opts.openLeft) // Below-left of grip
+    pushOrigin(h.right + GAP, h.bottom + GAP, !opts.openLeft) // Below-right of grip
+    if (existing) {
+      // Keep Y under the flyout row when possible; only slide X clear of the grip.
+      pushOrigin(h.left - GAP - menuW, existing.top, true)
+      pushOrigin(h.right + GAP, existing.top, true)
+    }
+  }
 
-  for (const pref of menuLeftPrefs) {
-    let menuLeft = pref // Start from the preferred menu origin
+  const cands: Cand[] = [] // Scored placements
+  const seen = new Set<string>() // Skip duplicate left/top after clamp
+  for (const pref of originPrefs) {
+    let menuLeft = pref.left // Start from the preferred menu origin
     // When not locked under the pointer, slide the card left so the right-side strip fits.
     if (!existing && extra > 0) {
       const clusterRight = menuLeft + menuW + extra // Strip grows rightward
       if (clusterRight > safe.right) menuLeft -= clusterRight - safe.right // Make room on the right
     }
     menuLeft = clampStart(menuLeft, menuW, safe.left, safe.right) // Menu itself must stay in the lane
-    const clusterBox = box(menuLeft, top, Math.min(clusterW, safe.width), clusterH) // Score the right-growing strip
-    const sidePenalty =
-      existing || (pref < opts.anchorX) === opts.openLeft ? 0 : 50_000 // Prefer the caller's openLeft unless we kept CSS paint
-    const score = avoidScore(clusterBox, avoid) + sidePenalty // Covering selection is the main cost
-    cands.push({ menuLeft, flyoutSide, nestedSide, score }) // Keep
+    const top = clampStart(pref.top, existing ? menuMaxH : clusterH, safe.top, safe.bottom) // Vertical lane
+    const key = `${menuLeft}|${top}` // After clamp, many prefs collapse
+    if (seen.has(key)) continue // Already scored this box
+    seen.add(key)
+    // Score the main card for handle clearance (flyouts attach later; grip must stay clickable).
+    const menuBox = box(menuLeft, top, menuW, menuMaxH) // Card only — not the whole flyout strip
+    const clusterBox = box(menuLeft, top, Math.min(clusterW, safe.width), clusterH) // Soft-score the strip vs block
+    // Covering a grip is forbidden; covering the block is discouraged; soft prefer openLeft / existing.
+    const sidePenalty = existing || pref.prefer ? 0 : 1_000
+    const score =
+      hardHandleScore(menuBox, handles) + softAvoidScore(clusterBox, avoid) + sidePenalty
+    cands.push({ menuLeft, top, flyoutSide, nestedSide, score }) // Keep
   }
 
-  cands.sort((a, b) => a.score - b.score) // Best (least coverage / closest to preference) first
+  cands.sort((a, b) => a.score - b.score) // Best (clear grips → least block cover → preference) first
   const best = cands[0] ?? {
     menuLeft: clampStart(existing?.left ?? opts.anchorX, menuW, safe.left, safe.right),
+    top: clampStart(existing?.top ?? opts.anchorY, menuMaxH, safe.top, safe.bottom),
     flyoutSide: 'right' as Side,
     nestedSide: 'right' as Side,
     score: 0,
   } // Fallback
 
-  setViewportPos(root, best.menuLeft, top) // Park the main card
+  setViewportPos(root, best.menuLeft, best.top) // Park the main card
+  const top = best.top // Flyouts share this cluster top when not row-aligned
   const chrome = body ? Math.max(0, root.getBoundingClientRect().height - body.getBoundingClientRect().height) : 0 // Search + label above the scroller
   if (body) body.style.maxHeight = `${Math.max(0, menuMaxH - chrome)}px` // Shrink rows; keep search visible
   else {

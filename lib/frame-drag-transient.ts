@@ -1,5 +1,6 @@
-// Frame selection is click-to-select (mouseup), not mousedown — so a drag never leaves a frame selected.
-// Marquee (user selection rect) is allowed through; RF mousedown select on chatPanel is blocked.
+// Frame selection is click-to-select (mouseup), not mousedown — so an unselected drag does not select.
+// Already-selected frames stay selected while dragging. Marquee select is allowed through;
+// RF mousedown select on chatPanel is blocked.
 
 let marqueeArmed = false // True after the user has drawn a selection rect (until the next changes batch)
 

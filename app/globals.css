@@ -1682,7 +1682,7 @@ span[data-added="true"] {
   .dark .ProseMirror .tt-block-highlight {
     background-color: rgba(59, 130, 246, 0.22) !important;
   }
-  /* Property top icon row lives outside ProseMirror — same wash when that block is armed */
+  /* Property top icon row — strip wash only when ⋮⋮-armed (hover = square only) */
   [data-tt-property-header].tt-block-highlight {
     background-color: rgba(35, 131, 226, 0.14);
     border-radius: 4px;
@@ -1690,7 +1690,7 @@ span[data-added="true"] {
   .dark [data-tt-property-header].tt-block-highlight {
     background-color: rgba(59, 130, 246, 0.22);
   }
-  /* Connections bottom strip — same wash as property header when ⋮⋮-armed / hovered */
+  /* Connections bottom strip — strip wash only when ⋮⋮-armed (hover = mark only) */
   [data-tt-connections-header].tt-block-highlight {
     background-color: rgba(35, 131, 226, 0.14);
     border-radius: 4px;

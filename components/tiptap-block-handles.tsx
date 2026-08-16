@@ -46,6 +46,7 @@ import { collectPropertyBlocks } from '@/lib/tiptap/property-block' // Top icon 
 import { setAiBlockSelection } from '@/lib/ai/selection-bridge' // Live block pills in AI composer (⋮⋮ only)
 import { htmlToPlain } from '@/lib/ai/context-pack' // Block hover preview from HTML
 import { type NotionSyncMode } from '@/lib/blocks' // Connections ⋮⋮ → Live Sync / Manual
+import { useSidebarContext } from '@/components/sidebar-context' // Phone: show every ⋮⋮ while the frame is selected
 import {
   createChildBoardForBlock,
   insertBoardTitleBlock,
@@ -247,6 +248,20 @@ function collectAiPendingBlocks(editor: Editor): EditorBlockRef[] {
   return out
 }
 
+/** Every TipTap block that can own a ⋮⋮ (phone paints all of these while the frame is selected). */
+function collectHandleBlocks(editor: Editor): EditorBlockRef[] {
+  const out: EditorBlockRef[] = []
+  editor.state.doc.descendants((node, pos) => {
+    const name = node.type.name
+    if (name === 'bulletList' || name === 'orderedList' || name === 'taskList') return true
+    if (!isHandleBlockType(name)) return true
+    out.push({ from: pos, to: pos + node.nodeSize, node, typeName: name })
+    if (name === 'listItem' || name === 'taskItem') return false // Prefer the item over the list wrapper
+    return true
+  })
+  return out
+}
+
 /** Resolve the DOM element for a ProseMirror block (handles sit beside this). */
 function blockDom(editor: Editor, block: EditorBlockRef): HTMLElement | null {
   const node = editor.view.nodeDOM(block.from)
@@ -404,12 +419,14 @@ export function TipTapBlockHandles({
 }: TipTapBlockHandlesProps) {
   const { screenToFlowPosition } = useReactFlow() // Drop-on-page → flow coords for a new frame
   const rfZoom = useStore((s) => s.transform[2] || 1) // Live zoom — re-render on board zoom so grips can counter-scale to a constant screen size
+  const { isMobileMode } = useSidebarContext() // Phone has no hover — show every ⋮⋮ while the frame is selected
   void frameScale // Re-render + remeasure when host locked-resize scale changes (transform ≠ layout)
   void handleGutterFlow // Re-render when blue gutter / screen chrome scale changes
   const queryClient = useQueryClient() // Refetch messages after extract
   const [hover, setHover] = useState<HandleLayout | null>(null) // Handle beside hovered block
   const [aiPendingBlocks, setAiPendingBlocks] = useState<EditorBlockRef[]>([]) // Blocks with rainbow AI edits
   const [focusLayout, setFocusLayout] = useState<HandleLayout | null>(null) // Handle beside focused/caret block
+  const [layoutTick, setLayoutTick] = useState(0) // Phone: force remeasure of every grip after type / resize
   const [menu, setMenu] = useState<{
     x: number // viewport
     y: number
@@ -711,6 +728,7 @@ export function TipTapBlockHandles({
 
     // Re-measure after typing / Enter / zoom-driven reflow so grips stay glued to lines
     const refreshLayouts = () => {
+      if (isMobileMode) setLayoutTick((n) => n + 1) // Remeasure every phone grip (not only caret/hover)
       if (menu) {
         const next = layoutForBlock(editor, container, menu.block)
         if (next) {
@@ -749,7 +767,7 @@ export function TipTapBlockHandles({
       editor.off('transaction', refreshLayouts)
       ro.disconnect()
     }
-  }, [editor, enabled, menu, isPanelSelected, frameScale])
+  }, [editor, enabled, menu, isPanelSelected, frameScale, isMobileMode])
 
   // Outside click: dismiss menu + clear armed block selection (unless clicking another grip / the menu)
   useEffect(() => {
@@ -771,7 +789,7 @@ export function TipTapBlockHandles({
   }, [menu, connectionsMenu, selection.length, connectionsHeaderArmed, clearBlockSelection])
 
   // Prefer opening the actions menu to the LEFT of the frame (the ⋮⋮ handle lives in the left gutter);
-  // fall back to the default right-of-handle spot when there isn't room on the left.
+  // else RIGHT of the frame — never park over the block text beside the handle.
   const menuPlacement = useCallback(
     (clientX: number, clientY: number): { x: number; y: number; openLeft: boolean } => {
       if (!editor) return { x: clientX, y: clientY, openLeft: false }
@@ -780,6 +798,10 @@ export function TipTapBlockHandles({
       const GAP = 8 // Breathing room between menu and frame edge
       // Room for the whole card between the viewport edge and the frame's left edge?
       if (frameRect.left - GAP - MENU_W >= 0) return { x: frameRect.left, y: clientY, openLeft: true }
+      // Room to the right of the frame (same idea as left — miss the block)?
+      if (frameRect.right + GAP + MENU_W <= window.innerWidth)
+        return { x: frameRect.right, y: clientY, openLeft: false }
+      // Cramped: still prefer the handle, but applyMenuPlacement will slide above/below the block.
       return { x: clientX, y: clientY, openLeft: false }
     },
     [editor]
@@ -1249,38 +1271,38 @@ export function TipTapBlockHandles({
     ]
   )
 
-  // Blue wash on the top icon list when that block is armed / hovered
+  // Blue wash on the top icon list only when ⋮⋮-armed — hover paints the property square alone
   useEffect(() => {
     if (!editor || editor.isDestroyed) return
     const el =
       frameForEditor(editor.view.dom).querySelector('[data-tt-property-header]') ||
       gripLayoutRoot(editor)?.querySelector('[data-tt-property-header]')
     if (!el) return
-    const on = propertyHeaderArmed || !!hover?.propertyHeader
-    el.classList.toggle('tt-block-highlight', on)
+    el.classList.toggle('tt-block-highlight', propertyHeaderArmed)
     return () => el.classList.remove('tt-block-highlight')
-  }, [editor, propertyHeaderArmed, hover?.propertyHeader])
+  }, [editor, propertyHeaderArmed])
 
-  // Blue wash on the bottom connections strip when that block is armed / hovered
+  // Blue wash on the bottom connections strip only when ⋮⋮-armed — hover paints the mark alone
   useEffect(() => {
     if (!editor || editor.isDestroyed) return
     const el =
       frameForEditor(editor.view.dom).querySelector('[data-tt-connections-header]') ||
       gripLayoutRoot(editor)?.querySelector('[data-tt-connections-header]')
     if (!el) return
-    const on = connectionsHeaderArmed || !!hover?.connectionsHeader
-    el.classList.toggle('tt-block-highlight', on)
+    el.classList.toggle('tt-block-highlight', connectionsHeaderArmed)
     return () => el.classList.remove('tt-block-highlight')
-  }, [editor, connectionsHeaderArmed, hover?.connectionsHeader])
+  }, [editor, connectionsHeaderArmed])
 
   if (!editor || !enabled) return null
   // Unselected frames never paint ⋮⋮ (hover / caret / AI pending) — only when the blue adjust box is up
   if (!isPanelSelected) return null
 
   // Grips render for every selected block (persistent wash) + the hovered/caret/menu block.
+  // Phone: no hover — paint a ⋮⋮ for every block while the frame is selected.
   const container = gripLayoutRoot(editor)
-  // `rfZoom` / handleGutterFlow / frameScale in render deps so grips remeasure when chrome scale changes
+  // `rfZoom` / handleGutterFlow / frameScale / layoutTick in render deps so grips remeasure
   void rfZoom
+  void layoutTick
   // Horizontal: ⋮⋮ centered in the LEFT chrome strip (outside the filled frame).
   // Absolute grips are positioned in the content box (inside contentFit pad), so subtract
   // contentPadLeft to measure from the fill’s left edge — otherwise the pad pulls grips
@@ -1305,6 +1327,34 @@ export function TipTapBlockHandles({
       if (propertyHeaderArmed && b.typeName === 'propertyBlock') continue
       const gl = layoutForBlock(editor, container, b)
       if (gl) gripLayouts.set(b.from, gl)
+    }
+    // Phone selected frame: every block gets a grip (including property cells)
+    if (isMobileMode) {
+      for (const b of collectHandleBlocks(editor)) {
+        if (gripLayouts.has(b.from)) continue
+        // Header mode already painted the top-row ⋮⋮ — don't also park a grip per cell
+        if (propertyHeaderArmed && b.typeName === 'propertyBlock') continue
+        const gl = layoutForBlock(editor, container, b)
+        if (gl) gripLayouts.set(b.from, gl)
+      }
+      // Icon strip ⋮⋮ as well (chrome band) — same as hover on desktop
+      const phoneProps = propertyHeaderBlock(editor)
+      if (phoneProps && !gripLayouts.has('property-header')) {
+        const hl = layoutForPropertyHeader(
+          container,
+          phoneProps.block,
+          phoneProps.insertFrom,
+          phoneProps.insertTo
+        )
+        if (hl) gripLayouts.set('property-header', hl)
+      }
+      if (notionConnected && !gripLayouts.has('connections-header')) {
+        const sentinel = connectionsHeaderBlock(editor)
+        if (sentinel) {
+          const hl = layoutForConnectionsHeader(container, sentinel)
+          if (hl) gripLayouts.set('connections-header', hl)
+        }
+      }
     }
   }
   const hoverLayout =
@@ -1422,7 +1472,9 @@ export function TipTapBlockHandles({
             key={gripKey}
             data-tt-gutter-hover
             data-tt-block-handle
-            className="group/gutter absolute z-[59] pointer-events-auto"
+            // Pass-through: dense phone property cells stack gutters — empty chrome must not
+            // steal taps from a neighbor’s add-block hairline. Only the grip + insert hit targets.
+            className="group/gutter absolute z-[59] pointer-events-none"
             style={{
               left: gutterCenterLeft,
               top: gutterTop,
@@ -1438,12 +1490,13 @@ export function TipTapBlockHandles({
                   title="Add block"
                   aria-label="Add block above"
                   className={cn(
-                    'group/insert absolute left-0 right-0 z-[1]',
+                    'group/insert absolute left-0 right-0 z-[1] pointer-events-auto',
                     'nodrag nopan cursor-pointer',
-                    'opacity-0 group-hover/gutter:opacity-100'
+                    // Phone: no gutter hover — keep add lines visible while the frame is selected
+                    isMobileMode ? 'opacity-100' : 'opacity-0 group-hover/gutter:opacity-100'
                   )}
                   style={{ top: insertAboveTop, height: localInsertHit }}
-                  onPointerDown={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()} // Don't start frame drag
                   onClick={(e) => onInsertLineClick(e, insertAbove)}
                 >
                   <span
@@ -1465,9 +1518,9 @@ export function TipTapBlockHandles({
                   title="Add block"
                   aria-label="Add block below"
                   className={cn(
-                    'group/insert absolute left-0 right-0 z-[1]',
+                    'group/insert absolute left-0 right-0 z-[1] pointer-events-auto',
                     'nodrag nopan cursor-pointer',
-                    'opacity-0 group-hover/gutter:opacity-100'
+                    isMobileMode ? 'opacity-100' : 'opacity-0 group-hover/gutter:opacity-100'
                   )}
                   style={{ top: insertBelowTop, height: localInsertHit }}
                   onPointerDown={(e) => e.stopPropagation()}

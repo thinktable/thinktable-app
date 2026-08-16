@@ -3843,20 +3843,9 @@ function BoardFlowInner({
       }
     })
 
-    // Frame move never leaves a selection — deselect as soon as drag starts and again on drag end
-    // (blue box comes from `dragging`, not `selected`).
-    const frameDragSelectClearIds = new Set<string>([...draggedNodeIds, ...dragEndedNodeIds])
-    if (frameDragSelectClearIds.size > 0) {
-      const deselectChanges: Array<{ type: 'select'; id: string; selected: false }> = []
-      frameDragSelectClearIds.forEach((nodeId) => {
-        const node = nodes?.find((n) => n.id === nodeId)
-        if (node?.type !== 'chatPanel') return
-        deselectChanges.push({ type: 'select', id: nodeId, selected: false })
-      })
-      if (deselectChanges.length > 0) {
-        changesToProcess = [...changesToProcess, ...deselectChanges]
-      }
-    }
+    // Unselected frame drag still does not select (mousedown select blocked + justDragged skips
+    // onNodeClick). Already-selected frames stay selected while dragging (blue ring yields to the
+    // transient drag border via `dragging`, then returns on release).
 
     // Camera rotate: RF applies screen deltas along unrotated axes — rewrite so frames follow the finger
     changesToProcess = applyBoardRotationToPositionChanges(changesToProcess, nodes)

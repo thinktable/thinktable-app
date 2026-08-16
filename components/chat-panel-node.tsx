@@ -432,9 +432,12 @@ function FramePropertyGroup({
         return (
           <span
             key={`${type}-${i}`} // Duplicate types are allowed (two Number cells, etc.)
-            className="flex h-5 w-5 shrink-0 items-center justify-center text-gray-500"
+            // Square hover only (like Notion connection mark) — not the whole property band
+            // nodrag: interacting with a mark must not start RF frame drag
+            className="nodrag nopan flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-500 hover:bg-gray-100 dark:hover:bg-[#2a2a2a]"
             title={label}
             aria-label={`Property · ${label}`}
+            onPointerDown={(e) => e.stopPropagation()} // Own the gesture; band body may still drag the frame
           >
             {propertyTypeIcon(type, 'h-4 w-4')}
           </span>
@@ -2586,11 +2589,11 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // • Connection **indicator** = plain DOM dot outside — starts drag on the edge point (not an RF Handle)
   const isThreadConnecting = useIsThreadConnecting() // Hide adjust chrome while dragging a thread
   const isNearThreadSnap = useIsNearThreadConnection(id) // Pointer near this frame → show connection simulators
-  // Pressed but not yet a drag — hide selection chrome until click release confirms select
+  // Mid-press on the body — hide connection indicators only (resize / ⋮⋮ / rotate stay mounted)
   const [pressing, setPressing] = useState(false)
-  // Full adjust chrome only when selected + idle (not mid-press / mid-drag)
-  const showAdjustFrame = Boolean(selected && isBlock && !isThreadConnecting && !dragging && !pressing)
-  // Transient blue outline while the frame is being moved (not a real selection)
+  // Full adjust chrome when selected + idle (not mid-drag / thread connect)
+  const showAdjustFrame = Boolean(selected && isBlock && !isThreadConnecting && !dragging)
+  // Transient blue outline while moving; selected frames keep `selected` and regain adjust chrome on release
   const showDragBorderOnly = Boolean(dragging && isBlock)
   // Blue-box L/R gutters when selected. Property / connections bands sit OUTSIDE the fill
   // — only while selected (hide entirely when the frame is idle).
@@ -5554,13 +5557,13 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       }}
       onPointerDownCapture={(e) => {
         const t = e.target as HTMLElement | null
-        // Resize / rotate / grips / connection simulators must stay mounted — `pressing`
-        // would unmount them mid-gesture (indicator unmount → RF treats the press as frame drag)
+        // Text / ⋮⋮ / resize / rotate / connection simulators / property·connection marks —
+        // those own the gesture. Body press only hides connection indicators (`pressing`).
         const onFrameChrome = !!t?.closest?.(
-          '.react-flow__resize-control, [data-frame-chrome], [data-tt-block-handle], [data-tt-insert-line], .block-actions-menu, [data-tt-connection-indicator]'
+          '.react-flow__resize-control, [data-frame-chrome], [data-tt-block-handle], [data-tt-insert-line], .block-actions-menu, [data-tt-connection-indicator], [data-tt-property-header] span, [data-tt-connections-header] button, .ProseMirror'
         )
         if (!onFrameChrome) {
-          // Hide selection chrome until mouseup — gesture may become a drag (blue box only)
+          // Body mid-press: hide connection simulators until release (adjust chrome stays)
           setPressing(true)
           const clearPress = () => setPressing(false)
           window.addEventListener('pointerup', clearPress, { once: true })
@@ -6008,7 +6011,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       {hasPropBand && (
         <div
           data-tt-frame-chrome-top
-          className="nodrag nopan absolute z-[2] flex items-end" // Sit on the fill (extra band air is above)
+          // Band body may drag the frame; individual property marks are nodrag
+          className="absolute z-[2] flex items-end" // Sit on the fill (extra band air is above)
           style={{
             top: 0,
             left: adjustChromeX + chromePadX,
@@ -6031,7 +6035,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       {hasConnBand && (
         <div
           data-tt-frame-chrome-bottom
-          className="nodrag nopan absolute z-[2] flex items-start" // Sit on the fill (extra band air is below)
+          // Band body may drag the frame; Notion mark button is nodrag
+          className="absolute z-[2] flex items-start" // Sit on the fill (extra band air is below)
           style={{
             bottom: 0,
             left: adjustChromeX + chromePadX,
