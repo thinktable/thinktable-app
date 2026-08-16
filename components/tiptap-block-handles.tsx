@@ -1295,11 +1295,10 @@ export function TipTapBlockHandles({
   // Grips render for every selected block (persistent wash) + the hovered/caret/menu block.
   const container = gripLayoutRoot(editor)
   // Local→screen scale (RF zoom × frameScale) measured off the container; grips live in local px
-  // inside these transforms, so counter-scaling by 1/scale keeps them a constant SCREEN size
-  // (like the portaled actions menu). `rfZoom` in deps forces this to re-measure on zoom.
+  // inside these transforms, so counter-scaling by comfort(scale) keeps them screen-relative
+  // (same curve as threads / resize chrome). `rfZoom` in deps forces re-measure on zoom.
   void rfZoom // Referenced so zoom changes re-render this component (measurement below reads live DOM)
   const localToScreen = container ? elementUniformScale(container) : 1 // Rotation-safe (not AABB height ratio)
-  void localToScreen
   // Horizontal: ⋮⋮ centered in the LEFT chrome strip (outside the filled frame).
   // Absolute grips are positioned in the content box (inside contentFit pad), so subtract
   // contentPadLeft to measure from the fill’s left edge — otherwise the pad pulls grips
@@ -1425,9 +1424,9 @@ export function TipTapBlockHandles({
         const gripTopInGutter = gripTop - gutterTop
         const insertAboveTop = insertAboveY - gutterTop - INSERT_HIT / 2
         const insertBelowTop = insertBelowY - gutterTop - INSERT_HIT / 2
-        // Comfort vs BOARD zoom only — do NOT fold frameScale into this (locked resize scales
-        // content; grips must ride with the block, not shrink against it).
-        const gripChromeScale = 1 / Math.max(1, Math.sqrt(rfZoom || 1))
+        // Comfort vs local→screen (RF zoom × frameScale): zoomed/scaled out → ride with content;
+        // zoomed/scaled in → counter-scale so ⋮⋮ stays screen-relative (same as resize chrome).
+        const gripChromeScale = 1 / Math.max(1, Math.sqrt(localToScreen || 1))
         const insertAbove = gl.insertFrom ?? gl.block.from
         const insertBelow = gl.insertTo ?? gl.block.to
         // Property / connections chrome strips — ⋮⋮ only, no between-block hairlines

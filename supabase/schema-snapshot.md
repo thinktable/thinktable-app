@@ -1,7 +1,7 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-16T03:37:14Z`
+- Snapped at: `2026-08-16T04:06:22Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
@@ -9,8 +9,14 @@
 
 ## This save
 
+- No DDL. Marker `20260816040622_screen_relative_frame_chrome.sql`.
+- Frame selection chrome is screen-relative (`threadComfortScale(zoom)`): resize handles, indicators, rotate/free/wrap, property/connections rows; ⋮⋮ comfort vs zoom×frameScale. Does not grow with frame width. Gap under chrome is flow px only (no double scale).
+- Schema unchanged.
+
+## Prior: frame resize chrome connection indicators
+
 - No DDL. Marker `20260816033714_frame_resize_chrome_connection_indicators.sql`.
-- Frame resize chrome scales 1:1 with frame width (compact corner/line sizes); blue adjust ring is square; connection simulators sit `INDICATOR_OUTSET × frameUiScale` outside the edge; pressing a simulator no longer unmounts it into a frame drag.
+- Frame resize chrome: compact handles + square adjust ring; connection simulators outset; indicator press no longer frame-drags.
 - Schema unchanged.
 
 ## Prior: connections properties block handles

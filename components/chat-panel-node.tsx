@@ -7,6 +7,7 @@ import {
   useIsNearThreadConnection,
   ConnectionIndicator,
   INDICATOR_OUTSET,
+  threadComfortScale,
 } from '@/components/threads' // Miro: DOM indicators arm edge connection points; proximity while dragging
 
 
@@ -2591,16 +2592,18 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const hasPropBand = Boolean(showFrameChrome && chromePropertyTypes.length > 0)
   const hasConnBand = Boolean(showFrameChrome && notionConnected && isBlock && !isFlashcard)
   // ⋮⋮ + bands sit in panel chrome, but grips mount inside the CSS-scaled contentFit — so when
-  // locked resize applies frameScale, chrome gutters/bands must grow by the same factor or the
-  // grips (and scaled content) spill past the blue adjust box while Notion icons stay tiny.
+  // locked resize applies frameScale, L/R gutters must grow by the same factor or the grips
+  // spill past the blue adjust box. Property / connections ROWS stay screen-sized (not × frameScale).
   const chromeScale =
     isBlock && isUserResized && frameScale !== 1 ? Math.max(0.15, frameScale) : 1
   // Cell radius is 6px inside contentFit’s CSS scale; fill + blue ring are outside — keep them matched
   const frameCornerRadius = frameShape ? 0 : FRAME_CORNER_RADIUS * chromeScale
   const adjustChromeX = showFrameChrome
     ? Math.round(BLOCK_HANDLE_GUTTER_W * chromeScale)
-    : 0 // Even side gutters when selected (scaled with content)
-  const chromeBandH = Math.round(CONNECTIONS_GROUP_H * chromeScale) // Property / connections strip
+    : 0 // Even side gutters when selected (scaled with content so ⋮⋮ stays inside blue)
+  // Band height is screen-comfort sized — does not grow when the frame is locked-resized larger
+  const screenChromeScale = threadComfortScale(rfZoom || 1)
+  const chromeBandH = Math.round(CONNECTIONS_GROUP_H * screenChromeScale) // Property / connections strip
   const chromePadX = Math.round(BLOCK_FRAME_PAD_X * chromeScale) // Band inset matches scaled fill pad
   // T/B bands only while selected — even empty strips keep the blue box balanced
   const adjustChromeYTop = showFrameChrome ? chromeBandH : 0
@@ -4361,25 +4364,17 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // Empty unresized: explicit px (not max-content) — CSS % children used to inflate ~120×160 boxes
   const emptyLineHug = growsWithLine && isBlockContentEmpty(promptContent)
   const hasBlockContent = isBlock && !isBlockContentEmpty(promptContent) // Lock only when a content block exists
-  // Shared size-with-frame scale for selection chrome: resize handles, blue lines, connection
-  // indicators. 1:1 with outer blue-box width (no √ damping); floor keeps tiny frames grabable.
-  const FRAME_UI_REF_W = 78 // Natural chrome row width — scale=1 near this / 0.7
-  // Live resize box wins — itemBoxSize lags while isResizingRef blocks the RO
-  const frameUiHostW =
-    (isUserResized && resizeDimensions?.width) ||
-    itemBoxSize.width ||
-    panelRef.current?.offsetWidth ||
-    BLOCK_LOCKED_MIN_W
-  const rawFrameUiFit = (frameUiHostW * 0.7) / FRAME_UI_REF_W
-  const frameUiScale = Math.max(0.75, rawFrameUiFit) // Linear 1:1 with frame width; floor 0.75
-  // Rotate/lock/wrap also eases vs board zoom (handles/lines ride the viewport already)
-  const frameChromeZoom = 1 / Math.max(1, Math.pow(rfZoom || 1, 0.35))
-  const frameChromeScale = frameChromeZoom * frameUiScale
+  // Shared screen-relative scale for selection chrome: resize handles, blue lines, connection
+  // indicators, rotate/free/wrap. Comfort vs board zoom only — does NOT grow with frame width.
+  const frameUiScale = screenChromeScale // Same 1/max(1,√zoom) as threads / ⋮⋮
+  const frameChromeScale = frameUiScale // Rotate · lock · wrap icons stay screen-sized
   const frameIndicatorSize = 8 * frameUiScale // Connection simulator dots (slightly under resize corners)
-  // Sit outside the blue edge — scales 1:1 with frame so big frames keep the same gap look
+  // Sit outside the blue edge — scales with zoom comfort so gap tracks the indicator
   const frameIndicatorOut = INDICATOR_OUTSET * frameUiScale
+  // Gap is already in flow px (indicator out + radius + pad) — do NOT × frameChromeScale again
+  // (that squared the offset on expand and parked rotate/free/wrap far below the blue box)
   const frameChromeGapY = frameIndicatorOut + frameIndicatorSize / 2 + 8 // Clear bottom simulator + pad
-  const frameHandleSize = 7 * frameUiScale // Corner resize dots — compact but still 1:1 with frame
+  const frameHandleSize = 7 * frameUiScale // Corner resize dots — screen-relative
   const frameLineW = Math.max(1, frameUiScale) // Blue selection stroke
   const frameLineHit = Math.max(4, 5 * frameUiScale) // Line hit target thickness
   const wrapActive =
@@ -5305,7 +5300,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // - Even focused flashcard comments should blur
   const shouldBlurComments = flashcardMode !== null && !isZoomedOutInNavMode
 
-  // Corner resize dots — size tracks frameUiScale (small frame → smaller dots, big → larger)
+  // Corner resize dots — size tracks screen chrome (zoom comfort), not frame width
   const itemCornerResizeStyle = {
     width: frameHandleSize,
     height: frameHandleSize,
@@ -5736,8 +5731,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               return {
                 left: 0,
                 top: '100%',
-                marginLeft: `${-8 * frameChromeScale}px`,
-                marginTop: `${frameChromeGapY * frameChromeScale}px`,
+                marginLeft: `${-8 * frameChromeScale}px`, // Nudge under left edge as chrome counter-scales
+                marginTop: `${frameChromeGapY}px`, // Flow gap only — scale() sizes icons, not this offset
                 transform: `scale(${frameChromeScale})`,
                 transformOrigin: 'top left' as const,
               }
@@ -6009,10 +6004,10 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             height: adjustChromeYTop,
           }}
         >
-          {/* Scale icons with frameScale — bands live outside the CSS-scaled contentFit */}
+          {/* Screen-comfort icons — do not grow with locked frameScale */}
           <div
             style={{
-              transform: chromeScale !== 1 ? `scale(${chromeScale})` : undefined,
+              transform: screenChromeScale !== 1 ? `scale(${screenChromeScale})` : undefined,
               transformOrigin: 'left center',
             }}
           >
@@ -6034,7 +6029,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         >
           <div
             style={{
-              transform: chromeScale !== 1 ? `scale(${chromeScale})` : undefined,
+              transform: screenChromeScale !== 1 ? `scale(${screenChromeScale})` : undefined,
               transformOrigin: 'left center',
             }}
           >
@@ -6322,7 +6317,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             >
               <div
                 style={{
-                  transform: chromeScale !== 1 ? `scale(${chromeScale})` : undefined,
+                  transform: screenChromeScale !== 1 ? `scale(${screenChromeScale})` : undefined,
                   transformOrigin: 'left center',
                 }}
               >

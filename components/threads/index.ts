@@ -28,5 +28,6 @@ export {
   threadAlgorithmFromStyle,
   threadStyleFromAlgorithm,
   isSharpThreadAlgorithm,
+  threadComfortScale,
   type ThreadStylePref,
 } from './constants'
