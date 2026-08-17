@@ -64,6 +64,9 @@ import {
   Cable,
   Hand,
   Unplug,
+  LayoutGrid,
+  Table2,
+  AppWindow,
 } from 'lucide-react' // Action + Turn into + Property + Connections icons
 import { NotionMarkIcon } from '@/components/notion-mark-icon' // Notion row in Connections
 import type { NotionSyncMode } from '@/lib/blocks' // Live vs Manual sync
@@ -188,6 +191,10 @@ export type BlockActionId =
   | 'connectNotion' // Connections → Notion (link this frame)
   | 'setNotionSync' // Live Sync vs Manual
   | 'removeNotionConnection' // Unlink Notion from this frame
+  | 'convertLayout' // Frame menu → Card view / Table view (Notion DB)
+  | 'open' // Open linked board / Notion page (DB row ⋮⋮, boardLink)
+
+export type DbConvertLayoutId = 'card' | 'table' // Convert layout flyout picks
 
 export type BlockActionPayload = {
   blockType?: BlockTypeId // Present when action === 'turnInto'
@@ -200,6 +207,7 @@ export type BlockActionPayload = {
   borderWeight?: number // Border thickness in px (fractional OK)
   borderWeightCommit?: boolean // true = undo snapshot + DB save (slider release)
   notionSync?: NotionSyncMode // Present when action === 'setNotionSync'
+  convertLayout?: DbConvertLayoutId // Present when action === 'convertLayout'
 }
 
 /** AI Autofill rows in the Property pane (stubs until wired). */
@@ -244,6 +252,15 @@ export type BlockActionsMenuProps = {
   notionConnected?: boolean
   /** Current Notion sync mode (Live vs Manual). */
   notionSync?: NotionSyncMode
+  /**
+   * Current Notion DB layout on this frame (`table` | `card`).
+   * null/undefined = hide Convert layout. Flyout checks the current mode.
+   */
+  convertLayoutMode?: DbConvertLayoutId | null
+  /** Show Open (DB row / page) at the top of the block menu. */
+  showOpen?: boolean
+  /** Override the gray context label under search (e.g. "Page" for DB rows). */
+  menuHeader?: string
   /** Slim Live Sync / Manual / Remove menu (Notion footer ⋮⋮). */
   variant?: 'default' | 'notionConnection'
   lastEditedLabel?: string // Footer metadata
@@ -319,7 +336,7 @@ type RowDef =
       shortcut?: string
       icon: React.ReactNode
       danger?: boolean
-      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape' | 'frameColor' | 'connections' | 'notionConnection'
+      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape' | 'frameColor' | 'connections' | 'notionConnection' | 'convertLayout'
       hidden?: boolean
       beta?: boolean
     }
@@ -465,6 +482,9 @@ export function BlockActionsMenu({
   canLockFramesTogether = false,
   notionConnected = false,
   notionSync = 'live',
+  convertLayoutMode = null,
+  showOpen = false,
+  menuHeader,
   variant = 'default',
   lastEditedLabel,
   onAction,
@@ -484,6 +504,7 @@ export function BlockActionsMenu({
     | 'frameColor'
     | 'connections'
     | 'notionConnection'
+    | 'convertLayout'
     | null
   >(null) // Flyout
   const inputRef = useRef<HTMLInputElement>(null) // Autofocus search
@@ -563,6 +584,14 @@ export function BlockActionsMenu({
     const list: RowDef[] = [
       {
         kind: 'action',
+        id: 'open',
+        label: 'Open',
+        icon: <AppWindow className="h-4 w-4" />,
+        hidden: !showOpen, // DB row / page menus
+      },
+      { kind: 'separator', hidden: !showOpen },
+      {
+        kind: 'action',
         id: 'turnInto',
         label: 'Turn into',
         icon: <RefreshCw className="h-4 w-4" />,
@@ -637,6 +666,14 @@ export function BlockActionsMenu({
         icon: <Shapes className="h-4 w-4" />,
         submenu: 'frameShape', // Silhouette picker — frames act as shapes
         hidden: !showFrameShape, // Frame menu only (not TipTap block ⋮⋮)
+      },
+      {
+        kind: 'action',
+        id: 'convertLayout',
+        label: 'Convert layout',
+        icon: <LayoutGrid className="h-4 w-4" />,
+        submenu: 'convertLayout', // Card view / Table view
+        hidden: !convertLayoutMode, // Frame or block ⋮⋮ when Notion DB table / Card view
       },
       {
         kind: 'action',
@@ -745,7 +782,7 @@ export function BlockActionsMenu({
                 .includes(q)
             )))
     )
-  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape, boardLocked, framesLockedTogether, canLockFramesTogether, notionConnected, notionSync])
+  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape, boardLocked, framesLockedTogether, canLockFramesTogether, notionConnected, notionSync, convertLayoutMode, showOpen])
 
   // When searching, also surface matching Turn into types as flat picks
   const turnIntoMatches = useMemo(() => {
@@ -921,7 +958,7 @@ export function BlockActionsMenu({
 
       {/* Current context: Frame menu vs TipTap block type (Notion-style) */}
       <div className="px-2.5 pb-1 text-xs text-gray-500 dark:text-gray-400">
-        {showFrameShape ? 'Frame' : blockTypeLabel(currentBlockType)}
+        {menuHeader || (showFrameShape ? 'Frame' : blockTypeLabel(currentBlockType))}
       </div>
 
       <div data-tt-menu-body className="flex flex-col gap-0.5 overflow-y-auto px-0.5 pb-0.5">
@@ -945,6 +982,8 @@ export function BlockActionsMenu({
           const isConnectionsOpen = row.submenu === 'connections' && openSubmenu === 'connections'
           const isNotionConnOpen =
             row.submenu === 'notionConnection' && openSubmenu === 'notionConnection'
+          const isConvertLayoutOpen =
+            row.submenu === 'convertLayout' && openSubmenu === 'convertLayout'
           return (
             <Button
               key={row.id}
@@ -963,6 +1002,7 @@ export function BlockActionsMenu({
                 if (row.submenu === 'turnInto') setOpenSubmenu('turnInto')
                 else if (row.submenu === 'frameShape') setOpenSubmenu('frameShape')
                 else if (row.submenu === 'frameColor') setOpenSubmenu('frameColor')
+                else if (row.submenu === 'convertLayout') setOpenSubmenu('convertLayout')
                 else if (row.submenu === 'notionConnection') setOpenSubmenu('notionConnection') // Hover → sync menu
                 else if (row.submenu === 'connections') return // Click-only picker
                 else setOpenSubmenu(null)
@@ -980,6 +1020,10 @@ export function BlockActionsMenu({
                 }
                 if (row.submenu === 'frameColor') {
                   setOpenSubmenu((s) => (s === 'frameColor' ? null : 'frameColor'))
+                  return
+                }
+                if (row.submenu === 'convertLayout') {
+                  setOpenSubmenu((s) => (s === 'convertLayout' ? null : 'convertLayout'))
                   return
                 }
                 if (row.submenu === 'connections') {
@@ -1001,7 +1045,13 @@ export function BlockActionsMenu({
               className={cn(
                 'justify-start text-sm h-8 px-2 font-normal',
                 row.danger && 'text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950',
-                (isTurnIntoOpen || isShapeOpen || isFrameColorOpen || isConnectionsOpen || isNotionConnOpen) && 'bg-gray-100 dark:bg-[#2a2a2a]'
+                (isTurnIntoOpen ||
+                  isShapeOpen ||
+                  isFrameColorOpen ||
+                  isConnectionsOpen ||
+                  isNotionConnOpen ||
+                  isConvertLayoutOpen) &&
+                  'bg-gray-100 dark:bg-[#2a2a2a]'
               )}
             >
               <span className="mr-2 text-gray-500 dark:text-gray-400">{row.icon}</span>
@@ -1343,6 +1393,61 @@ export function BlockActionsMenu({
               )
             })}
           </div>
+        </div>
+      )}
+
+      {/* Convert layout — Card view / Table view (Notion database frames) */}
+      {openSubmenu === 'convertLayout' && convertLayoutMode && (
+        <div
+          data-tt-menu-flyout="main"
+          className="absolute z-[1001] min-w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+          onMouseEnter={() => setOpenSubmenu('convertLayout')}
+        >
+          <div className="px-2 py-1.5 text-[11px] text-gray-400">Layout</div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              if (convertLayoutMode === 'card') {
+                onClose() // Already Card view
+                return
+              }
+              onAction('convertLayout', { convertLayout: 'card' })
+              onClose()
+            }}
+            className={cn(
+              'justify-start text-sm h-8 px-2 font-normal w-full',
+              convertLayoutMode === 'card' && 'bg-blue-50 dark:bg-blue-950/40'
+            )}
+          >
+            <LayoutGrid className="h-4 w-4 mr-2 text-gray-500" />
+            <span className="flex-1 text-left">Card view</span>
+            {convertLayoutMode === 'card' && <Check className="h-3.5 w-3.5 text-gray-500" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              if (convertLayoutMode === 'table') {
+                onClose() // Already Table view
+                return
+              }
+              onAction('convertLayout', { convertLayout: 'table' })
+              onClose()
+            }}
+            className={cn(
+              'justify-start text-sm h-8 px-2 font-normal w-full',
+              convertLayoutMode === 'table' && 'bg-blue-50 dark:bg-blue-950/40'
+            )}
+          >
+            <Table2 className="h-4 w-4 mr-2 text-gray-500" />
+            <span className="flex-1 text-left">Table view</span>
+            {convertLayoutMode === 'table' && <Check className="h-3.5 w-3.5 text-gray-500" />}
+          </Button>
         </div>
       )}
 

@@ -34,6 +34,17 @@ const BlockHighlight = Extension.create({
   },
 })
 
+/** Host frame ids for NodeViews (TipTap React NodeViews can miss React context). */
+const FrameHost = Extension.create({
+  name: 'frameHost',
+  addStorage() {
+    return {
+      conversationId: null as string | null, // Board the host frame sits on
+      hostMessageId: null as string | null, // Host frame message id
+    }
+  },
+})
+
 /** Build editor extensions; optional placeholder text. */
 export function createPanelExtensions(placeholder?: string): any[] {
   const extensions: any[] = [
@@ -65,6 +76,7 @@ export function createPanelExtensions(placeholder?: string): any[] {
     PropertyBlock, // Property cell (type icon + Empty box; frame still has top icon)
     EmptyBlockBackspace, // Empty block: Backspace → previous; Enter → no new blank line
     BlockHighlight, // Per-content-block menu highlight (not the map card)
+    FrameHost, // conversationId + hostMessageId for databaseBlock / boardLink NodeViews
   ]
 
   if (placeholder !== undefined && placeholder !== '') {

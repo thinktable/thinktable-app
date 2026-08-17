@@ -71,6 +71,10 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useTheme } from './theme-provider'
 import { ShareBoardMenu } from './share-board-menu' // Share dropdown: Notion people + role links
 import { BoardTopBarShare } from './board-top-bar-share' // Copy link / favorite / More (board actions + Connections)
+import {
+  NotionConnectProvider,
+  NotionTopBarPin,
+} from './notion-connect-button' // Notion pin left of Share + More → Connections host
 import { AutomationsMenu } from './automations-menu' // Actions-bar Automations list popover
 import { CapturesMenu } from './captures-menu' // View-bar Capture list popover
 import { ToolbarTitle } from './toolbar-title' // Animated icon-adjacent titles
@@ -3172,30 +3176,33 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           </div>
         )}
 
-        {/* Share + copy link / favorite / More (board actions + Connections → Notion) */}
-        <div className="flex items-center px-2 flex-shrink-0 gap-1">
-          {!canEdit && (
-            <span className="hidden sm:inline text-[11px] text-gray-500 px-1.5 py-0.5 rounded bg-gray-100">
-              {role === 'comment' ? 'Can comment' : 'View only'}
-            </span>
-          )}
-          {canShare && conversationId ? (
-            <ShareBoardMenu boardId={conversationId} />
-          ) : canShare ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 gap-1.5 text-gray-400 flex-shrink-0"
-              title="Save the board to share"
-              type="button"
-              disabled
-            >
-              <Lock className="h-4 w-4" />
-              <span className="text-sm font-medium">Share</span>
-            </Button>
-          ) : null}
-          <BoardTopBarShare conversationId={conversationId} />
-        </div>
+        {/* Notion pin (when connected) left of Share; then copy / favorite / More */}
+        <NotionConnectProvider>
+          <div className="flex items-center px-2 flex-shrink-0 gap-1">
+            {!canEdit && (
+              <span className="hidden sm:inline text-[11px] text-gray-500 px-1.5 py-0.5 rounded bg-gray-100">
+                {role === 'comment' ? 'Can comment' : 'View only'}
+              </span>
+            )}
+            <NotionTopBarPin />
+            {canShare && conversationId ? (
+              <ShareBoardMenu boardId={conversationId} />
+            ) : canShare ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 gap-1.5 text-gray-400 flex-shrink-0"
+                title="Save the board to share"
+                type="button"
+                disabled
+              >
+                <Lock className="h-4 w-4" />
+                <span className="text-sm font-medium">Share</span>
+              </Button>
+            ) : null}
+            <BoardTopBarShare conversationId={conversationId} />
+          </div>
+        </NotionConnectProvider>
       </div>
     </div>
   )

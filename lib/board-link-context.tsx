@@ -24,6 +24,10 @@ export type BoardLinkActions = {
   notionUrl?: string | null
   /** Host frame's linkedBoardId — lets sole databaseBlock frames use the same open menu. */
   hostLinkedBoardId?: string | null
+  /** Host frame message id — Convert layout from databaseBlock / row ⋮⋮. */
+  hostMessageId?: string | null
+  /** Board the host frame sits on — Convert layout API. */
+  conversationId?: string | null
 }
 
 // Safe no-op default so NodeViews used outside a host frame don't crash.
@@ -38,6 +42,8 @@ const BoardLinkContext = createContext<BoardLinkActions>({
   setIcon: noop,
   notionUrl: null,
   hostLinkedBoardId: null,
+  hostMessageId: null,
+  conversationId: null,
 })
 
 export const BoardLinkProvider = BoardLinkContext.Provider // Provided by the host frame (chat-panel-node)

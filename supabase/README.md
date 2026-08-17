@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260817004139_notion_row_card_frame_drag_zindex` — Notion row→card; frame drag zIndex (TipTap NodeViews); DB hug scrollWidth
 - `20260816131032_selected_frame_drag_keeps_selection` — Selected frame drag keeps selection; phone all-block ⋮⋮; menu placement
 - `20260816045221_frame_screen_chrome_fit_gaps` — Frame screen chrome boost + blue→content gaps + even add-block hairlines
 - `20260816040622_screen_relative_frame_chrome` — Screen-relative frame chrome (handles/indicators/rotate/wrap/property/conn/⋮⋮)

@@ -39,7 +39,12 @@ import {
   type BlockActionId,
   type BlockActionPayload,
   type BlockTypeId,
+  type DbConvertLayoutId,
 } from './block-actions-menu' // Notion-style block actions + Turn into baseline
+import {
+  isNotionDatabaseTableFrame,
+  resolveNotionDatabaseIdFromFrame,
+} from '@/lib/notion/convert-db-layout' // Convert layout → Card / Table detection
 import {
   FRAME_SHAPE_DEFAULT_SIZE,
   FRAME_SHAPE_MIN_SIZE,
@@ -82,6 +87,10 @@ import { setAiSelectedFrames, setAiViewportCenter } from '@/lib/ai/selection-bri
 import { takeBoardCapture } from '@/lib/captures' // Board-menu Capture view
 import { htmlToPlain } from '@/lib/ai/context-pack' // Frame hover previews from content
 import { AI_CHAT_BLOCK_MIME, type AiChatBlockDragPayload } from '@/lib/ai/types' // Drag chat turn onto page
+import {
+  NOTION_ROW_DRAG_MIME,
+  type NotionRowDragPayload,
+} from '@/lib/notion/row-to-card-client' // Drag DB row onto board → new Notion DB
 import { markHtmlWithAiOrigin } from '@/lib/ai/wrap-ai-html' // Persist AI provenance on chat-drop
 import { markdownToTipTapHtml } from '@/lib/ai/markdown-to-tiptap' // Chat drop → TipTap blocks (lists as listItems)
 import { AiEditReviewBar } from '@/components/ai/ai-edit-review-bar' // Pending edit review chrome
@@ -3677,16 +3686,26 @@ function BoardFlowInner({
       }
     })
 
-    // Bring dragged frames to front ONCE at drag start — reordering every move tick used a stale
-    // `nodes` snapshot and remounted TipTap (databaseBlock table NodeViews vanished mid-drag).
+    // Raise dragged frames above siblings ONCE at drag start via zIndex — do NOT reorder the
+    // nodes array. Moving the RF DOM node remounts TipTap React NodeViews (row cards / DB tables
+    // vanish on first drag; a second drag is already front so reorder no-ops and they “come back”).
     if (dragStartedNodeIds.length > 0) {
       const started = new Set(dragStartedNodeIds)
       setNodes((nds) => {
-        const dragged = nds.filter((n) => started.has(n.id))
-        if (dragged.length === 0) return nds
-        const others = nds.filter((n) => !started.has(n.id))
-        const alreadyFront = nds.slice(-dragged.length).every((n, i) => n.id === dragged[i]?.id)
-        return alreadyFront ? nds : [...others, ...dragged]
+        let maxZ = 0
+        for (const n of nds) {
+          const z = typeof n.zIndex === 'number' ? n.zIndex : 0
+          if (z > maxZ) maxZ = z
+        }
+        const nextZ = maxZ + 1
+        let changed = false
+        const next = nds.map((n) => {
+          if (!started.has(n.id)) return n
+          if (n.zIndex === nextZ) return n
+          changed = true
+          return { ...n, zIndex: nextZ }
+        })
+        return changed ? next : nds
       })
     }
 
@@ -6792,6 +6811,65 @@ function BoardFlowInner({
     [frameActionTargets, nodes, setNodes, takeSnapshot]
   )
 
+  // Frame menu → Convert layout (Notion DB table ↔ Card view frames)
+  const handleConvertLayout = useCallback(
+    async (layout: DbConvertLayoutId) => {
+      if (!conversationId || !rightClickedNode) return
+      const messageId = rightClickedNode.data?.promptMessage?.id as string | undefined
+      if (!messageId) return
+      const content = String(rightClickedNode.data?.promptMessage?.content || '')
+      const meta =
+        (rightClickedNode.data?.promptMessage?.metadata as Record<string, unknown> | undefined) ||
+        {}
+      const databaseId =
+        resolveNotionDatabaseIdFromFrame(content, meta) ||
+        (typeof meta.notionDatabaseId === 'string' ? meta.notionDatabaseId : null) ||
+        (typeof meta.notionPageId === 'string' ? meta.notionPageId : null)
+      if (!databaseId) {
+        console.error('Convert layout: no Notion database id on frame')
+        setRightClickedNode(null)
+        return
+      }
+      takeSnapshot?.()
+      setRightClickedNode(null)
+      try {
+        const res = await fetch(
+          `/api/notion/database/${encodeURIComponent(databaseId)}/convert-layout`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              layout,
+              conversationId,
+              sourceMessageId: messageId,
+            }),
+          }
+        )
+        const json = (await res.json().catch(() => ({}))) as {
+          error?: string
+          boardId?: string
+        }
+        if (!res.ok) {
+          console.error('Convert layout failed:', json.error || res.statusText)
+          return
+        }
+        const refreshId = json.boardId || conversationId
+        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', refreshId] })
+        await queryClient.refetchQueries({ queryKey: ['messages-for-panels', refreshId] })
+        if (refreshId !== conversationId) {
+          await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+          await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
+        }
+        await queryClient.invalidateQueries({ queryKey: ['panel-edges', refreshId] })
+        await queryClient.invalidateQueries({ queryKey: ['panel-edges', conversationId] })
+        await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      } catch (err) {
+        console.error('Convert layout failed:', err)
+      }
+    },
+    [conversationId, rightClickedNode, takeSnapshot, queryClient]
+  )
+
   // Turn into → Property: stamp propertyType on focused frame(s) (top icon only).
   // First-time apply shifts the frame up so block text stays on its prior board Y (I-bar / line).
   const handleTurnIntoProperty = useCallback(
@@ -7039,6 +7117,11 @@ function BoardFlowInner({
         case 'removeNotionConnection':
           void handleNotionConnection({ connected: false })
           break
+        case 'convertLayout':
+          if (payload?.convertLayout) {
+            void handleConvertLayout(payload.convertLayout)
+          }
+          break
         // Baseline stubs — menu entries present; behavior later
         case 'color':
         case 'listFormat':
@@ -7068,6 +7151,7 @@ function BoardFlowInner({
       handleToggleBoardLock,
       handleToggleFrameLock,
       handleNotionConnection,
+      handleConvertLayout,
       nodes,
       rightClickedNode,
       addChildNode,
@@ -8166,11 +8250,13 @@ function BoardFlowInner({
   
   // Handle drag and drop for shapes from dropdown - matches shapes-pro-example
   // Also accepts AI sidebar chat blocks → create a page frame (user-initiated placement only)
+  // And Notion DB rows → new one-row Notion database + databaseBlock frame
   const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault() // Allow drop
     const types = Array.from(event.dataTransfer.types || []) // DOMStringList → array
     const isAiBlock = types.includes(AI_CHAT_BLOCK_MIME) // AI chat turn?
-    event.dataTransfer.dropEffect = isAiBlock ? 'copy' : 'move' // Copy chat → page; move shapes
+    const isNotionRow = types.includes(NOTION_ROW_DRAG_MIME) // DB table row
+    event.dataTransfer.dropEffect = isAiBlock || isNotionRow ? 'copy' : 'move'
   }, [])
 
   const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
@@ -8182,6 +8268,83 @@ function BoardFlowInner({
       x: event.clientX,
       y: event.clientY,
     })
+
+    // Notion DB row → new Notion database (one-row copy) + databaseBlock frame on this board
+    const rowRaw = event.dataTransfer.getData(NOTION_ROW_DRAG_MIME)
+    if (rowRaw) {
+      let payload: NotionRowDragPayload | null = null
+      try {
+        payload = JSON.parse(rowRaw) as NotionRowDragPayload
+      } catch {
+        payload = null
+      }
+      if (payload?.source === 'notion-db-row' && payload.row?.id && payload.notionDatabaseId) {
+        if (!conversationId || !canEdit) return
+        try {
+          const supabase = createClient()
+          const {
+            data: { user },
+          } = await supabase.auth.getUser()
+          if (!user) return
+          takeSnapshot()
+          const res = await fetch('/api/notion/database/from-row', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sourceDatabaseId: payload.notionDatabaseId,
+              row: payload.row,
+            }),
+          })
+          const json = (await res.json().catch(() => ({}))) as {
+            error?: string
+            databaseId?: string
+            title?: string
+            url?: string
+            icon?: string | null
+          }
+          if (!res.ok || !json.databaseId) {
+            console.error('Failed to create Notion DB from row:', json.error || res.statusText)
+            return
+          }
+          const titleEsc = (json.title || 'Untitled database')
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+          const urlAttr = json.url
+            ? ` data-url="${json.url.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"`
+            : ''
+          const iconAttr = json.icon
+            ? ` data-icon="${String(json.icon).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"`
+            : ''
+          const content = `<div data-type="databaseBlock" data-notion-database-id="${json.databaseId}" data-title="${titleEsc}"${urlAttr}${iconAttr}></div>`
+          const { error } = await supabase.from('messages').insert({
+            conversation_id: conversationId,
+            user_id: user.id,
+            role: 'user',
+            content,
+            metadata: newBlockMetadata({
+              position,
+              fadeIn: true,
+              blockTitle: json.title || 'Untitled database',
+              notionPageId: json.databaseId,
+              notionObject: 'database',
+              notionUrl: json.url ?? null,
+              notionDatabaseId: json.databaseId,
+              notionIcon: json.icon || null,
+              isBoard: true,
+            }),
+          })
+          if (error) {
+            console.error('Failed to place new database frame:', error)
+            return
+          }
+          refetchMessages()
+        } catch (err) {
+          console.error('Notion row drop failed:', err)
+        }
+        return
+      }
+    }
 
     // AI chat turn → new frame; contents are TipTap blocks (lists = listItem grips)
     const aiRaw = event.dataTransfer.getData(AI_CHAT_BLOCK_MIME)
@@ -8262,7 +8425,7 @@ function BoardFlowInner({
       const updatedNodes = nds.map((n) => ({ ...n, selected: false }))
       return [...updatedNodes, newNode]
     })
-  }, [reactFlowInstance, fillColor, borderColor, borderWeight, setNodes, takeSnapshot, conversationId, refetchMessages])
+  }, [reactFlowInstance, fillColor, borderColor, borderWeight, setNodes, takeSnapshot, conversationId, refetchMessages, canEdit])
 
   // Embedded page previews stay chrome-light (no minimap / nav chrome fighting the tiny viewport)
   useEffect(() => {
@@ -9499,6 +9662,16 @@ function BoardFlowInner({
               rightClickedNode.data?.promptMessage?.metadata as Record<string, unknown> | undefined
             ).sync
           }
+          convertLayoutMode={(() => {
+            const content = String(rightClickedNode.data?.promptMessage?.content || '')
+            const meta =
+              (rightClickedNode.data?.promptMessage?.metadata as
+                | Record<string, unknown>
+                | undefined) || {}
+            if (meta.dbLayout === 'card') return 'card' as const // Already Card view → offer Table
+            if (isNotionDatabaseTableFrame(content, meta)) return 'table' as const // Table → offer Card
+            return null
+          })()}
           canLockFramesTogether={
             nodes.filter((n) => n.selected && n.type === 'chatPanel').length >= 2
           }

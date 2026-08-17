@@ -46,7 +46,7 @@ import { useQueryClient } from '@tanstack/react-query' // Keep Boards list in sy
 import { cn } from '@/lib/utils' // Class merge
 import { useReactFlowContext } from './react-flow-context' // Present switches to View mode
 import { useSidebarContext } from './sidebar-context' // Phone hides copy/star into More
-import { NotionConnectMenuItems, NotionConnectProvider } from './notion-connect-button' // Connections → Notion
+import { NotionConnectMenuItems } from './notion-connect-button' // Connections → Notion (provider wraps share cluster)
 
 type BoardTopBarShareProps = {
   conversationId?: string // Board id; copy/favorite wait until the board is saved
@@ -310,7 +310,6 @@ export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
   )
 
   return (
-    <NotionConnectProvider>
       <div className="flex items-center gap-1 flex-shrink-0">
         {!isMobileMode && (
           <>
@@ -619,6 +618,5 @@ export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-    </NotionConnectProvider>
   )
 }

@@ -1,20 +1,27 @@
 'use client'
 
-// Notion connect host + More-menu Connections row (OAuth / import / disconnect)
+// Notion connect host + More-menu Connections row (OAuth / import / disconnect / top-bar pin)
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { useQueryClient } from '@tanstack/react-query'
-import { LayoutGrid } from 'lucide-react' // Connections row icon (2×2 grid)
+import { ExternalLink, LayoutGrid, PinOff, Sparkles } from 'lucide-react' // Connections + import (magic) / edit / unpin
 import {
+  DropdownMenu,
+  DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
 } from './ui/dropdown-menu'
 import { NotionImportModal } from './notion-import-modal'
 import { NotionMarkIcon } from './notion-mark-icon' // Monochrome — matches other top-bar icons
 import { cn } from '@/lib/utils'
+
+/** localStorage — whether the connected Notion mark stays left of Share. */
+const TOPBAR_PIN_KEY = 'thinktable-notion-topbar-pinned'
 
 type NotionStatus = {
   configured: boolean // Whether server has OAuth secrets
@@ -25,12 +32,92 @@ type NotionStatus = {
 type NotionConnectApi = {
   status: NotionStatus | null // Latest /api/notion/status payload
   loading: boolean // Status fetch or disconnect in flight
-  startConnect: () => void // Kick off hosted Notion OAuth
+  topBarPinned: boolean // Show Notion mark left of Share when connected
+  authHref: string // /api/notion/auth?returnTo=… → 302 to Notion page picker
+  startConnect: () => void // Kick off hosted Notion OAuth (first connect / edit permissions)
   disconnect: () => Promise<void> // Drop stored tokens
   openPicker: () => void // Open Import pages modal
+  setTopBarPinned: (pinned: boolean) => void // Pin / unpin without disconnecting
 }
 
 const NotionConnectContext = createContext<NotionConnectApi | null>(null) // Shared by host + menu rows
+
+/** Read Notion connect API from the nearest provider (top-bar pin, More menu). */
+export function useNotionConnect(): NotionConnectApi | null {
+  return useContext(NotionConnectContext)
+}
+
+/** Read pin preference; default true so a fresh connect appears left of Share. */
+function readTopBarPinned(): boolean {
+  if (typeof window === 'undefined') return true
+  try {
+    const raw = window.localStorage.getItem(TOPBAR_PIN_KEY)
+    if (raw === null) return true // First connect → pin
+    return raw !== '0' && raw !== 'false'
+  } catch {
+    return true
+  }
+}
+
+/** Build the OAuth start URL for the current board path. */
+function buildAuthHref(pathname: string | null): string {
+  const returnTo = pathname && pathname.startsWith('/') ? pathname : '/board'
+  return `/api/notion/auth?returnTo=${encodeURIComponent(returnTo)}`
+}
+
+/**
+ * Shared connected-Notion actions (More → Connections + top-bar connection popup).
+ * Edit permissions is a real <a href> so the browser always follows /api/notion/auth → Notion.
+ */
+function NotionConnectedActions() {
+  const api = useNotionConnect()
+  if (!api?.status?.connected) return null
+  const { status, authHref, openPicker, disconnect, topBarPinned, setTopBarPinned } = api
+
+  return (
+    <>
+      <DropdownMenuItem disabled className="text-xs text-gray-500">
+        Connected{status.workspaceName ? ` · ${status.workspaceName}` : ''}
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onSelect={(e) => {
+          e.preventDefault() // Keep parent menus from fighting the modal open
+          window.setTimeout(() => openPicker(), 0) // Defer so the dropdown can finish closing
+        }}
+      >
+        <Sparkles className="h-4 w-4 mr-2 shrink-0" />
+        Import pages
+      </DropdownMenuItem>
+      {/* Native link — full document navigation; nested menus cannot cancel it */}
+      <DropdownMenuItem asChild>
+        <a href={authHref} className="cursor-pointer">
+          <ExternalLink className="h-4 w-4 mr-2 shrink-0" />
+          Edit permissions
+        </a>
+      </DropdownMenuItem>
+      {topBarPinned ? (
+        <DropdownMenuItem onSelect={() => setTopBarPinned(false)}>
+          <PinOff className="h-4 w-4 mr-2" />
+          Unpin
+        </DropdownMenuItem>
+      ) : (
+        <DropdownMenuItem onSelect={() => setTopBarPinned(true)}>
+          <NotionMarkIcon className="h-4 w-4 mr-2" />
+          Pin to top bar
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        onSelect={() => {
+          void disconnect()
+        }}
+        className="text-red-600 focus:text-red-600"
+      >
+        Disconnect Notion
+      </DropdownMenuItem>
+    </>
+  )
+}
 
 /** Fetch status, own the import modal, and listen for AI-composer connect events. */
 export function NotionConnectProvider({ children }: { children: React.ReactNode }) {
@@ -40,6 +127,13 @@ export function NotionConnectProvider({ children }: { children: React.ReactNode 
   const [status, setStatus] = useState<NotionStatus | null>(null) // Connection state from API
   const [loading, setLoading] = useState(true) // Initial fetch in flight
   const [pickerOpen, setPickerOpen] = useState(false) // Import pages modal
+  const [topBarPinned, setTopBarPinnedState] = useState(true) // Hydrate from localStorage after mount
+
+  const authHref = useMemo(() => buildAuthHref(pathname), [pathname])
+
+  useEffect(() => {
+    setTopBarPinnedState(readTopBarPinned()) // Client-only preference
+  }, [])
 
   useEffect(() => {
     let cancelled = false // Avoid setState after unmount
@@ -64,13 +158,19 @@ export function NotionConnectProvider({ children }: { children: React.ReactNode 
     }
   }, [])
 
-  // After OAuth connect, open the page picker (Mindmap.so-style)
+  // After OAuth connect / Edit permissions, open the page picker and re-pin the top-bar mark
   useEffect(() => {
     if (typeof window === 'undefined') return
     const params = new URLSearchParams(window.location.search)
     const shouldOpen = params.get('notion') === 'connected' || params.get('picker') === '1'
     if (!shouldOpen || !status?.connected) return
     setPickerOpen(true)
+    setTopBarPinnedState(true) // Fresh OAuth → show pin left of Share again
+    try {
+      window.localStorage.setItem(TOPBAR_PIN_KEY, '1')
+    } catch {
+      /* ignore quota */
+    }
     params.delete('notion')
     params.delete('picker')
     params.delete('imported')
@@ -85,8 +185,8 @@ export function NotionConnectProvider({ children }: { children: React.ReactNode 
       ) // Guide local setup when secrets are missing
       return
     }
-    const returnTo = pathname || '/' // Come back to the board after Notion page picker
-    window.location.href = `/api/notion/auth?returnTo=${encodeURIComponent(returnTo)}` // Full navigation for OAuth
+    // Hard navigation — first-time connect / same path as Edit permissions <a>
+    window.location.assign(buildAuthHref(pathname))
   }, [status?.configured, pathname])
 
   const handleImport = async (opts: { pageIds: string[]; mode: 'card' | 'mindmap' }) => {
@@ -134,7 +234,16 @@ export function NotionConnectProvider({ children }: { children: React.ReactNode 
   }, [])
 
   const openPicker = useCallback(() => {
-    setPickerOpen(true) // Import pages from More → Connections → Notion
+    setPickerOpen(true) // Import pages from More / top-bar connection popup
+  }, [])
+
+  const setTopBarPinned = useCallback((pinned: boolean) => {
+    setTopBarPinnedState(pinned)
+    try {
+      window.localStorage.setItem(TOPBAR_PIN_KEY, pinned ? '1' : '0')
+    } catch {
+      /* ignore quota */
+    }
   }, [])
 
   // AI composer Connection menu → open Notion connect / import
@@ -148,8 +257,17 @@ export function NotionConnectProvider({ children }: { children: React.ReactNode 
   }, [status?.connected, startConnect])
 
   const api = useMemo<NotionConnectApi>(
-    () => ({ status, loading, startConnect, disconnect, openPicker }),
-    [status, loading, startConnect, disconnect, openPicker]
+    () => ({
+      status,
+      loading,
+      topBarPinned,
+      authHref,
+      startConnect,
+      disconnect,
+      openPicker,
+      setTopBarPinned,
+    }),
+    [status, loading, topBarPinned, authHref, startConnect, disconnect, openPicker, setTopBarPinned]
   )
 
   return (
@@ -172,13 +290,13 @@ export function NotionConnectProvider({ children }: { children: React.ReactNode 
   )
 }
 
-/** More → Connections row; right label is None or the connected workspace. */
+/** More → Connections — flat actions when connected (no 3rd nested submenu that ate OAuth clicks). */
 export function NotionConnectMenuItems({ filterQuery = '' }: { filterQuery?: string }) {
   const api = useContext(NotionConnectContext) // Provider owns status / OAuth
   if (!api) return null
-  const { status, loading, startConnect, disconnect, openPicker } = api
+  const { status, loading, authHref } = api
   const q = filterQuery.trim().toLowerCase() // Search actions… filter
-  const hay = `connections notion ${status?.workspaceName || ''}` // Match row or Notion workspace
+  const hay = `connections notion unpin pin permissions manage ${status?.workspaceName || ''}` // Match row or actions
   if (q && !hay.toLowerCase().includes(q)) return null // Hide when search misses
   const rightLabel = status?.connected ? status.workspaceName || 'Notion' : 'None' // Screenshot-style status
 
@@ -195,36 +313,72 @@ export function NotionConnectMenuItems({ filterQuery = '' }: { filterQuery?: str
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className="w-56">
         {status?.connected ? (
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger
-              className="text-sm"
-              title={status.workspaceName ? `Notion · ${status.workspaceName}` : 'Notion connected'}
+          <>
+            <div className="px-2 py-1.5 flex items-center gap-2 text-sm text-gray-700">
+              <NotionMarkIcon className="h-4 w-4" />
+              <span className="truncate">Notion</span>
+            </div>
+            <DropdownMenuSeparator />
+            <NotionConnectedActions />
+          </>
+        ) : (
+          <DropdownMenuItem asChild disabled={loading}>
+            <a
+              href={status?.configured === false ? undefined : authHref}
+              title={
+                status?.configured === false
+                  ? 'Notion OAuth credentials missing — click for setup steps'
+                  : 'Connect Notion'
+              }
+              onClick={(e) => {
+                if (status?.configured === false) {
+                  e.preventDefault()
+                  api.startConnect() // Shows the env setup alert
+                }
+              }}
+              className="cursor-pointer"
             >
               <NotionMarkIcon className="h-4 w-4 mr-2" />
               Notion
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-56">
-              <DropdownMenuItem disabled className="text-xs text-gray-500">
-                Connected{status.workspaceName ? ` · ${status.workspaceName}` : ''}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={openPicker}>Import pages</DropdownMenuItem>
-              <DropdownMenuItem onClick={startConnect}>Reconnect / change pages</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => void disconnect()} className="text-red-600 focus:text-red-600">
-                Disconnect Notion
-              </DropdownMenuItem>
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-        ) : (
-          <DropdownMenuItem
-            disabled={loading}
-            title={status?.configured === false ? 'Notion OAuth credentials missing — click for setup steps' : 'Connect Notion'}
-            onClick={startConnect}
-          >
-            <NotionMarkIcon className="h-4 w-4 mr-2" />
-            Notion
+            </a>
           </DropdownMenuItem>
         )}
       </DropdownMenuSubContent>
     </DropdownMenuSub>
+  )
+}
+
+/**
+ * Top-bar pin left of Share — connection popup with Import / Edit permissions / Unpin / Disconnect.
+ */
+export function NotionTopBarPin({ className }: { className?: string }) {
+  const api = useNotionConnect()
+  const [open, setOpen] = useState(false)
+  if (!api?.status?.connected || !api.topBarPinned) return null // Hidden until connected + pinned
+  const label = api.status.workspaceName
+    ? `Notion · ${api.status.workspaceName}`
+    : 'Notion connection'
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          title={label}
+          aria-label={label}
+          disabled={api.loading}
+          className={cn(
+            'h-7 w-7 p-0 inline-flex items-center justify-center rounded-md text-gray-700 hover:text-gray-900 hover:bg-gray-100 flex-shrink-0 disabled:opacity-50',
+            open && 'bg-gray-100',
+            className
+          )}
+        >
+          <NotionMarkIcon className="h-4 w-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56" onCloseAutoFocus={(e) => e.preventDefault()}>
+        <NotionConnectedActions />
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

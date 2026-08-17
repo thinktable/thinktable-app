@@ -3,6 +3,7 @@
 // Editable Notion database with Thinktable view settings (layout / filter / sort / group / color / sub-tasks).
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Check,
   ChevronDown,
@@ -12,9 +13,22 @@ import {
   List,
   Loader2,
   Plus,
-  Trash2,
   Type,
 } from 'lucide-react'
+import {
+  BlockActionsMenu,
+  type BlockActionId,
+  type BlockActionPayload,
+  type DbConvertLayoutId,
+} from '@/components/block-actions-menu'
+import { useBoardLinkActions } from '@/lib/board-link-context'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { createClient } from '@/lib/supabase/client'
+import {
+  createRowCardOnBoard,
+  NOTION_ROW_DRAG_MIME,
+  type NotionRowDragPayload,
+} from '@/lib/notion/row-to-card-client'
 import {
   applyEditToCell,
   isNotionPropertyEditable,
@@ -55,6 +69,12 @@ type NotionDatabaseTableViewProps = {
   className?: string
   viewSettingsJson?: string | null // Persisted TipTap attr
   onViewSettingsChange?: (json: string) => void // Persist back to databaseBlock
+  /** Board containing the host frame — Convert layout places cards here. */
+  conversationId?: string | null
+  /** Host frame message id — Convert layout source + thread endpoint. */
+  hostMessageId?: string | null
+  /** Host frame selected — only then block RF drag (unselected = grab table to move frame). */
+  frameSelected?: boolean
 }
 
 /** Column-type icon for property headers. */
@@ -474,55 +494,139 @@ function EditableCell({
   )
 }
 
-/** Left-gutter ⋮⋮ for a database row — overlays outside the first cell (no empty column). */
+/** Left-gutter ⋮⋮ for a database row — select + menu; drag onto board → new DB. */
 function RowHandle({
   row,
   selected,
   onSelect,
   onDelete,
   onOpen,
+  onDuplicate,
+  onConvertLayout,
+  dragPayload,
 }: {
   row: NotionDbRow
   selected: boolean
   onSelect: () => void
   onDelete: () => void
   onOpen: () => void
+  onDuplicate: () => void
+  onConvertLayout?: (layout: DbConvertLayoutId, rowId: string) => void
+  dragPayload: NotionRowDragPayload
 }) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const draggedRef = useRef(false) // Skip menu open after a drag
+
+  const closeMenu = useCallback(() => setMenu(null), [])
+
+  // Click away closes — same pattern as TipTap block ⋮⋮
+  useEffect(() => {
+    if (!menu) return
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (t?.closest?.('.block-actions-menu')) return
+      if (btnRef.current?.contains(t)) return
+      closeMenu()
+    }
+    document.addEventListener('mousedown', onDoc, true)
+    return () => document.removeEventListener('mousedown', onDoc, true)
+  }, [menu, closeMenu])
+
+  const onAction = useCallback(
+    (action: BlockActionId, payload?: BlockActionPayload) => {
+      if (action === 'open') onOpen()
+      else if (action === 'delete') onDelete()
+      else if (action === 'duplicate') onDuplicate()
+      else if (action === 'convertLayout' && payload?.convertLayout) {
+        onConvertLayout?.(payload.convertLayout, row.id)
+      } else if (action === 'copyLink') {
+        const url =
+          row.url || `https://www.notion.so/${String(row.id).replace(/-/g, '')}`
+        void navigator.clipboard.writeText(url).catch(() => {})
+      }
+      closeMenu()
+    },
+    [onOpen, onDelete, onDuplicate, onConvertLayout, row.url, row.id, closeMenu]
+  )
+
+  const openMenuAt = useCallback(() => {
+    const r = btnRef.current?.getBoundingClientRect()
+    setMenu({
+      x: r ? r.left : 0,
+      y: r ? r.top + r.height / 2 : 0,
+    })
+  }, [])
+
   return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            'tt-db-row-handle flex h-5 w-5 items-center justify-center rounded text-gray-400',
-            'opacity-0 group-hover/row:opacity-100 focus:opacity-100 hover:bg-black/5 hover:text-gray-800',
-            'group-hover/gutter:opacity-100',
-            selected && 'opacity-100 bg-blue-50 text-blue-600'
-          )}
-          title="Row actions"
-          aria-label="Row handle"
-          onClick={(e) => {
-            e.stopPropagation()
-            onSelect()
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          <GripVertical className="h-3.5 w-3.5" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="z-[220] min-w-[160px]" side="left">
-        {row.url ? (
-          <DropdownMenuItem onSelect={() => onOpen()}>Open</DropdownMenuItem>
-        ) : null}
-        <DropdownMenuItem
-          className="text-red-600 focus:text-red-600"
-          onSelect={() => onDelete()}
-        >
-          <Trash2 className="mr-2 h-3.5 w-3.5" />
-          Delete
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        draggable
+        className={cn(
+          'tt-db-row-handle flex h-5 w-5 items-center justify-center rounded text-gray-400 cursor-grab active:cursor-grabbing',
+          'opacity-0 group-hover/row:opacity-100 focus:opacity-100 hover:bg-black/5 hover:text-gray-800',
+          'group-hover/gutter:opacity-100',
+          selected && 'opacity-100 bg-blue-50 text-blue-600',
+          menu && 'opacity-100 bg-blue-50 text-blue-600'
+        )}
+        title="Drag to board or open actions"
+        aria-label="Row handle"
+        onPointerDown={(e) => {
+          e.stopPropagation() // Don't start RF frame drag
+          onSelect() // Arm this row immediately
+        }}
+        onDragStart={(e) => {
+          draggedRef.current = false
+          onSelect()
+          e.dataTransfer.setData(NOTION_ROW_DRAG_MIME, JSON.stringify(dragPayload))
+          e.dataTransfer.effectAllowed = 'copy'
+          // Some browsers need text/plain for drop to fire
+          e.dataTransfer.setData('text/plain', dragPayload.row.id)
+          closeMenu()
+        }}
+        onDrag={() => {
+          draggedRef.current = true
+        }}
+        onDragEnd={() => {
+          // click may fire after dragend in some browsers — keep flag briefly
+          window.setTimeout(() => {
+            draggedRef.current = false
+          }, 0)
+        }}
+        onClick={(e) => {
+          e.stopPropagation()
+          onSelect()
+          if (draggedRef.current) return // Drag, not a menu click
+          if (menu) {
+            closeMenu()
+            return
+          }
+          openMenuAt()
+        }}
+      >
+        <GripVertical className="h-3.5 w-3.5" />
+      </button>
+      {menu &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <BlockActionsMenu
+            x={menu.x}
+            y={menu.y}
+            zoom={1}
+            positionMode="fixed"
+            openLeft
+            showOpen
+            menuHeader="Page"
+            showAddChild={false}
+            convertLayoutMode={onConvertLayout ? 'table' : null}
+            onAction={onAction}
+            onClose={closeMenu}
+          />,
+          document.body
+        )}
+    </>
   )
 }
 
@@ -580,10 +684,46 @@ export function NotionDatabaseTableView({
   className,
   viewSettingsJson,
   onViewSettingsChange,
+  conversationId: conversationIdProp,
+  hostMessageId: hostMessageIdProp,
+  frameSelected = false,
 }: NotionDatabaseTableViewProps) {
-  const [data, setData] = useState<NotionDatabaseTable | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
+  const boardLink = useBoardLinkActions() // Fallback when props missing
+  const pathBoardId =
+    typeof window !== 'undefined'
+      ? window.location.pathname.match(/\/board\/([^/?#]+)/)?.[1] ||
+        window.location.pathname.match(/\/embed\/([^/?#]+)/)?.[1] ||
+        null
+      : null
+  const conversationId =
+    conversationIdProp || boardLink.conversationId || pathBoardId || null
+  const hostMessageId = hostMessageIdProp || boardLink.hostMessageId || null
+  const tableQueryKey = useMemo(
+    () => ['notion-database', notionDatabaseId] as const,
+    [notionDatabaseId]
+  )
+
+  // Cache by DB id — TipTap NodeView remounts (e.g. after drag) must not hit Notion again
+  const {
+    data,
+    error: queryError,
+    isPending,
+  } = useQuery({
+    queryKey: tableQueryKey,
+    queryFn: async (): Promise<NotionDatabaseTable> => {
+      const res = await fetch(`/api/notion/database/${encodeURIComponent(notionDatabaseId)}`)
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error((json as { error?: string }).error || 'Failed to load database')
+      return json as NotionDatabaseTable
+    },
+    staleTime: 5 * 60 * 1000, // Fresh enough for edits; drag remounts reuse cache instantly
+    gcTime: 30 * 60 * 1000,
+  })
+
+  const error = queryError ? (queryError instanceof Error ? queryError.message : 'Failed to load database') : null
+  // Only show the loading shell when we have nothing cached (remount with cache = no spinner)
+  const loading = isPending && !data
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [settings, setSettings] = useState<DatabaseViewSettings>(() =>
@@ -593,48 +733,128 @@ export function NotionDatabaseTableView({
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null)
   const [rowBusy, setRowBusy] = useState(false)
 
-  /** Open a DB row — Notion page URL (layout open mode reserved for Thinktable peeks later). */
+  /** Patch cached table rows (optimistic edits survive NodeView remount). */
+  const setCachedTable = useCallback(
+    (updater: (prev: NotionDatabaseTable | null) => NotionDatabaseTable | null) => {
+      queryClient.setQueryData<NotionDatabaseTable>(tableQueryKey, (prev) => {
+        const next = updater(prev ?? null)
+        return next === null ? prev : next
+      })
+    },
+    [queryClient, tableQueryKey]
+  )
+
+  /** Open a DB row — Notion page URL (fallback from page id when url missing). */
   const openRow = useCallback((row: NotionDbRow) => {
-    if (row.url) window.open(row.url, '_blank', 'noopener,noreferrer')
+    const url = row.url || `https://www.notion.so/${String(row.id).replace(/-/g, '')}`
+    window.open(url, '_blank', 'noopener,noreferrer')
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    setError(null)
-    void (async () => {
-      try {
-        const res = await fetch(`/api/notion/database/${encodeURIComponent(notionDatabaseId)}`)
-        const json = await res.json()
-        if (!res.ok) throw new Error(json.error || 'Failed to load database')
-        if (!cancelled) {
-          const table = json as NotionDatabaseTable
-          setData(table)
-          // Seed layout/name from Notion Views API when TipTap has no saved viewSettings
-          const saved = parseViewSettings(viewSettingsJson)
-          const seeded =
-            !saved && table.notionView
-              ? {
-                  ...defaultDatabaseViewSettings(table.notionView.name || 'Default'),
-                  layout: table.notionView.layout,
-                  name: table.notionView.name || 'Default',
-                }
-              : saved
-          const normalized = normalizeViewSettings(seeded, table.properties)
-          setSettings(normalized)
-          // Persist seeded layout once so reload doesn't re-seed against user edits later
-          if (!saved && table.notionView) onViewSettingsChange?.(JSON.stringify(normalized))
+  /** One row → card on THIS board (client-side; table stays). */
+  const handleConvertLayout = useCallback(
+    async (layout: DbConvertLayoutId, rowId?: string) => {
+      if (layout !== 'card' || !rowId) {
+        // Table view / full-DB convert still uses the API when no rowId
+        if (!conversationId || !hostMessageId || !notionDatabaseId) return
+        try {
+          const res = await fetch(
+            `/api/notion/database/${encodeURIComponent(notionDatabaseId)}/convert-layout`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ layout, conversationId, sourceMessageId: hostMessageId }),
+            }
+          )
+          if (!res.ok) {
+            const json = (await res.json().catch(() => ({}))) as { error?: string }
+            console.error('Convert layout failed:', json.error || res.statusText)
+            return
+          }
+          await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+          await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
+          await queryClient.invalidateQueries({ queryKey: ['panel-edges', conversationId] })
+          await queryClient.refetchQueries({ queryKey: ['panel-edges', conversationId] })
+        } catch (err) {
+          console.error('Convert layout failed:', err)
         }
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load database')
-      } finally {
-        if (!cancelled) setLoading(false)
+        return
       }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [notionDatabaseId]) // eslint-disable-line react-hooks/exhaustive-deps -- reload on id only
+
+      if (!conversationId || !data) {
+        console.error('Convert layout: missing board or table data', {
+          conversationId,
+          hasData: !!data,
+        })
+        return
+      }
+      const row = data.rows.find((r) => r.id === rowId)
+      if (!row) {
+        console.error('Convert layout: row not in loaded table', rowId)
+        return
+      }
+      try {
+        const supabase = createClient()
+        const {
+          data: { user },
+        } = await supabase.auth.getUser()
+        if (!user) return
+
+        // Prefer host frame position so the card sits to its right
+        let origin = { x: 80, y: 80 }
+        if (hostMessageId) {
+          const { data: hostMsg } = await supabase
+            .from('messages')
+            .select('metadata')
+            .eq('id', hostMessageId)
+            .maybeSingle()
+          const pos = (hostMsg?.metadata as { position?: { x?: number; y?: number } } | null)
+            ?.position
+          if (typeof pos?.x === 'number' && typeof pos?.y === 'number') {
+            origin = { x: pos.x, y: pos.y }
+          }
+        }
+
+        await createRowCardOnBoard({
+          supabase,
+          userId: user.id,
+          conversationId,
+          sourceMessageId: hostMessageId || undefined,
+          notionDatabaseId,
+          databaseTitle: data.title,
+          properties: data.properties,
+          row,
+          origin,
+        })
+        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+        await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
+        await queryClient.invalidateQueries({ queryKey: ['panel-edges', conversationId] })
+        await queryClient.refetchQueries({ queryKey: ['panel-edges', conversationId] })
+        await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      } catch (err) {
+        console.error('Convert row to card failed:', err)
+      }
+    },
+    [conversationId, hostMessageId, notionDatabaseId, data, queryClient]
+  )
+
+  // Seed Thinktable view settings once when table data lands (cache hit or first fetch)
+  useEffect(() => {
+    if (!data) return
+    const saved = parseViewSettings(viewSettingsJson)
+    const seeded =
+      !saved && data.notionView
+        ? {
+            ...defaultDatabaseViewSettings(data.notionView.name || 'Default'),
+            layout: data.notionView.layout,
+            name: data.notionView.name || 'Default',
+          }
+        : saved
+    const normalized = normalizeViewSettings(seeded, data.properties)
+    setSettings(normalized)
+    if (!saved && data.notionView) onViewSettingsChange?.(JSON.stringify(normalized))
+    // Only re-seed when the DB id / table identity changes — not every viewSettings edit
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notionDatabaseId, data?.title, data?.properties?.length])
 
   const updateSettings = useCallback(
     (next: DatabaseViewSettings) => {
@@ -651,7 +871,7 @@ export function NotionDatabaseTableView({
       setSavingKey(key)
       setSaveError(null)
       const prop = data?.properties.find((p) => p.name === propertyName)
-      setData((prev) => {
+      setCachedTable((prev) => {
         if (!prev) return prev
         return {
           ...prev,
@@ -692,18 +912,13 @@ export function NotionDatabaseTableView({
         if (!res.ok) throw new Error(json.error || 'Failed to save')
       } catch (e) {
         setSaveError(e instanceof Error ? e.message : 'Failed to save')
-        try {
-          const res = await fetch(`/api/notion/database/${encodeURIComponent(notionDatabaseId)}`)
-          const json = await res.json()
-          if (res.ok) setData(json as NotionDatabaseTable)
-        } catch {
-          /* keep optimistic */
-        }
+        // Soft refresh into the same cache key (no loading flash)
+        void queryClient.invalidateQueries({ queryKey: tableQueryKey })
       } finally {
         setSavingKey(null)
       }
     },
-    [data?.properties, notionDatabaseId]
+    [data?.properties, queryClient, setCachedTable, tableQueryKey]
   )
 
   /** Create a Notion page (row) and insert it after `afterId` (null = top). */
@@ -732,7 +947,7 @@ export function NotionDatabaseTableView({
           }
         }
         const fullRow: NotionDbRow = { ...row, cells }
-        setData((prev) => {
+        setCachedTable((prev) => {
           if (!prev) return prev
           const rows = [...prev.rows]
           if (afterId == null) {
@@ -751,7 +966,7 @@ export function NotionDatabaseTableView({
         setRowBusy(false)
       }
     },
-    [data, notionDatabaseId, rowBusy]
+    [data, notionDatabaseId, rowBusy, setCachedTable]
   )
 
   /** Archive a Notion page (row) and remove it from the table. */
@@ -761,7 +976,7 @@ export function NotionDatabaseTableView({
       setRowBusy(true)
       setSaveError(null)
       const prevRows = data?.rows
-      setData((prev) =>
+      setCachedTable((prev) =>
         prev ? { ...prev, rows: prev.rows.filter((r) => r.id !== pageId) } : prev
       )
       if (selectedRowId === pageId) setSelectedRowId(null)
@@ -773,12 +988,14 @@ export function NotionDatabaseTableView({
         if (!res.ok) throw new Error(json.error || 'Failed to delete row')
       } catch (e) {
         setSaveError(e instanceof Error ? e.message : 'Failed to delete row')
-        if (prevRows && data) setData({ ...data, rows: prevRows })
+        if (prevRows && data) {
+          setCachedTable(() => ({ ...data, rows: prevRows }))
+        }
       } finally {
         setRowBusy(false)
       }
     },
-    [data, rowBusy, selectedRowId]
+    [data, rowBusy, selectedRowId, setCachedTable]
   )
 
   const columns = useMemo(
@@ -796,7 +1013,16 @@ export function NotionDatabaseTableView({
 
   if (loading) {
     return (
-      <div className={cn('flex items-center gap-2 py-3 text-sm text-gray-500', className)}>
+      <div
+        className={cn(
+          // Keep DB hug size while refetching after NodeView remount / frame drag
+          'tt-notion-db nokey flex items-center gap-2 py-3 text-sm text-gray-500 min-w-[420px] min-h-[120px]',
+          // Selected: nodrag so cell edits don't move the frame; unselected: allow RF frame drag
+          frameSelected && 'nodrag',
+          className
+        )}
+        onPointerDown={frameSelected ? (e) => e.stopPropagation() : undefined}
+      >
         <Loader2 className="h-4 w-4 animate-spin" />
         Loading {fallbackTitle || 'database'}…
       </div>
@@ -854,6 +1080,19 @@ export function NotionDatabaseTableView({
                     onSelect={() => setSelectedRowId(row.id)}
                     onDelete={() => void deleteRow(row.id)}
                     onOpen={() => openRow(row)}
+                    onDuplicate={() => void createRow(row.id)}
+                    onConvertLayout={
+                      conversationId
+                        ? (layout, rowId) => void handleConvertLayout(layout, rowId)
+                        : undefined
+                    }
+                    dragPayload={{
+                      source: 'notion-db-row',
+                      notionDatabaseId,
+                      row,
+                      properties: data?.properties || [],
+                      databaseTitle: data?.title,
+                    }}
                   />
                 </div>
                 <RowInsertBar
@@ -972,9 +1211,14 @@ export function NotionDatabaseTableView({
           className={cn(
             'group/row relative hover:bg-[#fafafa]',
             // Row rules painted on td via globals.css — avoid a second tr border (misaligns add lines)
-            selectedRowId === row.id && 'bg-blue-50/30'
+            selectedRowId === row.id && 'bg-blue-50/50 ring-1 ring-inset ring-blue-200'
           )}
-          style={{ background: rowBackground(row, settings.conditionalColors) }}
+          style={{
+            background:
+              selectedRowId === row.id
+                ? undefined
+                : rowBackground(row, settings.conditionalColors),
+          }}
           onClick={() => setSelectedRowId(row.id)}
         >
           {renderRowCells(row, depth, { insertBeforeAfterId })}
@@ -1202,10 +1446,12 @@ export function NotionDatabaseTableView({
     <div
       className={cn(
         // No perimeter box — dividers live on rows/cols inside the table
-        'tt-notion-db nodrag nokey w-full min-w-[420px] max-w-full overflow-auto bg-transparent',
+        'tt-notion-db nokey w-full min-w-[420px] max-w-full overflow-auto bg-transparent',
+        // Selected: nodrag so scrolling/editing doesn't start RF drag; unselected: drag the frame
+        frameSelected && 'nodrag',
         className
       )}
-      onPointerDown={(e) => e.stopPropagation()}
+      onPointerDown={frameSelected ? (e) => e.stopPropagation() : undefined}
     >
       {settings.layoutOptions.showDataSourceTitle ? (
         <div className="px-1 pb-1 text-[12px] font-medium text-gray-500 truncate">

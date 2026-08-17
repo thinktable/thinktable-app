@@ -20,6 +20,71 @@ export function buildBoardLinkHtml(opts: {
   return `<div data-type="boardLink" data-board-id="${escapeHtml(opts.boardId)}" data-title="${title}" data-variant="title"${iconAttr}></div>`
 }
 
+/** Live Notion database atom HTML (table NodeView). */
+export function buildDatabaseBlockHtml(opts: {
+  notionDatabaseId: string
+  title?: string | null
+  url?: string | null
+  icon?: string | null
+}): string {
+  const id = escapeHtml(opts.notionDatabaseId)
+  const title = escapeHtml((opts.title || 'Untitled').trim() || 'Untitled')
+  const urlAttr = opts.url ? ` data-url="${escapeHtml(opts.url)}"` : ''
+  const iconAttr = opts.icon ? ` data-icon="${escapeHtml(opts.icon)}"` : ''
+  return `<div data-type="databaseBlock" data-notion-database-id="${id}" data-title="${title}"${urlAttr}${iconAttr}></div>`
+}
+
+/**
+ * If a Notion DB frame lost its databaseBlock (empty after bad migrate/save),
+ * rebuild the live table atom from metadata. Returns null when content is already fine.
+ * Does **not** rewrite correct map boardLinks (sole boardLink + linkedBoardId).
+ */
+export function restoreWipedDatabaseBlockHtml(
+  content: string,
+  metadata: Record<string, unknown>
+): string | null {
+  if (metadata.notionObject !== 'database') return null
+  if (isSoleDatabaseBlockContent(content)) return null
+  if (/data-type=["']databaseBlock["']/i.test(content || '')) return null // Still has a table atom
+
+  const isBody = metadata.isBoardBody === true || metadata.isPageBody === true
+  const linked =
+    typeof metadata.linkedBoardId === 'string'
+      ? metadata.linkedBoardId
+      : typeof metadata.linkedPageId === 'string'
+        ? metadata.linkedPageId
+        : null
+  // Correct import shape: map title boardLink → nested board holds the table
+  if (!isBody && linked && isSoleBoardLinkContent(content)) return null
+
+  const empty =
+    isBlockContentEmpty(content) ||
+    !content ||
+    content.trim() === '' ||
+    content.trim() === '<p></p>'
+  // Board body wrongly turned into a boardLink, or any DB frame wiped empty
+  if (!empty && !(isBody && isSoleBoardLinkContent(content))) return null
+
+  const notionDatabaseId =
+    (typeof metadata.notionPageId === 'string' && metadata.notionPageId) ||
+    (typeof metadata.notionDatabaseId === 'string' && metadata.notionDatabaseId) ||
+    null
+  if (!notionDatabaseId) return null
+  const title =
+    (typeof metadata.blockTitle === 'string' && metadata.blockTitle) ||
+    (typeof metadata.notionDatabaseTitle === 'string' && metadata.notionDatabaseTitle) ||
+    'Untitled'
+  const url = typeof metadata.notionUrl === 'string' ? metadata.notionUrl : null
+  const iconMeta = metadata.notionIcon as { type?: string; emoji?: string } | null
+  const icon =
+    iconMeta?.type === 'emoji' && iconMeta.emoji
+      ? iconMeta.emoji
+      : typeof metadata.notionIcon === 'string'
+        ? metadata.notionIcon
+        : null
+  return buildDatabaseBlockHtml({ notionDatabaseId, title, url, icon })
+}
+
 /** Strip boardLink/pageLink atoms; leftover HTML is sibling body content. */
 export function stripBoardLinksFromHtml(content: string): string {
   return content
@@ -92,10 +157,11 @@ export async function ensureNotionMapFrameIsBoardLink(
   }
 ): Promise<{ content: string; linkedBoardId: string; metadata: Record<string, unknown> } | null> {
   const { messageId, userId, parentConversationId, content, metadata } = opts
-  // Intentional database map frames render a structured table — do not convert to boardLink
-  if (metadata.notionObject === 'database') return null
+  // Sole databaseBlock on a map frame → title boardLink; DB stays on the nested board body
   if (!isSoleDatabaseBlockContent(content)) return null // Already a page block / mixed body
   if (/data-type="boardLink"/.test(content)) return null
+  // Imported/live Notion databases keep the table where it is (do not migrate on remount)
+  if (metadata.notionObject === 'database') return null
 
   const parsed = parseDatabaseBlockAttrs(content)
   const title =
@@ -208,6 +274,11 @@ export async function repairBoardFrameToSoleLink(
   const { messageId, userId, content, metadata } = opts
   const bt = typeof metadata.blockType === 'string' ? metadata.blockType : ''
   if (bt !== 'board' && bt !== 'boardIn' && bt !== 'page' && bt !== 'pageIn') return null
+  // Live Notion DB tables must stay as databaseBlock (row→card remounts used to wipe them)
+  if (metadata.notionObject === 'database' || isSoleDatabaseBlockContent(content)) return null
+  // Card-view frames intentionally keep boardLink + property cells on the map frame
+  if (metadata.dbLayout === 'card') return null
+  if (/data-type=["']propertyBlock["']/i.test(content)) return null
   const linkedBoardId =
     typeof metadata.linkedBoardId === 'string'
       ? metadata.linkedBoardId

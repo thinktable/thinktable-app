@@ -859,3 +859,260 @@ export async function archiveNotionPage(
     throw new Error(payload?.message || `Failed to archive Notion page ${pageId}`)
   }
 }
+
+/** Property types we can recreate when spinning a one-row DB from a drag. */
+const COPYABLE_PROP_TYPES = new Set([
+  'title',
+  'rich_text',
+  'number',
+  'select',
+  'multi_select',
+  'status',
+  'checkbox',
+  'url',
+  'email',
+  'phone_number',
+  'date',
+])
+
+/** Build Notion create-database property schema from our table columns. */
+function schemaPropertiesForCreate(
+  properties: NotionDbProperty[]
+): Record<string, Record<string, unknown>> {
+  const out: Record<string, Record<string, unknown>> = {}
+  for (const prop of properties) {
+    if (!COPYABLE_PROP_TYPES.has(prop.type)) continue
+    if (prop.type === 'title') {
+      out[prop.name] = { title: {} }
+      continue
+    }
+    if (prop.type === 'rich_text') {
+      out[prop.name] = { rich_text: {} }
+      continue
+    }
+    if (prop.type === 'number') {
+      out[prop.name] = { number: {} }
+      continue
+    }
+    if (prop.type === 'checkbox') {
+      out[prop.name] = { checkbox: {} }
+      continue
+    }
+    if (prop.type === 'url') {
+      out[prop.name] = { url: {} }
+      continue
+    }
+    if (prop.type === 'email') {
+      out[prop.name] = { email: {} }
+      continue
+    }
+    if (prop.type === 'phone_number') {
+      out[prop.name] = { phone_number: {} }
+      continue
+    }
+    if (prop.type === 'date') {
+      out[prop.name] = { date: {} }
+      continue
+    }
+    if (prop.type === 'select' || prop.type === 'status') {
+      const options = (prop.options || []).map((o) => ({
+        name: o.name,
+        ...(o.color ? { color: o.color } : {}),
+      }))
+      out[prop.name] = { [prop.type]: { options } }
+      continue
+    }
+    if (prop.type === 'multi_select') {
+      const options = (prop.options || []).map((o) => ({
+        name: o.name,
+        ...(o.color ? { color: o.color } : {}),
+      }))
+      out[prop.name] = { multi_select: { options } }
+    }
+  }
+  // Notion requires exactly one title property
+  if (!Object.values(out).some((p) => 'title' in p)) {
+    out.Name = { title: {} }
+  }
+  return out
+}
+
+/** Build page properties payload from a render-ready row. */
+function pagePropertiesFromRow(
+  properties: NotionDbProperty[],
+  row: NotionDbRow
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const prop of properties) {
+    if (!COPYABLE_PROP_TYPES.has(prop.type)) continue
+    const cell = row.cells[prop.name]
+    if (prop.type === 'title') {
+      out[prop.name] = {
+        title: [{ type: 'text', text: { content: (cell?.text || '').slice(0, 2000) } }],
+      }
+      continue
+    }
+    if (prop.type === 'rich_text') {
+      out[prop.name] = {
+        rich_text: [{ type: 'text', text: { content: (cell?.text || '').slice(0, 2000) } }],
+      }
+      continue
+    }
+    if (prop.type === 'number') {
+      const n = cell?.text != null && cell.text !== '' ? Number(cell.text) : null
+      out[prop.name] = { number: Number.isFinite(n as number) ? n : null }
+      continue
+    }
+    if (prop.type === 'checkbox') {
+      out[prop.name] = { checkbox: !!cell?.checked }
+      continue
+    }
+    if (prop.type === 'url') {
+      out[prop.name] = { url: cell?.text || null }
+      continue
+    }
+    if (prop.type === 'email') {
+      out[prop.name] = { email: cell?.text || null }
+      continue
+    }
+    if (prop.type === 'phone_number') {
+      out[prop.name] = { phone_number: cell?.text || null }
+      continue
+    }
+    if (prop.type === 'date') {
+      const raw = (cell?.text || '').trim()
+      out[prop.name] = raw ? { date: { start: raw } } : { date: null }
+      continue
+    }
+    if (prop.type === 'select' || prop.type === 'status') {
+      const name = cell?.tags?.[0]?.name
+      out[prop.name] = name ? { [prop.type]: { name } } : { [prop.type]: null }
+      continue
+    }
+    if (prop.type === 'multi_select') {
+      const names = (cell?.tags || []).map((t) => ({ name: t.name }))
+      out[prop.name] = { multi_select: names }
+    }
+  }
+  return out
+}
+
+/**
+ * Create a new Notion database (same copyable schema) under the source DB's parent page,
+ * seed it with one page copied from `row`, return ids for a Thinktable databaseBlock frame.
+ */
+export async function createNotionDatabaseFromRow(
+  accessToken: string,
+  sourceDatabaseId: string,
+  row: NotionDbRow
+): Promise<{
+  databaseId: string
+  dataSourceId: string
+  title: string
+  url?: string
+  icon?: string | null
+  rowId: string
+}> {
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    'Notion-Version': NOTION_VERSION,
+    'Content-Type': 'application/json',
+  }
+
+  // Load source schema + parent
+  const table = await fetchNotionDatabaseTable(accessToken, sourceDatabaseId)
+  const dbRes = await fetch(`https://api.notion.com/v1/databases/${table.id}`, {
+    method: 'GET',
+    headers,
+  })
+  const dbPayload = await dbRes.json().catch(() => ({}))
+  if (!dbRes.ok) {
+    throw new Error(dbPayload?.message || 'Failed to load source database')
+  }
+  const parent = dbPayload.parent as
+    | { type?: string; page_id?: string; workspace?: boolean }
+    | undefined
+  let parentBody: Record<string, unknown>
+  if (parent?.type === 'page_id' && parent.page_id) {
+    parentBody = { type: 'page_id', page_id: parent.page_id }
+  } else if (parent?.type === 'workspace' || parent?.workspace) {
+    parentBody = { type: 'workspace', workspace: true }
+  } else {
+    // Fallback: nest under the row page's... can't. Try data_source parent page via row page parent.
+    const pageRes = await fetch(`https://api.notion.com/v1/pages/${row.id}`, {
+      method: 'GET',
+      headers,
+    })
+    const pagePayload = await pageRes.json().catch(() => ({}))
+    const pageParent = pagePayload?.parent as
+      | { type?: string; page_id?: string; database_id?: string }
+      | undefined
+    if (pageParent?.type === 'page_id' && pageParent.page_id) {
+      parentBody = { type: 'page_id', page_id: pageParent.page_id }
+    } else {
+      throw new Error(
+        'Cannot create a new database — share a parent page with Thinktable (not only this database).'
+      )
+    }
+  }
+
+  const titleProp = table.properties.find((p) => p.type === 'title')
+  const rowTitle =
+    (titleProp && row.cells[titleProp.name]?.text?.trim()) ||
+    table.title ||
+    'Untitled database'
+  const schema = schemaPropertiesForCreate(table.properties)
+
+  const createRes = await fetch('https://api.notion.com/v1/databases', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      parent: parentBody,
+      title: [{ type: 'text', text: { content: rowTitle.slice(0, 100) } }],
+      properties: schema,
+      ...(row.icon ? { icon: { type: 'emoji', emoji: row.icon } } : {}),
+    }),
+  })
+  const created = await createRes.json().catch(() => ({}))
+  if (!createRes.ok) {
+    throw new Error(created?.message || 'Failed to create Notion database')
+  }
+
+  const newDatabaseId = created.id as string
+  const sources =
+    (created.data_sources as Array<{ id?: string }> | undefined) || []
+  let dataSourceId = sources[0]?.id || ''
+  if (!dataSourceId) {
+    // Resolve via retrieve
+    const fresh = await fetchNotionDatabaseTable(accessToken, newDatabaseId)
+    dataSourceId = fresh.dataSourceId
+  }
+
+  const pageProps = pagePropertiesFromRow(table.properties, row)
+  const pageRes = await fetch('https://api.notion.com/v1/pages', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      parent: { type: 'data_source_id', data_source_id: dataSourceId },
+      properties: pageProps,
+      ...(row.icon ? { icon: { type: 'emoji', emoji: row.icon } } : {}),
+    }),
+  })
+  const pagePayload = await pageRes.json().catch(() => ({}))
+  if (!pageRes.ok) {
+    throw new Error(pagePayload?.message || 'Failed to copy row into new database')
+  }
+
+  const titleArr = (created.title as Array<{ plain_text?: string }> | undefined) || []
+  const title =
+    titleArr.map((t) => t.plain_text || '').join('').trim() || rowTitle
+
+  return {
+    databaseId: newDatabaseId,
+    dataSourceId,
+    title,
+    url: created.url,
+    icon: row.icon || null,
+    rowId: pagePayload.id as string,
+  }
+}

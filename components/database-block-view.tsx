@@ -13,17 +13,37 @@ import { NotionDatabaseTableView } from '@/components/notion-database-table' // 
 import { useBoardLinkActions } from '@/lib/board-link-context'
 import { cn } from '@/lib/utils'
 
-export function DatabaseBlockView({ node, updateAttributes }: NodeViewProps) {
+export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewProps) {
   const notionDatabaseId = (node.attrs.notionDatabaseId as string | null) || null // Linked Notion DB
   const icon = (node.attrs.icon as string | null) || null // Emoji, else table icon
   const url = (node.attrs.url as string | null) || null // Open-in-Notion when set
   const actions = useBoardLinkActions() // Host may supply linkedBoardId + notionUrl
   const hostPageId = actions.hostLinkedBoardId || null // Map-frame DB → full open menu
   const notionUrl = url || actions.notionUrl || null // Prefer block url, else frame metadata
+  // Prefer editor.storage (survives NodeView React roots) over BoardLink context
+  const frameHost = (
+    editor?.storage as
+      | { frameHost?: { conversationId: string | null; hostMessageId: string | null } }
+      | undefined
+  )?.frameHost
+  const hostConversationId = frameHost?.conversationId || actions.conversationId || null
+  const hostMessageId = frameHost?.hostMessageId || actions.hostMessageId || null
 
   const [title, setTitle] = useState<string>((node.attrs.title as string) || 'Untitled database') // Local label
   const [editing, setEditing] = useState(false) // True while the title span holds focus
   const titleRef = useRef<HTMLSpanElement>(null) // contentEditable span
+  // Host sets TipTap editable only when the frame is selected — drive table nodrag from that
+  const [frameSelected, setFrameSelected] = useState(() => !!editor?.isEditable)
+
+  useEffect(() => {
+    const dom = editor?.view?.dom as HTMLElement | undefined
+    if (!dom) return
+    const sync = () => setFrameSelected(!!editor?.isEditable)
+    sync()
+    const mo = new MutationObserver(sync)
+    mo.observe(dom, { attributes: true, attributeFilter: ['contenteditable'] })
+    return () => mo.disconnect()
+  }, [editor])
 
   // Keep local title in sync when the node attr changes externally (e.g. re-import)
   useEffect(() => {
@@ -131,6 +151,9 @@ export function DatabaseBlockView({ node, updateAttributes }: NodeViewProps) {
           fallbackTitle={title}
           viewSettingsJson={(node.attrs.viewSettings as string | null) || null}
           onViewSettingsChange={(json) => updateAttributes({ viewSettings: json })}
+          conversationId={hostConversationId}
+          hostMessageId={hostMessageId}
+          frameSelected={frameSelected}
         />
       ) : null}
     </NodeViewWrapper>

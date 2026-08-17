@@ -74,6 +74,8 @@ type TipTapBlockHandlesProps = {
   isPanelSelected?: boolean // Host frame must be selected before ⋮⋮ can drag a block
   hostNodeId?: string // Host **frame** RF id — Page promote / extract target
   conversationId?: string // Page id — extract a block onto the page as its own frame
+  /** Host frame message id — Convert layout / page promote target */
+  hostMessageId?: string
   boardInTargets?: BoardInTarget[]
   onPageTurnInto?: (blockType: 'board' | 'boardIn', boardInParentId?: string | null) => void
   onPropertyTurnInto?: (propertyType: PropertyTypeId) => void // Turn into → Property
@@ -407,6 +409,7 @@ export function TipTapBlockHandles({
   isPanelSelected = false,
   hostNodeId,
   conversationId,
+  hostMessageId,
   boardInTargets = [],
   onPageTurnInto,
   onPropertyTurnInto,
@@ -1190,9 +1193,72 @@ export function TipTapBlockHandles({
         clearBlockSelection()
         return
       }
+      if (action === 'convertLayout' && payload?.convertLayout) {
+        const databaseId =
+          (menu.block.node?.attrs?.notionDatabaseId as string | undefined) ||
+          null
+        if (!conversationId || !hostMessageId || !databaseId) {
+          console.error('Convert layout: missing board, frame, or database id')
+          clearBlockSelection()
+          return
+        }
+        void (async () => {
+          try {
+            const res = await fetch(
+              `/api/notion/database/${encodeURIComponent(databaseId)}/convert-layout`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  layout: payload.convertLayout,
+                  conversationId,
+                  sourceMessageId: hostMessageId,
+                }),
+              }
+            )
+            const json = (await res.json().catch(() => ({}))) as {
+              error?: string
+              boardId?: string
+            }
+            if (!res.ok) {
+              console.error('Convert layout failed:', json.error || res.statusText)
+              return
+            }
+            const refreshId = json.boardId || conversationId
+            await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', refreshId] })
+            await queryClient.refetchQueries({ queryKey: ['messages-for-panels', refreshId] })
+            if (refreshId !== conversationId) {
+              await queryClient.invalidateQueries({
+                queryKey: ['messages-for-panels', conversationId],
+              })
+              await queryClient.refetchQueries({
+                queryKey: ['messages-for-panels', conversationId],
+              })
+            }
+            await queryClient.invalidateQueries({ queryKey: ['panel-edges', refreshId] })
+            await queryClient.invalidateQueries({ queryKey: ['panel-edges', conversationId] })
+            await queryClient.invalidateQueries({ queryKey: ['conversations'] })
+          } catch (err) {
+            console.error('Convert layout failed:', err)
+          }
+        })()
+        clearBlockSelection()
+        return
+      }
       clearBlockSelection()
     },
-    [editor, menu, clearBlockSelection, turnBlockIntoBoard, turnSelectionIntoBoard, hostNodeId, onPropertyTurnInto]
+    [
+      editor,
+      menu,
+      clearBlockSelection,
+      turnBlockIntoBoard,
+      turnSelectionIntoBoard,
+      hostNodeId,
+      hostMessageId,
+      conversationId,
+      queryClient,
+      onPropertyTurnInto,
+    ]
   )
 
   // Grip click: plain = arm block + actions menu; Shift/⌘ = multi-select.
@@ -1651,6 +1717,9 @@ export function TipTapBlockHandles({
             selectedCount={menuCount}
             canUngroup={false}
             notionConnected={notionConnected} // Slimmer ⋮⋮ when the frame is Notion-linked
+            convertLayoutMode={
+              menu.block.typeName === 'databaseBlock' ? ('table' as const) : null
+            }
             onAction={onAction}
             onClose={closeMenu}
           />,

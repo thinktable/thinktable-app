@@ -1047,6 +1047,10 @@ span[data-added="true"] {
   .tt-frame-unselected .ProseMirror:active * {
     cursor: grabbing !important;
   }
+  /* Unselected DB table: cells/toolbar call stopPropagation — let pointers hit the frame so RF can drag */
+  .tt-frame-unselected .tt-notion-db {
+    pointer-events: none !important;
+  }
 
   /* Phone long-press armed: no browser text selection / hide RF marquee flash */
   .tt-long-press-armed,

@@ -360,30 +360,26 @@ export async function importNotionPagesToBoard(opts: {
 
   await Promise.all(framePages.map((page) => fetchTreeAndDiscover(page)))
 
-  // Map frames:
-  // - Notion **pages** → temp title, then title-variant boardLink (menu page + open chrome)
-  // - Notion **databases** → databaseBlock visible in the frame
+  // Map frames: Notion pages + databases → temp title, then title-variant boardLink
+  // (DB table lives on the nested board body as databaseBlock — same as Add frame pages)
   const rows = framePages.map((page) => {
     const position = positions.get(page.id) || { x: START_X, y: START_Y } // Fallback origin
     const isDatabase = page.object === 'database'
-    const content = isDatabase
-      ? databaseBlockHtml(page) // Show DB in-frame
-      : `<p>${escapeHtml(page.title || 'Untitled')}</p>` // Temp until boardLink patch
+    const title = page.title || (isDatabase ? 'Untitled database' : 'Untitled')
     return {
       conversation_id: conversationId, // Target board
       user_id: opts.userId, // Owner
       role: 'user', // Frames are user-role messages in this app
-      content,
+      content: `<p>${escapeHtml(title)}</p>`, // Temp until boardLink patch (pages + DBs)
       metadata: newBlockMetadata({
         position, // Canvas coordinates
-        blockTitle: page.title || (isDatabase ? 'Untitled database' : 'Untitled'),
+        blockTitle: title,
         notionPageId: page.id, // Link back for sync later
         notionObject: page.object, // page vs database
         notionUrl: page.url ?? null, // Deep link for Open in Notion
         notionIcon: page.icon ?? null, // Optional icon payload
-        // Pages are board-links; DB frames show content in-place but still link a menu board
-        isBoard: true,
-        blockType: isDatabase ? 'text' : 'board',
+        isBoard: true, // Map frame links a nested Thinktable board
+        blockType: 'board', // Title boardLink chrome after patch
       }),
     }
   })
@@ -529,7 +525,7 @@ export async function importNotionPagesToBoard(opts: {
         .from('conversations')
         .insert({
           user_id: opts.userId,
-          title: page.title || 'Untitled',
+          title: page.title || (page.object === 'database' ? 'Untitled database' : 'Untitled'),
           metadata: {
             parent_id: parentId,
             notionPageId: page.id,
@@ -554,7 +550,8 @@ export async function importNotionPagesToBoard(opts: {
     const linkedBoardId = notionIdToConvId.get(nid)
     if (!linkedBoardId) continue
 
-    // Wire map frame ↔ nested board: pages → sole boardLink; databases keep DB atom in-frame
+    // Wire map frame ↔ nested board: pages + databases → sole title boardLink
+    // (databaseBlock / page body live on the child board)
     if (sourceBlockMessageId) {
       const { data: frameRow } = await admin
         .from('messages')
@@ -563,45 +560,25 @@ export async function importNotionPagesToBoard(opts: {
         .maybeSingle()
       const existingMeta = (frameRow?.metadata as Record<string, unknown>) || {}
       const notionTitle = page.title || (page.object === 'database' ? 'Untitled database' : 'Untitled')
-      const isDatabase = page.object === 'database'
-
-      if (isDatabase) {
-        await admin
-          .from('messages')
-          .update({
-            content: (frameRow?.content as string) || databaseBlockHtml(page),
-            metadata: {
-              ...existingMeta,
-              linkedBoardId,
-              blockTitle: notionTitle,
-              notionUrl: page.url ?? null,
-              isBoard: true,
-              blockType: 'text',
-            },
-          })
-          .eq('id', sourceBlockMessageId)
-      } else {
-        // Notion page map frame → title-variant boardLink only (body on the child board)
-        const linkContent = boardLinkHtml({
-          boardId: linkedBoardId,
-          title: notionTitle,
-          icon: emojiFromNotionIcon(page.icon),
+      const linkContent = boardLinkHtml({
+        boardId: linkedBoardId,
+        title: notionTitle,
+        icon: emojiFromNotionIcon(page.icon),
+      })
+      await admin
+        .from('messages')
+        .update({
+          content: linkContent,
+          metadata: {
+            ...existingMeta,
+            linkedBoardId,
+            blockTitle: notionTitle,
+            notionUrl: page.url ?? null,
+            isBoard: true,
+            blockType: 'board',
+          },
         })
-        await admin
-          .from('messages')
-          .update({
-            content: linkContent,
-            metadata: {
-              ...existingMeta,
-              linkedBoardId,
-              blockTitle: notionTitle,
-              notionUrl: page.url ?? null,
-              isBoard: true,
-              blockType: 'board',
-            },
-          })
-          .eq('id', sourceBlockMessageId)
-      }
+        .eq('id', sourceBlockMessageId)
     }
   }
 

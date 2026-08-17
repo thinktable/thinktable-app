@@ -88,12 +88,30 @@ const BLOCK_FRAME_PAD = BLOCK_FRAME_PAD_X // Default / band inset = horizontal p
 const FRAME_CORNER_RADIUS = 6
 const CONNECTIONS_GROUP_H = 28 // h-7 footer strip — hug spacer + pinned group when the free frame clips
 const DATABASE_BLOCK_HTML_RE = /data-type=["']databaseBlock["']/i // TipTap Notion DB atom in frame HTML
+const FRAME_ATOM_HTML_RE =
+  /data-type=["'](?:boardLink|pageLink|databaseBlock|imageBlock|propertyBlock)["']/i // Attr-only TipTap atoms
 const MIN_DATABASE_FRAME_W = 240 // Below this a DB frame is a collapsed stub (grip + title only)
 const MIN_DATABASE_FRAME_H = 120 // Title row alone is ~40; table needs more height than that
 
 /** True when this frame's TipTap HTML embeds a Notion databaseBlock. */
 function hasDatabaseBlockHtml(html: string): boolean {
   return DATABASE_BLOCK_HTML_RE.test(html || '')
+}
+
+/** True when HTML carries boardLink / property / DB / image atoms (must not wipe on drag). */
+function hasFrameAtomHtml(html: string): boolean {
+  return FRAME_ATOM_HTML_RE.test(html || '')
+}
+
+/** Count propertyBlock atoms — row cards lose these when NodeViews remount mid-drag. */
+function countPropertyBlocks(html: string): number {
+  const m = (html || '').match(/data-type=["']propertyBlock["']/gi)
+  return m ? m.length : 0
+}
+
+/** Row→card frames (boardLink + property cells) — not sole databaseBlock tables. */
+function isRowCardAtomHtml(html: string): boolean {
+  return countPropertyBlocks(html) > 0
 }
 
 /** Post-drag hug sometimes measures a remounting DB NodeView as ~52×40 and persists it — reject those. */
@@ -212,12 +230,15 @@ function measureNaturalContentWidth(contentFit: HTMLElement): number {
       (child.classList.contains('tt-database-block') && child) ||
       (child.querySelector('.tt-database-block') as HTMLElement | null)
     if (dbBlock) {
+      // Prefer the table’s intrinsic scrollWidth — under data-single-line the NodeView is
+      // width:100%, so offsetWidth echoes the frame and atomExplicitBox/hug inflate forever.
       const table = dbBlock.querySelector('.tt-notion-db') as HTMLElement | null
+      const tableEl = table?.querySelector('table') as HTMLElement | null
       const w = Math.max(
-        dbBlock.scrollWidth || 0,
-        dbBlock.offsetWidth || 0,
+        tableEl?.scrollWidth || 0,
         table?.scrollWidth || 0,
-        table?.offsetWidth || 0
+        // Title row only (loading shell) — still need a floor wider than the grip stub
+        (dbBlock.querySelector('.tt-database-block-row') as HTMLElement | null)?.scrollWidth || 0
       )
       maxLine = Math.max(maxLine, w)
       continue
@@ -296,7 +317,7 @@ import { BoardOpenMenu } from '@/components/board-open-menu' // Preview/open chr
 import { NestedBoardPreview, prefetchBoardEmbed } from './nested-board-preview' // Page-within-page board preview
 import { unwrapNestedFramesHtml } from '@/lib/tiptap/unwrap-nested-frames' // Flatten legacy nest wrappers
 import { applyTurnInto, bodyHtmlWithoutBoardTitle } from '@/lib/blocks/turn-into' // Page promote + strip title from board body
-import { migrateSoleDatabaseBlockToBoardLink, ensureNotionMapFrameIsBoardLink, isSoleDatabaseBlockContent, isSoleBoardLinkContent, repairBoardFrameToSoleLink } from '@/lib/notion/migrate-frame' // Notion DB map frames → boardLink; repair polluted board frames
+import { migrateSoleDatabaseBlockToBoardLink, ensureNotionMapFrameIsBoardLink, isSoleDatabaseBlockContent, isSoleBoardLinkContent, repairBoardFrameToSoleLink, restoreWipedDatabaseBlockHtml } from '@/lib/notion/migrate-frame' // Notion DB map frames → boardLink; repair polluted board frames; heal wiped tables
 
 interface Message {
   id: string
@@ -547,9 +568,11 @@ function TipTapContent({
   singleLineUntilEnter = false, // Unresized blocks: one visual line per TipTap block
   hostNodeId,
   conversationId,
+  hostMessageId,
   boardInTargets,
   onPageTurnInto,
   suspendContentSync = false, // True while RF frame-dragging — skip setContent remounts
+  dragSuspendRef, // Sync flag armed on pointerdown (React state alone is one frame late)
   forceContentSyncKey = 0, // Bump to setContent even while editor is focused (AI eye / remove / save)
   notionConnected = false, // Connections → Notion selected
   notionSync = 'live', // Live Sync vs Manual
@@ -588,9 +611,11 @@ function TipTapContent({
   singleLineUntilEnter?: boolean // Unresized map blocks: grow width; Enter starts a new line
   hostNodeId?: string
   conversationId?: string // Page id — ⋮⋮ extract a block onto the page
+  hostMessageId?: string // Frame message id — Convert layout API source
   boardInTargets?: BoardInTarget[]
   onPageTurnInto?: (blockType: 'board' | 'boardIn', boardInParentId?: string | null) => void
   suspendContentSync?: boolean
+  dragSuspendRef?: React.MutableRefObject<boolean> // Parent mutates sync on pointerdown
   forceContentSyncKey?: number
   notionConnected?: boolean
   notionSync?: NotionSyncMode
@@ -628,6 +653,10 @@ function TipTapContent({
   onEditorActiveChangeRef.current = onEditorActiveChange
   const setActiveEditorRef = useRef(setActiveEditor)
   setActiveEditorRef.current = setActiveEditor
+  const suspendContentSyncRef = useRef(suspendContentSync)
+  suspendContentSyncRef.current = suspendContentSync
+  const contentRef = useRef(content)
+  contentRef.current = content
 
   const resolvedPlaceholder =
     placeholder !== undefined && placeholder !== ''
@@ -773,40 +802,59 @@ function TipTapContent({
     [isFlashcard, singleLineUntilEnter]
   )
 
-  const editor = useEditor({
-    extensions,
-    content,
-    // Unselected frames are not contenteditable — iOS long-press opens the frame menu, not text select
-    editable: canEdit && !!isPanelSelected,
-    immediatelyRender: false, // Prevent SSR hydration mismatches
-    shouldRerenderOnTransaction: false, // Avoid parent re-render storms; NodeViews update themselves
-    editorProps,
-    onUpdate: ({ editor: ed }) => {
-      const newContent = ed.getHTML()
-      const hasChanged = newContent !== originalContentRef.current
-      onHasChangesChangeRef.current?.(hasChanged)
-      onContentChangeRef.current?.(newContent)
+  const editor = useEditor(
+    {
+      extensions,
+      content,
+      // Unselected frames are not contenteditable — iOS long-press opens the frame menu, not text select
+      editable: canEdit && !!isPanelSelected,
+      immediatelyRender: false, // Prevent SSR hydration mismatches
+      shouldRerenderOnTransaction: false, // Avoid parent re-render storms; NodeViews update themselves
+      editorProps,
+      onUpdate: ({ editor: ed }) => {
+        // Frame drag: NodeView remount noise must not wipe boardLink / property cells to the DB.
+        // dragSuspendRef is set sync on pointerdown — React suspendContentSync lags one frame.
+        if (suspendContentSyncRef.current || dragSuspendRef?.current) return
+        const newContent = ed.getHTML()
+        const hasChanged = newContent !== originalContentRef.current
+        onHasChangesChangeRef.current?.(hasChanged)
+        onContentChangeRef.current?.(newContent)
+      },
+      onFocus: ({ editor: ed }) => {
+        // Register this editor as active when focused
+        setActiveEditorRef.current(ed)
+        // Notify parent that editor is active (focused or has selection)
+        onEditorActiveChangeRef.current?.(true)
+      },
+      onBlur: ({ editor: ed }) => {
+        // Call custom onBlur callback if provided
+        onBlurRef.current?.()
+        // Keep frame selected only for a real TEXT range (format popup). boardLink atoms use
+        // NodeSelection (from≠to) — counting that re-selected the frame on every pane click.
+        if (ed && onEditorActiveChangeRef.current) {
+          const sel = ed.state.selection
+          const hasTextRange = sel instanceof TextSelection && !sel.empty
+          onEditorActiveChangeRef.current(hasTextRange)
+        } else {
+          onEditorActiveChangeRef.current?.(false)
+        }
+      },
     },
-    onFocus: ({ editor: ed }) => {
-      // Register this editor as active when focused
-      setActiveEditorRef.current(ed)
-      // Notify parent that editor is active (focused or has selection)
-      onEditorActiveChangeRef.current?.(true)
-    },
-    onBlur: ({ editor: ed }) => {
-      // Call custom onBlur callback if provided
-      onBlurRef.current?.()
-      // Keep frame selected only for a real TEXT range (format popup). boardLink atoms use
-      // NodeSelection (from≠to) — counting that re-selected the frame on every pane click.
-      if (ed && onEditorActiveChangeRef.current) {
-        const sel = ed.state.selection
-        const hasTextRange = sel instanceof TextSelection && !sel.empty
-        onEditorActiveChangeRef.current(hasTextRange)
-      } else {
-        onEditorActiveChangeRef.current?.(false)
-      }
-    },
-  })
+    // Non-empty deps: TipTap skips per-render setOptions (deps=[] compares options every RF
+    // drag tick → remounts databaseBlock NodeView → table vanishes / frame hugs to a stub).
+    [extensions, editorProps]
+  )
+
+  // Keep FrameHost storage in sync so databaseBlock NodeViews can convert layout without React context
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return
+    const storage = editor.storage as {
+      frameHost?: { conversationId: string | null; hostMessageId: string | null }
+    }
+    if (!storage.frameHost) return
+    storage.frameHost.conversationId = conversationId || null
+    storage.frameHost.hostMessageId = hostMessageId || null
+  }, [editor, conversationId, hostMessageId])
 
   // Top icons = propertyBlock types in doc order (live; reorder / add / delete updates the strip)
   const [propertyTypes, setPropertyTypes] = useState<PropertyTypeId[]>(() => {
@@ -1100,10 +1148,12 @@ function TipTapContent({
     if (editor) {
       // Caret owns the doc while typing — except when AI review forces a content swap
       if (editor.isFocused && forceContentSyncKey === lastAiForceSyncRef.current) return
+      // While RF is dragging the frame, never setContent AND never consume a force-sync key
+      // (consuming here dropped the post-drag restore and left row cards empty until a 2nd drag).
+      if (suspendContentSync || dragSuspendRef?.current) return
       if (forceContentSyncKey !== lastAiForceSyncRef.current) {
         lastAiForceSyncRef.current = forceContentSyncKey
       }
-      if (suspendContentSync) return // Frame drag: never setContent (remounts databaseBlock NodeView → table vanishes)
       // Compare DOCUMENTS, not HTML strings. The boardLink NodeView adds a class and TipTap emits
       // attributes in its own order, so editor.getHTML() never byte-equals the stored HTML once a
       // boardLink exists — a raw string compare re-ran setContent every sync (infinite loop / page
@@ -1116,6 +1166,29 @@ function TipTapContent({
         differs = !editor.state.doc.eq(parsed) // Semantic equality (not string)
       } catch {
         differs = editor.getHTML() !== content // Fallback to string compare on parse error
+      }
+      // Same Notion DB atom already in the editor — skip setContent (avoids table remount on drag-end)
+      if (differs && hasDatabaseBlockHtml(content)) {
+        const propId = content.match(/data-notion-database-id=["']([^"']+)["']/i)?.[1]
+        let editorId: string | null = null
+        editor.state.doc.descendants((node) => {
+          if (node.type.name === 'databaseBlock') {
+            editorId = (node.attrs.notionDatabaseId as string) || null
+            return false
+          }
+          return true
+        })
+        if (propId && editorId && propId.replace(/-/g, '') === editorId.replace(/-/g, '')) {
+          differs = false
+        }
+      }
+      // Row card / atom frames: editor may look “eq” after a remount stripped propertyBlocks — force restore
+      if (hasFrameAtomHtml(content)) {
+        const live = editor.getHTML()
+        const lostProps =
+          countPropertyBlocks(content) > 0 && countPropertyBlocks(live) < countPropertyBlocks(content)
+        const lostAtoms = !hasFrameAtomHtml(live) || isBlockContentEmpty(live)
+        if (lostProps || lostAtoms) differs = true
       }
       // Sync prop → editor only when the document actually changed
       if (differs) {
@@ -1268,23 +1341,30 @@ function TipTapContent({
               enableBlockHandles &&
               !isFlashcard &&
               !showFrameShimmer && <FramePropertyGroup types={propertyTypes} />}
-            {/* ⋮⋮ paints outside the fill (negative left into panel chrome); no pl-6 inside the frame */}
-            <TipTapBlockHandles
-              editor={editor}
-              enabled={enableBlockHandles && showBlockHandles && !isFlashcard}
-              isPanelSelected={!!isPanelSelected}
-              hostNodeId={hostNodeId}
-              conversationId={conversationId}
-              boardInTargets={boardInTargets}
-              onPageTurnInto={onPageTurnInto}
-              onPropertyTurnInto={onPropertyTurnInto}
-              notionConnected={notionConnected}
-              notionSync={notionSync}
-              onNotionConnection={onNotionConnection}
-              contentPadLeft={contentPadLeft}
-              frameScale={frameScale}
-              handleGutterFlow={handleGutterFlow}
-            />
+            {/* ⋮⋮ paints outside the fill (negative left into panel chrome); no pl-6 inside the frame.
+                Keep mounted during RF drag (invisible) — unmounting mid-drag remounted atom NodeViews. */}
+            <div
+              className={cn(suspendContentSync && 'invisible pointer-events-none')}
+              aria-hidden={suspendContentSync || undefined}
+            >
+              <TipTapBlockHandles
+                editor={editor}
+                enabled={enableBlockHandles && showBlockHandles && !isFlashcard}
+                isPanelSelected={!!isPanelSelected}
+                hostNodeId={hostNodeId}
+                conversationId={conversationId}
+                hostMessageId={hostMessageId}
+                boardInTargets={boardInTargets}
+                onPageTurnInto={onPageTurnInto}
+                onPropertyTurnInto={onPropertyTurnInto}
+                notionConnected={notionConnected}
+                notionSync={notionSync}
+                onNotionConnection={onNotionConnection}
+                contentPadLeft={contentPadLeft}
+                frameScale={frameScale}
+                handleGutterFlow={handleGutterFlow}
+              />
+            </div>
             <EditorContent
               editor={editor}
               className={cn('block w-full', isPanelSelected && 'nodrag nopan')}
@@ -1933,16 +2013,17 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const [promptHasChanges, setPromptHasChanges] = useState(false)
   const [responseHasChanges, setResponseHasChanges] = useState(false)
   // Single text body: plain-merge legacy prompt + response (no section split).
-  // Sync-migrate sole databaseBlock → boardLink when linkedBoardId exists (legacy pages only — not DBs).
+  // Legacy: sole databaseBlock → boardLink when linkedBoardId exists (pages only).
+  // Notion DB frames / board bodies keep the live databaseBlock (row→card must not wipe the table).
   const [promptContent, setPromptContent] = useState(() => {
     if (isProjectBoard) return data.boardTitle || ''
     const responseRaw = data.responseMessage?.content
     const responseHtml = responseRaw ? formatResponseContent(responseRaw) : ''
     const merged = mergePanelHtml(data.promptMessage?.content, responseHtml)
     const meta = (data.promptMessage?.metadata || {}) as Record<string, unknown>
+    if (isBoardBodyMeta(meta) || meta.notionObject === 'database') return merged
     const linkedId = getLinkedBoardId(meta)
     if (!linkedId) return merged
-    if (meta.notionObject === 'database') return merged // Keep structured DB table in-frame
     const iconMeta = meta.notionIcon as { type?: string; emoji?: string } | null
     const emoji = iconMeta?.type === 'emoji' && iconMeta.emoji ? iconMeta.emoji : null
     return (
@@ -2571,6 +2652,15 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     }
     const dims = meta.resizeDimensions as { width?: number; height?: number } | null | undefined
     if (dims && typeof dims.width === 'number' && typeof dims.height === 'number') {
+      const contentHtml =
+        typeof promptMessage?.content === 'string' ? promptMessage.content : ''
+      // Don't re-apply a post-drag stub size onto a live Notion database frame
+      if (
+        hasDatabaseBlockHtml(contentHtml) &&
+        isCollapsedDatabaseFrameSize(dims.width, dims.height)
+      ) {
+        return
+      }
       setResizeDimensions({ width: dims.width, height: dims.height })
       setIsUserResized(true)
     }
@@ -2738,18 +2828,16 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     !hasDatabaseBlockForFrame &&
     (isFrameHovering || selected)
 
-  // One-shot: legacy sole-databaseBlock map frames → boardLink (pages only).
-  // Notion **databases** keep databaseBlock so the structured table NodeView can render.
-  // Check server content too — useState may already have rewritten promptContent locally.
+  // One-shot: legacy sole-databaseBlock map frames → boardLink (Notion **pages** only).
+  // Notion databases keep the live table — remount after row→card must not wipe databaseBlock.
+  // Nested board body / imported map boardLinks already have the right shape.
   const migratedDbFrameRef = useRef(false)
   useEffect(() => {
     if (migratedDbFrameRef.current || isProjectBoard || isBoardBody) return
     if (!promptMessage?.id || !conversationId) return
     if (hasBoardLinkForFrame) return
-    // Intentional DB map frames (mindmap / Add frame on a DB) must stay as databaseBlock
-    if ((promptMessage.metadata as { notionObject?: string } | null)?.notionObject === 'database') {
-      return
-    }
+    const meta = (promptMessage.metadata as Record<string, unknown>) || {}
+    if (meta.notionObject === 'database') return // Live table stays on this frame / board body
     const serverContent = promptMessage.content || ''
     const needsMigrate =
       isSoleDatabaseBlockContent(serverContent) || isSoleDatabaseBlockContent(promptContent)
@@ -2830,12 +2918,15 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     queryClient,
   ])
 
-  // One-shot: board/boardIn frames must be sole boardLink — repair sibling leak from prepend-only sync
+  // One-shot: board/boardIn frames must be sole boardLink — repair sibling leak from prepend-only sync.
+  // Never peel a live Notion databaseBlock or Card-view frames (boardLink + property cells).
   const repairedBoardFrameRef = useRef(false)
   useEffect(() => {
     if (repairedBoardFrameRef.current || isProjectBoard || isBoardBody) return
     if (!promptMessage?.id || !linkedBoardId) return
     const meta = (promptMessage.metadata as Record<string, unknown>) || {}
+    if (meta.notionObject === 'database') return
+    if (meta.dbLayout === 'card') return // Row→card frames keep title + property cells
     const bt = typeof meta.blockType === 'string' ? meta.blockType : ''
     if (bt !== 'board' && bt !== 'boardIn' && bt !== 'page' && bt !== 'pageIn') return
     const serverContent = promptMessage.content || ''
@@ -2845,6 +2936,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         ? promptContent
         : null
     if (!source) return
+    if (isSoleDatabaseBlockContent(source)) return // Keep live table; do not rewrite to boardLink
+    // Property cells on a board frame are intentional (Card view) — not sibling leak
+    if (/data-type=["']propertyBlock["']/i.test(source)) return
 
     repairedBoardFrameRef.current = true
     void (async () => {
@@ -2899,6 +2993,10 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         : '')
     if (!title) return
     const source = promptMessage.content || promptContent || ''
+    // Never strip a live Notion database atom as if it were a title line
+    if (isSoleDatabaseBlockContent(source) || /data-type=["']databaseBlock["']/i.test(source)) {
+      return
+    }
     const cleaned = bodyHtmlWithoutBoardTitle(source, title)
     if (cleaned === source.trim()) return // Already free of a title-line duplicate
 
@@ -2941,6 +3039,38 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     promptMessage?.metadata,
     promptContent,
     blockTitleLabel,
+    conversationId,
+    queryClient,
+  ])
+
+  // One-shot: restore Notion DB table if migrate/repair wiped databaseBlock (empty / sole boardLink)
+  const restoredDbBlockRef = useRef(false)
+  useEffect(() => {
+    if (restoredDbBlockRef.current || isProjectBoard) return
+    if (!promptMessage?.id || !conversationId) return
+    const meta = (promptMessage.metadata as Record<string, unknown>) || {}
+    const serverContent = promptMessage.content || ''
+    const healed = restoreWipedDatabaseBlockHtml(serverContent, meta)
+    if (!healed) return
+
+    restoredDbBlockRef.current = true
+    void (async () => {
+      try {
+        const client = createClient()
+        await client.from('messages').update({ content: healed }).eq('id', promptMessage.id)
+        setPromptContent(healed)
+        setAiForceSyncKey((k) => k + 1)
+        await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
+      } catch (err) {
+        console.error('Failed to restore wiped Notion databaseBlock:', err)
+        restoredDbBlockRef.current = false
+      }
+    })()
+  }, [
+    isProjectBoard,
+    promptMessage?.id,
+    promptMessage?.content,
+    promptMessage?.metadata,
     conversationId,
     queryClient,
   ])
@@ -2996,8 +3126,20 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       notionUrl, // Open in Notion button when this frame is Notion-linked
       // DB / legacy titled frames (no boardLink NodeView) reuse this for BoardOpenMenu
       hostLinkedBoardId: hasBoardLinkForFrame ? null : linkedBoardId || null,
+      hostMessageId: promptMessage?.id || null, // Convert layout from DB table / row ⋮⋮
+      conversationId: conversationId || null,
     }),
-    [pagePreviewOpen, activePreviewBoardId, router, queryClient, notionUrl, hasBoardLinkForFrame, linkedBoardId]
+    [
+      pagePreviewOpen,
+      activePreviewBoardId,
+      router,
+      queryClient,
+      notionUrl,
+      hasBoardLinkForFrame,
+      linkedBoardId,
+      promptMessage?.id,
+      conversationId,
+    ]
   )
 
   // Update title-chip perimeter when the note/item box changes size
@@ -3019,6 +3161,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     return () => resizeObserver.disconnect()
   }, [isBlock])
 
+  const hugFreezeUntilRef = useRef(0) // Skip hug that would shrink atom frames right after drag
+  const frameDragSuspendRef = useRef(false) // Sync — onUpdate must see this before React re-renders
+
   // Natural content box (not the stretched w-full width when unlocked+resized) — lock hug needs this.
   // Debounced: RO can fire in bursts; avoid setState storms into BoardFlow.
   // Skip while the frame is being dragged — RF transforms make Range/gBCR measurements collapse
@@ -3032,10 +3177,21 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {
         if (isResizingRef.current) return // Corner-drag owns size — hug RO would hitch the gesture (esp. phone)
+        if (Date.now() < hugFreezeUntilRef.current) return // Post-drag: wait for property NodeViews
         // databaseBlock: wait until the Notion table NodeView is mounted. Measuring the title
         // stub (~52×40) after a remount would hug-shrink the frame and clip the table away.
         const dbHost = el.querySelector('.tt-database-block') as HTMLElement | null
         if (dbHost && !dbHost.querySelector('.tt-notion-db')) return
+        // Row card: wait until property cells remount after drag-end setContent (first-drag hug
+        // otherwise collapses to grip+I-bar; a second drag remeasured and “brought it back”).
+        const expectProps = countPropertyBlocks(promptContent)
+        if (expectProps > 0) {
+          const liveProps = el.querySelectorAll('.tt-property-block').length
+          if (liveProps < expectProps) return
+        }
+        if (hasFrameAtomHtml(promptContent) && !el.querySelector('.tt-board-link, .tt-database-block, .tt-property-block')) {
+          return
+        }
         const width = Math.max(1, Math.round(measureNaturalContentWidth(el)))
         const height = Math.max(1, Math.round(measureNaturalContentHeight(el)))
         if (
@@ -3043,6 +3199,24 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           isCollapsedDatabaseFrameSize(width, height)
         ) {
           return // Reject collapsed stub measures
+        }
+        // Row cards: reject post-drag stub hugs (grip + empty line)
+        if (
+          expectProps > 0 &&
+          (width < 120 || height < Math.min(80, 24 * expectProps))
+        ) {
+          return
+        }
+        // Never shrink a row card to ≤ half its last good size (Empty-stub race).
+        // Do NOT apply this to databaseBlock tables — offsetWidth feedback used to lock a huge box.
+        const prev = intrinsicSizeRef.current
+        if (
+          isRowCardAtomHtml(promptContent) &&
+          prev.width > 80 &&
+          prev.height > 40 &&
+          (width < prev.width * 0.5 || height < prev.height * 0.5)
+        ) {
+          return
         }
         setIntrinsicMeasured(true)
         setIntrinsicSize((prev) =>
@@ -3061,7 +3235,138 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     }
   }, [isBlock, dragging, promptContent, frameUnlocked, frameTextWrap, frameScale])
   // Note: do NOT depend on resizeDimensions — hug writes that and would loop
-  
+
+  // After frame drag: restore atom HTML only if the editor actually lost atoms.
+  // Always force-setContent remounted property NodeViews → hug measured Empty stubs → first-drag collapse.
+  const wasDraggingRef = useRef(false)
+  const preDragContentRef = useRef<string | null>(null)
+  const draggingRef = useRef(!!dragging)
+  draggingRef.current = !!dragging
+  // promptContentRef already declared above (live HTML for min-width during drag)
+  const [dragAtomGuard, setDragAtomGuard] = useState(false)
+  // Outer panel px snapshot — atom frames use fit-content and collapse when NodeViews remount on first drag
+  const [layoutBoxFreeze, setLayoutBoxFreeze] = useState<{ width: number; height: number } | null>(
+    null
+  )
+  useEffect(() => {
+    // Layout freeze is for row cards only — DB tables hug via max-content (zIndex fix covers vanish)
+    if (!isBlock || !isRowCardAtomHtml(promptContent)) return
+    const panel = panelRef.current
+    if (!panel) return
+    const onDown = (e: PointerEvent) => {
+      if (e.button !== 0) return
+      // Arm for selected + unselected — selected cards drag via chrome; state alone is too late
+      frameDragSuspendRef.current = true
+      setDragAtomGuard(true)
+      const w = Math.round(panel.offsetWidth)
+      const h = Math.round(panel.offsetHeight)
+      // Freeze CSS box before select+drag remounts property NodeViews (fit-content → 0)
+      if (w > 40 && h > 20) setLayoutBoxFreeze({ width: w, height: h })
+    }
+    const onUp = () => {
+      // RF still owns the gesture — clear only after drag-end restore (below)
+      if (draggingRef.current || wasDraggingRef.current) return
+      frameDragSuspendRef.current = false
+      setDragAtomGuard(false)
+      setLayoutBoxFreeze(null)
+    }
+    panel.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('pointerup', onUp, true)
+    window.addEventListener('pointercancel', onUp, true)
+    return () => {
+      panel.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('pointerup', onUp, true)
+      window.removeEventListener('pointercancel', onUp, true)
+    }
+  }, [isBlock, promptContent])
+
+  // Drop a leftover layout freeze if this isn’t a row card (DB must not keep a bloated box)
+  useEffect(() => {
+    if (!isRowCardAtomHtml(promptContent) && layoutBoxFreeze) setLayoutBoxFreeze(null)
+  }, [promptContent, layoutBoxFreeze])
+
+  useEffect(() => {
+    if (dragging) {
+      if (!wasDraggingRef.current) {
+        const msg =
+          typeof promptMessage?.content === 'string' ? promptMessage.content : ''
+        const live = promptContentRef.current || ''
+        const score = (html: string) =>
+          (hasFrameAtomHtml(html) ? 100 : 0) + countPropertyBlocks(html)
+        // Prefer the richer atom HTML (message can lag behind a fresh convert)
+        preDragContentRef.current =
+          score(msg) >= score(live) && msg ? msg : live || msg || null
+        frameDragSuspendRef.current = true
+        setDragAtomGuard(true)
+        // Row-card layout freeze only — DB tables must keep hugging the table columns
+        if (isRowCardAtomHtml(live) || isRowCardAtomHtml(msg)) {
+          const panel = panelRef.current
+          if (panel) {
+            const w = Math.round(panel.offsetWidth)
+            const h = Math.round(panel.offsetHeight)
+            if (w > 40 && h > 20) setLayoutBoxFreeze({ width: w, height: h })
+          }
+        }
+      }
+      wasDraggingRef.current = true
+      return
+    }
+    if (!wasDraggingRef.current) return
+    wasDraggingRef.current = false
+    const frozen = preDragContentRef.current
+    preDragContentRef.current = null
+    hugFreezeUntilRef.current = Date.now() + 450
+
+    const clearFreezeSoon = () => {
+      window.setTimeout(() => setLayoutBoxFreeze(null), 450)
+    }
+
+    // If TipTap still has the card atoms, do NOT setContent (remount → Empty stubs → hug collapse)
+    let editorHtml = ''
+    try {
+      const ed = promptEditorRef.current
+      if (ed && !ed.isDestroyed) editorHtml = ed.getHTML()
+    } catch {
+      editorHtml = ''
+    }
+    const expectProps = frozen ? countPropertyBlocks(frozen) : 0
+    const editorOk =
+      hasFrameAtomHtml(editorHtml) &&
+      !isBlockContentEmpty(editorHtml) &&
+      (expectProps === 0 || countPropertyBlocks(editorHtml) >= expectProps)
+    if (editorOk) {
+      if (editorHtml && editorHtml !== promptContentRef.current) {
+        setPromptContent(editorHtml)
+      }
+      frameDragSuspendRef.current = false
+      setDragAtomGuard(false)
+      clearFreezeSoon()
+      return
+    }
+
+    const restore =
+      (frozen && hasFrameAtomHtml(frozen) ? frozen : null) ||
+      (hasFrameAtomHtml(promptContent) ? promptContent : null) ||
+      (typeof promptMessage?.content === 'string' && hasFrameAtomHtml(promptMessage.content)
+        ? promptMessage.content
+        : null)
+    if (!restore) {
+      frameDragSuspendRef.current = false
+      setDragAtomGuard(false)
+      clearFreezeSoon()
+      return
+    }
+    if (restore !== promptContent) setPromptContent(restore)
+    // Keep suspend until force-sync applies, then clear
+    const t = window.setTimeout(() => {
+      setAiForceSyncKey((k) => k + 1)
+      frameDragSuspendRef.current = false
+      setDragAtomGuard(false)
+      clearFreezeSoon()
+    }, 0)
+    return () => window.clearTimeout(t)
+  }, [dragging, promptContent, promptMessage?.content])
+
   // Regular chat panels are those that are not flashcards and not notes
   const isRegularChatPanel = !isFlashcard && !isBlock
 
@@ -3263,17 +3568,15 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   }, [])
 
   // Heal: post-drag hug can persist ~52×40 on a databaseBlock frame (NodeView remount stub).
-  // Clear the clip box + relock so the table can hug open again.
-  const healedCollapsedDbFrameRef = useRef(false)
+  // Clear the clip box + relock so the table can hug open again. Re-runs if it collapses again.
   useEffect(() => {
-    if (!isBlock || healedCollapsedDbFrameRef.current) return
+    if (!isBlock) return
     const fromLoadFlag = needsCollapsedDbFrameHealRef.current
     const fromLiveDims =
       !!resizeDimensions &&
       hasDatabaseBlockHtml(promptContent) &&
       isCollapsedDatabaseFrameSize(resizeDimensions.width, resizeDimensions.height)
     if (!fromLoadFlag && !fromLiveDims) return
-    healedCollapsedDbFrameRef.current = true
     needsCollapsedDbFrameHealRef.current = false
     setFrameUnlocked(false)
     setResizeDimensions(null)
@@ -3687,6 +3990,14 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     if (
       hasDatabaseBlockHtml(promptContent) &&
       isCollapsedDatabaseFrameSize(natural.width, natural.height)
+    ) {
+      return
+    }
+    // Row cards: same — don't persist grip+I-bar size after drag-end remount
+    const expectProps = countPropertyBlocks(promptContent)
+    if (
+      expectProps > 0 &&
+      (natural.width < 120 || natural.height < Math.min(80, 24 * expectProps))
     ) {
       return
     }
@@ -4927,10 +5238,31 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   ])
 
   const handlePromptChange = async (newContent: string) => {
+    // Never persist an empty / atom-stripped editor over real frame content (drag remount races)
+    const prev = promptMessage?.content || promptContent || ''
+    const nextEmpty =
+      isBlockContentEmpty(newContent) ||
+      !newContent ||
+      newContent.trim() === '' ||
+      newContent.trim() === '<p></p>'
+    const prevHasAtoms = hasFrameAtomHtml(prev) || !isBlockContentEmpty(prev)
+    const lostPropertyCells =
+      countPropertyBlocks(prev) > 0 && countPropertyBlocks(newContent) < countPropertyBlocks(prev)
+    const lostAtoms = hasFrameAtomHtml(prev) && !hasFrameAtomHtml(newContent)
+    if ((nextEmpty && prevHasAtoms) || lostPropertyCells || lostAtoms) {
+      console.warn('Ignored save that would wipe frame atoms', {
+        nextEmpty,
+        lostPropertyCells,
+        lostAtoms,
+      })
+      setPromptContent(prev)
+      setAiForceSyncKey((k) => k + 1)
+      return
+    }
+
     // Expand panel width FIRST (before content update) to prevent wrapping
-    // Wrapping should not happen if panel is not at max width
     expandPanelWidth(newContent)
-    
+
     setPromptContent(newContent)
 
     if (isProjectBoard) {
@@ -5421,6 +5753,20 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const displayBox = isContentRotated
     ? rotatedFrameAabbSize(contentBoxW, contentBoxH, rotation, frameShape)
     : { width: contentBoxW, height: contentBoxH }
+  // Row cards only: never rely on fit-content — NodeView remount on first select+drag collapses
+  // the box. Sole databaseBlock tables must NOT use this (width:100% + offsetWidth → runaway size).
+  const atomExplicitBox =
+    isBlock &&
+    isRowCardAtomHtml(promptContent) &&
+    intrinsicMeasured &&
+    !pagePreviewOpen &&
+    !(isUserResized && resizeDimensions)
+      ? {
+          width: huggedSize.width + adjustChromeX * 2,
+          height: huggedSize.height + adjustChromeYTop + adjustChromeYBottom,
+        }
+      : null
+  const layoutBox = layoutBoxFreeze || atomExplicitBox
   const shapeBoxW = contentBoxW
   const shapeBoxH = contentBoxH
   const shapeClip = frameShape ? frameShapeClipCss(frameShape) : undefined
@@ -5475,7 +5821,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         )}
       style={{
         // Selected: even L/R gutters. T/B bands always host property / connections outside the fill.
-        width: pagePreviewOpen
+        width: layoutBox
+          ? `${layoutBox.width}px`
+          : pagePreviewOpen
           ? '520px'
           : isContentRotated
             ? `${displayBox.width + adjustChromeX * 2}px`
@@ -5486,7 +5834,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                 : growsWithLine
                   ? 'max-content'
                   : `${panelWidthToUse + adjustChromeX * 2}px`,
-        height: pagePreviewOpen
+        height: layoutBox
+          ? `${layoutBox.height}px`
+          : pagePreviewOpen
           ? '420px'
           : isContentRotated
             ? `${displayBox.height + adjustChromeYTop + adjustChromeYBottom}px`
@@ -5497,7 +5847,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                 : growsWithLine
                   ? 'fit-content'
                   : undefined,
-        minWidth: pagePreviewOpen
+        minWidth: layoutBox
+          ? `${layoutBox.width}px`
+          : pagePreviewOpen
           ? '520px'
           : isContentRotated
             ? `${displayBox.width + adjustChromeX * 2}px`
@@ -5506,11 +5858,19 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               : isFlashcard
                 ? '300px'
                 : '200px',
-        minHeight: pagePreviewOpen ? '420px' : '0px',
-        maxWidth: isContentRotated
+        minHeight: layoutBox
+          ? `${layoutBox.height}px`
+          : pagePreviewOpen
+            ? '420px'
+            : '0px',
+        maxWidth: layoutBox
+          ? `${layoutBox.width}px`
+          : isContentRotated
           ? `${displayBox.width + adjustChromeX * 2}px`
           : undefined,
-        maxHeight: isContentRotated
+        maxHeight: layoutBox
+          ? `${layoutBox.height}px`
+          : isContentRotated
           ? `${displayBox.height + adjustChromeYTop + adjustChromeYBottom}px`
           : undefined,
         // Bands outside the fill: property (top) / connections (bottom); L/R gutters when selected
@@ -6263,16 +6623,18 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               placeholder=""
               isFlashcard={isFlashcard}
               isPanelSelected={!!selected} // Keep editable on tap — !dragging was flipping off mid-gesture (I-bar needed 2 taps)
-              suspendContentSync={!!dragging} // Keep databaseBlock NodeView mounted while the frame moves
+              suspendContentSync={!!dragging || dragAtomGuard} // Freeze TipTap before RF sets dragging (first-drag race)
+              dragSuspendRef={frameDragSuspendRef} // Sync arm on pointerdown — state lags one frame
               forceContentSyncKey={aiForceSyncKey} // AI eye / remove / save swaps content even while focused
               isLoading={false}
               onBlur={handleEditorBlur}
               onEditorActiveChange={handleEditorActiveChange}
               enableBlockHandles={isBlock && !isFlashcard} // TipTap blocks; ⋮⋮ gutter only while selected
-              showBlockHandles={!dragging} // Hide ⋮⋮ grips mid-drag only; caret stays available
+              showBlockHandles={!!selected && !isFlashcard} // Keep grips mounted while selected — dragging used to unmount them mid-gesture
               singleLineUntilEnter={isBlock && !isFlashcard && !wrapActive} // nowrap until Enter; wrap mode (locked/unlocked) soft-wraps
               hostNodeId={id}
               conversationId={conversationId}
+              hostMessageId={promptMessage?.id}
               notionConnected={notionConnected}
               notionSync={notionSync}
               onNotionConnection={handleNotionConnection}
