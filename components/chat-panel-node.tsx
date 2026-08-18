@@ -694,11 +694,11 @@ function TipTapContent({
           if (pe.pointerType === 'touch') return false // Phone: non-passive touchstart owns placement
           if (pe.button === 2) return false // Right-click → frame menu
           if (!isPanelSelectedRef.current) return false // Unselected: RF selects/drags
-          // Preview / open / Notion (and ⋮⋮) must receive the click — don't steal for caret
+          // Preview / open / Notion / DB table (and ⋮⋮) must receive the click — don't steal for caret
           const target = pe.target as HTMLElement | null
           if (
             target?.closest?.(
-              '[data-tt-block-handle], [data-tt-insert-line], .block-actions-menu, [data-page-link-preview]'
+              '[data-tt-block-handle], [data-tt-insert-line], .block-actions-menu, [data-page-link-preview], .tt-database-block, .tt-notion-db'
             )
           ) {
             return false
@@ -733,6 +733,11 @@ function TipTapContent({
           // (that aborted RF/d3 frame drag on press+move). Only suppress the follow-up I-bar.
           if (!isPanelSelectedRef.current) {
             selectOnlyClickRef.current = true // Suppress I-bar on the matching click
+            return false
+          }
+          // DB table / title chrome owns clicks (cells, toolbar) — table nodrag stops RF drag
+          const mouseTarget = mouseEvent.target as HTMLElement | null
+          if (mouseTarget?.closest?.('.tt-database-block, .tt-notion-db')) {
             return false
           }
           selectOnlyClickRef.current = false
@@ -911,13 +916,14 @@ function TipTapContent({
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length !== 1) return // Pinch / multi-finger → board zoom/pan
       const target = e.target as HTMLElement | null
-      // Preview / open / Notion live inside TipTap NodeViews — preventDefault here kills their click
+      // Preview / open / Notion / DB live inside TipTap NodeViews — preventDefault here kills
+      // their click AND suppresses pointerdown for finger 1, so a later pinch never arms.
       if (
         target?.closest?.(
-          '[data-tt-block-handle], [data-tt-insert-line], .block-actions-menu, [data-page-link-preview]'
+          '[data-tt-block-handle], [data-tt-insert-line], .block-actions-menu, [data-page-link-preview], .tt-database-block, .tt-notion-db'
         )
       ) {
-        return // ⋮⋮ / insert line / board open menu own the gesture
+        return // ⋮⋮ / insert line / board open / DB table own the gesture (pinch still arms)
       }
       e.preventDefault() // Requires non-passive — stops iOS focus-only first tap
       e.stopPropagation() // RF d3-drag listens for touchstart on the node
@@ -2788,6 +2794,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       a.length === b.length &&
       a.every((x, i) => x.side === b[i].side && x.groupId === b[i].groupId)
   )
+
   // Indicators: selected frame (idle), OR nearby snap target while connecting — never during frame drag.
   // Mid-press on the *body* hides them (`pressing`); press on the indicator itself is excluded so
   // the simulator stays mounted and can arm the thread instead of RF frame-dragging.

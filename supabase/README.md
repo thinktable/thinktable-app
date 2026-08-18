@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260818013815_card_convert_bring_collapsed_stack` — Card convert bring-along (sub/parent); collapsed stack; peel from table
 - `20260818002748_board_nav_notion_db_widths_subtasks` — Board nav freeze; Notion DB column widths/subtasks; cell ellipsis
 - `20260817004139_notion_row_card_frame_drag_zindex` — Notion row→card; frame drag zIndex (TipTap NodeViews); DB hug scrollWidth
 - `20260816131032_selected_frame_drag_keeps_selection` — Selected frame drag keeps selection; phone all-block ⋮⋮; menu placement

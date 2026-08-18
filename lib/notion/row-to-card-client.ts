@@ -69,6 +69,10 @@ export async function createRowCardOnBoard(opts: {
   /** Flow position for the card; default = right of origin */
   position?: { x: number; y: number }
   origin?: { x: number; y: number }
+  /** Optional fixed message id (stack host needs a known id for groupId). */
+  cardMessageId?: string
+  /** Merged into frame metadata (e.g. sideStacks for bring-along stack). */
+  frameMetadataExtras?: Record<string, unknown>
 }): Promise<{ cardMessageId: string; boardId: string }> {
   const {
     supabase,
@@ -86,7 +90,7 @@ export async function createRowCardOnBoard(opts: {
   const origin = opts.origin || { x: 80, y: 80 }
   const position = opts.position || { x: origin.x + CARD_GAP_X, y: origin.y }
   const boardId = crypto.randomUUID()
-  const cardMessageId = crypto.randomUUID()
+  const cardMessageId = opts.cardMessageId || crypto.randomUUID()
   const dbNorm = normalizeNotionId(notionDatabaseId)
   const dbTitle = databaseTitle || 'Database'
   const frameHtml = cardFrameHtmlFromRow({
@@ -151,10 +155,10 @@ export async function createRowCardOnBoard(opts: {
       notionDatabaseTitle: dbTitle,
       dbLayout: 'card',
       notionIcon: icon,
+      ...(opts.frameMetadataExtras || {}),
     }),
   })
   if (frameError) throw new Error(frameError.message || 'Failed to create card frame')
-
   // Thread DB frame → card when we know the host frame (best-effort)
   if (sourceMessageId) {
     const edge = {

@@ -1908,6 +1908,9 @@ span[data-added="true"] {
   /* Fixed layout + explicit column px widths (from Notion view or defaults) so cells clip. */
   .ProseMirror .tt-notion-db table {
     table-layout: fixed;
+    /* separate so td overflow:visible can paint the -left row gutter (collapse ignores overflow) */
+    border-collapse: separate;
+    border-spacing: 0;
   }
   .ProseMirror .tt-notion-db .tt-db-table-wrap {
     overflow: hidden;
@@ -1919,7 +1922,12 @@ span[data-added="true"] {
     overflow: hidden; /* Cutoff unwrapped text at the cell edge */
     vertical-align: middle;
   }
-  .ProseMirror .tt-notion-db td.tt-db-cell-nowrap {
+  /* First body cell hosts absolute -left gutter ⋮⋮ / + — must not clip into wrap padding */
+  .ProseMirror .tt-notion-db tbody td:first-child {
+    overflow: visible;
+  }
+  .ProseMirror .tt-notion-db td.tt-db-cell-nowrap,
+  .ProseMirror .tt-notion-db .tt-db-cell-nowrap {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
