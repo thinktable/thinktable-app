@@ -9,6 +9,29 @@ export const NOTION_VIEWS_VERSION = '2026-03-11'
 
 export type NotionViewRef = { object: 'view'; id: string }
 
+/** Notion view `configuration.subtasks` — nested vs flat parent/child rows. */
+export type NotionSubtaskConfig = {
+  property_id?: string | null // Self-relation used for Parent item
+  display_mode?: 'show' | 'hidden' | 'flattened' | 'disabled' | string | null
+  filter_scope?: 'parents' | 'parents_and_subitems' | 'subitems' | string | null
+  toggle_column_id?: string | null
+}
+
+/** One entry in view `configuration.properties` (visibility + column width). */
+export type NotionViewPropertyConfig = {
+  property_id: string
+  visible?: boolean
+  width?: number // px — Notion table column width
+}
+
+/** Table (and list) bits we read from `configuration` besides subtasks. */
+export type NotionViewLayoutConfig = {
+  properties?: NotionViewPropertyConfig[] | null
+  wrap_cells?: boolean | null
+  show_vertical_lines?: boolean | null
+  subtasks?: NotionSubtaskConfig | null
+}
+
 /** Full view config from GET /v1/views/:id */
 export type NotionView = {
   id: string
@@ -20,6 +43,10 @@ export type NotionView = {
   quick_filters?: Record<string, Record<string, unknown>> | null
   sorts?: Array<Record<string, unknown>> | null
   url?: string
+  /** Table sub-item nesting from `configuration.subtasks` (Views API). */
+  subtasks?: NotionSubtaskConfig | null
+  /** Column widths / visibility / wrap from `configuration`. */
+  layoutConfig?: NotionViewLayoutConfig | null
 }
 
 /**
@@ -45,6 +72,10 @@ export type NotionViewSummary = {
   name: string
   type: string
   layout: DatabaseLayout
+  /** Notion sub-item mode — seed Thinktable Sub-tasks (nested / flat / off). */
+  subtasks?: NotionSubtaskConfig | null
+  /** Column widths / visibility / wrap from view configuration. */
+  layoutConfig?: NotionViewLayoutConfig | null
 }
 
 function viewsHeaders(accessToken: string): Record<string, string> {
@@ -159,6 +190,7 @@ export async function retrieveNotionView(
     })
     const payload = await res.json().catch(() => ({}))
     if (!res.ok || payload?.object !== 'view') return null
+    const configuration = (payload.configuration || null) as NotionViewLayoutConfig | null
     return {
       id: payload.id as string,
       name: String(payload.name || ''),
@@ -170,6 +202,16 @@ export async function retrieveNotionView(
         null,
       sorts: (payload.sorts as Array<Record<string, unknown>> | null | undefined) ?? null,
       url: payload.url as string | undefined,
+      // Table views carry sub-item nesting + column widths on configuration
+      subtasks: configuration?.subtasks ?? null,
+      layoutConfig: configuration
+        ? {
+            properties: configuration.properties ?? null,
+            wrap_cells: configuration.wrap_cells ?? null,
+            show_vertical_lines: configuration.show_vertical_lines ?? null,
+            subtasks: configuration.subtasks ?? null,
+          }
+        : null,
     } satisfies NotionView
   }
 

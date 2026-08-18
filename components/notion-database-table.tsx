@@ -40,17 +40,21 @@ import {
   type NotionPropertyEditValue,
 } from '@/lib/notion/database'
 import {
+  applyNotionLayoutConfig,
   applyViewRows,
   buildSubTaskTree,
+  columnWidthPx,
   defaultDatabaseViewSettings,
   groupRows,
   normalizeViewSettings,
   parseViewSettings,
   rowBackground,
+  subTasksFromNotionView,
   visibleProperties,
   type DatabaseViewSettings,
 } from '@/lib/notion/database-view'
 import { DatabaseViewToolbar } from '@/components/database-view-settings'
+import { useSidebarContext } from '@/components/sidebar-context' // Phone: lightweight cells until tapped
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -139,14 +143,14 @@ function CellDisplay({
   }
   if (prop.type === 'title') {
     return (
-      <span className="inline-flex items-center gap-1.5 min-w-0 font-medium text-[13px] text-gray-900">
+      <span className="flex items-center gap-1.5 min-w-0 max-w-full overflow-hidden font-medium text-[13px] text-gray-900">
         {rowIcon ? <span className="flex-shrink-0 leading-none">{rowIcon}</span> : null}
-        <span className="truncate">{cell?.text || 'Untitled'}</span>
+        <span className="min-w-0 truncate">{cell?.text || 'Untitled'}</span>
       </span>
     )
   }
   return (
-    <span className="truncate text-[13px] text-gray-700 tabular-nums">
+    <span className="block min-w-0 truncate text-[13px] text-gray-700 tabular-nums">
       {cell?.text || <span className="text-gray-300">Empty</span>}
     </span>
   )
@@ -213,7 +217,7 @@ function TextCellEditor({
       <button
         type="button"
         className={cn(
-          'w-full min-h-[28px] text-left rounded px-0.5 -mx-0.5 hover:bg-black/[0.04]',
+          'w-full min-w-0 max-w-full min-h-[28px] overflow-hidden text-left rounded px-0.5 -mx-0.5 hover:bg-black/[0.04]',
           saving && 'opacity-60'
         )}
         onClick={(e) => {
@@ -446,6 +450,22 @@ function EditableCell({
   onSave: SaveFn
   saving: boolean
 }) {
+  const { isMobileMode } = useSidebarContext() // Phone: defer heavy editors until the cell is armed
+  const [armed, setArmed] = useState(false) // True after tap — mount select/input chrome
+  // Phone Safari: hundreds of select/checkbox editors in a DB frame OOMs on fast pan
+  if (isMobileMode && !armed) {
+    return (
+      <div
+        className="min-h-[28px] w-full min-w-0 max-w-full overflow-hidden cursor-text"
+        onPointerDown={(e) => {
+          e.stopPropagation() // Arm without starting RF drag
+          setArmed(true)
+        }}
+      >
+        <CellDisplay prop={prop} cell={cell} rowIcon={rowIcon} />
+      </div>
+    )
+  }
   if (!isNotionPropertyEditable(prop.type)) {
     return <CellDisplay prop={prop} cell={cell} rowIcon={rowIcon} />
   }
@@ -729,7 +749,7 @@ export function NotionDatabaseTableView({
   const [settings, setSettings] = useState<DatabaseViewSettings>(() =>
     normalizeViewSettings(parseViewSettings(viewSettingsJson), [])
   )
-  const [expandedParents, setExpandedParents] = useState<Set<string>>(() => new Set())
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(() => new Set()) // Nested: empty = collapsed (Notion default)
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null)
   const [rowBusy, setRowBusy] = useState(false)
 
@@ -841,7 +861,7 @@ export function NotionDatabaseTableView({
   useEffect(() => {
     if (!data) return
     const saved = parseViewSettings(viewSettingsJson)
-    const seeded =
+    let seeded =
       !saved && data.notionView
         ? {
             ...defaultDatabaseViewSettings(data.notionView.name || 'Default'),
@@ -849,12 +869,28 @@ export function NotionDatabaseTableView({
             name: data.notionView.name || 'Default',
           }
         : saved
+    // Prefer Notion view layout (subtasks + column widths / wrap / visibility) when present
+    if (data.notionView && seeded) {
+      seeded = applyNotionLayoutConfig(
+        {
+          ...seeded,
+          subTasks: subTasksFromNotionView(data.notionView.subtasks, data.properties),
+        },
+        data.notionView.layoutConfig,
+        data.properties
+      )
+    }
     const normalized = normalizeViewSettings(seeded, data.properties)
     setSettings(normalized)
     if (!saved && data.notionView) onViewSettingsChange?.(JSON.stringify(normalized))
+    else if (saved && (data.notionView?.subtasks || data.notionView?.layoutConfig)) {
+      // Persist Notion-synced layout so remounts stay in sync
+      onViewSettingsChange?.(JSON.stringify(normalized))
+    }
+    // Nested starts collapsed (empty expandedParents) — same as Notion
     // Only re-seed when the DB id / table identity changes — not every viewSettings edit
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notionDatabaseId, data?.title, data?.properties?.length])
+  }, [notionDatabaseId, data?.title, data?.properties?.length, data?.notionView?.id])
 
   const updateSettings = useCallback(
     (next: DatabaseViewSettings) => {
@@ -1010,6 +1046,13 @@ export function NotionDatabaseTableView({
     () => groupRows(filteredRows, settings.groupBy),
     [filteredRows, settings.groupBy]
   )
+  // Parent→children once — title chevrons + nested walk share this (before early returns)
+  const subTaskTree = useMemo(() => {
+    if (!settings.subTasks.enabled || !settings.subTasks.relationProperty) {
+      return { roots: filteredRows, childrenOf: new Map<string, NotionDbRow[]>() }
+    }
+    return buildSubTaskTree(filteredRows, settings.subTasks.relationProperty)
+  }, [filteredRows, settings.subTasks.enabled, settings.subTasks.relationProperty])
 
   if (loading) {
     return (
@@ -1046,6 +1089,8 @@ export function NotionDatabaseTableView({
 
   const titleProp = data.properties.find((p) => p.type === 'title')
   const vLines = settings.layoutOptions.showVerticalLines
+  // Explicit px widths (Notion view or defaults) so fixed-layout cells clip instead of expanding the hug
+  const tablePixelWidth = columns.reduce((sum, prop) => sum + columnWidthPx(prop, settings), 0)
 
   const renderRowCells = (
     row: NotionDbRow,
@@ -1053,18 +1098,19 @@ export function NotionDatabaseTableView({
     opts: { insertBeforeAfterId: string | null }
   ) => (
     <>
-      {columns.map((prop, colIndex) => (
+      {columns.map((prop, colIndex) => {
+        const colW = columnWidthPx(prop, settings)
+        return (
         <td
           key={prop.id}
+          style={{ width: colW, maxWidth: colW, minWidth: 0 }}
           className={cn(
-            'relative px-2 py-1 align-middle max-w-[220px] text-[13px]',
-            prop.type === 'title' && 'min-w-[160px]',
+            'relative px-2 py-1 align-middle min-w-0 overflow-hidden text-[13px]',
             // Vertical dividers only BETWEEN columns (never outer left/right)
             vLines && colIndex < columns.length - 1 && 'border-r border-gray-200',
             selectedRowId === row.id && 'bg-blue-50/40',
-            !settings.layoutOptions.wrapAllContent && 'whitespace-nowrap'
+            !settings.layoutOptions.wrapAllContent && 'tt-db-cell-nowrap whitespace-nowrap'
           )}
-          style={colIndex === 0 && depth ? { paddingLeft: 8 + depth * 16 } : undefined}
         >
           {colIndex === 0 ? (
             <>
@@ -1103,21 +1149,27 @@ export function NotionDatabaseTableView({
               </div>
             </>
           ) : null}
-          {prop.type === 'title' && settings.subTasks.enabled && depth === 0 ? (
-            <div className="flex items-center gap-0.5">
+          {prop.type === 'title' && settings.subTasks.enabled && settings.subTasks.display === 'nested' ? (
+            <div
+              className="flex items-center gap-0.5 min-w-0 max-w-full overflow-hidden"
+              // Nest indent on the name (chevron + icon + title), Notion-style — not the Status column
+              style={depth ? { paddingLeft: depth * 16 } : undefined}
+            >
               {(() => {
-                const { childrenOf } = buildSubTaskTree(
-                  filteredRows,
-                  settings.subTasks.relationProperty
-                )
-                const kids = childrenOf.get(row.id) || []
-                if (!kids.length) return <span className="w-3" />
+                const kids = subTaskTree.childrenOf.get(row.id) || []
+                if (!kids.length) {
+                  // Spacer so titles without kids line up with chevron column
+                  return <span className="inline-block w-3.5 shrink-0" aria-hidden />
+                }
                 const open = expandedParents.has(row.id)
                 return (
                   <button
                     type="button"
-                    className="p-0.5 text-gray-400"
-                    onClick={() => {
+                    className="shrink-0 -ml-0.5 p-0.5 rounded text-gray-400 hover:bg-black/5 hover:text-gray-600"
+                    title={open ? 'Collapse' : 'Expand'}
+                    aria-expanded={open}
+                    onClick={(e) => {
+                      e.stopPropagation()
                       setExpandedParents((prev) => {
                         const next = new Set(prev)
                         if (next.has(row.id)) next.delete(row.id)
@@ -1127,9 +1179,9 @@ export function NotionDatabaseTableView({
                     }}
                   >
                     {open ? (
-                      <ChevronDown className="h-3.5 w-3.5" />
+                      <ChevronDown className="h-3 w-3" strokeWidth={2.5} />
                     ) : (
-                      <ChevronRight className="h-3.5 w-3.5" />
+                      <ChevronRight className="h-3 w-3" strokeWidth={2.5} />
                     )}
                   </button>
                 )
@@ -1158,7 +1210,8 @@ export function NotionDatabaseTableView({
             />
           )}
         </td>
-      ))}
+        )
+      })}
     </>
   )
 
@@ -1186,20 +1239,26 @@ export function NotionDatabaseTableView({
       )
     }
     const { roots, childrenOf } = settings.subTasks.enabled
-      ? buildSubTaskTree(rows, settings.subTasks.relationProperty)
+      ? subTaskTree
       : { roots: rows, childrenOf: new Map<string, NotionDbRow[]>() }
     const flat: Array<{ row: NotionDbRow; depth: number }> = []
-    const walk = (row: NotionDbRow, depth: number) => {
-      flat.push({ row, depth })
-      if (
-        settings.subTasks.enabled &&
-        settings.subTasks.display === 'nested' &&
-        expandedParents.has(row.id)
-      ) {
-        for (const child of childrenOf.get(row.id) || []) walk(child, depth + 1)
+    // Flat Notion mode: show every row (roots-only walk hid sub-items)
+    if (settings.subTasks.enabled && settings.subTasks.display === 'flat') {
+      for (const row of rows) flat.push({ row, depth: 0 })
+    } else {
+      const walk = (row: NotionDbRow, depth: number) => {
+        flat.push({ row, depth })
+        // Nested starts collapsed — only walk children when the parent chevron is open
+        if (
+          settings.subTasks.enabled &&
+          settings.subTasks.display === 'nested' &&
+          expandedParents.has(row.id)
+        ) {
+          for (const child of childrenOf.get(row.id) || []) walk(child, depth + 1)
+        }
       }
+      for (const row of settings.subTasks.enabled ? roots : rows) walk(row, 0)
     }
-    for (const row of settings.subTasks.enabled ? roots : rows) walk(row, 0)
 
     return flat.map(({ row, depth }, index) => {
       const isFirst = index === 0
@@ -1228,27 +1287,34 @@ export function NotionDatabaseTableView({
   }
 
   const tableLayout = (
-    <div className="relative" style={{ paddingLeft: ROW_GUTTER }}>
+    <div className="relative tt-db-table-wrap overflow-hidden" style={{ paddingLeft: ROW_GUTTER }}>
       {/* Left gutter for overlay grips / + — not a visible empty column */}
-      <table className="w-full border-collapse text-left border-0">
+      <table
+        className="border-collapse text-left border-0"
+        style={{ width: tablePixelWidth, tableLayout: 'fixed' }}
+      >
         <thead>
           {/* No top perimeter; header↔body rule only (not a full box) */}
           <tr className="border-b border-gray-200">
-            {columns.map((prop, colIndex) => (
+            {columns.map((prop, colIndex) => {
+              const colW = columnWidthPx(prop, settings)
+              return (
               <th
                 key={prop.id}
+                style={{ width: colW, maxWidth: colW, minWidth: 0 }}
                 className={cn(
-                  'sticky top-0 z-[1] whitespace-nowrap px-2 py-1 text-[12px] font-medium text-gray-500 bg-transparent',
+                  'sticky top-0 z-[1] overflow-hidden whitespace-nowrap px-2 py-1 text-[12px] font-medium text-gray-500 bg-transparent',
                   // Column dividers only when "Show vertical lines" is on — never outer L/R
                   vLines && colIndex < columns.length - 1 && 'border-r border-gray-200'
                 )}
               >
-                <span className="inline-flex items-center gap-1">
+                <span className="inline-flex items-center gap-1 max-w-full truncate">
                   <PropertyTypeIcon type={prop.type} />
                   {prop.name}
                 </span>
               </th>
-            ))}
+              )
+            })}
           </tr>
         </thead>
         <tbody>
@@ -1274,7 +1340,7 @@ export function NotionDatabaseTableView({
   )
 
   const listLayout = (
-    <div className="divide-y divide-gray-100">
+    <div className="divide-y divide-gray-100 min-w-0 max-w-full overflow-hidden">
       {filteredRows.length === 0 ? (
         <div className="px-3 py-3 text-sm text-gray-400">No rows</div>
       ) : (
@@ -1283,18 +1349,23 @@ export function NotionDatabaseTableView({
           return (
             <div
               key={row.id}
-              className="flex items-center gap-2 px-3 py-2 hover:bg-[#fafafa]"
+              className="flex items-center gap-2 px-3 py-2 hover:bg-[#fafafa] min-w-0 overflow-hidden"
               style={{ background: rowBackground(row, settings.conditionalColors) }}
             >
               {settings.layoutOptions.showPageIcon && row.icon ? (
-                <span className="leading-none">{row.icon}</span>
+                <span className="leading-none shrink-0">{row.icon}</span>
               ) : null}
-              <span className="text-[13px] font-medium truncate flex-1">{title}</span>
+              <span className="text-[13px] font-medium truncate min-w-0 flex-1 overflow-hidden">
+                {title}
+              </span>
               {columns
                 .filter((c) => c.type !== 'title')
                 .slice(0, 3)
                 .map((prop) => (
-                  <span key={prop.id} className="text-[12px] text-gray-500 max-w-[120px] truncate">
+                  <span
+                    key={prop.id}
+                    className="text-[12px] text-gray-500 max-w-[120px] truncate shrink-0 overflow-hidden"
+                  >
                     <CellDisplay prop={prop} cell={row.cells[prop.name]} />
                   </span>
                 ))}

@@ -49,8 +49,120 @@ export type ConditionalColorRule = {
 export type SubTasksSettings = {
   enabled: boolean
   relationProperty: string | null // Relation / text holding parent ids
-  display: 'nested' | 'flat' // Nested in toggle vs flat list
+  display: 'nested' | 'flat' // Nested in toggle vs flat list (all rows visible)
   filterMode: 'parents_and_subs' | 'matching_only'
+}
+
+/** Map Notion Views API `configuration.subtasks` → Thinktable Sub-tasks settings. */
+export function subTasksFromNotionView(
+  subtasks: {
+    property_id?: string | null
+    display_mode?: string | null
+    filter_scope?: string | null
+  } | null | undefined,
+  properties: NotionDbProperty[]
+): SubTasksSettings {
+  const base = defaultDatabaseViewSettings().subTasks
+  const mode = (
+    subtasks?.display_mode ||
+    (subtasks?.property_id ? 'show' : '')
+  ).toLowerCase()
+  if (!subtasks || mode === 'disabled' || mode === '') {
+    // No Notion subtask config → keep off (flat full list)
+    return base
+  }
+  const propId = (subtasks.property_id || '').replace(/-/g, '').toLowerCase()
+  const prop =
+    properties.find((p) => p.id.replace(/-/g, '').toLowerCase() === propId) ||
+    properties.find((p) => p.type === 'relation' && /parent/i.test(p.name)) ||
+    null
+  // show = nested toggles; flattened = all rows; hidden = parents only (nested, start collapsed)
+  const display: 'nested' | 'flat' = mode === 'flattened' ? 'flat' : 'nested'
+  const scope = (subtasks.filter_scope || '').toLowerCase()
+  return {
+    enabled: true,
+    relationProperty: prop?.name || null,
+    display,
+    filterMode: scope === 'subitems' ? 'matching_only' : 'parents_and_subs',
+  }
+}
+
+/** Normalize Notion property ids for loose matching (dashed vs undashed). */
+function notionPropIdKey(id: string): string {
+  return id.replace(/-/g, '').toLowerCase()
+}
+
+/**
+ * Seed column widths / visibility / wrap from Notion view `configuration.properties`
+ * (+ wrap_cells / show_vertical_lines). Widths are px as returned by the Views API.
+ */
+export function applyNotionLayoutConfig(
+  settings: DatabaseViewSettings,
+  layoutConfig: {
+    properties?: Array<{ property_id: string; visible?: boolean; width?: number }> | null
+    wrap_cells?: boolean | null
+    show_vertical_lines?: boolean | null
+  } | null | undefined,
+  properties: NotionDbProperty[]
+): DatabaseViewSettings {
+  if (!layoutConfig) return settings
+  const byId = new Map(properties.map((p) => [notionPropIdKey(p.id), p]))
+  const columnWidths: Record<string, number> = { ...(settings.columnWidths || {}) }
+  const order: string[] = []
+  const hidden: string[] = []
+  let sawVisibility = false
+  for (const entry of layoutConfig.properties || []) {
+    const prop = byId.get(notionPropIdKey(entry.property_id))
+    if (!prop) continue
+    order.push(prop.name)
+    if (typeof entry.visible === 'boolean') {
+      sawVisibility = true
+      if (!entry.visible) hidden.push(prop.name)
+    }
+    if (typeof entry.width === 'number' && entry.width > 0) {
+      columnWidths[prop.name] = Math.round(entry.width)
+    }
+  }
+  const nextOrder =
+    order.length > 0
+      ? [...order, ...settings.propertyOrder.filter((n) => !order.includes(n))]
+      : settings.propertyOrder
+  return {
+    ...settings,
+    columnWidths,
+    propertyOrder: nextOrder,
+    // Prefer Notion visibility when the view lists properties; else keep local hidden set
+    hiddenProperties: sawVisibility ? hidden : settings.hiddenProperties,
+    layoutOptions: {
+      ...settings.layoutOptions,
+      wrapAllContent:
+        typeof layoutConfig.wrap_cells === 'boolean'
+          ? layoutConfig.wrap_cells
+          : settings.layoutOptions.wrapAllContent,
+      showVerticalLines:
+        typeof layoutConfig.show_vertical_lines === 'boolean'
+          ? layoutConfig.show_vertical_lines
+          : settings.layoutOptions.showVerticalLines,
+    },
+  }
+}
+
+/** Fallback px when Notion omitted `width` for a column (keeps fixed layout from growing). */
+export function defaultColumnWidthPx(prop: NotionDbProperty): number {
+  if (prop.type === 'title') return 280
+  if (prop.type === 'checkbox') return 48
+  if (prop.type === 'number') return 100
+  return 160
+}
+
+/** Resolved column width for render (Notion / saved / default). */
+export function columnWidthPx(
+  prop: NotionDbProperty,
+  settings: Pick<DatabaseViewSettings, 'columnWidths'>
+): number {
+  const w = settings.columnWidths?.[prop.name]
+  if (typeof w === 'number' && w > 0) return w
+  return defaultColumnWidthPx(prop)
 }
 
 export type LayoutOptions = {
@@ -66,6 +178,8 @@ export type DatabaseViewSettings = {
   layout: DatabaseLayout
   propertyOrder: string[] // Property names in display order
   hiddenProperties: string[] // Hidden property names
+  /** Property name → column width in px (from Notion view config or local resize). */
+  columnWidths: Record<string, number>
   filters: DatabaseFilter[]
   sorts: DatabaseSort[]
   groupBy: string | null // Property name, or null
@@ -113,6 +227,7 @@ export function defaultDatabaseViewSettings(name = 'Default'): DatabaseViewSetti
     layout: 'table',
     propertyOrder: [],
     hiddenProperties: [],
+    columnWidths: {},
     filters: [],
     sorts: [],
     groupBy: null,
@@ -146,10 +261,15 @@ export function normalizeViewSettings(
     ...base.propertyOrder.filter((n) => nameSet.has(n)),
     ...names.filter((n) => !base.propertyOrder.includes(n)),
   ]
+  const columnWidths: Record<string, number> = {}
+  for (const [n, w] of Object.entries(base.columnWidths || {})) {
+    if (nameSet.has(n) && typeof w === 'number' && w > 0) columnWidths[n] = w
+  }
   return {
     ...base,
     propertyOrder: order,
     hiddenProperties: base.hiddenProperties.filter((n) => nameSet.has(n)),
+    columnWidths,
     filters: base.filters.filter((f) => nameSet.has(f.property)),
     sorts: base.sorts.filter((s) => nameSet.has(s.property)),
     groupBy: base.groupBy && nameSet.has(base.groupBy) ? base.groupBy : null,

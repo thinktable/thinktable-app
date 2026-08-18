@@ -5,6 +5,7 @@ import {
   ThreadAlgorithm,
   threadComfortScale,
 } from './constants' // Toolbar Smooth / Sharp / Linear + zoom comfort
+import { navigationZoom } from '@/lib/board-navigating' // Freeze preview mid-pinch
 
 /** Read board thread style preference for the live connection preview. */
 function preferredAlgorithm() {
@@ -35,7 +36,9 @@ export function ThreadConnectionLine({
   toPosition?: Position // Target handle side when snapped
 }) {
   const algorithm = preferredAlgorithm()
-  const zoom = useStore((s) => s.transform[2] || 1) // Live board zoom for preview stroke
+  const zoom = useStore((s) =>
+    navigationZoom(Math.round((s.transform[2] || 1) * 8) / 8)
+  ) // Freeze mid-pinch
   const strokeWidth = 2 * threadComfortScale(zoom) // Match settled thread comfort (thins on zoom-out)
 
   let path: string

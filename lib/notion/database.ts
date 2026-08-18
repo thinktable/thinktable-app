@@ -628,6 +628,8 @@ export async function fetchNotionDatabaseTable(
         name: notionView.name || title,
         type: notionView.type,
         layout: notionViewTypeToLayout(notionView.type),
+        subtasks: notionView.subtasks ?? null,
+        layoutConfig: notionView.layoutConfig ?? null,
       }
     : null
 

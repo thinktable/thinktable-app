@@ -20,6 +20,7 @@ import {
   ThreadAlgorithm,
   threadComfortScale,
 } from './constants' // Stroke + algorithm defaults + zoom comfort
+import { navigationZoom } from '@/lib/board-navigating' // Freeze stroke mid-pinch
 import { normalizeHandleId } from './handle-ids' // Strip -indicator from stored handle ids
 import {
   connectionPointOnNode,
@@ -128,7 +129,9 @@ export function EditableThread({
   })
 
   const isConnecting = useStore((s) => !!s.connectionNodeId)
-  const zoom = useStore((s) => s.transform[2] || 1) // Live board zoom for stroke / hit-band scaling
+  const zoom = useStore((s) =>
+    navigationZoom(Math.round((s.transform[2] || 1) * 8) / 8)
+  ) // Freeze mid-pinch — avoid edge re-renders every tick
   const comfort = threadComfortScale(zoom) // Thins on zoom-out; soft counter-scale on zoom-in
   const invZoom = 1 / Math.max(0.01, zoom) // Hit band stays ~screen-constant so thin threads remain clickable
 

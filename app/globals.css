@@ -1886,6 +1886,13 @@ span[data-added="true"] {
   }
   .ProseMirror .tt-notion-db {
     font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    contain: layout style; /* Isolate from board chrome; do NOT use content-visibility — Safari defers paint until after pinch */
+    /* Let board-rotation receive two-finger pinch immediately (pan-x/pan-y blocks pinch on iOS) */
+    touch-action: none;
+  }
+  /* During pinch: don’t let the table steal touches for scroll (viewport still transforms live) */
+  .react-flow.tt-board-navigating .ProseMirror .tt-notion-db {
+    pointer-events: none;
   }
   /* TipTap `.prose table th/td` draws a full box on every cell — wipe that so DB
      tables have no outer perimeter (Notion-like: internal dividers only). */
@@ -1898,9 +1905,23 @@ span[data-added="true"] {
   .ProseMirror .tt-notion-db tr:nth-child(even) {
     background-color: transparent; /* Override prose zebra striping */
   }
+  /* Fixed layout + explicit column px widths (from Notion view or defaults) so cells clip. */
+  .ProseMirror .tt-notion-db table {
+    table-layout: fixed;
+  }
+  .ProseMirror .tt-notion-db .tt-db-table-wrap {
+    overflow: hidden;
+    max-width: 100%;
+  }
   .ProseMirror .tt-notion-db th,
   .ProseMirror .tt-notion-db td {
     padding: 0.25rem 0.5rem; /* Compact — override prose 0.75rem */
+    overflow: hidden; /* Cutoff unwrapped text at the cell edge */
+    vertical-align: middle;
+  }
+  .ProseMirror .tt-notion-db td.tt-db-cell-nowrap {
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   /* Internal horizontal rules on cells (tr borders are unreliable with collapse) */
   .ProseMirror .tt-notion-db thead th {

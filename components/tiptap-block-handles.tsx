@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom'
 import type { Editor } from '@tiptap/react'
 import { GripVertical } from 'lucide-react' // ⋮⋮ grip; between-block add is a short centered hairline
 import { useReactFlow, useStore } from 'reactflow' // screenToFlowPosition when extracting a line onto the map; useStore = live zoom to keep grips screen-constant
+import { navigationZoom } from '@/lib/board-navigating' // Freeze grip scale mid-pinch
 import { useQueryClient } from '@tanstack/react-query' // Refresh panels after extract-to-card
 import { createClient } from '@/lib/supabase/client' // Persist a new map card from a dragged line
 import { isBlockContentEmpty, newBlockMetadata } from '@/lib/blocks' // Canonical isBlock metadata + empty check
@@ -421,7 +422,11 @@ export function TipTapBlockHandles({
   handleGutterFlow = 0, // Host adjustChromeX — inverse-scale local left so ⋮⋮ fits the blue gutter
 }: TipTapBlockHandlesProps) {
   const { screenToFlowPosition } = useReactFlow() // Drop-on-page → flow coords for a new frame
-  const rfZoom = useStore((s) => s.transform[2] || 1) // Live zoom — re-render on board zoom so grips can counter-scale to a constant screen size
+  // ⋮⋮ only while selected — skip zoom store ticks when idle; freeze mid-pinch via navigationZoom
+  const rfZoom = useStore((s) => {
+    if (!isPanelSelected) return 1
+    return navigationZoom(Math.round((s.transform[2] || 1) * 8) / 8)
+  })
   const { isMobileMode } = useSidebarContext() // Phone has no hover — show every ⋮⋮ while the frame is selected
   void frameScale // Re-render + remeasure when host locked-resize scale changes (transform ≠ layout)
   void handleGutterFlow // Re-render when blue gutter / screen chrome scale changes

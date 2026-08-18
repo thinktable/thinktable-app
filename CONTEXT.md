@@ -55,7 +55,7 @@ Thinktable is a spatial mind-map on **boards** (see `DEFINITIONS.md`):
 
 ### Device testing (iPad)
 
-Same Wi‑Fi (most reliable): `http://<mac-lan-ip>:3031` (e.g. `ipconfig getifaddr en0`). Quick tunnel: `cloudflared tunnel --url http://localhost:3031` → `*.trycloudflare.com` (DNS often fails on iPad Safari; prefer LAN). Auth/OAuth may still expect `localhost` / `NEXT_PUBLIC_SITE_URL`.
+Same Wi‑Fi (most reliable): `http://<mac-lan-ip>:3031` (e.g. `ipconfig getifaddr en0`). Quick tunnel: `cloudflared tunnel --url http://localhost:3031` → `*.trycloudflare.com` (DNS often fails on iPad Safari; prefer LAN). Auth/OAuth may still expect `localhost` / `NEXT_PUBLIC_SITE_URL`. **Zoom/pan perf (phone):** keep DB table visible during pinch; `navigationZoom()` + `onMoveStart/End` freeze chrome React work. Full Notion row set loads. Phone cells stay read-only until tapped. **Sub-tasks:** read Notion view `configuration.subtasks` (`show` / `flattened` / `hidden` / `disabled`); nested starts **collapsed** with chevron left of the name (Notion-style); flat lists every row. **Column widths:** read Notion view `configuration.properties[].width` (+ `wrap_cells` / `show_vertical_lines` / visibility); apply explicit px on `<th>`/`<td>` (defaults title 280 / others 160) so nowrap text ellipsizes instead of expanding the hug. `.tt-notion-db { touch-action: none }`. Never `useStore(transform)` in a board-wrapping provider. Chrome glue `setNodes` only on select/deselect. `stackGapSides` needs an equality fn.
 
 ### Notion Developer portal setup (one-time)
 

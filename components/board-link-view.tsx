@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react'
 import { useStore } from 'reactflow' // Live zoom → counter-scale the icon + open menu (screen-relative)
+import { navigationZoom } from '@/lib/board-navigating' // Freeze chrome mid-pinch
 import { FileText } from 'lucide-react'
 import { useTheme } from '@/components/theme-provider'
 import Picker from '@emoji-mart/react'
@@ -49,7 +50,9 @@ export function BoardLinkView({ node, updateAttributes }: NodeViewProps) {
   const variant = (node.attrs.variant as string) === 'title' ? 'title' : 'inline' // Layout mode
   const actions = useBoardLinkActions() // Host frame preview / open / rename / setIcon bridge
   const { resolvedTheme } = useTheme() // Emoji picker theme
-  const zoom = useStore((s) => s.transform[2] || 1) // Re-render on board zoom so the icon/menu re-measure
+  const zoom = useStore((s) =>
+    navigationZoom(Math.round((s.transform[2] || 1) * 8) / 8)
+  ) // Freeze mid-pinch — avoid remounting chrome every tick
   const [chromeScale, setChromeScale] = useState(1) // Comfort counter-scale for icon + open menu (transform-only)
 
   const [title, setTitle] = useState<string>((node.attrs.title as string) || '') // Local editable label

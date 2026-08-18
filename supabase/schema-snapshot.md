@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-17T00:41:39Z`
+- Snapped at: `2026-08-18T00:27:48Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260818002748_board_nav_notion_db_widths_subtasks.sql`.
+- Board pan/zoom nav freeze (`board-navigating`); Notion view subtasks + `configuration.properties` column widths / wrap / visibility; DB cell overflow ellipsis; phone DB touch/paint hygiene.
+- Schema unchanged.
+
+## Prior: notion row card frame drag zindex
 
 - No DDL. Marker `20260817004139_notion_row_card_frame_drag_zindex.sql`.
 - Notion DB row→card convert (property frames + threads); frame drag z-order via `zIndex` (no RF nodes reorder — TipTap NodeViews); row-card layout freeze; DB frame hug uses table `scrollWidth`.

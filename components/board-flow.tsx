@@ -84,6 +84,7 @@ import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
 import { setAiSelectedFrames, setAiViewportCenter } from '@/lib/ai/selection-bridge' // Bridge RF selection + viewport → AI context
+import { beginBoardNavigating, endBoardNavigating } from '@/lib/board-navigating' // Freeze React zoom during pan/pinch
 import { takeBoardCapture } from '@/lib/captures' // Board-menu Capture view
 import { htmlToPlain } from '@/lib/ai/context-pack' // Frame hover previews from content
 import { AI_CHAT_BLOCK_MIME, type AiChatBlockDragPayload } from '@/lib/ai/types' // Drag chat turn onto page
@@ -8997,6 +8998,13 @@ function BoardFlowInner({
         deleteKeyCode={canEdit ? DELETE_KEYS : null}
         nodesDraggable={canEdit}
         nodesConnectable={canEdit}
+        onMoveStart={(_event, viewport) => {
+          // One-finger pan wasn’t covered by pinch-only freeze — fast pan over DB OOMed Safari
+          beginBoardNavigating(viewport.zoom)
+        }}
+        onMoveEnd={() => {
+          endBoardNavigating()
+        }}
         onMove={(event, viewport) => {
           // Publish flow-space center of the visible pane for AI Edit frame placement
           const pane = document.querySelector('.react-flow')

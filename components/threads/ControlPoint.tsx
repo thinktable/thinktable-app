@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react' // Drag + keyboard edit for a control point
 import { useReactFlow, useStore, type XYPosition } from 'reactflow' // Screen→flow coords + pane DOM
 import { threadComfortScale } from './constants' // Same zoom comfort as thread stroke
+import { navigationZoom } from '@/lib/board-navigating' // Freeze knob scale mid-pinch
 
 /** One editable point on a thread path (active = shapes the curve). */
 export type ControlPointData = XYPosition & {
@@ -32,7 +33,9 @@ export function ControlPoint({
   onPointsCommitted,
 }: ControlPointProps) {
   const container = useStore((store) => store.domNode) // Pane element for pointer listeners
-  const zoom = useStore((s) => s.transform[2] || 1) // Live board zoom for knob sizing
+  const zoom = useStore((s) =>
+    navigationZoom(Math.round((s.transform[2] || 1) * 8) / 8)
+  ) // Freeze mid-pinch — avoid knob re-renders every tick
   const comfort = threadComfortScale(zoom) // Match thread stroke comfort (thin on zoom-out)
   const { screenToFlowPosition } = useReactFlow() // Convert pointer to flow coords
   const [dragging, setDragging] = useState(false) // True while pointer is down on this knob

@@ -37,6 +37,10 @@ import {
   readSideStacks,
 } from '@/lib/frame-side-stacks' // Per adjust-box side stack trees
 import { findEditorBlockAtClientY } from '@/lib/tiptap/block-selection' // Click in frame padding → block at Y
+import {
+  isBoardNavigating,
+  navigationZoom,
+} from '@/lib/board-navigating' // Freeze zoom selectors + skip hug while pinching
 import { deleteLinkedBoardForBlock, getLinkedBoardId, isBlockContentEmpty, isBlockMeta, isBoardBodyMeta, readNotionConnection, type NotionSyncMode } from '@/lib/blocks' // Block detection + Notion connection
 import {
   propertyTypeIcon,
@@ -2009,7 +2013,13 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   )
   const updateNodeInternals = useUpdateNodeInternals() // Remeasure auto-sized frames without setNodes (avoids RO→setNodes storms)
   const rfStoreApi = useStoreApi() // Unselect legacy wrapper before RF snapshots dragItems (frame-body drag)
-  const rfZoom = useStore((s) => s.transform[2] || 1) // Live board zoom — re-render chrome on zoom (comfort scale)
+  // Zoom only drives selected-frame chrome. Unselected frames return a constant so pinch/pan
+  // does not re-render TipTap + large Notion DB tables every tick (phone Safari OOM over tunnel).
+  // While pinching, navigationZoom freezes the value so chrome doesn’t re-render mid-gesture.
+  const rfZoom = useStore((s) => {
+    if (!selected) return 1
+    return navigationZoom(Math.round((s.transform[2] || 1) * 8) / 8)
+  })
   const [promptHasChanges, setPromptHasChanges] = useState(false)
   const [responseHasChanges, setResponseHasChanges] = useState(false)
   // Single text body: plain-merge legacy prompt + response (no section split).
@@ -2713,19 +2723,23 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // T/B bands only while selected — even empty strips keep the blue box balanced
   const adjustChromeYTop = showFrameChrome ? chromeBandH : 0
   const adjustChromeYBottom = showFrameChrome ? chromeBandH : 0
-  // Keep the filled frame glued to the board when chrome / bands appear (grow left/up)
-  const frameChromeOffsetRef = useRef<{ x: number; y: number } | null>(null)
+  // Keep the filled frame glued when selection chrome appears/disappears (grow left/up).
+  // Do NOT shift RF position when chrome scale changes with zoom — that deferred setNodes
+  // jumped the frame (looked like the board slid) after phone pinch over DB tables.
+  const frameChromeOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
   useLayoutEffect(() => {
     if (!isBlock) return
-    const nextX = adjustChromeX
-    const nextY = adjustChromeYTop
-    if (frameChromeOffsetRef.current === null) {
-      frameChromeOffsetRef.current = { x: 0, y: 0 }
-    }
-    const dx = nextX - frameChromeOffsetRef.current.x
-    const dy = nextY - frameChromeOffsetRef.current.y
+    const wantX = showFrameChrome ? adjustChromeX : 0
+    const wantY = showFrameChrome ? adjustChromeYTop : 0
+    const prev = frameChromeOffsetRef.current
+    const wasOn = prev.x > 0 || prev.y > 0
+    const nowOn = wantX > 0 || wantY > 0
+    // Still selected (or still idle): zoom only resizes chrome visually — leave node put
+    if (wasOn === nowOn) return
+    const dx = wantX - prev.x
+    const dy = wantY - prev.y
     if (dx === 0 && dy === 0) return
-    frameChromeOffsetRef.current = { x: nextX, y: nextY }
+    frameChromeOffsetRef.current = { x: wantX, y: wantY }
     const setNodesFunc = getSetNodes()
     if (!setNodesFunc) return
     setNodesFunc((nds: any[]) =>
@@ -2736,29 +2750,44 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       )
     )
     updateNodeInternals(id)
-  }, [isBlock, id, adjustChromeX, adjustChromeYTop, getSetNodes, updateNodeInternals])
-  // Stack lines: one per adjust-box side that has a mate further out on that side’s tree
+  }, [
+    isBlock,
+    id,
+    showFrameChrome,
+    adjustChromeX,
+    adjustChromeYTop,
+    getSetNodes,
+    updateNodeInternals,
+  ])
+  // Stack lines: one per adjust-box side that has a mate further out on that side’s tree.
+  // Equality fn is required — a fresh `[]` every store tick re-rendered every frame on pinch
+  // (large Notion DB tables → phone Safari tab reload over tunnel).
   const stackMeta = (promptMessage?.metadata || {}) as Record<string, unknown>
-  const stackGapSides = useStore((s) => {
-    const mine = readSideStacks(stackMeta)
-    const sides: Array<{ side: FrameStackSide; groupId: string }> = []
-    for (const side of FRAME_STACK_SIDES) {
-      const entry = mine[side]
-      if (!entry) continue
-      const myIdx = entry.anchor ? 0 : entry.index
-      let hasOut = false
-      s.nodeInternals.forEach((n) => {
-        if (n.id === id || n.type !== 'chatPanel') return
-        const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-        const other = readSideStacks(m)[side]
-        if (!other || other.groupId !== entry.groupId) return
-        const idx = other.anchor ? 0 : other.index
-        if (idx > myIdx) hasOut = true
-      })
-      if (hasOut) sides.push({ side, groupId: entry.groupId })
-    }
-    return sides
-  })
+  const stackGapSides = useStore(
+    (s) => {
+      const mine = readSideStacks(stackMeta)
+      const sides: Array<{ side: FrameStackSide; groupId: string }> = []
+      for (const side of FRAME_STACK_SIDES) {
+        const entry = mine[side]
+        if (!entry) continue
+        const myIdx = entry.anchor ? 0 : entry.index
+        let hasOut = false
+        s.nodeInternals.forEach((n) => {
+          if (n.id === id || n.type !== 'chatPanel') return
+          const m = (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
+          const other = readSideStacks(m)[side]
+          if (!other || other.groupId !== entry.groupId) return
+          const idx = other.anchor ? 0 : other.index
+          if (idx > myIdx) hasOut = true
+        })
+        if (hasOut) sides.push({ side, groupId: entry.groupId })
+      }
+      return sides
+    },
+    (a, b) =>
+      a.length === b.length &&
+      a.every((x, i) => x.side === b[i].side && x.groupId === b[i].groupId)
+  )
   // Indicators: selected frame (idle), OR nearby snap target while connecting — never during frame drag.
   // Mid-press on the *body* hides them (`pressing`); press on the indicator itself is excluded so
   // the simulator stays mounted and can arm the thread instead of RF frame-dragging.
@@ -3178,6 +3207,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       raf = requestAnimationFrame(() => {
         if (isResizingRef.current) return // Corner-drag owns size — hug RO would hitch the gesture (esp. phone)
         if (Date.now() < hugFreezeUntilRef.current) return // Post-drag: wait for property NodeViews
+        if (isBoardNavigating()) return // Pinch freeze silhouette — don’t hug to stub size
         // databaseBlock: wait until the Notion table NodeView is mounted. Measuring the title
         // stub (~52×40) after a remount would hug-shrink the frame and clip the table away.
         const dbHost = el.querySelector('.tt-database-block') as HTMLElement | null

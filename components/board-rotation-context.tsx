@@ -12,7 +12,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { useReactFlow, useStore } from 'reactflow'
+import { useReactFlow, useStore, useStoreApi } from 'reactflow'
 import {
   boardRotationRef,
   patchReactFlowRotation,
@@ -22,6 +22,7 @@ import {
   twistSnapHeading,
   viewportKeepingPanePoint,
 } from '@/lib/board-rotation'
+import { beginBoardNavigating, endBoardNavigating } from '@/lib/board-navigating'
 
 const CHROME_SEL =
   '[data-minimap-toggle-context], [data-minimap-context], [data-minimap-pill-context], [data-edit-top-bar]' // Free nav / minimap / top bar — never steal twist from chrome
@@ -91,7 +92,7 @@ function overBoard(e: { clientX?: number; clientY?: number; target?: EventTarget
 
 export function BoardRotationProvider({ children }: { children: ReactNode }) {
   const instance = useReactFlow() // Viewport helpers + patch target
-  const transform = useStore((s) => s.transform) // Live x/y/zoom so CSS vars track pan
+  const storeApi = useStoreApi() // Imperative transform reads — avoid React re-renders on every pan/zoom tick
   const domNode = useStore((s) => s.domNode) // .react-flow — WebKit dispatches gestures onto this tree
   const [rotation, setRotation] = useState(0) // React state for nav UI
   const rotationRef = useRef(0) // Gesture math must not wait a render
@@ -142,15 +143,33 @@ export function BoardRotationProvider({ children }: { children: ReactNode }) {
     patchReactFlowRotation(instance)
   }, [instance, instance.viewportInitialized])
 
-  // Drive CSS camera rotate on nodes/edges/dots without touching RF’s translate+scale (m22 = zoom)
+  // Drive CSS camera rotate on nodes/edges/dots without touching RF’s translate+scale (m22 = zoom).
+  // Subscribe imperatively — a React `useStore(transform)` here re-rendered the whole board
+  // (incl. large Notion DB tables) on every pinch/pan tick and crashed phone Safari over tunnel.
   useLayoutEffect(() => {
     const el = flowEl()
     if (!el) return
     el.style.setProperty('--tt-board-rot', `${rotation}deg`) // Inner layers read this
-    el.style.setProperty('--tt-vx', `${transform[0]}px`) // Background rotates around the flow origin
-    el.style.setProperty('--tt-vy', `${transform[1]}px`)
     el.classList.toggle('tt-board-rotated', Math.abs(rotation) > 0.01) // Skip identity transforms when upright
-  }, [rotation, transform])
+    const syncPanOrigin = (
+      state?: { transform: [number, number, number] },
+      prev?: { transform: [number, number, number] }
+    ) => {
+      const t = state?.transform ?? storeApi.getState().transform
+      // Skip node/selection store ticks that don’t move the viewport
+      if (
+        prev &&
+        prev.transform[0] === t[0] &&
+        prev.transform[1] === t[1]
+      ) {
+        return
+      }
+      el.style.setProperty('--tt-vx', `${t[0]}px`)
+      el.style.setProperty('--tt-vy', `${t[1]}px`)
+    }
+    syncPanOrigin() // Seed immediately (rotation may change without a store tick)
+    return storeApi.subscribe(syncPanOrigin) // Pan/zoom → CSS only, no React tree walk
+  }, [rotation, storeApi, domNode])
 
   // Two-finger twist (+ pinch zoom) — capture so RF’s d3 pinch doesn’t double-zoom
   useEffect(() => {
@@ -279,6 +298,7 @@ export function BoardRotationProvider({ children }: { children: ReactNode }) {
 
     const beginPinch = (ax: number, ay: number, bx: number, by: number) => {
       stopInertia() // New gesture owns the camera
+      beginBoardNavigating(instance.getViewport().zoom) // Freeze React zoom selectors only (viewport tracks live)
       const dx = bx - ax
       const dy = by - ay
       const midX = (ax + bx) / 2
@@ -308,12 +328,17 @@ export function BoardRotationProvider({ children }: { children: ReactNode }) {
 
     const endTwoFinger = () => {
       if (!pinch) return
-      if (scrollModeRef.current) {
-        if (Math.hypot(pinch.vx, pinch.vy) > 0.06) startPanInertia(pinch.vx, pinch.vy) // Flick → pan coast
-      } else if (Math.abs(pinch.vz) > 0.00005) {
-        startZoomInertia(pinch.vz, pinch.lastPaneX, pinch.lastPaneY) // Flick → zoom coast
+      // Phone: no pan/zoom coast — inertia kept firing setViewport after lift and felt like
+      // the board kept sliding (esp. over large DB tables). Trackpad Mac keeps coast.
+      if (!isIosTouch()) {
+        if (scrollModeRef.current) {
+          if (Math.hypot(pinch.vx, pinch.vy) > 0.06) startPanInertia(pinch.vx, pinch.vy)
+        } else if (Math.abs(pinch.vz) > 0.00005) {
+          startZoomInertia(pinch.vz, pinch.lastPaneX, pinch.lastPaneY)
+        }
       }
       pinch = null
+      endBoardNavigating() // Drop tt-board-navigating after settle
     }
 
     const onDown = (e: PointerEvent) => {
