@@ -45,6 +45,7 @@ Thinktable is a spatial mind-map on **pages** (see `DEFINITIONS.md`):
 - `NOTION_CLIENT_ID`, `NOTION_CLIENT_SECRET` — public connection OAuth.
 - `NEXT_PUBLIC_SITE_URL` — redirect base (local: `http://localhost:3031`).
 - Existing Supabase + OpenAI vars unchanged.
+- Cloud Agents: `.cursor/environment.json` (`npm install` + `npm run dev` on 3031). Inject secrets via the Cloud Agents environment for `github.com/thinktable/thinktable-app` — do not commit `.env.local`. Repo Supabase project is `yhsyhtnnklpkfcpydbst` (`supabase/README.md`; dashboard may label it “thinkable”).
 
 ### Auth / confirmation email (Supabase project `yhsyhtnnklpkfcpydbst`)
 
