@@ -722,7 +722,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
         >
           {/* Left chrome — menu + board path; no z-boost so absolute tools stay above if the path cap races */}
           <div data-top-bar-left data-path-ready={pathReady || !pathKey ? 'true' : undefined} className="relative flex items-center flex-shrink-0">
-          {/* Menu icon — hover opens; click pins open until clicked again (survives page switch) */}
+          {/* Menu icon — hover opens; click pins across leave/page switch; board click still closes */}
           <div
             data-nav-logo-trigger
             className="flex items-center flex-shrink-0"

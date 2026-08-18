@@ -1040,7 +1040,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
 
   // Close hover-only nav on route change; click-pinned stays open across page switches
   useEffect(() => {
-    if (isSidebarPinned) return // Keep open until menu button clicked again
+    if (isSidebarPinned) return // Keep open across board switches; board click still dismisses
     closeSidebar()
   }, [pathname, closeSidebar, isSidebarPinned])
 

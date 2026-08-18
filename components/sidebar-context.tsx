@@ -173,7 +173,7 @@ export function SidebarContextProvider({
   }, [cancelCloseSidebar])
 
   const scheduleCloseSidebar = useCallback(() => {
-    if (isSidebarPinnedRef.current) return // Click-pinned stays open until menu clicked again
+    if (isSidebarPinnedRef.current) return // Click-pinned stays open on leave (board click still closes)
     cancelCloseSidebar() // Reset previous timer
     closeTimerRef.current = setTimeout(() => {
       if (isSidebarPinnedRef.current) return // Re-check in case pinned during grace
@@ -195,6 +195,27 @@ export function SidebarContextProvider({
       return true
     })
   }, [cancelCloseSidebar])
+
+  // Board (or other chrome) click dismisses like a dropdown — pin only survives leave / board switch
+  useEffect(() => {
+    if (!isSidebarOpen) return // Closed — no dismiss listener
+    const onPointerDown = (event: PointerEvent) => {
+      const node = event.target as Node | null // May be a text node inside a frame
+      const target = node instanceof Element ? node : node?.parentElement // closest() needs an Element
+      if (!target) return
+      // Hamburger toggles; popup + portaled menus/dialogs stay interactive
+      if (
+        target.closest(
+          '[data-nav-menu-popup], [data-nav-logo-trigger], [data-radix-popper-content-wrapper], [role="menu"], [role="dialog"], [data-radix-dialog-content]'
+        )
+      ) {
+        return
+      }
+      closeSidebar() // Unpin and hide immediately (don't wait for hover grace)
+    }
+    document.addEventListener('pointerdown', onPointerDown, true) // Capture: RF pane may stop bubble
+    return () => document.removeEventListener('pointerdown', onPointerDown, true)
+  }, [isSidebarOpen, closeSidebar])
 
   const toggleChatSidebar = useCallback(() => {
     const opening = !isChatOpenRef.current // About to open?
