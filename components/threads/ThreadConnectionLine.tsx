@@ -1,4 +1,5 @@
-import { getBezierPath, getSmoothStepPath, Position, useStore } from 'reactflow' // Preview by thread style + live zoom
+import { getSmoothStepPath, Position, useStore } from 'reactflow' // Sharp preview + live zoom
+import { getSmoothThreadBezier } from './path/bezier' // Same bowed Smooth path as settled threads
 import {
   isSharpThreadAlgorithm,
   threadAlgorithmFromStyle,
@@ -55,14 +56,14 @@ export function ThreadConnectionLine({
   } else if (algorithm === ThreadAlgorithm.Linear) {
     path = `M ${fromX} ${fromY} L ${toX} ${toY}`
   } else {
-    ;[path] = getBezierPath({
-      sourceX: fromX,
+    path = getSmoothThreadBezier({
+      sourceX: fromX, // Live drag start (already on the source connection point)
       sourceY: fromY,
-      sourcePosition: fromPosition,
+      sourcePosition: fromPosition, // Side we left — top↔top while snapping beside a mate
       targetX: toX,
       targetY: toY,
-      targetPosition: toPosition,
-    })
+      targetPosition: toPosition, // RF toPosition so a top snap approaches from above
+    }).path
   }
 
   return (

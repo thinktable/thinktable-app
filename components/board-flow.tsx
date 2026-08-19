@@ -9753,6 +9753,9 @@ function BoardFlowInner({
         <ThreadActionsMenu
           x={edgePopupPosition.x}
           y={edgePopupPosition.y}
+          edgeId={clickedEdge.id}
+          sourceId={clickedEdge.source}
+          targetId={clickedEdge.target}
           isDotted={
             (clickedEdge.data as ThreadEdgeData | undefined)?.dotted === true ||
             clickedEdge.type === 'animatedDotted'

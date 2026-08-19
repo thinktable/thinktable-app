@@ -100,14 +100,40 @@ export function getMenuCollisionPadding(): { top: number; left: number; right: n
  */
 export function getMenuAvoidRects(exclude?: Element | null): MenuRect[] {
   const out: MenuRect[] = [] // Collected obstacles
+  const seen = new Set<Element>() // Don't add the same node twice (thread + overlap)
   const push = (el: Element) => {
+    if (seen.has(el)) return // Already in the list
     if (exclude && (exclude === el || exclude.contains(el) || el.contains(exclude))) return // Skip the menu itself
     const r = el.getBoundingClientRect() // Screen box
     if (r.width < 1 || r.height < 1) return // Invisible
+    seen.add(el) // Remember
     out.push(boxFromDom(r)) // Keep
   }
   document.querySelectorAll('.tt-block-highlight').forEach(push) // Armed / selected blocks (blue wash)
   if (out.length === 0) document.querySelectorAll('.react-flow__node.selected').forEach(push) // Frame selection when no block is armed
+  // Selected thread curve + the frames it meets — thread click menu must not sit on the arch.
+  const edgeBoxes: MenuRect[] = [] // Thread AABBs used to find attached frames
+  document.querySelectorAll('.react-flow__edge.selected').forEach((el) => {
+    const r = el.getBoundingClientRect() // Path + interaction stroke
+    if (r.width < 0.5 && r.height < 0.5) return // Degenerate
+    const b = boxFromDom(r) // Screen box
+    edgeBoxes.push(b) // For frame overlap
+    if (exclude && (exclude === el || exclude.contains(el) || el.contains(exclude))) return // Skip if somehow inside the menu
+    out.push(b) // Soft-avoid the curve
+  })
+  if (edgeBoxes.length > 0) {
+    document.querySelectorAll('.react-flow__node').forEach((el) => {
+      const r = el.getBoundingClientRect() // Frame box
+      if (r.width < 1 || r.height < 1) return // Hidden
+      const nb = boxFromDom(r) // Screen box
+      for (const eb of edgeBoxes) {
+        if (overlapArea(nb, inflate(eb, GAP)) > 0) {
+          push(el) // Attached / overlapping frame (snapped pair under a top↔top thread)
+          break
+        }
+      }
+    })
+  }
   return out
 }
 
@@ -165,6 +191,36 @@ export type ApplyMenuPlacementOpts = {
   openLeft: boolean // Caller preference: park to the left of the anchor
   preferredFlyoutTop?: number // Viewport Y to align a row flyout (Color / Connections)
   fromExisting?: boolean // Keep CSS first-paint (e.g. above-click) and only clamp / attach flyouts
+  extraHard?: MenuRect[] // Extra never-cover boxes (clicked thread curve + its frames)
+}
+
+/** Screen boxes for a clicked thread — curve + endpoint frames. Menu must not sit on these. */
+export function getThreadCoverRects(edgeId?: string, sourceId?: string, targetId?: string): MenuRect[] {
+  const out: MenuRect[] = [] // Collected never-cover boxes
+  const pushSel = (sel: string) => {
+    document.querySelectorAll(sel).forEach((el) => {
+      const r = el.getBoundingClientRect() // Path / node screen box
+      if (r.width < 0.5 && r.height < 0.5) return // Degenerate
+      out.push(boxFromDom(r)) // Keep
+    })
+  }
+  if (edgeId) {
+    const id = CSS.escape(edgeId) // RF id may contain special chars
+    pushSel(`.react-flow__edge[data-id="${id}"]`) // Wrapper g / div
+    pushSel(`[data-testid="rf__edge-${id}"]`) // RF 11 test id fallback
+  }
+  pushSel('.react-flow__edge.selected') // Any selected thread curve
+  if (sourceId) {
+    const id = CSS.escape(sourceId) // Frame id
+    pushSel(`.react-flow__node[data-id="${id}"]`) // Source frame
+    pushSel(`[data-testid="rf__node-${id}"]`) // RF 11 test id fallback
+  }
+  if (targetId) {
+    const id = CSS.escape(targetId) // Frame id
+    pushSel(`.react-flow__node[data-id="${id}"]`) // Target frame
+    pushSel(`[data-testid="rf__node-${id}"]`) // RF 11 test id fallback
+  }
+  return out
 }
 
 /**
@@ -176,7 +232,7 @@ export type ApplyMenuPlacementOpts = {
 export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOpts): void {
   const safe = getMenuSafeRect() // Chrome-free window
   const avoid = getMenuAvoidRects(root) // Selected block / frame (soft)
-  const handles = getMenuHandleRects(root) // ⋮⋮ grips (hard — never cover)
+  const handles = [...getMenuHandleRects(root), ...(opts.extraHard ?? [])] // ⋮⋮ grips + thread curve (hard — never cover)
   const body = root.querySelector('[data-tt-menu-body]') as HTMLElement | null // Inner scroller (search chrome stays put)
   const flyout = root.querySelector('[data-tt-menu-flyout="main"]') as HTMLElement | null // Turn into / Color / Shape / …
   const nested = root.querySelector('[data-tt-menu-flyout="nested"]') as HTMLElement | null // Board in (off Turn into)

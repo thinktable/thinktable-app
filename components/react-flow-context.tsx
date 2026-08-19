@@ -25,8 +25,8 @@ interface ReactFlowContextType {
   setLineStyle: (style: 'solid' | 'dotted') => void // Function to set line style
   arrowDirection: 'down' | 'up' | 'left' | 'right' // Arrow direction state
   setArrowDirection: (direction: 'down' | 'up' | 'left' | 'right') => void // Function to set arrow direction
-  editMenuPillMode: 'home' | 'insert' | 'draw' | 'view' // Edit menu pill mode state
-  setEditMenuPillMode: (mode: 'home' | 'insert' | 'draw' | 'view') => void // Function to set edit menu pill mode
+  editMenuPillMode: 'home' | 'insert' | 'style' | 'draw' | 'view' // Edit menu pill mode state
+  setEditMenuPillMode: (mode: 'home' | 'insert' | 'style' | 'draw' | 'view') => void // Function to set edit menu pill mode
   viewMode: 'linear' | 'canvas' // View mode state (linear or canvas)
   boardRule: 'wide' | 'college' | 'narrow' // Board rule state (paper rule type)
   setBoardRule: (rule: 'wide' | 'college' | 'narrow') => void // Function to set board rule
@@ -66,13 +66,13 @@ interface ReactFlowContextType {
 
 const ReactFlowContext = createContext<ReactFlowContextType | undefined>(undefined)
 
-/** localStorage — last Actions/Layout/Draw/View so reload keeps that tool set. */
+/** localStorage — last Actions/Layout/Style/Draw/View so reload keeps that tool set. */
 const TT_PILL_MODE_KEY = 'thinktable-edit-menu-pill-mode'
 
 /** localStorage — last armed Draw tool (pencil/lasso/…) so reload keeps it toggled. */
 const TT_DRAW_TOOL_KEY = 'thinktable-draw-tool'
 
-const PILL_MODES = ['home', 'insert', 'draw', 'view'] as const // Valid pill values (Actions = home)
+const PILL_MODES = ['home', 'insert', 'style', 'draw', 'view'] as const // Valid pill values (Actions = home, Layout = insert)
 type EditMenuPillMode = (typeof PILL_MODES)[number] // Matches context editMenuPillMode
 const DRAW_TOOLS = ['lasso', 'pencil', 'highlighter', 'eraser'] as const // Valid Draw tools (null = none)
 type StoredDrawTool = (typeof DRAW_TOOLS)[number] // Armed Draw tool persisted across reload
@@ -118,7 +118,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
   // Initialize with consistent defaults to avoid hydration mismatch, then load from Supabase
   const [lineStyle, setLineStyle] = useState<'solid' | 'dotted'>('solid')
   const [arrowDirection, setArrowDirection] = useState<'down' | 'up' | 'left' | 'right'>('down')
-  const [editMenuPillMode, setEditMenuPillModeState] = useState<'home' | 'insert' | 'draw' | 'view'>('home') // SSR: Actions; layout restore before paint
+  const [editMenuPillMode, setEditMenuPillModeState] = useState<'home' | 'insert' | 'style' | 'draw' | 'view'>('home') // SSR: Actions; layout restore before paint
   const [viewMode, setViewMode] = useState<'linear' | 'canvas'>('canvas') // View mode state
   const [boardRule, setBoardRule] = useState<'wide' | 'college' | 'narrow'>('college') // Board rule state (default: college)
   const [boardStyle, setBoardStyle] = useState<'none' | 'dotted' | 'lined' | 'grid'>('dotted') // Board style state (default: college dotted)
@@ -151,7 +151,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
     setSelectedTag((current) => current === tagId ? null : tagId)
   }, [])
 
-  // Persist pill so reload / board remount keeps Actions vs Layout vs Draw vs View
+  // Persist pill so reload / board remount keeps Actions vs Layout vs Style vs Draw vs View
   const setEditMenuPillMode = useCallback((mode: EditMenuPillMode) => {
     persistPillMode(mode) // Remember before the next load
     setEditMenuPillModeState(mode) // Swap the tool set immediately
@@ -166,7 +166,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
   // Restore pill + Draw tool before first paint (skip embed — no toolbar, must not arm Freehand)
   useLayoutEffect(() => {
     if (pathname?.startsWith('/embed/')) return // Nested preview iframe stays selection-only
-    const mode = getStoredPillMode() // Last Actions / Layout / Draw / View
+    const mode = getStoredPillMode() // Last Actions / Layout / Style / Draw / View
     setEditMenuPillModeState(mode) // Same tool set as last session
     if (mode !== 'draw') return // Other modes: don’t arm a Draw tool or capture the board
     const tool = getStoredDrawTool() // Last toggled Draw tool, if any

@@ -2,11 +2,12 @@
 
 // Stack line between snap-linked frames on one adjust-box side (one line per gap).
 // Each side (top/right/bottom/left) has its own stack tree.
+// • Visible when either frame on that gap is selected; always visible while mates are stacked
 // • Click → Open stack / directional Stack arrows / Lock
 // • First Stack sets lock for that group (snap alone does not lock)
 // • Hover when any mate is stacked → fast faded preview; click one to open just that frame
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { useReactFlow, useStore } from 'reactflow'
 import { Eye, Lock, ArrowLeft, ArrowRight, ArrowUp, ArrowDown } from 'lucide-react'
@@ -14,6 +15,7 @@ import { createClient } from '@/lib/supabase/client'
 import {
   stackExpandLayout,
   STACK_LINE_GAP,
+  frameScreenRect,
   type FrameStackSide,
 } from '@/components/use-frame-nest-stack-drag'
 import {
@@ -51,6 +53,61 @@ function oppositeSide(side: FrameStackSide): FrameStackSide {
   if (side === 'left') return 'right'
   if (side === 'top') return 'bottom'
   return 'top'
+}
+
+/** Screen-fixed box for a portaled stack line (so a selected mate cannot cover the host’s line). */
+function stackLineScreenBox(
+  stackSide: FrameStackSide,
+  rect: DOMRect,
+  zoom: number,
+  frameUiScale: number
+): CSSProperties {
+  const lineOutset = Math.max(4, STACK_LINE_GAP / 2) * zoom // Mid-gap in screen px
+  const hitPad = Math.max(STACK_LINE_GAP, 10 * frameUiScale) * zoom // Grab band
+  const inset = 0.08 // Same 8% inset as the in-node line
+  const span = 0.84
+  if (stackSide === 'top') {
+    return {
+      position: 'fixed',
+      left: rect.left + rect.width * inset,
+      width: rect.width * span,
+      top: rect.top - lineOutset - hitPad / 2,
+      height: hitPad,
+      paddingTop: hitPad / 2 - 1,
+      zIndex: 40,
+    }
+  }
+  if (stackSide === 'bottom') {
+    return {
+      position: 'fixed',
+      left: rect.left + rect.width * inset,
+      width: rect.width * span,
+      top: rect.bottom + lineOutset - hitPad / 2,
+      height: hitPad,
+      paddingTop: hitPad / 2 - 1,
+      zIndex: 40,
+    }
+  }
+  if (stackSide === 'left') {
+    return {
+      position: 'fixed',
+      top: rect.top + rect.height * inset,
+      height: rect.height * span,
+      left: rect.left - lineOutset - hitPad / 2,
+      width: hitPad,
+      paddingLeft: hitPad / 2 - 1,
+      zIndex: 40,
+    }
+  }
+  return {
+    position: 'fixed',
+    top: rect.top + rect.height * inset,
+    height: rect.height * span,
+    left: rect.right + lineOutset - hitPad / 2,
+    width: hitPad,
+    paddingLeft: hitPad / 2 - 1,
+    zIndex: 40,
+  }
 }
 
 function stackIndexOf(n: { data?: unknown }, groupId: string): number {
@@ -190,10 +247,11 @@ export function FrameStackRevealLine({
       if (n.id === nodeId && !findStackEntry(m, stackGroupId)) return
       const lock = isGroupLocked(m, stackGroupId) ? 1 : 0
       const expanded = entryExpanded(m, stackGroupId) ? 1 : 0
-      parts.push(`${n.id}:${expanded}:${n.hidden ? 1 : 0}:${lock}`)
+      parts.push(`${n.id}:${expanded}:${n.hidden ? 1 : 0}:${lock}:${n.selected ? 1 : 0}`)
     })
     return parts.join('|')
   })
+  const viewportKey = useStore((s) => s.transform.join(',')) // Re-place the portaled line on pan/zoom
   const [previewing, setPreviewing] = useState(false) // Hover-dwell preview active
   const [menuOpen, setMenuOpen] = useState(false) // Eye / Stack / Lock menu
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 }) // Screen coords for portal menu
@@ -1058,48 +1116,7 @@ export function FrameStackRevealLine({
 
   if (mates.length === 0) return null
 
-  // Line sits in the gap between host and mate (mid-gap) so it isn’t covered
-  const lineOutset = Math.max(4, STACK_LINE_GAP / 2)
-  const lineStyle: React.CSSProperties =
-    stackSide === 'top'
-      ? {
-          left: '8%',
-          width: '84%',
-          top: 0,
-          height: LINE_THICKNESS,
-          transform: `translateY(calc(-50% - ${lineOutset}px))`,
-          transformOrigin: 'center',
-        }
-      : stackSide === 'bottom'
-        ? {
-            left: '8%',
-            width: '84%',
-            bottom: 0,
-            height: LINE_THICKNESS,
-            transform: `translateY(calc(50% + ${lineOutset}px))`,
-            transformOrigin: 'center',
-          }
-        : stackSide === 'left'
-          ? {
-              top: '8%',
-              height: '84%',
-              left: 0,
-              width: LINE_THICKNESS,
-              transform: `translateX(calc(-50% - ${lineOutset}px))`,
-              transformOrigin: 'center',
-            }
-          : {
-              top: '8%',
-              height: '84%',
-              right: 0,
-              width: LINE_THICKNESS,
-              transform: `translateX(calc(50% + ${lineOutset}px))`,
-              transformOrigin: 'center',
-            }
-
   const isHorizontal = stackSide === 'top' || stackSide === 'bottom'
-  // Hit band fills most of the snap gap so the line is easy to grab
-  const hitPad = Math.max(STACK_LINE_GAP, 10 * frameUiScale)
   // This gap's "outward" count = mates further out than this frame
   const myIndex = (() => {
     const self = getNodes().find((n) => n.id === nodeId)
@@ -1119,6 +1136,15 @@ export function FrameStackRevealLine({
   const markCount = stackMarkCount(Math.max(1, totalOutCount))
   const isDotted = totalOutCount > STACK_LINE_DASH_CAP
   const gapPct = isDotted ? undefined : markCount <= 1 ? 0 : `${100 / (markCount * 4)}%`
+  // Expanded snap: show when either frame on this gap is selected. Collapsed stack: always show.
+  const mateStacked = outwardMates.some((n) => n.hidden === true || !entryExpanded(nodeStackMeta(n), stackGroupId))
+  const showLine = anyHidden || mateStacked || !!hostNode?.selected || !!outwardMates[0]?.selected
+  void viewportKey // Re-place after pan/zoom
+  const zoom = Number(String(viewportKey).split(',')[2]) || 1
+  const hostRect = showLine ? frameScreenRect(nodeId) : null
+  if (!showLine || !hostRect || typeof document === 'undefined') return null
+  const lineBox = stackLineScreenBox(stackSide, hostRect, zoom, frameUiScale)
+  const stroke = LINE_THICKNESS * zoom // Match former in-node thickness (viewport-scaled)
 
   // Arrow toward this frame (inward) vs toward the next mate (outward)
   const InwardIcon =
@@ -1142,19 +1168,17 @@ export function FrameStackRevealLine({
 
   return (
     <>
+      {createPortal(
       <button
         ref={lineBtnRef}
         type="button"
         data-tt-stack-reveal
         className={cn(
-          'nodrag nopan absolute z-[40] cursor-pointer border-0 p-0',
+          'nodrag nopan cursor-pointer border-0 p-0',
           'opacity-80 hover:opacity-100'
         )}
         style={{
-          ...lineStyle,
-          ...(isHorizontal
-            ? { marginTop: -hitPad / 2, height: hitPad, paddingTop: hitPad / 2 - 1 }
-            : { marginLeft: -hitPad / 2, width: hitPad, paddingLeft: hitPad / 2 - 1 }),
+          ...lineBox,
           background: 'transparent',
         }}
         title="Stack line"
@@ -1171,8 +1195,8 @@ export function FrameStackRevealLine({
             alignItems: 'center',
             justifyContent: isDotted ? 'space-between' : 'stretch',
             gap: gapPct,
-            height: isHorizontal ? LINE_THICKNESS : '100%',
-            width: isHorizontal ? '100%' : LINE_THICKNESS,
+            height: isHorizontal ? stroke : '100%',
+            width: isHorizontal ? '100%' : stroke,
             margin: isHorizontal ? undefined : '0 auto',
           }}
         >
@@ -1183,17 +1207,19 @@ export function FrameStackRevealLine({
               style={{
                 flex: isDotted ? '0 0 auto' : '1 1 0',
                 ...(isDotted
-                  ? { width: LINE_THICKNESS, height: LINE_THICKNESS }
+                  ? { width: stroke, height: stroke }
                   : isHorizontal
-                    ? { height: LINE_THICKNESS, minWidth: LINE_THICKNESS }
-                    : { width: LINE_THICKNESS, minHeight: LINE_THICKNESS }),
+                    ? { height: stroke, minWidth: stroke }
+                    : { width: stroke, minHeight: stroke }),
                 background: STACK_LINE_COLOR,
                 borderRadius: 9999,
               }}
             />
           ))}
         </span>
-      </button>
+      </button>,
+        document.body
+      )}
 
       {menuOpen &&
         typeof document !== 'undefined' &&

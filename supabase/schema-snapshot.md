@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-19T10:39:21Z`
+- Snapped at: `2026-08-19T23:37:57Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260819233757_thread_layout_snap_pack_stack_line.sql`.
+- Thread layout: magnet packs selected frames flush and links `sideStacks` (stack line; no lock). Line shows when either frame is selected, and always while mates are stacked.
+- Schema unchanged.
+
+## Prior: notion import picker recents cancel
 
 - No DDL. Marker `20260819103921_notion_import_picker_recents_cancel.sql`.
 - Notion Import pages: Recents / Shared start open; Private + nested pages collapsed; Adding… / Generating… + Cancel (abort in-flight import). Sidebar more-menu New board nests under a row.

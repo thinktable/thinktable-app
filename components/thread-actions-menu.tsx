@@ -22,7 +22,7 @@ import {
 } from 'lucide-react' // Row icons matching FigJam-style action list
 import { Button } from '@/components/ui/button' // Ghost row buttons
 import { cn } from '@/lib/utils' // Class merge
-import { applyMenuPlacement, watchMenuSafeRect } from '@/lib/menu-placement' // Stay in-window, miss top bar / chat
+import { applyMenuPlacement, getThreadCoverRects, watchMenuSafeRect } from '@/lib/menu-placement' // Stay in-window, miss top bar / chat / thread curve
 
 /** Actions the thread menu can emit (wired + stubs). */
 export type ThreadActionId =
@@ -57,6 +57,9 @@ export type ThreadActionsMenuProps = {
   currentStrokeWidth?: number // Checkmark in Thickness flyout (1–4)
   onAction: (action: ThreadActionId) => void // Parent wires delete / insert / style
   onClose: () => void // Dismiss on Escape / outside
+  edgeId?: string // Clicked thread RF id — avoid its path even before .selected
+  sourceId?: string // Source frame id — don't cover the snapped pair
+  targetId?: string // Target frame id
   className?: string
 }
 
@@ -85,6 +88,9 @@ export function ThreadActionsMenu({
   currentStrokeWidth = 2,
   onAction,
   onClose,
+  edgeId,
+  sourceId,
+  targetId,
   className,
 }: ThreadActionsMenuProps) {
   const [openSubmenu, setOpenSubmenu] = useState<'arrange' | 'info' | 'thickness' | null>(null) // Flyout
@@ -97,10 +103,17 @@ export function ThreadActionsMenu({
   useLayoutEffect(() => {
     const root = rootRef.current // Menu shell
     if (!root) return // Not mounted
-    const place = () => applyMenuPlacement(root, { anchorX: x, anchorY: y, openLeft: false, fromExisting: true }) // Keep above-click, then clamp
+    const place = () =>
+      applyMenuPlacement(root, {
+        anchorX: x, // Click on the thread
+        anchorY: y,
+        openLeft: false, // Prefer the right of the curve
+        fromExisting: false, // Re-score every time so a tall card cannot clamp onto the arch
+        extraHard: getThreadCoverRects(edgeId, sourceId, targetId), // Never cover the curve or its frames
+      })
     place()
     return watchMenuSafeRect(place)
-  }, [x, y, openSubmenu])
+  }, [x, y, openSubmenu, edgeId, sourceId, targetId])
 
   // FigJam-shaped list, product terms (thread / frame), Thinktable row chrome
   const rows: RowDef[] = [
@@ -234,9 +247,8 @@ export function ThreadActionsMenu({
       style={{
         left: `${x}px`,
         top: `${y}px`,
-        transform: 'translate(-50%, -100%)', // Anchor above click; no zoom scale (matches handle menu)
-        transformOrigin: 'center bottom',
-        marginTop: '-8px',
+        transform: 'translate(8px, -50%)', // First paint: right of click, not on the arch
+        transformOrigin: 'left center',
       }}
       onClick={(e) => {
         e.stopPropagation()

@@ -56,6 +56,7 @@ import {
   Circle,
   Grid3x3,
   Boxes, // Layout Smart Align — multi-box glyph
+  Spline, // Layout Style — thread path glyph (same as thread click-menu Style)
   Presentation, // View presentation mode
   Scan, // View capture — 4 disconnected rounded corners
   Table,
@@ -78,6 +79,9 @@ import {
 import { AutomationsMenu } from './automations-menu' // Actions-bar Automations list popover
 import { CapturesMenu } from './captures-menu' // View-bar Capture list popover
 import { ToolbarTitle } from './toolbar-title' // Animated icon-adjacent titles
+import { LayoutAlignGlyph, LayoutForkMenuItems, type LayoutForkAlign } from './layout-fork-icon' // Layout dropdown: forked arrows + align
+import { packSelectedFramesTogether } from '@/components/use-frame-nest-stack-drag' // Magnet: pack far-apart frames flush
+import { setSideStackEntry } from '@/lib/frame-side-stacks' // Stamp stack line link without lock
 import { PresentationsMenu } from './presentations-menu' // View-bar Presentation list popover
 import { useBoardAccess } from '@/lib/share/board-access-context' // Owner-only share menu
 import { useSidebarContext } from './sidebar-context' // Wait for chat column restore before measuring titles
@@ -106,9 +110,48 @@ function titledToolWidth(label: string) {
   return 16 + 6 + Math.ceil(label.length * 7.5) + 16 // icon + gap-1.5 + glyph estimate + px-2
 }
 
+/** Style bar dropdown — thread stroke + path for the Thread style tool. */
+function ThreadStyleMenuItems({
+  strokeIsSolid,
+  curve,
+  onStrokeChange,
+  onCurveChange,
+}: {
+  strokeIsSolid: boolean // Context `lineStyle === 'solid'`
+  curve: ThreadStylePref // Smooth / Sharp / Linear board pref
+  onStrokeChange: (solid: boolean) => void // Solid vs directional (dotted) stroke
+  onCurveChange: (next: ThreadStylePref) => void // Apply path style + patch selected threads
+}) {
+  const curveValue = curve === 'boxed' ? 'sharp' : curve === 'linear' ? 'linear' : 'smooth' // Radio ids vs stored pref
+  return (
+    <>
+      <DropdownMenuRadioGroup
+        value={strokeIsSolid ? 'solid' : 'dashed'}
+        onValueChange={(value) => onStrokeChange(value === 'solid')}
+      >
+        <DropdownMenuRadioItem value="solid" className="pl-8 text-xs">Solid</DropdownMenuRadioItem>
+        <DropdownMenuRadioItem value="dashed" className="pl-8 text-xs">Directional</DropdownMenuRadioItem>
+      </DropdownMenuRadioGroup>
+      <DropdownMenuSeparator className="mx-2" />
+      <DropdownMenuRadioGroup
+        value={curveValue}
+        onValueChange={(value) => {
+          const next: ThreadStylePref = value === 'sharp' ? 'boxed' : value === 'linear' ? 'linear' : 'curved' // Map radio → stored pref
+          onCurveChange(next)
+        }}
+      >
+        <DropdownMenuRadioItem value="smooth" className="pl-8 text-xs">Smooth</DropdownMenuRadioItem>
+        <DropdownMenuRadioItem value="sharp" className="pl-8 text-xs">Sharp</DropdownMenuRadioItem>
+        <DropdownMenuRadioItem value="linear" className="pl-8 text-xs">Linear</DropdownMenuRadioItem>
+      </DropdownMenuRadioGroup>
+    </>
+  )
+}
+
 /** Slash-free cluster immediately right of undo/redo — never fold into More; phone pill instead. */
 function leftmostGroupIds(mode: string): Set<string> {
-  if (mode === 'insert') return new Set(['smartAlign', 'arrows']) // Tidy up + Layout (no slash between)
+  if (mode === 'insert') return new Set(['smartAlign', 'arrows']) // Tidy up + Thread layout (Table can overflow)
+  if (mode === 'style') return new Set(['threadStyle']) // Thread style — Style pill’s only cluster
   if (mode === 'view') return new Set(['boardStyle']) // Board, then slash, then Capture/Present
   if (mode === 'draw') return new Set(['drawGroup2', 'drawGroup3']) // Eraser + ink, then slash, then lasso/spaces
   return new Set(['lock']) // Anchor + Snap frames, then slash, then Filter cluster
@@ -117,7 +160,8 @@ function leftmostGroupIds(mode: string): Set<string> {
 /** Icon-only width of each mode’s furthest-left slash-free cluster. Phone pill uses the widest. */
 const LEFTMOST_ICON_WIDTH: Record<string, number> = {
   home: 64, // Anchor + Snap
-  insert: 40 + 4 + 40, // Tidy up + Layout (gap-0.5)
+  insert: 40 + 4 + 40, // Tidy up + Thread layout (gap-0.5)
+  style: 40, // Thread style
   draw: 28 + 4 + 76, // Eraser + pencil + highlighter
   view: 40, // Board
 }
@@ -269,6 +313,15 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   
   // Track which dropdown is currently open - only one can be open at a time
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
+  const [layoutForkAlign, setLayoutForkAlign] = useState<LayoutForkAlign>('center') // Snap, single arrow, or left / center / right fork
+  useEffect(() => {
+    const saved = localStorage.getItem('thinktable-layout-fork-align') // Sticky across reload; UI-only until layout is wired
+    if (saved === 'snap' || saved === 'single' || saved === 'left' || saved === 'center' || saved === 'right') setLayoutForkAlign(saved)
+  }, [])
+  const pickLayoutForkAlign = (next: LayoutForkAlign) => {
+    setLayoutForkAlign(next) // Update the open menu + trigger icon
+    localStorage.setItem('thinktable-layout-fork-align', next) // Remember without waiting on board prefs
+  }
   
   // Handler to manage dropdown open state - closes other dropdowns when one opens
   const handleDropdownOpenChange = (dropdownId: string, isOpen: boolean) => {
@@ -417,6 +470,17 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
 
   // Initialize with consistent defaults to avoid hydration mismatch, then load from Supabase
   const [lineStyle, setLineStyle] = useState<ThreadStylePref>('curved')
+  const applyThreadCurve = (next: ThreadStylePref) => {
+    setLineStyle(next) // Board default Smooth / Sharp / Linear
+    const algorithm = threadAlgorithmFromStyle(next) // Map pref → RF path algorithm
+    reactFlowInstance?.setEdges((eds) =>
+      eds.map((e) => {
+        if (!e.selected && e.id !== clickedEdge?.id) return e // Only the picked / selected thread
+        if (e.type !== 'editable' && e.type !== 'animatedDotted') return e // Skip non-thread edges
+        return { ...e, data: { ...(e.data as object), algorithm } } // Stamp the new path style
+      })
+    )
+  }
   const [editMode, setEditMode] = useState<'editing' | 'suggesting' | 'viewing'>('editing')
   // Use context values for drawTool, with local state as fallback
   const drawTool = contextDrawTool ?? null
@@ -795,6 +859,67 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     }).catch((err) => console.error('Failed to persist frame-group lock:', err))
   }
 
+  // Thread layout magnet: pull selected frames flush (they can start far apart)
+  const handleSnapFramesTogether = () => {
+    if (!reactFlowInstance) return
+    const selected = getSelectedFrames()
+    if (selected.length < 2) return
+    getMapTakeSnapshot()?.()
+    const live = reactFlowInstance.getNodes()
+    const packed = packSelectedFramesTogether(selected, live, arrowDirection, layoutForkAlign)
+    if (packed.length === 0) return
+    const byId = new Map(packed.map((p) => [p.id, p]))
+    reactFlowInstance.setNodes((nds) =>
+      nds.map((n) => {
+        const p = byId.get(n.id)
+        if (!p) return n
+        const pm = n.data?.promptMessage
+        if (!pm) return { ...n, position: p.position } // RF only
+        let metadata = { ...(pm.metadata || {}), position: p.abs } as Record<string, unknown>
+        if (p.stack) {
+          metadata = setSideStackEntry(metadata, p.stack.side, {
+            groupId: p.stack.groupId,
+            index: p.stack.index,
+            ...(p.stack.anchor ? { anchor: true } : {}),
+            expanded: true, // Stay visible — stack line only, no collapse / lock
+          })
+        }
+        return {
+          ...n,
+          position: p.position,
+          hidden: false,
+          data: { ...n.data, promptMessage: { ...pm, metadata } },
+        }
+      })
+    )
+    void (async () => {
+      const supabaseClient = createClient()
+      for (const p of packed) {
+        if (!p.messageId) continue
+        const { data: row } = await supabaseClient
+          .from('messages')
+          .select('metadata')
+          .eq('id', p.messageId)
+          .maybeSingle()
+        if (!row) continue
+        let next: Record<string, unknown> = {
+          ...((row.metadata as Record<string, unknown>) || {}),
+          isBlock: true,
+          position: p.abs,
+        }
+        if (p.stack) {
+          next = setSideStackEntry(next, p.stack.side, {
+            groupId: p.stack.groupId,
+            index: p.stack.index,
+            ...(p.stack.anchor ? { anchor: true } : {}),
+            expanded: true, // Persist the line link; do not lock
+          })
+        }
+        await supabaseClient.from('messages').update({ metadata: next }).eq('id', p.messageId)
+      }
+    })().catch((err) => console.error('Failed to persist snap-together:', err))
+  }
+
   // Dim frames that do not match the Actions-bar search query
   useEffect(() => {
     if (!reactFlowInstance) return
@@ -984,11 +1109,16 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       // Icon-only widths (after all titles have condensed)
       const iconGroups = editMenuPillMode === 'insert'
         ? [
-          { id: 'insertGroup1', width: 40 }, // Table icon
-          { id: 'arrows', width: 40 }, // Layout arrow
+          { id: 'insertGroup1', width: 40 }, // Table icon — hides first
+          { id: 'arrows', width: 40 }, // Thread layout
           { id: 'smartAlign', width: 40 }, // Tidy up
           { id: 'undoRedo', width: 70 },
         ]
+        : editMenuPillMode === 'style'
+          ? [
+            { id: 'threadStyle', width: 40 }, // Thread style — Style bar
+            { id: 'undoRedo', width: 70 },
+          ]
         : editMenuPillMode === 'view'
           ? [
             { id: 'presentation', width: 40 }, // Present icon (hides first — rightmost)
@@ -1014,10 +1144,15 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       const midGroups = editMenuPillMode === 'insert'
         ? [
           { id: 'insertGroup1', width: titledToolWidth('Table') + 16 },
-          { id: 'arrows', width: titledToolWidth('Layout') },
+          { id: 'arrows', width: titledToolWidth('Thread layout') },
           { id: 'smartAlign', width: titledToolWidth('Tidy up') },
           { id: 'undoRedo', width: 70 },
         ]
+        : editMenuPillMode === 'style'
+          ? [
+            { id: 'threadStyle', width: titledToolWidth('Thread style') },
+            { id: 'undoRedo', width: 70 },
+          ]
         : editMenuPillMode === 'view'
           ? [
             { id: 'presentation', width: titledToolWidth('Present') },
@@ -1042,6 +1177,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       // All titles shown
       const fullGroups = editMenuPillMode === 'insert'
         ? midGroups // Layout has no early cluster
+        : editMenuPillMode === 'style'
+          ? midGroups // Style has no early cluster
         : editMenuPillMode === 'view'
           ? midGroups // View has no early cluster
           : editMenuPillMode === 'draw'
@@ -1087,6 +1224,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       const widestLeftmost = Math.max( // Hungriest left cluster across modes so the pill doesn’t flip on mode change
         LEFTMOST_ICON_WIDTH.home,
         LEFTMOST_ICON_WIDTH.insert,
+        LEFTMOST_ICON_WIDTH.style,
         LEFTMOST_ICON_WIDTH.draw,
         LEFTMOST_ICON_WIDTH.view
       )
@@ -1461,7 +1599,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           </>
         )}
 
-        {/* Smart Align + layout arrow — Layout bar (pill still `insert`) */}
+        {/* Tidy up + Thread layout — Layout bar (pill still `insert`) */}
         {editMenuPillMode === 'insert' && (!isItemHidden('smartAlign') || !isItemHidden('arrows')) && (
           <div className="flex items-center gap-0.5 flex-shrink-0">
             {!isItemHidden('smartAlign') && (
@@ -1489,52 +1627,34 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
                       'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
                     )}
-                    title="Layout direction"
-                    aria-label="Layout direction"
+                    title="Thread layout"
+                    aria-label="Thread layout"
                   >
-                    {arrowDirection === 'down' && <ArrowDown className="h-4 w-4 flex-shrink-0" />}
-                    {arrowDirection === 'up' && <ArrowUp className="h-4 w-4 flex-shrink-0" />}
-                    {arrowDirection === 'left' && <ArrowLeft className="h-4 w-4 flex-shrink-0" />}
-                    {arrowDirection === 'right' && <ArrowRight className="h-4 w-4 flex-shrink-0" />}
-                    <ToolbarTitle show={!compactLabels}>Layout</ToolbarTitle>
+                    <LayoutAlignGlyph direction={arrowDirection} align={layoutForkAlign} className="h-4 w-4 flex-shrink-0" />
+                    <ToolbarTitle show={!compactLabels}>Thread layout</ToolbarTitle>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="min-w-0 w-fit p-1">
-                  <DropdownMenuItem
-                    onClick={() => setArrowDirection('down')}
-                    className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'down' && 'bg-gray-100')}
-                  >
-                    <ArrowDown className="h-4 w-4" />
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => setArrowDirection('right')}
-                    className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'right' && 'bg-gray-100')}
-                  >
-                    <ArrowRight className="h-4 w-4" />
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => setArrowDirection('left')}
-                    className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'left' && 'bg-gray-100')}
-                  >
-                    <ArrowLeft className="h-4 w-4" />
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => setArrowDirection('up')}
-                    className={cn('h-7 w-7 p-0 flex items-center justify-center rounded-sm', arrowDirection === 'up' && 'bg-gray-100')}
-                  >
-                    <ArrowUp className="h-4 w-4" />
-                  </DropdownMenuItem>
+                  <LayoutForkMenuItems
+                    direction={arrowDirection}
+                    align={layoutForkAlign}
+                    onDirectionChange={setArrowDirection}
+                    onAlignChange={pickLayoutForkAlign}
+                    canSnap={frameLockUi.hasMulti}
+                    snapActive={layoutForkAlign === 'snap'}
+                    onSnapFrames={handleSnapFramesTogether}
+                  />
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
           </div>
         )}
-        {/* Slash between layout tools and Table */}
+        {/* Slash between Thread layout cluster and Table */}
         {editMenuPillMode === 'insert' && (!isItemHidden('smartAlign') || !isItemHidden('arrows')) && !isItemHidden('insertGroup1') && (
           <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
         )}
 
-        {/* Table — right of Layout */}
+        {/* Table — right of Thread layout */}
         {editMenuPillMode === 'insert' && !isItemHidden('insertGroup1') && (
           <div className="flex items-center gap-1 px-2 flex-shrink-0">
             <Button
@@ -1557,6 +1677,37 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         {/* Slash before More menu when Layout tools overflow */}
         {editMenuPillMode === 'insert' && (!isItemHidden('smartAlign') || !isItemHidden('arrows') || !isItemHidden('insertGroup1')) && hiddenItems.size > 0 && (
           <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
+        )}
+
+        {/* Style bar — Thread style (pill is Style; this tool is named Thread style) */}
+        {editMenuPillMode === 'style' && !isItemHidden('threadStyle') && (
+          <div className="flex items-center gap-1 px-2 flex-shrink-0">
+            <DropdownMenu open={openDropdown === 'threadStyle'} onOpenChange={(open) => handleDropdownOpenChange('threadStyle', open)}>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
+                    'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
+                  )}
+                  title="Thread style"
+                  aria-label="Thread style"
+                >
+                  <Spline className="h-4 w-4 flex-shrink-0" />
+                  <ToolbarTitle show={!compactLabels}>Thread style</ToolbarTitle>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-40">
+                <ThreadStyleMenuItems
+                  strokeIsSolid={verticalLineStyle === 'solid'}
+                  curve={lineStyle}
+                  onStrokeChange={(solid) => setVerticalLineStyle(solid ? 'solid' : 'dotted')}
+                  onCurveChange={applyThreadCurve}
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         )}
 
         {/* Draw Mode Buttons - Eraser, Pencil, Highlighter, Lasso, Insert Spaces (ink dropdowns on the tools) */}
@@ -2659,7 +2810,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             {/* Show hidden items in more menu - different items based on edit menu mode */}
             {editMenuPillMode === 'insert' ? (
               <>
-                {/* Insert mode items — visual order: Smart Align, arrows, Table */}
+                {/* Insert mode items — visual order: Tidy up, Thread layout, Table */}
                 {isItemHidden('smartAlign') && (
                   <>
                     <DropdownMenuItem>
@@ -2671,22 +2822,15 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 )}
                 {isItemHidden('arrows') && (
                   <>
-                    <DropdownMenuItem onClick={() => setArrowDirection('down')}>
-                      <ArrowDown className="h-4 w-4 mr-2" />
-                      Arrow Down
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setArrowDirection('right')}>
-                      <ArrowRight className="h-4 w-4 mr-2" />
-                      Arrow Right
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setArrowDirection('left')}>
-                      <ArrowLeft className="h-4 w-4 mr-2" />
-                      Arrow Left
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setArrowDirection('up')}>
-                      <ArrowUp className="h-4 w-4 mr-2" />
-                      Arrow Up
-                    </DropdownMenuItem>
+                    <LayoutForkMenuItems
+                      direction={arrowDirection}
+                      align={layoutForkAlign}
+                      onDirectionChange={setArrowDirection}
+                      onAlignChange={pickLayoutForkAlign}
+                      canSnap={frameLockUi.hasMulti}
+                      snapActive={layoutForkAlign === 'snap'}
+                      onSnapFrames={handleSnapFramesTogether}
+                    />
                     <DropdownMenuSeparator />
                   </>
                 )}
@@ -2700,6 +2844,20 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       <Table className="h-4 w-4 mr-2" />
                       Table
                     </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+              </>
+            ) : editMenuPillMode === 'style' ? (
+              <>
+                {isItemHidden('threadStyle') && (
+                  <>
+                    <ThreadStyleMenuItems
+                      strokeIsSolid={verticalLineStyle === 'solid'}
+                      curve={lineStyle}
+                      onStrokeChange={(solid) => setVerticalLineStyle(solid ? 'solid' : 'dotted')}
+                      onCurveChange={applyThreadCurve}
+                    />
                     <DropdownMenuSeparator />
                   </>
                 )}

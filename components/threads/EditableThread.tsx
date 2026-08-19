@@ -6,12 +6,12 @@ import {
   useReactFlow,
   useStore,
   Position,
-  getBezierPath,
   type XYPosition,
-} from 'reactflow' // Custom edge primitives + selection store + Miro bezier
+} from 'reactflow' // Custom edge primitives + selection store
 
 import { ControlPoint, type ControlPointData } from './ControlPoint' // Miro-style path knobs
 import { getPath, getControlPoints } from './path' // Path math when user has bent the thread
+import { getSmoothThreadBezier } from './path/bezier' // Same-side bow for unbent Smooth (snapped frames)
 import {
   DEFAULT_THREAD_ALGORITHM,
   THREAD_DEFAULT_COLOR,
@@ -159,35 +159,36 @@ export function EditableThread({
   const toSide = targetSide ?? Position.Left
   const sides = { fromSide, toSide }
 
-  // Route for editable knobs (user bends). Unbent smooth threads use RF bezier below — Catmull
-  // stubs were adding S-curves that looked worse than Miro.
+  // Route for editable knobs (user bends). Unbent Smooth uses getSmoothThreadBezier below —
+  // Catmull stubs added S-curves; RF getBezierPath went flat on same-side snapped frames.
   const routePoints = [sourceOrigin, ...points, targetOrigin]
-  const controlPoints = getControlPoints({
-    points: routePoints,
-    algorithm,
-    sides,
-  })
-  const controlPointsWithIds = useIdsForInactiveControlPoints(controlPoints)
-
-  // Unbent Smooth → single cubic bezier (side-aware approach, no extra waypoints).
-  // Bent / Sharp / Linear → existing path math through waypoints.
   const unbentSmooth =
     points.length === 0 &&
     (algorithm === ThreadAlgorithm.BezierCatmullRom ||
       algorithm === ThreadAlgorithm.CatmullRom)
-  let path: string
-  if (unbentSmooth) {
-    ;[path] = getBezierPath({
-      sourceX: sourceOrigin.x,
-      sourceY: sourceOrigin.y,
-      sourcePosition: fromSide,
-      targetX: targetOrigin.x,
-      targetY: targetOrigin.y,
-      targetPosition: toSide,
-    })
-  } else {
-    path = getPath({ points: routePoints, algorithm, sides })
-  }
+  const smoothBezier = unbentSmooth
+    ? getSmoothThreadBezier({
+        sourceX: sourceOrigin.x, // Frame-edge attach, not the outer indicator
+        sourceY: sourceOrigin.y,
+        sourcePosition: fromSide, // Snapped side (top↔top when frames sit left/right)
+        targetX: targetOrigin.x,
+        targetY: targetOrigin.y,
+        targetPosition: toSide,
+      })
+    : null
+  const controlPoints = unbentSmooth
+    ? [{ id: '', active: false, x: smoothBezier!.mid.x, y: smoothBezier!.mid.y }] // Hollow knob on the arch, not the chord
+    : getControlPoints({
+        points: routePoints,
+        algorithm,
+        sides,
+      })
+  const controlPointsWithIds = useIdsForInactiveControlPoints(controlPoints)
+
+  // Unbent Smooth → bowed cubic (same-side) / RF bezier (opposite). Bent / Sharp / Linear → waypoints.
+  const path = smoothBezier
+    ? smoothBezier.path
+    : getPath({ points: routePoints, algorithm, sides })
 
   const stroke = selected ? THREAD_SELECTED_COLOR : (style?.stroke as string) || THREAD_DEFAULT_COLOR
   const baseWidth = selected ? Math.max(strokeWidth, strokeWidth + 0.5) : strokeWidth // Selected reads slightly heavier

@@ -107,6 +107,90 @@ export function stackExpandLayout(
   return { x: front.x + (front.width - w) / 2, y: front.y + front.height + offset }
 }
 
+/** Thread-layout direction → host edge that packed mates attach to. */
+const PACK_SIDE: Record<'down' | 'up' | 'left' | 'right', FrameStackSide> = {
+  down: 'bottom',
+  up: 'top',
+  left: 'left',
+  right: 'right',
+}
+
+/** Cross-axis align against the *anchor* box (not the previous mate — avoids stair-steps). */
+function packCrossAlign(
+  anchor: { x: number; y: number; width: number; height: number },
+  mate: { width: number; height: number },
+  side: FrameStackSide,
+  align: 'snap' | 'single' | 'left' | 'center' | 'right',
+  pos: { x: number; y: number }
+): { x: number; y: number } {
+  const a = align === 'left' || align === 'right' ? align : 'center' // Snap / single = centered like stackExpandLayout
+  if (side === 'bottom' || side === 'top') {
+    if (a === 'left') return { x: anchor.x, y: pos.y } // Left edges on the anchor
+    if (a === 'right') return { x: anchor.x + anchor.width - mate.width, y: pos.y } // Right edges
+    return pos // Center already from stackExpandLayout
+  }
+  if (a === 'left') return { x: pos.x, y: anchor.y } // Start of cross-axis = top when packing left/right
+  if (a === 'right') return { x: pos.x, y: anchor.y + anchor.height - mate.height } // End = bottom
+  return pos
+}
+
+/** One frame’s new RF position + abs flow after a toolbar snap-together. */
+export type PackedFrame = {
+  id: string
+  messageId?: string // messages.id for persist
+  position: { x: number; y: number } // RF node.position (parent-relative)
+  abs: { x: number; y: number } // Page-absolute for metadata.position
+  stack: { side: FrameStackSide; groupId: string; index: number; anchor?: boolean } | null // sideStacks link (no lock)
+}
+
+/**
+ * Pull selected frames flush along Thread layout direction (works even when far apart).
+ * First in spatial order stays put; others park with stackExpandLayout + align.
+ * Links `sideStacks` so the stack line appears — does not lock (`frameLockGroupId` / `snapLockGroupId`).
+ */
+export function packSelectedFramesTogether(
+  selected: Node[],
+  live: Node[],
+  direction: 'down' | 'up' | 'left' | 'right',
+  align: 'snap' | 'single' | 'left' | 'center' | 'right'
+): PackedFrame[] {
+  if (selected.length < 2) return []
+  const side = PACK_SIDE[direction]
+  const sorted = [...selected].sort((a, b) => {
+    const aa = absFlowPosition(a, live)
+    const bb = absFlowPosition(b, live)
+    if (direction === 'down') return aa.y - bb.y || aa.x - bb.x // Topmost stays
+    if (direction === 'up') return bb.y - aa.y || aa.x - bb.x // Bottommost stays
+    if (direction === 'left') return bb.x - aa.x || aa.y - bb.y // Rightmost stays
+    return aa.x - bb.x || aa.y - bb.y // Leftmost stays
+  })
+  const host = sorted[0]
+  const hostSize = nodeFlowSize(host)
+  const hostAbs = absFlowPosition(host, live)
+  let front = { x: hostAbs.x, y: hostAbs.y, width: hostSize.width, height: hostSize.height }
+  const hostMsgId = host.data?.promptMessage?.id as string | undefined
+  const groupId = hostMsgId ? sideStackGroupId(hostMsgId, side) : null // Stable group from the parked host
+  const out: PackedFrame[] = []
+  for (let i = 0; i < sorted.length; i++) {
+    const n = sorted[i]
+    const size = nodeFlowSize(n)
+    let abs = i === 0 ? { x: front.x, y: front.y } : stackExpandLayout(front, side, size, 0)
+    if (i > 0) abs = packCrossAlign( { x: hostAbs.x, y: hostAbs.y, width: hostSize.width, height: hostSize.height }, size, side, align, abs )
+    const messageId = n.data?.promptMessage?.id as string | undefined
+    out.push({
+      id: n.id,
+      messageId,
+      position: absToNodePosition(n, abs, live),
+      abs,
+      stack: groupId
+        ? { side, groupId, index: i, ...(i === 0 ? { anchor: true } : {}) } // Host anchors; mates sit further out
+        : null,
+    })
+    front = { x: abs.x, y: abs.y, width: size.width, height: size.height } // Next mate parks against this one
+  }
+  return out
+}
+
 /** True when this chatPanel is a collapsed (hidden) stack mate on every tree it belongs to. */
 export function isStackCollapsedMeta(meta?: Record<string, unknown> | null): boolean {
   if (!meta) return false

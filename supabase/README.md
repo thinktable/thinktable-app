@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260819233757_thread_layout_snap_pack_stack_line` — Thread layout magnet pack + stack line (no lock)
 - `20260819103921_notion_import_picker_recents_cancel` — Notion Import pages Recents/Shared open; Adding/Generating Cancel
 - `20260818235211_boards_nav_dismiss_on_board_click` — Boards nav hides on board / outside chrome click
 - `20260818013815_card_convert_bring_collapsed_stack` — Card convert bring-along (sub/parent); collapsed stack; peel from table
