@@ -273,11 +273,21 @@ export async function importNotionPagesToBoard(opts: {
   workspaceName?: string | null // Optional board title seed
   pageIds?: string[] // Explicit picks from the import modal
   mode?: 'card' | 'mindmap' // card = one frame per pick; mindmap = pick + descendants
+  signal?: AbortSignal // Picker Cancel — stop before writing frames
 }): Promise<ImportNotionResult> {
+  const throwIfAborted = () => {
+    if (!opts.signal?.aborted) return
+    const err = new Error('Import cancelled')
+    err.name = 'AbortError'
+    throw err
+  }
+
   const admin = createAdminClient() // Service role for tokens + inserts
-  const rawPages = await searchAllAccessibleNotionPages(opts.accessToken) // Full accessible set
+  const rawPages = await searchAllAccessibleNotionPages(opts.accessToken, opts.signal) // Full accessible set
+  throwIfAborted()
   // Nested DBs often report parent.block_id — rewrite to owning page for tree/threads
   const allPages = await resolveBlockIdParents(opts.accessToken, rawPages)
+  throwIfAborted()
   const mode = opts.mode || 'card' // Default: add as frame(s)
 
   let pages: NotionSearchPage[] // Pages that become frames
@@ -285,7 +295,13 @@ export async function importNotionPagesToBoard(opts: {
     const wanted = new Set(opts.pageIds.map(normalizeNotionId)) // Selected ids
     if (mode === 'mindmap' && opts.pageIds.length === 1) {
       // Walk child_page blocks — search alone often returns only the shared root
-      pages = await collectMindmapSubtreeViaBlocks(opts.accessToken, opts.pageIds[0], allPages)
+      pages = await collectMindmapSubtreeViaBlocks(
+        opts.accessToken,
+        opts.pageIds[0],
+        allPages,
+        8,
+        opts.signal
+      )
     } else {
       pages = allPages.filter((p) => wanted.has(normalizeNotionId(p.id))) // Exact picks only
     }
@@ -293,6 +309,7 @@ export async function importNotionPagesToBoard(opts: {
     // Legacy auto-import: top-level shares only (no nested content pages)
     pages = filterTopLevelSharedPages(allPages)
   }
+  throwIfAborted()
 
   const conversationId = await resolveConversationId({
     userId: opts.userId,
@@ -327,11 +344,12 @@ export async function importNotionPagesToBoard(opts: {
 
   /** Recursively fetch a page tree and queue its child_pages for their own boards. */
   const fetchTreeAndDiscover = async (page: NotionSearchPage): Promise<void> => {
+    throwIfAborted()
     const id = normalizeNotionId(page.id)
     if (page.object !== 'page') return // Databases have no child_page body tree here
     if (treesByNotionId.has(id)) return // Already fetched
     try {
-      const tree = await fetchNotionPageBlockTree(opts.accessToken, page.id)
+      const tree = await fetchNotionPageBlockTree(opts.accessToken, page.id, 4, opts.signal)
       treesByNotionId.set(id, tree)
       for (const ref of collectChildPageRefs(tree)) {
         const cid = normalizeNotionId(ref.id)
@@ -353,12 +371,14 @@ export async function importNotionPagesToBoard(opts: {
         await fetchTreeAndDiscover(childPage) // Recurse into nested sub-pages
       }
     } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') throw err // Cancel must stop the import
       console.error('Failed to fetch Notion page body:', page.id, err)
       treesByNotionId.set(id, []) // Empty tree → title fallback later
     }
   }
 
   await Promise.all(framePages.map((page) => fetchTreeAndDiscover(page)))
+  throwIfAborted()
 
   // Map frames: Notion pages + databases → temp title, then title-variant boardLink
   // (DB table lives on the nested board body as databaseBlock — same as Add frame pages)
@@ -388,6 +408,7 @@ export async function importNotionPagesToBoard(opts: {
   const notionIdToMessageId = new Map<string, string>()
 
   if (rows.length > 0) {
+    throwIfAborted() // Don't write frames after Cancel
     const { data: inserted, error: insertError } = await admin
       .from('messages')
       .insert(rows)

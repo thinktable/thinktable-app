@@ -57,7 +57,8 @@ export function richTextToHtml(richText: NotionRichText[] | undefined | null): s
 /** Paginate GET /v1/blocks/{id}/children for one parent. */
 export async function fetchBlockChildren(
   accessToken: string,
-  blockId: string
+  blockId: string,
+  signal?: AbortSignal // Optional Cancel from Import pages / Generate mindmap
 ): Promise<NotionBlock[]> {
   const blocks: NotionBlock[] = [] // Flat children of this parent
   let startCursor: string | undefined // Notion pagination cursor
@@ -73,6 +74,7 @@ export async function fetchBlockChildren(
         Authorization: `Bearer ${accessToken}`, // User OAuth token
         'Notion-Version': NOTION_VERSION,
       },
+      signal, // Stop paging when the user cancels
     })
 
     const payload = await res.json() // Parse Notion body
@@ -99,10 +101,11 @@ export async function fetchBlockChildren(
 export async function fetchNotionPageBlockTree(
   accessToken: string,
   pageId: string,
-  maxDepth = 4
+  maxDepth = 4,
+  signal?: AbortSignal // Optional Cancel from Import pages
 ): Promise<NotionBlock[]> {
   const walk = async (parentId: string, depth: number): Promise<NotionBlock[]> => {
-    const children = await fetchBlockChildren(accessToken, parentId) // One parent’s children
+    const children = await fetchBlockChildren(accessToken, parentId, signal) // One parent’s children
     if (depth >= maxDepth) return children // Stop recursing; keep leaf stubs
 
     // Load nested children only when Notion says they exist (and type needs them)

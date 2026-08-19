@@ -45,10 +45,14 @@ export async function POST(request: NextRequest) {
       workspaceName: connection.workspace_name,
       pageIds: body.pageIds,
       mode: body.mode || 'card',
+      signal: request.signal, // Picker Cancel aborts the client fetch → this signal
     })
 
     return NextResponse.json(imported) // conversationId + counts for client navigation
   } catch (error) {
+    if (request.signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
+      return NextResponse.json({ cancelled: true, error: 'Import cancelled' }, { status: 499 })
+    }
     console.error('Notion import failed:', error)
     return NextResponse.json({ error: 'Failed to import Notion pages' }, { status: 500 })
   }

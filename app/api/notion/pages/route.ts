@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import {
   buildNotionPageTree,
+  buildNotionPickerSections,
   resolveBlockIdParents,
   searchAllAccessibleNotionPages,
 } from '@/lib/notion/pages'
@@ -34,11 +35,13 @@ export async function GET() {
 
     const raw = await searchAllAccessibleNotionPages(connection.access_token) // Flat accessible set
     const pages = await resolveBlockIdParents(connection.access_token, raw) // Nest DBs under pages
-    const tree = buildNotionPageTree(pages) // Notion-native nesting
+    const tree = buildNotionPageTree(pages) // Notion-native nesting (search fallback)
+    const sections = buildNotionPickerSections(pages) // Recents / Shared / Private — start collapsed in UI
 
     return NextResponse.json({
       workspaceName: connection.workspace_name,
-      tree, // Nested pages for the modal
+      tree, // Nested pages for search results
+      sections, // Sidebar-style groups for the empty-query picker
       count: pages.length, // Total accessible pages
     })
   } catch (error) {

@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-18T23:52:11Z`
+- Snapped at: `2026-08-19T10:39:21Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260819103921_notion_import_picker_recents_cancel.sql`.
+- Notion Import pages: Recents / Shared start open; Private + nested pages collapsed; Adding… / Generating… + Cancel (abort in-flight import). Sidebar more-menu New board nests under a row.
+- Schema unchanged.
+
+## Prior: boards nav dismiss on board click
 
 - No DDL. Marker `20260818235211_boards_nav_dismiss_on_board_click.sql`.
 - Boards nav popup: board / other-chrome pointerdown outside the menu + hamburger unpins and hides immediately (pin still survives leave / board switch / reload).

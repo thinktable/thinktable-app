@@ -6,7 +6,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 're
 import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Search, MoreVertical, MoreHorizontal, Trash2, SquarePen, Pencil, ChevronDown, FolderPlus, File, FileText, Folder, FolderOpen, Loader2, Share2, UserPlus, CornerUpLeft, Sparkles, HelpCircle, LogOut, ChevronRight as ChevronRightIcon, Settings } from 'lucide-react'
+import { Plus, Search, MoreHorizontal, Trash2, SquarePen, Pencil, ChevronDown, File, FileText, Folder, FolderOpen, Loader2, Share2, UserPlus, CornerUpLeft, Sparkles, HelpCircle, LogOut, ChevronRight as ChevronRightIcon, Settings } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { SettingsPanel } from '@/components/settings-panel'
@@ -207,6 +207,8 @@ function SortableBoardItem({
   hasChildren = false, // True when this board has nested sub-pages
   isExpanded = false, // Whether children are visible
   onToggleExpand, // Expand/collapse nested children
+  onCreateSubBoard, // Mint an Untitled child nested under this board
+  isCreatingBoard, // Disable New board while a mint is in flight
   userId, // Owner id for icon updates
 }: {
   conversation: Conversation
@@ -230,6 +232,8 @@ function SortableBoardItem({
   hasChildren?: boolean
   isExpanded?: boolean
   onToggleExpand?: (id: string) => void
+  onCreateSubBoard?: (parent: Conversation) => void // Nested Untitled board under this row
+  isCreatingBoard?: boolean // True while any board mint is in flight
   userId: string // Owner id for icon updates
 }) {
   // Fetch bookmark count for this conversation
@@ -395,6 +399,16 @@ function SortableBoardItem({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation() // Don't navigate the row
+                onCreateSubBoard?.(conversation) // Nest an Untitled board under this one
+              }}
+              disabled={isCreatingBoard} // One mint at a time
+            >
+              <SquarePen className="h-4 w-4 mr-2" />
+              New board
+            </DropdownMenuItem>
             <DropdownMenuItem
               onClick={(e) => {
                 e.stopPropagation()
@@ -586,6 +600,8 @@ function DroppableProjectItem({
   queryClient,
   refetch,
   userId,
+  onCreateSubBoard, // Forward nested-board mint to child rows
+  isCreatingBoard, // Disable New board while a mint is in flight
 }: {
   project: Project
   isActive: boolean
@@ -611,6 +627,8 @@ function DroppableProjectItem({
   queryClient: ReturnType<typeof useQueryClient>
   refetch: () => void
   userId: string
+  onCreateSubBoard?: (parent: Conversation) => void // Nested Untitled board under a project board
+  isCreatingBoard?: boolean // True while any board mint is in flight
 }) {
   const { setNodeRef } = useDroppable({
     id: `project-${project.id}`, // Prefix with 'project-' to identify as project drop target
@@ -759,6 +777,8 @@ function DroppableProjectItem({
                 refetch={refetch}
                 project={project}
                 userId={userId}
+                onCreateSubBoard={onCreateSubBoard} // Same nested-board mint as the Boards list
+                isCreatingBoard={isCreatingBoard} // Disable New board while a mint is in flight
               />
             )
           })}
@@ -897,6 +917,32 @@ function flattenBoardTree(
   return result
 }
 
+// Mint an Untitled board (root from +, nested from a row’s more menu). Client UUID avoids INSERT…RETURNING RLS races.
+async function createUntitledBoard(
+  supabase: ReturnType<typeof createClient>,
+  opts: {
+    userId: string // Owner of the new conversations row
+    parentId?: string // When set, nest under this board via metadata.parent_id
+    projectId?: string // Keep project membership when nesting under a project board
+  }
+): Promise<string | null> {
+  const boardId = crypto.randomUUID() // Client id so INSERT need not RETURNING through SELECT RLS
+  const metadata: Record<string, unknown> = {} // Spatial/nav fields only — empty board has no body yet
+  if (opts.parentId) metadata.parent_id = opts.parentId // Sub-board in the boards list tree
+  else metadata.position = -1 // Root boards pin to the top of the list
+  if (opts.projectId) metadata.project_id = opts.projectId // Stay in the same project as the parent
+  const { error } = await supabase.from('conversations').insert({
+    id: boardId, // Use the client UUID as the primary key
+    user_id: opts.userId, // RLS: owner is the signed-in user
+    title: 'Untitled', // Default name until the user renames
+    metadata, // Nesting / project / list position
+  })
+  if (error) {
+    console.error('Failed to create board:', error) // Surface insert failures for debugging
+    return null // Caller shows an alert
+  }
+  return boardId // Navigate + cache-patch with this id
+}
 
 // Fetch conversations/boards for the user
 async function fetchConversations(): Promise<Conversation[]> {
@@ -1018,6 +1064,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
   const [dragOverPosition, setDragOverPosition] = useState<'above' | 'below' | 'top' | 'bottom' | 'into' | null>(null) // Position indicator (into = nest)
   const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null) // Project being dragged over (for board-to-project drops)
   const [expandedBoardIds, setExpandedBoardIds] = useState<Set<string>>(new Set()) // Nested sub-page expand state
+  const [isCreatingBoard, setIsCreatingBoard] = useState(false) // True while + or New board mint is in flight
   const [showCreateProjectDialog, setShowCreateProjectDialog] = useState(false) // Create project dialog state
   const [projectName, setProjectName] = useState('') // Project name input
   const [isCreatingProject, setIsCreatingProject] = useState(false) // Creating project state
@@ -2022,6 +2069,54 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     }
   }, [projectsWithBoardsKey, projects.length])
 
+  // Plus mints a root Untitled board; a row’s New board mints a nested child under that row
+  const handleCreateBoard = async (parent?: Conversation) => {
+    if (isCreatingBoard) return // Ignore double-clicks while the insert is in flight
+    setIsCreatingBoard(true) // Disable + and New board until this mint finishes
+    try {
+      const parentId = parent?.id // Nested when called from a row more menu
+      const rawProjectId = parent?.metadata?.project_id // Inherit project so the child stays in that list
+      const projectId =
+        typeof rawProjectId === 'string' && rawProjectId.trim() !== '' ? rawProjectId : undefined
+      const boardId = await createUntitledBoard(supabase, {
+        userId: user.id, // RLS owner
+        parentId, // undefined → root board from +
+        projectId, // undefined when the parent is not in a project
+      })
+      if (!boardId) {
+        alert('Failed to create board. Please try again.') // Insert failed — stay on this board
+        return
+      }
+      const now = new Date().toISOString() // Optimistic timestamps until refetch
+      const metadata: Conversation['metadata'] = parentId
+        ? { parent_id: parentId, ...(projectId ? { project_id: projectId } : {}) } // Nested nav row
+        : { position: -1 } // Root row pins to the top
+      queryClient.setQueryData(['conversations'], (old: Conversation[] | undefined) => {
+        const row: Conversation = {
+          id: boardId,
+          title: 'Untitled',
+          created_at: now,
+          updated_at: now,
+          ...(parentId ? {} : { position: -1 }), // Match list sort for root boards
+          metadata,
+        }
+        return old ? [row, ...old] : [row] // Show immediately in the boards list
+      })
+      if (parentId) {
+        setExpandedBoardIds((prev) => new Set(prev).add(parentId)) // Reveal the new child under its parent
+      }
+      setIsBoardsExpanded(true) // Ensure the Boards section is open
+      queryClient.invalidateQueries({ queryKey: ['conversations'] }) // Confirm from the server
+      router.push(`/board/${boardId}`) // Open the empty board
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to create board. Please try again.'
+      console.error('Failed to create board:', error)
+      alert(message)
+    } finally {
+      setIsCreatingBoard(false) // Re-enable + / New board
+    }
+  }
+
   // Handle create project
   const handleCreateProject = async () => {
     if (!projectName.trim()) return
@@ -2305,7 +2400,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
           scheduleCloseSidebar()
         }}
       >
-        {/* Search Bar and New/Add Dropdown */}
+        {/* Search + mint a root Untitled board (no New project / New board dropdown) */}
         {!isCollapsed ? (
           <div className="px-4 pt-2 pb-4">
             <div className="flex items-center gap-2">
@@ -2320,73 +2415,39 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                   suppressHydrationWarning
                 />
               </div>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-8 w-8 rounded-lg bg-transparent border-0 hover:bg-gray-100 dark:hover:bg-gray-800 group"
-                    title="New"
-                  >
-                    <Plus className="h-5 w-5 text-gray-500 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 transition-colors" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-40">
-                  <DropdownMenuItem
-                    onClick={() => {
-                      // Create new board - navigate to /board which will create one on first message
-                      router.push('/board')
-                    }}
-                  >
-                    <SquarePen className="h-4 w-4 mr-2" />
-                    New board
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => {
-                      setShowCreateProjectDialog(true)
-                    }}
-                  >
-                    <FolderPlus className="h-4 w-4 mr-2" />
-                    New project
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8 rounded-lg bg-transparent border-0 hover:bg-gray-100 dark:hover:bg-gray-800 group"
+                title="Create board"
+                disabled={isCreatingBoard} // Prevent duplicate mints
+                onClick={() => handleCreateBoard()} // Root Untitled board, then open it
+              >
+                {isCreatingBoard ? (
+                  <Loader2 className="h-5 w-5 text-gray-500 animate-spin" /> // In-flight mint
+                ) : (
+                  <Plus className="h-5 w-5 text-gray-500 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 transition-colors" />
+                )}
+              </Button>
             </div>
           </div>
         ) : (
-          // Collapsed: Show centered Plus button - same vertical position as expanded state
+          // Collapsed: same mint, centered to match expanded vertical position
           <div className="px-4 pt-2 pb-4 flex justify-center">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="h-8 w-8 rounded-lg bg-transparent border-0 hover:bg-gray-100 group"
-                  title="New"
-                >
-                  <Plus className="h-5 w-5 text-gray-500 group-hover:text-gray-900 transition-colors" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-40">
-                <DropdownMenuItem
-                  onClick={() => {
-                    // Create new board - navigate to /board which will create one on first message
-                    router.push('/board')
-                  }}
-                >
-                  <SquarePen className="h-4 w-4 mr-2" />
-                  New board
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => {
-                    setShowCreateProjectDialog(true)
-                  }}
-                >
-                  <FolderPlus className="h-4 w-4 mr-2" />
-                  New project
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8 rounded-lg bg-transparent border-0 hover:bg-gray-100 group"
+              title="Create board"
+              disabled={isCreatingBoard} // Prevent duplicate mints
+              onClick={() => handleCreateBoard()} // Root Untitled board, then open it
+            >
+              {isCreatingBoard ? (
+                <Loader2 className="h-5 w-5 text-gray-500 animate-spin" /> // In-flight mint
+              ) : (
+                <Plus className="h-5 w-5 text-gray-500 group-hover:text-gray-900 transition-colors" />
+              )}
+            </Button>
           </div>
         )}
 
@@ -2478,6 +2539,8 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                               queryClient={queryClient}
                               refetch={refetch}
                               userId={user.id}
+                              onCreateSubBoard={handleCreateBoard} // Nested Untitled board under a project board
+                              isCreatingBoard={isCreatingBoard} // Disable New board while a mint is in flight
                             />
                           )
                         })}
@@ -2528,6 +2591,8 @@ export default function AppSidebar({ user }: AppSidebarProps) {
                               hasChildren={hasChildren}
                               isExpanded={expandedBoardIds.has(conversation.id)}
                               onToggleExpand={toggleBoardExpand}
+                              onCreateSubBoard={handleCreateBoard} // Nested Untitled board under this row
+                              isCreatingBoard={isCreatingBoard} // Disable New board while a mint is in flight
                               userId={user.id}
                             />
                           )

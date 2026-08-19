@@ -18,11 +18,23 @@ export type NotionSearchPage = {
   icon?: { type?: string; emoji?: string; external?: { url?: string }; file?: { url?: string } } | null
   title: string // Extracted display title for the mind-map node
   parent?: NotionPageParent | null // Used for tree nesting + top-level filtering
+  lastEditedTime?: string // ISO last_edited_time — Recents sort (view recency is not in the public API)
 }
 
 export type NotionPageTreeNode = NotionSearchPage & {
   children: NotionPageTreeNode[] // Nested pages/databases (Notion sidebar order)
 }
+
+/** Notion sidebar sections used by the Import pages picker (same labels / order as Notion). */
+export type NotionPickerSectionId = 'recents' | 'favorites' | 'shared' | 'private'
+
+export type NotionPickerSection = {
+  id: NotionPickerSectionId // Stable section key for collapse state
+  title: string // Recents / Favorites / Shared / Private
+  nodes: NotionPageTreeNode[] // Pages under this heading (trees start collapsed in the UI)
+}
+
+const PICKER_RECENTS_LIMIT = 10 // Notion Recents shows a short flat list, not the full tree
 
 export function normalizeNotionId(id: string | undefined | null): string {
   return (id || '').replace(/-/g, '').toLowerCase() // Compare dashed vs undashed Notion ids
@@ -152,6 +164,43 @@ export function buildNotionPageTree(pages: NotionSearchPage[]): NotionPageTreeNo
   }
   sortRecursively(roots)
   return roots
+}
+
+/** Copy a search hit as a Recents leaf (Notion Recents is flat — no nested chevrons). */
+function clonePickerLeaf(page: NotionSearchPage): NotionPageTreeNode {
+  return { ...page, children: [] } // Drop children so Recents cannot expand into the private tree
+}
+
+/**
+ * Group accessible pages like Notion's sidebar: Recents, Favorites, Shared, Private.
+ * Favorites is omitted — the public API does not expose starred pages.
+ * Recents uses last_edited_time (closest public-API stand-in for last viewed).
+ * Private = workspace-parented roots + their nested tree.
+ * Shared = roots whose parent is not in the accessible set (shared-with-me style).
+ */
+export function buildNotionPickerSections(pages: NotionSearchPage[]): NotionPickerSection[] {
+  const tree = buildNotionPageTree(pages) // Full nested tree; roots are workspace + orphans
+  const privateRoots: NotionPageTreeNode[] = [] // parent.type === workspace (or missing)
+  const sharedRoots: NotionPageTreeNode[] = [] // Parent page/db not shared with the connection
+  for (const node of tree) {
+    const parentType = node.parent?.type // workspace / page_id / database_id / …
+    if (!parentType || parentType === 'workspace') {
+      privateRoots.push(node) // Personal-workspace top level lives under Private
+    } else {
+      sharedRoots.push(node) // Orphan root → Shared (parent not in the accessible set)
+    }
+  }
+
+  const recents = [...pages] // Shallow copy so sort does not mutate search order
+    .sort((a, b) => (b.lastEditedTime || '').localeCompare(a.lastEditedTime || '')) // Newest first
+    .slice(0, PICKER_RECENTS_LIMIT) // Cap like Notion Recents
+    .map(clonePickerLeaf) // Flat rows — same page may also appear under Private/Shared
+
+  const sections: NotionPickerSection[] = [] // Skip empty sections the way Notion hides unused sidebar groups
+  if (recents.length) sections.push({ id: 'recents', title: 'Recents', nodes: recents })
+  if (sharedRoots.length) sections.push({ id: 'shared', title: 'Shared', nodes: sharedRoots })
+  if (privateRoots.length) sections.push({ id: 'private', title: 'Private', nodes: privateRoots })
+  return sections
 }
 
 /**
@@ -371,7 +420,8 @@ export async function collectMindmapSubtreeViaBlocks(
   accessToken: string,
   rootId: string,
   allPages: NotionSearchPage[],
-  maxDepth = 8
+  maxDepth = 8,
+  signal?: AbortSignal // Picker Cancel — stop the child_page walk
 ): Promise<NotionSearchPage[]> {
   const byId = new Map(allPages.map((p) => [normalizeNotionId(p.id), p])) // Enrich from search when present
   const ordered: NotionSearchPage[] = [] // DFS order for layout
@@ -426,11 +476,17 @@ export async function collectMindmapSubtreeViaBlocks(
 
   /** Recurse block children; child_page / child_database become map frames. */
   const walk = async (blockParentId: string, owningPageId: string, depth: number) => {
+    if (signal?.aborted) {
+      const err = new Error('Import cancelled')
+      err.name = 'AbortError'
+      throw err
+    }
     if (depth > maxDepth) return // Cap API fan-out on huge trees
     let children
     try {
-      children = await fetchBlockChildren(accessToken, blockParentId)
+      children = await fetchBlockChildren(accessToken, blockParentId, signal)
     } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') throw err
       console.error('Mindmap block walk failed for', blockParentId, err)
       return
     }
@@ -505,7 +561,10 @@ export async function collectMindmapSubtreeViaBlocks(
 }
 
 /** Flat list of every page/database currently shared with the connection (includes children). */
-export async function searchAllAccessibleNotionPages(accessToken: string): Promise<NotionSearchPage[]> {
+export async function searchAllAccessibleNotionPages(
+  accessToken: string,
+  signal?: AbortSignal // Optional Cancel from Import pages
+): Promise<NotionSearchPage[]> {
   const pages: NotionSearchPage[] = [] // Accumulator across paginated search
   let startCursor: string | undefined // Notion pagination cursor
 
@@ -522,6 +581,7 @@ export async function searchAllAccessibleNotionPages(accessToken: string): Promi
         start_cursor: startCursor, // Continue when present
         sort: { direction: 'ascending', timestamp: 'last_edited_time' }, // Stable-ish order
       }),
+      signal, // Abort when the picker Cancel fires
     })
 
     const payload = await res.json() // Parse Notion body
@@ -545,6 +605,7 @@ export async function searchAllAccessibleNotionPages(accessToken: string): Promi
         icon: result.icon ?? null, // Emoji / file icon for later UI
         title: extractTitle(result), // Human label for the note
         parent: (result.parent as NotionPageParent) ?? null, // Needed for tree nesting
+        lastEditedTime: typeof result.last_edited_time === 'string' ? result.last_edited_time : undefined, // Recents
       })
     }
 

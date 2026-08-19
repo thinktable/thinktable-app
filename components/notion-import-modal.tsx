@@ -27,10 +27,20 @@ export type NotionPickerNode = {
   children: NotionPickerNode[]
 }
 
+export type NotionPickerSection = {
+  id: string // recents | favorites | shared | private
+  title: string // Notion sidebar heading
+  nodes: NotionPickerNode[] // Pages under this heading
+}
+
+type VisibleRow =
+  | { kind: 'section'; section: NotionPickerSection; rowKey: string }
+  | { kind: 'page'; node: NotionPickerNode; depth: number; rowKey: string }
+
 type NotionImportModalProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onImport: (opts: { pageIds: string[]; mode: 'card' | 'mindmap' }) => Promise<void>
+  onImport: (opts: { pageIds: string[]; mode: 'card' | 'mindmap'; signal?: AbortSignal }) => Promise<void>
 }
 
 function NotionIcon({ icon, object }: { icon?: NotionPickerNode['icon']; object: 'page' | 'database' }) {
@@ -49,19 +59,60 @@ function NotionIcon({ icon, object }: { icon?: NotionPickerNode['icon']; object:
   )
 }
 
-function flattenVisible(
+function flattenPages(
   nodes: NotionPickerNode[],
   expanded: Set<string>,
-  depth = 0
-): Array<{ node: NotionPickerNode; depth: number }> {
-  const out: Array<{ node: NotionPickerNode; depth: number }> = []
+  depth: number,
+  keyPrefix: string
+): Array<{ node: NotionPickerNode; depth: number; rowKey: string }> {
+  const out: Array<{ node: NotionPickerNode; depth: number; rowKey: string }> = []
   for (const node of nodes) {
-    out.push({ node, depth })
-    if (node.children.length > 0 && expanded.has(node.id)) {
-      out.push(...flattenVisible(node.children, expanded, depth + 1))
+    const rowKey = `${keyPrefix}${node.id}` // Prefix so Recents + Private can share a page id
+    out.push({ node, depth, rowKey })
+    if (node.children.length > 0 && expanded.has(rowKey)) {
+      out.push(...flattenPages(node.children, expanded, depth + 1, keyPrefix))
     }
   }
   return out
+}
+
+function flattenPicker(
+  sections: NotionPickerSection[],
+  tree: NotionPickerNode[],
+  expanded: Set<string>,
+  query: string
+): VisibleRow[] {
+  const q = query.trim()
+  if (q) {
+    return flattenPages(filterTree(tree, q), expanded, 0, 'search:').map((row) => ({
+      kind: 'page' as const,
+      ...row,
+    }))
+  }
+  const out: VisibleRow[] = []
+  for (const section of sections) {
+    const rowKey = `section:${section.id}` // Collapse key for Recents / Private / …
+    out.push({ kind: 'section', section, rowKey })
+    if (!expanded.has(rowKey)) continue // Private starts collapsed; Recents / Shared are pre-opened
+    out.push(
+      ...flattenPages(section.nodes, expanded, 1, `${section.id}:`).map((row) => ({
+        kind: 'page' as const,
+        ...row,
+      }))
+    )
+  }
+  return out
+}
+
+/** Recents + Shared start open (Notion-style); Private and nested pages stay collapsed. */
+function defaultExpandedSections(sections: NotionPickerSection[]): Set<string> {
+  const next = new Set<string>()
+  for (const section of sections) {
+    if (section.id === 'recents' || section.id === 'shared') {
+      next.add(`section:${section.id}`) // Open these headings on first paint
+    }
+  }
+  return next
 }
 
 function filterTree(nodes: NotionPickerNode[], query: string): NotionPickerNode[] {
@@ -94,14 +145,18 @@ function collectExpandIds(nodes: NotionPickerNode[]): string[] {
 
 export function NotionImportModal({ open, onOpenChange, onImport }: NotionImportModalProps) {
   const [tree, setTree] = useState<NotionPickerNode[]>([])
+  const [sections, setSections] = useState<NotionPickerSection[]>([]) // Recents / Shared / Private
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [expanded, setExpanded] = useState<Set<string>>(new Set()) // Empty = all sections + pages collapsed
   const [activeIndex, setActiveIndex] = useState(0)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [busyMode, setBusyMode] = useState<'card' | 'mindmap' | null>(null) // Adding vs generating label
   const searchRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const wasSearching = useRef(false) // Detect search → empty so we restore Recents / Shared open
+  const abortRef = useRef<AbortController | null>(null) // In-flight Add frame / Generate mindmap
 
   const loadPages = useCallback(async () => {
     setLoading(true)
@@ -111,13 +166,15 @@ export function NotionImportModal({ open, onOpenChange, onImport }: NotionImport
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to load pages')
       const nextTree = (data.tree || []) as NotionPickerNode[]
+      const nextSections = (data.sections || []) as NotionPickerSection[]
       setTree(nextTree)
-      // Expand first level by default so the tree reads like Notion
-      setExpanded(new Set(nextTree.filter((n) => n.children.length > 0).map((n) => n.id)))
+      setSections(nextSections)
+      setExpanded(defaultExpandedSections(nextSections)) // Recents / Shared open; Private collapsed
       setActiveIndex(0)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load pages')
       setTree([])
+      setSections([])
     } finally {
       setLoading(false)
     }
@@ -125,6 +182,7 @@ export function NotionImportModal({ open, onOpenChange, onImport }: NotionImport
 
   useEffect(() => {
     if (!open) return
+    setQuery('') // Fresh search box each open
     void loadPages()
     const t = window.setTimeout(() => searchRef.current?.focus(), 50)
     return () => window.clearTimeout(t)
@@ -133,12 +191,23 @@ export function NotionImportModal({ open, onOpenChange, onImport }: NotionImport
   const filteredTree = useMemo(() => filterTree(tree, query), [tree, query])
 
   useEffect(() => {
-    if (!query.trim()) return
-    // Auto-expand matches while searching
-    setExpanded(new Set(collectExpandIds(filteredTree)))
+    const searching = Boolean(query.trim())
+    if (searching) {
+      wasSearching.current = true
+      // Auto-expand matches while searching
+      setExpanded(new Set(collectExpandIds(filteredTree).map((id) => `search:${id}`)))
+      return
+    }
+    if (wasSearching.current) {
+      wasSearching.current = false
+      setExpanded(defaultExpandedSections(sections)) // Back to Recents / Shared open, Private collapsed
+    }
   }, [query, filteredTree])
 
-  const visible = useMemo(() => flattenVisible(filteredTree, expanded), [filteredTree, expanded])
+  const visible = useMemo(
+    () => flattenPicker(sections, tree, expanded, query),
+    [sections, tree, expanded, query]
+  )
 
   useEffect(() => {
     if (activeIndex >= visible.length) setActiveIndex(Math.max(0, visible.length - 1))
@@ -158,15 +227,34 @@ export function NotionImportModal({ open, onOpenChange, onImport }: NotionImport
     })
   }
 
+  const cancelImport = () => {
+    abortRef.current?.abort() // Stop the fetch + server walk
+    abortRef.current = null
+    setBusyId(null) // Unlock the row immediately
+    setBusyMode(null)
+  }
+
   const runImport = async (pageId: string, mode: 'card' | 'mindmap') => {
+    abortRef.current?.abort() // One import at a time
+    const ac = new AbortController() // Token for this Add frame / Generate mindmap
+    abortRef.current = ac
     setBusyId(pageId)
+    setBusyMode(mode)
     try {
-      await onImport({ pageIds: [pageId], mode })
+      await onImport({ pageIds: [pageId], mode, signal: ac.signal })
+      if (ac.signal.aborted) return // Cancelled — keep the picker open
       onOpenChange(false)
     } catch (e) {
+      const aborted =
+        ac.signal.aborted ||
+        (e instanceof DOMException && e.name === 'AbortError') ||
+        (e instanceof Error && e.name === 'AbortError')
+      if (aborted) return // User hit Cancel — no error toast
       window.alert(e instanceof Error ? e.message : 'Import failed')
     } finally {
+      if (abortRef.current === ac) abortRef.current = null
       setBusyId(null)
+      setBusyMode(null)
     }
   }
 
@@ -188,19 +276,21 @@ export function NotionImportModal({ open, onOpenChange, onImport }: NotionImport
     }
     if (e.key === 'ArrowRight') {
       const row = visible[activeIndex]
-      if (row?.node.children.length) {
+      const canExpand =
+        row?.kind === 'section' || (row?.kind === 'page' && row.node.children.length > 0)
+      if (canExpand) {
         e.preventDefault()
-        setExpanded((prev) => new Set(prev).add(row.node.id))
+        setExpanded((prev) => new Set(prev).add(row.rowKey)) // Expand section or nested page
       }
       return
     }
     if (e.key === 'ArrowLeft') {
       const row = visible[activeIndex]
-      if (row && expanded.has(row.node.id)) {
+      if (row && expanded.has(row.rowKey)) {
         e.preventDefault()
         setExpanded((prev) => {
           const next = new Set(prev)
-          next.delete(row.node.id)
+          next.delete(row.rowKey)
           return next
         })
       }
@@ -210,12 +300,22 @@ export function NotionImportModal({ open, onOpenChange, onImport }: NotionImport
       const row = visible[activeIndex]
       if (!row) return
       e.preventDefault()
+      if (row.kind === 'section') {
+        toggleExpand(row.rowKey) // Enter on a heading opens Recents / Private
+        return
+      }
       void runImport(row.node.id, e.shiftKey ? 'mindmap' : 'card')
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && busyId) cancelImport() // Closing the picker aborts an in-flight import
+        onOpenChange(next)
+      }}
+    >
       <DialogContent
         className="max-w-[560px] p-0 gap-0 overflow-hidden rounded-xl border-gray-200 shadow-2xl"
         onKeyDown={onKeyDown}
@@ -263,11 +363,13 @@ export function NotionImportModal({ open, onOpenChange, onImport }: NotionImport
           </div>
         </div>
 
-        <div className="px-4 pt-3 pb-1">
-          <h3 className="text-sm font-semibold text-gray-900">Available pages</h3>
-        </div>
+        {query.trim() ? (
+          <div className="px-4 pt-3 pb-1">
+            <h3 className="text-xs font-semibold text-gray-500">Best matches</h3>
+          </div>
+        ) : null}
 
-        <div ref={listRef} className="max-h-[420px] overflow-y-auto px-2 pb-2">
+        <div ref={listRef} className={cn('max-h-[420px] overflow-y-auto px-2 pb-2', !query.trim() && 'pt-2')} >
           {loading && <div className="px-3 py-8 text-sm text-gray-500 text-center">Loading Notion pages…</div>}
           {error && !loading && <div className="px-3 py-8 text-sm text-red-600 text-center">{error}</div>}
           {!loading && !error && visible.length === 0 && (
@@ -275,15 +377,43 @@ export function NotionImportModal({ open, onOpenChange, onImport }: NotionImport
           )}
 
           {!loading &&
-            visible.map(({ node, depth }, index) => {
-              const hasChildren = node.children.length > 0
-              const isExpanded = expanded.has(node.id)
+            visible.map((row, index) => {
               const isActive = index === activeIndex
+              if (row.kind === 'section') {
+                const isExpanded = expanded.has(row.rowKey)
+                return (
+                  <button
+                    key={row.rowKey}
+                    type="button"
+                    data-picker-index={index}
+                    className={cn(
+                      'flex w-full items-center gap-1 rounded-lg px-1 py-1.5 text-left transition-colors',
+                      isActive ? 'bg-gray-100' : 'hover:bg-gray-50'
+                    )}
+                    onMouseEnter={() => setActiveIndex(index)}
+                    onClick={() => toggleExpand(row.rowKey)}
+                    aria-expanded={isExpanded}
+                  >
+                    {isExpanded ? (
+                      <ChevronDown className="h-4 w-4 flex-shrink-0 text-gray-400" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-400" />
+                    )}
+                    <span className="truncate text-xs font-semibold text-gray-500">
+                      {row.section.title}
+                    </span>
+                  </button>
+                )
+              }
+
+              const { node, depth, rowKey } = row
+              const hasChildren = node.children.length > 0
+              const isExpanded = expanded.has(rowKey)
               const isBusy = busyId === node.id
 
               return (
                 <div
-                  key={node.id}
+                  key={rowKey}
                   data-picker-index={index}
                   className={cn(
                     'group flex items-center gap-1 rounded-lg px-1 py-1.5 transition-colors',
@@ -300,7 +430,7 @@ export function NotionImportModal({ open, onOpenChange, onImport }: NotionImport
                     )}
                     onClick={(e) => {
                       e.stopPropagation()
-                      toggleExpand(node.id)
+                      toggleExpand(rowKey)
                     }}
                     aria-label={isExpanded ? 'Collapse' : 'Expand'}
                   >
@@ -319,26 +449,58 @@ export function NotionImportModal({ open, onOpenChange, onImport }: NotionImport
 
                   <div
                     className={cn(
-                      'flex items-center gap-1.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity',
-                      isActive && 'opacity-100'
+                      'flex items-center gap-1.5 flex-shrink-0 whitespace-nowrap',
+                      isBusy || isActive
+                        ? 'opacity-100'
+                        : 'opacity-0 group-hover:opacity-100 transition-opacity'
                     )}
                   >
-                    <button
-                      type="button"
-                      disabled={!!busyId}
-                      onClick={() => void runImport(node.id, 'card')}
-                      className="text-xs text-gray-500 hover:text-gray-800 px-1.5 py-1"
-                    >
-                      {isBusy ? 'Adding…' : 'Add frame'}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!!busyId}
-                      onClick={() => void runImport(node.id, 'mindmap')}
-                      className="text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-md px-2.5 py-1.5"
-                    >
-                      Generate mindmap
-                    </button>
+                    {isBusy && busyMode === 'card' ? (
+                      <>
+                        <span className="text-xs font-medium text-blue-700 whitespace-nowrap">
+                          Adding…
+                        </span>
+                        <button
+                          type="button"
+                          onClick={cancelImport}
+                          className="text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md px-2.5 py-1.5 flex-shrink-0"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={!!busyId}
+                        onClick={() => void runImport(node.id, 'card')}
+                        className="text-xs text-gray-500 hover:text-gray-800 px-1.5 py-1 disabled:opacity-40"
+                      >
+                        Add frame
+                      </button>
+                    )}
+                    {isBusy && busyMode === 'mindmap' ? (
+                      <>
+                        <span className="text-xs font-medium text-blue-700 whitespace-nowrap">
+                          Generating…
+                        </span>
+                        <button
+                          type="button"
+                          onClick={cancelImport}
+                          className="text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md px-2.5 py-1.5 flex-shrink-0"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={!!busyId}
+                        onClick={() => void runImport(node.id, 'mindmap')}
+                        className="text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-md px-2.5 py-1.5 disabled:opacity-40"
+                      >
+                        Generate mindmap
+                      </button>
+                    )}
                   </div>
                 </div>
               )

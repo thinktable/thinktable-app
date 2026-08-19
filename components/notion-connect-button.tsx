@@ -189,7 +189,7 @@ export function NotionConnectProvider({ children }: { children: React.ReactNode 
     window.location.assign(buildAuthHref(pathname))
   }, [status?.configured, pathname])
 
-  const handleImport = async (opts: { pageIds: string[]; mode: 'card' | 'mindmap' }) => {
+  const handleImport = async (opts: { pageIds: string[]; mode: 'card' | 'mindmap'; signal?: AbortSignal }) => {
     const res = await fetch('/api/notion/import', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -198,8 +198,11 @@ export function NotionConnectProvider({ children }: { children: React.ReactNode 
         pageIds: opts.pageIds,
         mode: opts.mode,
       }),
+      signal: opts.signal, // Cancel from the picker aborts this request
     })
+    if (opts.signal?.aborted) return // Ignore a response that raced cancel
     const data = await res.json()
+    if (data?.cancelled) return // Server stopped after AbortSignal
     if (!res.ok) {
       throw new Error(data.error || 'Failed to import Notion pages')
     }
