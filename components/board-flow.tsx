@@ -212,6 +212,27 @@ function eventElement(target: EventTarget | null): Element | null {
   return null
 }
 
+/** Chrome / text that own the gesture — not the frame drag strip (blue pad outside TipTap). */
+const FRAME_NON_DRAG_SEL =
+  '.react-flow__resize-control, [data-frame-chrome], [data-tt-block-handle], [data-tt-insert-line], .block-actions-menu, [data-tt-connection-indicator], [data-tt-property-header] span, [data-tt-connections-header] button, .ProseMirror, .nodrag, input, textarea, a, button, [data-page-link-preview], [data-tt-ibar-grip]'
+
+/** True when the event hit the selected-frame drag area (padding / shell — not text or adjust chrome). */
+function isFrameDragAreaTarget(target: EventTarget | null): boolean {
+  const el = eventElement(target)
+  if (!el) return false
+  if (el.closest(FRAME_NON_DRAG_SEL)) return false // Text, ⋮⋮, resize, marks — not drag
+  return !!el.closest('.react-flow__node') // Must be on a frame
+}
+
+/** Thread path hit band — not endpoint updaters or bend knobs (those drag). */
+function isThreadDragAreaTarget(target: EventTarget | null): boolean {
+  const el = eventElement(target)
+  if (!el) return false
+  if (el.closest('.react-flow__edgeupdater')) return false // Endpoint reconnect drag
+  if (el.tagName === 'circle' && el.classList.contains('nopan')) return false // Path bend knobs
+  return !!el.closest('.react-flow__edge') // Thread interaction path
+}
+
 // Fetch messages for a conversation and create panels
 // For homepage boards, uses API route (public access via service role)
 // For regular boards, requires authentication and ownership
@@ -1650,7 +1671,13 @@ function BoardFlowInner({
   const boardClickFlowRef = useRef<{ x: number; y: number } | null>(null) // Flow coords for Add frame / zoom-to-100%
   const nodesRef = useRef(nodes) // Long-press lookups without stale closures
   nodesRef.current = nodes
+  const edgesRef = useRef(edges) // Phone thread tap: was-selected without stale closure
+  edgesRef.current = edges
   const longPressRef = useRef<ReturnType<typeof createLongPressController> | null>(null) // Phone long-press controller
+  const rightClickedNodeRef = useRef(rightClickedNode) // Phone drag-area tap toggle without stale closure
+  rightClickedNodeRef.current = rightClickedNode
+  const clickedEdgeRef = useRef(clickedEdge) // Phone thread menu toggle without stale closure
+  clickedEdgeRef.current = clickedEdge
 
   // Keep the target block highlighted while its actions menu is open
   useEffect(() => {
@@ -5414,9 +5441,17 @@ function BoardFlowInner({
     })
   }, [setEdges])
 
-  // Open frame menu at a screen point (right-click or long-press)
+  // Open frame menu at a screen point (right-click or long-press); same frame again toggles closed
   const openFrameMenuAt = useCallback(
     (clientX: number, clientY: number, node: Node<ChatPanelNodeData>) => {
+      // Second open on the same frame closes (right-click / long-press / phone drag-strip)
+      if (rightClickedNodeRef.current?.id === node.id) {
+        setRightClickedNode(null)
+        setNodePopupPosition({ x: 0, y: 0 })
+        nodeClickPositionRef.current = null
+        nodePopupZoomRef.current = null
+        return
+      }
       setBoardMenuPosition(null)
       boardClickFlowRef.current = null
       setMinimapContextMenuPosition(null)
@@ -7273,21 +7308,19 @@ function BoardFlowInner({
       // Check if click is on the popup
       const isOnPopup = target.closest('.node-popup')
 
-      // Check if click is on any React Flow node
-      const isOnAnyNode = target.closest('.react-flow__node')
-
       // Also check if click is on a button inside the popup (to allow delete/condense buttons to work)
       const isOnButton = target.closest('button') && target.closest('.node-popup')
 
-      // Close popup if:
-      // 1. Clicking on background (not on popup or any node)
-      // 2. Clicking on any node (including the selected panel) - but not on the popup itself
-      // Allow button clicks inside popup to work
-      if (!isOnPopup && !isOnButton) {
-        setRightClickedNode(null)
-        nodeClickPositionRef.current = null
-        nodePopupZoomRef.current = null
-      }
+      if (isOnPopup || isOnButton) return // Menu owns the gesture
+
+      // Same-frame drag strip: leave open for click toggle (mousedown close + click open fought each other)
+      const isOnSameNode = !!target.closest(`[data-id="${rightClickedNode.id}"]`)
+      if (isOnSameNode && isFrameDragAreaTarget(event.target)) return
+
+      // Background, other frames, or TipTap/chrome on this frame — dismiss
+      setRightClickedNode(null)
+      nodeClickPositionRef.current = null
+      nodePopupZoomRef.current = null
     }
 
     // Handle right-click outside to close popup
@@ -7304,7 +7337,7 @@ function BoardFlowInner({
       // Close popup if:
       // 1. Right-clicking on background (not on popup or any node)
       // 2. Right-clicking on a different node (not the same node that has the popup)
-      // Note: handleNodeContextMenu will then open a new popup for the different node
+      // Note: handleNodeContextMenu / openFrameMenuAt will then open or toggle for that node
       if (!isOnPopup && (!isOnAnyNode || !isOnSameNode)) {
         setRightClickedNode(null)
         nodeClickPositionRef.current = null
@@ -7331,13 +7364,26 @@ function BoardFlowInner({
     event.stopPropagation() // Prevent other click handlers
     setBoardMenuPosition(null) // Don't stack with board menu
     boardClickFlowRef.current = null
+    setRightClickedNode(null) // Don't stack with frame menu
 
-    // Toggle popup - if same edge is clicked, close it; otherwise open it
-    if (clickedEdge?.id === edge.id) {
+    // Toggle first — second click/tap on the same thread closes (before phone select-only gate)
+    if (clickedEdgeRef.current?.id === edge.id) {
       setClickedEdge(null)
       edgeClickPositionRef.current = null
       edgePopupZoomRef.current = null
       return
+    }
+
+    // Phone: first tap selects only; tap again on the path opens the thread menu (drag knobs stay)
+    if (isMobileMode) {
+      if (!isThreadDragAreaTarget(event.target)) return // Endpoint / bend knob — keep drag
+      const wasSelected = edgesRef.current.some((e) => e.id === edge.id && e.selected)
+      if (!wasSelected) {
+        setClickedEdge(null) // Select without menu (RF selects the thread)
+        edgeClickPositionRef.current = null
+        edgePopupZoomRef.current = null
+        return
+      }
     }
 
     // Get click position and convert to flow coordinates
@@ -7363,7 +7409,7 @@ function BoardFlowInner({
     }
 
     setClickedEdge(edge)
-  }, [clickedEdge, reactFlowInstance])
+  }, [isMobileMode, reactFlowInstance])
 
   // Handle collapse/expand all panels connected to the edge
   const handleCollapseTarget = useCallback(() => {
@@ -7822,7 +7868,8 @@ function BoardFlowInner({
     if (!clickedEdge) return
 
     const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement
+      const target = eventElement(event.target) // Text / SVG text → parent element
+      if (!target) return
       // Check if click is on the popup or edge
       const isOnPopup = target.closest('.edge-popup')
       const isOnEdge = target.closest('.react-flow__edge')
@@ -7830,7 +7877,10 @@ function BoardFlowInner({
       // Also check if click is on a button inside the popup (to allow delete/collapse buttons to work)
       const isOnButton = target.closest('button') && target.closest('.edge-popup')
 
-      if (!isOnPopup && !isOnEdge && !isOnButton) {
+      // Same thread path: leave open for onEdgeClick toggle (don't mousedown-close then click-reopen)
+      if (isOnEdge && isThreadDragAreaTarget(event.target)) return
+
+      if (!isOnPopup && !isOnButton) {
         setClickedEdge(null)
       }
     }
@@ -8908,7 +8958,22 @@ function BoardFlowInner({
           }
           // Frames: select on click release only (mousedown select is blocked so drag ≠ select)
           if (node?.type !== 'chatPanel') return
-          if (justDraggedFrameRef.current.has(node.id)) return // Drag release is not a select
+          if (justDraggedFrameRef.current.has(node.id)) return // Drag release is not a select / menu
+          // Phone: tap the drag strip of an already-selected frame → frame menu (drag still moves)
+          if (isMobileMode) {
+            const alreadySelected = nodesRef.current.some((n) => n.id === node.id && n.selected)
+            if (alreadySelected && isFrameDragAreaTarget(event.target)) {
+              openFrameMenuAt(event.clientX, event.clientY, node as Node<ChatPanelNodeData>) // Opens or toggles closed
+              return
+            }
+          }
+          // Desktop left-click (or phone non-strip): dismiss an open menu on this frame
+          if (rightClickedNodeRef.current?.id === node.id) {
+            setRightClickedNode(null)
+            setNodePopupPosition({ x: 0, y: 0 })
+            nodeClickPositionRef.current = null
+            nodePopupZoomRef.current = null
+          }
           const additive = event.metaKey || event.ctrlKey || event.shiftKey
           setNodes((nds) =>
             nds.map((n) => {

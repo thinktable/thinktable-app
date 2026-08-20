@@ -7,13 +7,8 @@ import { Button } from './ui/button'
 import { useReactFlowContext } from './react-flow-context'
 import {
   threadAlgorithmFromStyle,
-  THREAD_COLOR_SWATCHES,
-  THREAD_DEFAULT_COLOR,
-  THREAD_STROKE_COLOR_KEY,
-  resolveThreadStrokeColor,
   type ThreadStylePref,
-  type ThreadEdgeData,
-} from '@/components/threads' // Smooth/Sharp/Linear + stroke color
+} from '@/components/threads' // Board default Smooth / Sharp / Linear + path algorithm
 import { usePreviewFocus } from '@/lib/preview-focus-context' // Nested preview View-style targeting
 import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom' // Phone: mode tools inside the pill; undo/redo to its right
@@ -64,9 +59,6 @@ import {
   Circle,
   Grid3x3,
   Boxes, // Layout Smart Align — multi-box glyph
-  Spline, // Layout Style — thread path glyph (same as thread click-menu Style)
-  Square, // Style bar — Frame style glyph
-  Baseline, // Style bar — Block style (A / text+highlight)
   Presentation, // View presentation mode
   Scan, // View capture — 4 disconnected rounded corners
   Table,
@@ -113,26 +105,12 @@ import {
 } from '@/lib/ai/selection-bridge' // Armed ⋮⋮ block → enable Turn into
 import { LegoBrickIcon } from './lego-brick-icon' // Frame-group lock: two bricks, top one stud back
 import { TOOLBAR_MENU_PLACEMENT } from '@/lib/menu-placement' // Actions-style: under the trigger, never over the board path
-import { FrameStyleMenuItems, parseBorderWeightPx } from '@/components/frame-style-menu' // Style bar Frame style dropdown
-import {
-  BlockStyleMenuItems,
-  readEditorHighlightColor,
-  readEditorTextColor,
-} from '@/components/block-style-menu' // Style bar Block style (text + highlight)
 import {
   TurnIntoMenuItems,
   applyToolbarTurnInto,
   readToolbarBlockType,
 } from '@/components/turn-into-menu' // Actions-bar Turn into (Format / Property)
 import type { BlockTypeId, BoardInTarget } from '@/components/block-actions-menu'
-import {
-  FRAME_SHAPE_DEFAULT_SIZE,
-  FRAME_SHAPE_MIN_SIZE,
-  FRAME_SHAPE_NONE,
-  parseFrameShape,
-  type FrameShapeChoice,
-} from '@/lib/frame-shape' // Apply silhouette from Style bar
-import { nodeFlowSize } from '@/components/use-block-group-drag' // Measured box when shaping frames
 
 interface EditorToolbarProps {
   editor: Editor | null
@@ -153,98 +131,9 @@ function titledToolWidth(label: string) {
   return 16 + 6 + Math.ceil(label.length * 7.5) + 16 // icon + gap-1.5 + glyph estimate + px-2
 }
 
-/** Style bar dropdown — thread stroke, color, and path for the Thread style tool. */
-function ThreadStyleMenuItems({
-  strokeIsSolid,
-  curve,
-  strokeColor,
-  onStrokeChange,
-  onCurveChange,
-  onColorChange,
-}: {
-  strokeIsSolid: boolean // Context `lineStyle === 'solid'`
-  curve: ThreadStylePref // Smooth / Sharp / Linear board pref
-  strokeColor: string // Board default / picker hex (empty = default gray)
-  onStrokeChange: (solid: boolean) => void // Solid vs directional (dotted) stroke
-  onCurveChange: (next: ThreadStylePref) => void // Apply path style + patch selected threads
-  onColorChange: (next: string) => void // Apply stroke color + patch selected threads
-}) {
-  const curveValue = curve === 'boxed' ? 'sharp' : curve === 'linear' ? 'linear' : 'smooth' // Radio ids vs stored pref
-  const paint = resolveThreadStrokeColor(strokeColor) // Swatch / native input preview
-  return (
-    <>
-      <DropdownMenuRadioGroup
-        value={strokeIsSolid ? 'solid' : 'dashed'}
-        onValueChange={(value) => onStrokeChange(value === 'solid')}
-      >
-        <DropdownMenuRadioItem value="solid" className="pl-8 text-xs">Solid</DropdownMenuRadioItem>
-        <DropdownMenuRadioItem value="dashed" className="pl-8 text-xs">Directional</DropdownMenuRadioItem>
-      </DropdownMenuRadioGroup>
-      <DropdownMenuSeparator className="mx-2" />
-      <div className="px-2 py-1.5">
-        <div className="mb-1.5 text-[11px] font-medium text-gray-400">Color</div>
-        <div className="flex flex-wrap gap-1.5">
-          {THREAD_COLOR_SWATCHES.map((swatch) => {
-            const value = swatch.value // Empty = board default gray
-            const active =
-              (value === '' && !strokeColor) ||
-              (value !== '' && strokeColor.toLowerCase() === value.toLowerCase())
-            return (
-              <button
-                key={swatch.id}
-                type="button"
-                title={swatch.name}
-                aria-label={swatch.name}
-                onClick={(e) => {
-                  e.preventDefault() // Keep the Thread style menu open
-                  onColorChange(value)
-                }}
-                className={cn(
-                  'h-5 w-5 rounded-full border border-gray-200 dark:border-gray-600',
-                  active && 'ring-2 ring-offset-1 ring-gray-900 dark:ring-gray-100 dark:ring-offset-[#0f0f0f]'
-                )}
-                style={{ backgroundColor: value || THREAD_DEFAULT_COLOR }}
-              />
-            )
-          })}
-        </div>
-        <label className="mt-2 flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
-          <span
-            className="h-5 w-5 flex-shrink-0 rounded-full border border-gray-200 dark:border-gray-600"
-            style={{ backgroundColor: paint }}
-            aria-hidden
-          />
-          <input
-            type="color"
-            value={paint}
-            onChange={(e) => onColorChange(e.target.value)}
-            onClick={(e) => e.stopPropagation()} // Don’t close the dropdown
-            className="h-7 w-full cursor-pointer rounded border-0 bg-transparent p-0"
-            title="Custom color"
-            aria-label="Custom thread color"
-          />
-        </label>
-      </div>
-      <DropdownMenuSeparator className="mx-2" />
-      <DropdownMenuRadioGroup
-        value={curveValue}
-        onValueChange={(value) => {
-          const next: ThreadStylePref = value === 'sharp' ? 'boxed' : value === 'linear' ? 'linear' : 'curved' // Map radio → stored pref
-          onCurveChange(next)
-        }}
-      >
-        <DropdownMenuRadioItem value="smooth" className="pl-8 text-xs">Smooth</DropdownMenuRadioItem>
-        <DropdownMenuRadioItem value="sharp" className="pl-8 text-xs">Sharp</DropdownMenuRadioItem>
-        <DropdownMenuRadioItem value="linear" className="pl-8 text-xs">Linear</DropdownMenuRadioItem>
-      </DropdownMenuRadioGroup>
-    </>
-  )
-}
-
 /** Slash-free cluster immediately right of undo/redo — never fold into More; phone pill instead. */
 function leftmostGroupIds(mode: string): Set<string> {
   if (mode === 'insert') return new Set(['lock']) // Anchor + Lock frames, then slash, then Tidy up + Thread layout
-  if (mode === 'style') return new Set(['blockStyle', 'frameStyle', 'threadStyle']) // Block + Frame + Thread style
   if (mode === 'view') return new Set(['boardStyle']) // Board, then slash, then Capture/Present
   if (mode === 'draw') return new Set(['drawGroup2', 'drawGroup3']) // Eraser + ink, then slash, then lasso/spaces
   return new Set() // Actions: Filter cluster may overflow; no protected left cluster
@@ -254,7 +143,6 @@ function leftmostGroupIds(mode: string): Set<string> {
 const LEFTMOST_ICON_WIDTH: Record<string, number> = {
   home: 0, // Actions has no protected left cluster after Anchor/Lock moved to Layout
   insert: 64, // Anchor + Lock frames
-  style: 40 + 4 + 40 + 4 + 40, // Block + Frame + Thread style (gap-0.5)
   draw: 28 + 4 + 76, // Eraser + pencil + highlighter
   view: 40, // Board
 }
@@ -564,71 +452,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const shouldHideFormattingOptions = true // Text / frame / thread menus own these now
 
   // Initialize with consistent defaults to avoid hydration mismatch, then load from Supabase
-  const [lineStyle, setLineStyle] = useState<ThreadStylePref>('curved')
-  const [threadStrokeColor, setThreadStrokeColor] = useState('') // Empty = default gray; board + new-thread default
-  useEffect(() => {
-    const saved = localStorage.getItem(THREAD_STROKE_COLOR_KEY) // Sticky across reload
-    if (saved != null) setThreadStrokeColor(saved)
-  }, [])
-  const applyThreadCurve = (next: ThreadStylePref) => {
-    setLineStyle(next) // Board default Smooth / Sharp / Linear
-    const algorithm = threadAlgorithmFromStyle(next) // Map pref → RF path algorithm
-    reactFlowInstance?.setEdges((eds) =>
-      eds.map((e) => {
-        if (!e.selected && e.id !== clickedEdge?.id) return e // Only the picked / selected thread
-        if (e.type !== 'editable' && e.type !== 'animatedDotted') return e // Skip non-thread edges
-        return { ...e, data: { ...(e.data as object), algorithm } } // Stamp the new path style
-      })
-    )
-  }
-  // Style-bar color: board default + selected threads (persist strokeColor on panel_edges)
-  const applyThreadColor = (next: string) => {
-    const color = (next || '').trim() // Empty clears to default gray
-    setThreadStrokeColor(color)
-    localStorage.setItem(THREAD_STROKE_COLOR_KEY, color)
-    if (!reactFlowInstance) return
-    const targets = reactFlowInstance.getEdges().filter(
-      (e) =>
-        (e.selected || e.id === clickedEdge?.id) &&
-        (e.type === 'editable' || e.type === 'animatedDotted')
-    )
-    if (targets.length === 0) return // Board default only — new threads pick it up on connect
-    getMapTakeSnapshot()?.()
-    reactFlowInstance.setEdges((eds) =>
-      eds.map((e) => {
-        if (!targets.some((t) => t.id === e.id)) return e
-        const prev = (e.data as ThreadEdgeData | undefined) || {}
-        const data: ThreadEdgeData = { ...prev }
-        if (color) data.strokeColor = color
-        else delete data.strokeColor
-        return { ...e, data }
-      })
-    )
-    void (async () => {
-      const supabaseClient = createClient()
-      for (const e of targets) {
-        const sourceMsg = reactFlowInstance
-          .getNodes()
-          .find((n) => n.id === e.source)?.data?.promptMessage?.id as string | undefined
-        const targetMsg = reactFlowInstance
-          .getNodes()
-          .find((n) => n.id === e.target)?.data?.promptMessage?.id as string | undefined
-        if (!sourceMsg || !targetMsg) continue
-        const prev = (e.data as ThreadEdgeData | undefined) || {}
-        const metadata: ThreadEdgeData = { ...prev }
-        if (color) metadata.strokeColor = color
-        else delete metadata.strokeColor
-        const { error } = await supabaseClient
-          .from('panel_edges')
-          .update({ metadata })
-          .eq('source_message_id', sourceMsg)
-          .eq('target_message_id', targetMsg)
-        if (error && !String(error.message || '').includes('metadata')) {
-          console.error('Failed to persist thread color:', error)
-        }
-      }
-    })()
-  }
+  const [lineStyle, setLineStyle] = useState<ThreadStylePref>('curved') // Board default Smooth / Sharp / Linear
   const [editMode, setEditMode] = useState<'editing' | 'suggesting' | 'viewing'>('editing')
   // Use context values for drawTool, with local state as fallback
   const drawTool = contextDrawTool ?? null
@@ -661,10 +485,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     locked: false,
   })
   const [hasArmedBlock, setHasArmedBlock] = useState(false) // ⋮⋮ blue-wash block — gates Turn into
-  const [hasThreadSelection, setHasThreadSelection] = useState(false) // Selected / clicked thread — gates Thread style
-  const canBlockStyle = Boolean(editor) // TipTap focus required for text / highlight marks
-  const canFrameStyle = boardLockUi.hasSelection // Frame style needs a selected frame
-  const canThreadStyle = hasThreadSelection // Thread style needs a selected thread
   const canTurnInto = hasArmedBlock // Turn into needs an armed TipTap block (not frame-only)
   const preferencesLoadedRef = useRef(false) // Track if preferences have been loaded
   const toolbarRef = useRef<HTMLDivElement>(null)
@@ -869,27 +689,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     })
   }
 
-  // Silhouette + chrome shown in Frame style (synced when the dropdown opens — display only)
-  const [frameStyleUi, setFrameStyleUi] = useState<{
-    fill: string
-    border: string
-    weight: number
-    style: 'solid' | 'dashed' | 'dotted' | 'none'
-    shape: FrameShapeChoice
-  }>({
-    fill: '',
-    border: '',
-    weight: 1,
-    style: 'none',
-    shape: FRAME_SHAPE_NONE,
-  })
-
-  // Active TipTap text / highlight colors for Block style menu rows
-  const [blockStyleUi, setBlockStyleUi] = useState<{ text: string; highlight: string }>({
-    text: '',
-    highlight: '',
-  })
-
   // Checkmark for Actions-bar Turn into Format pane
   const [turnIntoBlockType, setTurnIntoBlockType] = useState<BlockTypeId>('text')
 
@@ -911,132 +710,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         .slice(0, 40)
         .map((c) => ({ id: c.id, title: c.title?.trim() || 'Untitled' })),
     ]
-  }
-
-  // Re-read Color / Highlight marks from the active editor (open menu / after pick)
-  const syncBlockStyleFromEditor = () => {
-    setBlockStyleUi({
-      text: readEditorTextColor(editor),
-      highlight: readEditorHighlightColor(editor),
-    })
-  }
-
-  // Pull fill/border/shape from the first selected frame into the Frame style UI only
-  // (do not write context on open — that would repaint multi-select to the first frame’s chrome)
-  const syncFrameStyleFromSelection = () => {
-    const selected = getSelectedFrames()
-    const first = selected[0]
-    if (!first) {
-      setFrameStyleUi({
-        fill: fillColor,
-        border: borderColor,
-        weight: borderWeight,
-        style: borderStyle,
-        shape: FRAME_SHAPE_NONE,
-      })
-      return
-    }
-    const meta = (first.data?.promptMessage?.metadata || {}) as Record<string, unknown>
-    const data = first.data as Record<string, unknown>
-    const fill = (typeof meta.fillColor === 'string' ? meta.fillColor : (data.fillColor as string)) || ''
-    const border = (typeof meta.borderColor === 'string' ? meta.borderColor : (data.borderColor as string)) || ''
-    const styleRaw = (meta.borderStyle as string) || (data.borderStyle as string) || 'none'
-    const style =
-      styleRaw === 'dashed' || styleRaw === 'dotted' || styleRaw === 'solid' || styleRaw === 'none'
-        ? styleRaw
-        : 'none'
-    const weight = parseBorderWeightPx(meta.borderWeight ?? data.borderWeight ?? borderWeight)
-    const shape = parseFrameShape(meta.frameShape ?? data.frameShape)
-    setFrameStyleUi({
-      fill,
-      border,
-      weight,
-      style,
-      shape: shape ?? FRAME_SHAPE_NONE,
-    })
-  }
-
-  // Apply / clear silhouette on all selected frames (Style bar; multi-select)
-  const applyFrameShape = (choice: FrameShapeChoice) => {
-    const selected = getSelectedFrames()
-    if (selected.length === 0 || !reactFlowInstance) return
-    getMapTakeSnapshot()?.()
-    const shape = choice === FRAME_SHAPE_NONE ? null : parseFrameShape(choice)
-    setFrameStyleUi((prev) => ({
-      ...prev,
-      shape: choice === FRAME_SHAPE_NONE ? FRAME_SHAPE_NONE : shape ?? FRAME_SHAPE_NONE,
-    }))
-    const ids = new Set(selected.map((n) => n.id))
-    reactFlowInstance.setNodes((nds) =>
-      nds.map((n) => {
-        if (!ids.has(n.id)) return n
-        const pm = n.data?.promptMessage
-        if (!pm) return n
-        const meta = { ...((pm.metadata as Record<string, unknown>) || {}) }
-        const prevDims = meta.resizeDimensions as { width?: number; height?: number } | undefined
-        const measured = nodeFlowSize(n)
-        let nextW = Math.max(
-          FRAME_SHAPE_MIN_SIZE.width,
-          prevDims?.width || measured.width || FRAME_SHAPE_DEFAULT_SIZE.width
-        )
-        let nextH = Math.max(
-          FRAME_SHAPE_MIN_SIZE.height,
-          prevDims?.height || measured.height || FRAME_SHAPE_DEFAULT_SIZE.height
-        )
-        if (shape && nextW < FRAME_SHAPE_DEFAULT_SIZE.width) nextW = FRAME_SHAPE_DEFAULT_SIZE.width
-        if (shape && nextH < FRAME_SHAPE_DEFAULT_SIZE.height) nextH = FRAME_SHAPE_DEFAULT_SIZE.height
-        const nextMeta: Record<string, unknown> = {
-          ...meta,
-          frameShape: shape,
-        }
-        if (shape) {
-          nextMeta.frameUnlocked = true
-          nextMeta.resizeDimensions = { width: nextW, height: nextH }
-          nextMeta.unlockedFrameSize = { width: nextW, height: nextH }
-        }
-        return {
-          ...n,
-          data: {
-            ...n.data,
-            frameShape: shape ?? undefined,
-            promptMessage: { ...pm, metadata: { ...pm.metadata, ...nextMeta } },
-          },
-        }
-      })
-    )
-    void (async () => {
-      const supabaseClient = createClient()
-      for (const n of selected) {
-        const msgId = n.data?.promptMessage?.id as string | undefined
-        if (!msgId) continue
-        const live = reactFlowInstance.getNode(n.id) || n
-        const pm = live.data?.promptMessage
-        const meta = { ...((pm?.metadata as Record<string, unknown>) || {}) }
-        const prevDims = meta.resizeDimensions as { width?: number; height?: number } | undefined
-        const measured = nodeFlowSize(live)
-        let nextW = Math.max(
-          FRAME_SHAPE_MIN_SIZE.width,
-          prevDims?.width || measured.width || FRAME_SHAPE_DEFAULT_SIZE.width
-        )
-        let nextH = Math.max(
-          FRAME_SHAPE_MIN_SIZE.height,
-          prevDims?.height || measured.height || FRAME_SHAPE_DEFAULT_SIZE.height
-        )
-        if (shape && nextW < FRAME_SHAPE_DEFAULT_SIZE.width) nextW = FRAME_SHAPE_DEFAULT_SIZE.width
-        if (shape && nextH < FRAME_SHAPE_DEFAULT_SIZE.height) nextH = FRAME_SHAPE_DEFAULT_SIZE.height
-        const nextMeta: Record<string, unknown> = { ...meta, frameShape: shape }
-        if (shape) {
-          nextMeta.frameUnlocked = true
-          nextMeta.resizeDimensions = { width: nextW, height: nextH }
-          nextMeta.unlockedFrameSize = { width: nextW, height: nextH }
-        }
-        try {
-          await supabaseClient.from('messages').update({ metadata: nextMeta }).eq('id', msgId)
-        } catch (err) {
-          console.error('Failed to save frame shape:', err)
-        }
-      }
-    })()
   }
 
   // Persist metadata patches for selected frames (board pin / frame-group lock)
@@ -1065,14 +738,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       setBoardLockUi({ hasSelection: false, locked: false })
       setFrameLockUi({ hasMulti: false, locked: false })
       setLayoutLinkUi({ linked: false, stacked: false })
-      setHasThreadSelection(false)
       return
     }
-    // Thread style: any selected edge or the click-menu thread
-    const edges = reactFlowInstance.getEdges()
-    setHasThreadSelection(
-      Boolean(clickedEdge) || edges.some((e) => e.selected)
-    )
     const selected = getSelectedFrames()
     if (selected.length === 0) {
       setBoardLockUi({ hasSelection: false, locked: false })
@@ -1130,10 +797,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   // Close gated menus if their selection disappears while open
   useEffect(() => {
     if (!canTurnInto && openDropdown === 'turnInto') setOpenDropdown(null)
-    if (!canBlockStyle && openDropdown === 'blockStyle') setOpenDropdown(null)
-    if (!canFrameStyle && openDropdown === 'frameStyle') setOpenDropdown(null)
-    if (!canThreadStyle && openDropdown === 'threadStyle') setOpenDropdown(null)
-  }, [canTurnInto, canBlockStyle, canFrameStyle, canThreadStyle, openDropdown])
+  }, [canTurnInto, openDropdown])
 
   // Lock selected frames to the board (pin: not draggable)
   const handleToggleBoardLock = () => {
@@ -1530,13 +1194,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           { id: 'lock', width: 64 }, // Anchor + Lock frames — Layout leftmost
           { id: 'undoRedo', width: 70 },
         ]
-        : editMenuPillMode === 'style'
-          ? [
-            { id: 'threadStyle', width: 40 }, // Thread style — rightmost of Style cluster
-            { id: 'frameStyle', width: 40 }, // Frame style
-            { id: 'blockStyle', width: 40 }, // Block style — Style bar leftmost
-            { id: 'undoRedo', width: 70 },
-          ]
         : editMenuPillMode === 'view'
           ? [
             { id: 'presentation', width: 40 }, // Present icon (hides first — rightmost)
@@ -1567,13 +1224,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           { id: 'lock', width: titledToolWidth('Anchor') + 2 + titledToolWidth('Lock frames') + 12 },
           { id: 'undoRedo', width: 70 },
         ]
-        : editMenuPillMode === 'style'
-          ? [
-            { id: 'threadStyle', width: titledToolWidth('Thread') },
-            { id: 'frameStyle', width: titledToolWidth('Frame') },
-            { id: 'blockStyle', width: titledToolWidth('Block') },
-            { id: 'undoRedo', width: 70 },
-          ]
         : editMenuPillMode === 'view'
           ? [
             { id: 'presentation', width: titledToolWidth('Present') },
@@ -1598,8 +1248,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       // All titles shown
       const fullGroups = editMenuPillMode === 'insert'
         ? midGroups // Layout has no early cluster
-        : editMenuPillMode === 'style'
-          ? midGroups // Style has no early cluster
         : editMenuPillMode === 'view'
           ? midGroups // View has no early cluster
           : editMenuPillMode === 'draw'
@@ -2164,146 +1812,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         {/* Slash before More menu when Layout tools overflow */}
         {editMenuPillMode === 'insert' && (!isItemHidden('lock') || !isItemHidden('smartAlign') || !isItemHidden('arrows') || !isItemHidden('insertGroup1')) && hiddenItems.size > 0 && (
           <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
-        )}
-
-        {/* Style bar — Block style + Frame style + Thread style (pill is Style) */}
-        {editMenuPillMode === 'style' &&
-          (!isItemHidden('blockStyle') || !isItemHidden('frameStyle') || !isItemHidden('threadStyle')) && (
-          <div className="flex items-center gap-0.5 flex-shrink-0">
-            {!isItemHidden('blockStyle') && (
-              <DropdownMenu
-                open={openDropdown === 'blockStyle'}
-                onOpenChange={(open) => {
-                  if (open && !canBlockStyle) return // Greyed: no TipTap focus
-                  handleDropdownOpenChange('blockStyle', open)
-                  if (open) syncBlockStyleFromEditor() // Match rows to caret / selection
-                }}
-              >
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className={cn(
-                      'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
-                      'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5'
-                    )}
-                    disabled={!canBlockStyle}
-                    title={!canBlockStyle ? 'Select a block to style' : 'Block'}
-                    aria-label="Block"
-                  >
-                    <Baseline className="h-4 w-4 flex-shrink-0" />
-                    <ToolbarTitle show={!compactLabels}>Block</ToolbarTitle>
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  {...TOOLBAR_MENU_PLACEMENT}
-                  className="w-[220px] p-0"
-                  onCloseAutoFocus={(e) => e.preventDefault()} // Keep TipTap caret after pick
-                >
-                  <BlockStyleMenuItems
-                    editor={editor}
-                    textColor={blockStyleUi.text}
-                    highlightColor={blockStyleUi.highlight}
-                    onApplied={syncBlockStyleFromEditor}
-                  />
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-            {!isItemHidden('frameStyle') && (
-              <DropdownMenu
-                open={openDropdown === 'frameStyle'}
-                onOpenChange={(open) => {
-                  if (open && !canFrameStyle) return // Greyed: no frame selected
-                  handleDropdownOpenChange('frameStyle', open)
-                  if (open) syncFrameStyleFromSelection() // Match swatches to selection
-                }}
-              >
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className={cn(
-                      'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
-                      'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5'
-                    )}
-                    disabled={!canFrameStyle}
-                    title={!canFrameStyle ? 'Select a frame to style' : 'Frame'}
-                    aria-label="Frame"
-                  >
-                    <Square className="h-4 w-4 flex-shrink-0" />
-                    <ToolbarTitle show={!compactLabels}>Frame</ToolbarTitle>
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-56">
-                  <FrameStyleMenuItems
-                    fillColor={frameStyleUi.fill}
-                    borderColor={frameStyleUi.border}
-                    borderWeight={frameStyleUi.weight}
-                    borderStyle={frameStyleUi.style}
-                    frameShape={frameStyleUi.shape}
-                    onFillChange={(next) => {
-                      setFrameStyleUi((prev) => ({ ...prev, fill: next }))
-                      setFillColor(next)
-                    }}
-                    onBorderChange={(next) => {
-                      setFrameStyleUi((prev) => ({
-                        ...prev,
-                        border: next,
-                        style: next && prev.style === 'none' ? 'solid' : prev.style,
-                      }))
-                      setBorderColor(next)
-                      if (next && (borderStyle === 'none' || !borderStyle)) setBorderStyle('solid')
-                    }}
-                    onBorderWeightChange={(next) => {
-                      setFrameStyleUi((prev) => ({ ...prev, weight: next }))
-                      setBorderWeight(next)
-                    }}
-                    onBorderStyleChange={(next) => {
-                      setFrameStyleUi((prev) => ({ ...prev, style: next }))
-                      setBorderStyle(next)
-                    }}
-                    onShapeChange={applyFrameShape}
-                  />
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-            {!isItemHidden('threadStyle') && (
-              <DropdownMenu
-                open={openDropdown === 'threadStyle'}
-                onOpenChange={(open) => {
-                  if (open && !canThreadStyle) return // Greyed: no thread selected
-                  handleDropdownOpenChange('threadStyle', open)
-                }}
-              >
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className={cn(
-                      'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
-                      'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5'
-                    )}
-                    disabled={!canThreadStyle}
-                    title={!canThreadStyle ? 'Select a thread to style' : 'Thread'}
-                    aria-label="Thread"
-                  >
-                    <Spline className="h-4 w-4 flex-shrink-0" />
-                    <ToolbarTitle show={!compactLabels}>Thread</ToolbarTitle>
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-48">
-                  <ThreadStyleMenuItems
-                    strokeIsSolid={verticalLineStyle === 'solid'}
-                    curve={lineStyle}
-                    strokeColor={threadStrokeColor}
-                    onStrokeChange={(solid) => setVerticalLineStyle(solid ? 'solid' : 'dotted')}
-                    onCurveChange={applyThreadCurve}
-                    onColorChange={applyThreadColor}
-                  />
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-          </div>
         )}
 
         {/* Draw Mode Buttons - Eraser, Pencil, Highlighter, Lasso, Insert Spaces (ink dropdowns on the tools) */}
@@ -3465,82 +2973,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       <Table className="h-4 w-4 mr-2" />
                       Table
                     </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-              </>
-            ) : editMenuPillMode === 'style' ? (
-              <>
-                {isItemHidden('blockStyle') && (
-                  <>
-                    <DropdownMenuLabel className="text-xs font-normal text-gray-500">Block</DropdownMenuLabel>
-                    {canBlockStyle ? (
-                      <BlockStyleMenuItems
-                        editor={editor}
-                        textColor={blockStyleUi.text}
-                        highlightColor={blockStyleUi.highlight}
-                        onApplied={syncBlockStyleFromEditor}
-                      />
-                    ) : (
-                      <DropdownMenuItem disabled>Select a block to style</DropdownMenuItem>
-                    )}
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                {isItemHidden('frameStyle') && (
-                  <>
-                    <DropdownMenuLabel className="text-xs font-normal text-gray-500">Frame</DropdownMenuLabel>
-                    {canFrameStyle ? (
-                      <FrameStyleMenuItems
-                        fillColor={frameStyleUi.fill}
-                        borderColor={frameStyleUi.border}
-                        borderWeight={frameStyleUi.weight}
-                        borderStyle={frameStyleUi.style}
-                        frameShape={frameStyleUi.shape}
-                        onFillChange={(next) => {
-                          setFrameStyleUi((prev) => ({ ...prev, fill: next }))
-                          setFillColor(next)
-                        }}
-                        onBorderChange={(next) => {
-                          setFrameStyleUi((prev) => ({
-                            ...prev,
-                            border: next,
-                            style: next && prev.style === 'none' ? 'solid' : prev.style,
-                          }))
-                          setBorderColor(next)
-                          if (next && (borderStyle === 'none' || !borderStyle)) setBorderStyle('solid')
-                        }}
-                        onBorderWeightChange={(next) => {
-                          setFrameStyleUi((prev) => ({ ...prev, weight: next }))
-                          setBorderWeight(next)
-                        }}
-                        onBorderStyleChange={(next) => {
-                          setFrameStyleUi((prev) => ({ ...prev, style: next }))
-                          setBorderStyle(next)
-                        }}
-                        onShapeChange={applyFrameShape}
-                      />
-                    ) : (
-                      <DropdownMenuItem disabled>Select a frame to style</DropdownMenuItem>
-                    )}
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                {isItemHidden('threadStyle') && (
-                  <>
-                    <DropdownMenuLabel className="text-xs font-normal text-gray-500">Thread</DropdownMenuLabel>
-                    {canThreadStyle ? (
-                      <ThreadStyleMenuItems
-                        strokeIsSolid={verticalLineStyle === 'solid'}
-                        curve={lineStyle}
-                        strokeColor={threadStrokeColor}
-                        onStrokeChange={(solid) => setVerticalLineStyle(solid ? 'solid' : 'dotted')}
-                        onCurveChange={applyThreadCurve}
-                        onColorChange={applyThreadColor}
-                      />
-                    ) : (
-                      <DropdownMenuItem disabled>Select a thread to style</DropdownMenuItem>
-                    )}
                     <DropdownMenuSeparator />
                   </>
                 )}

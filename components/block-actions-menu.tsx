@@ -518,7 +518,9 @@ export function BlockActionsMenu({
   const borderWeightDraggingRef = useRef(false) // Ignore prop sync mid-drag
 
   useEffect(() => {
-    inputRef.current?.focus()
+    // Phone / touch: skip search autofocus — soft keyboard must not open with the frame menu (I-bar isn’t placed)
+    if (typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches) return
+    inputRef.current?.focus() // Desktop: caret in Search actions for quick filter
   }, [])
 
   // Reset to Format when the Turn into flyout closes so reopen starts compact

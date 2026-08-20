@@ -133,7 +133,7 @@ export function setAiBlockSelection(sel: AiBlockSelection): void {
   notify()
 }
 
-/** Read armed ⋮⋮ block selection (top bar Turn into / Block style gates). */
+/** Read armed ⋮⋮ block selection (top bar Turn into gates). */
 export function getAiBlockSelection(): AiBlockSelection {
   return blockSelection
 }

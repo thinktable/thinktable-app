@@ -339,14 +339,13 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
           options={[
             { value: 'home', label: 'Actions' },
             { value: 'insert', label: 'Layout' },
-            { value: 'style', label: 'Style' },
             { value: 'draw', label: 'Draw' },
             { value: 'view', label: 'View' },
           ]}
           value={editMenuPillMode}
           onChange={(value) => {
             // Update mode when pill select changes - updates context shared with EditorToolbar
-            setEditMenuPillMode(value as 'home' | 'insert' | 'style' | 'draw' | 'view')
+            setEditMenuPillMode(value as 'home' | 'insert' | 'draw' | 'view')
           }}
         />
       </div>

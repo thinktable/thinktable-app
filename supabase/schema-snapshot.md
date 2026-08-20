@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-20T02:01:05Z`
+- Snapped at: `2026-08-20T10:37:42Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260820103736_remove_style_bar_menu_toggle.sql`.
+- Remove Style mode (Block/Frame/Thread) from the top-bar pill; frame menu skips Search autofocus on touch; second strip/path tap toggles frame/thread menus closed.
+- Schema unchanged.
+
+## Prior: style bar labels and menus
 
 - No DDL. Marker `20260820020104_style_bar_labels_and_menus.sql`.
 - Style bar: Block / Frame / Thread menus (drop “style” from tool names); Layout bar Threads; Turn into + Notion top-bar pin preference polish.

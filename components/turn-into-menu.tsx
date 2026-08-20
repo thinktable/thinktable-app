@@ -307,7 +307,7 @@ export function TurnIntoMenuItems({
     })).filter((s) => s.items.length > 0)
   }, [propertyFilterQ])
 
-  void editor // Kept for API symmetry with Block style (caret target resolved by parent)
+  void editor // Kept for API symmetry with other toolbar menus (caret target resolved by parent)
 
   return (
     <div
