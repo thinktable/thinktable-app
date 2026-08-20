@@ -722,10 +722,10 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
         >
           {/* Left chrome — menu + board path; no z-boost so absolute tools stay above if the path cap races */}
           <div data-top-bar-left data-path-ready={pathReady || !pathKey ? 'true' : undefined} className="relative flex items-center flex-shrink-0">
-          {/* Menu icon — hover opens; click pins across leave/page switch; board click still closes */}
+          {/* Menu icon — hover opens; click pins; above mobile scrim so close works on first tap */}
           <div
             data-nav-logo-trigger
-            className="flex items-center flex-shrink-0"
+            className="relative z-50 flex items-center flex-shrink-0" // z-50: above mobile nav scrim (z-40)
             onMouseEnter={() => {
               if (!isMobileMode) openSidebar() // Desktop: open on hover (not pinned)
             }}

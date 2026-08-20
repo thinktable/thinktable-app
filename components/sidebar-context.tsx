@@ -109,6 +109,7 @@ export function SidebarContextProvider({
   const isMobileModeRef = useRef(false) // Latest mobile flag for sync focus in toggle
   const isChatOpenRef = useRef(false) // Latest chat open for sync focus in toggle
   const aiComposerFocusRef = useRef<(() => void) | null>(null) // Phone composer.focus (same-tap keyboard)
+  const closedAtRef = useRef(0) // Timestamp of last close — ignore ghost click reopen on the hamburger
 
   // Keep pin ref in sync for delayed-close guard
   useEffect(() => {
@@ -170,6 +171,7 @@ export function SidebarContextProvider({
     persistBoardsNavPinned(false) // Reload should not reopen after an explicit close
     setIsSidebarPinned(false) // Explicit close clears click-pin
     setIsSidebarOpen(false) // Hide immediately
+    closedAtRef.current = Date.now() // Block ghost click that would reopen via toggle
   }, [cancelCloseSidebar])
 
   const scheduleCloseSidebar = useCallback(() => {
@@ -188,7 +190,12 @@ export function SidebarContextProvider({
       if (pinned) {
         persistBoardsNavPinned(false) // Unpin: next reload stays closed
         setIsSidebarOpen(false) // Second click: unpin and hide
+        closedAtRef.current = Date.now() // Same ghost-click guard as closeSidebar
         return false
+      }
+      // Scrim used to cover the hamburger — close unmounted it and the same tap’s click reopened
+      if (Date.now() - closedAtRef.current < 400) {
+        return false // Stay closed; ignore click-through reopen
       }
       persistBoardsNavPinned(true) // Pin: next reload reopens the menu
       setIsSidebarOpen(true) // First click: open and pin across leave/page switch

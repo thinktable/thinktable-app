@@ -267,6 +267,7 @@ function SortableBoardItem({
     staleTime: 30000, // Cache for 30 seconds
   })
 
+  const { closeSidebar } = useSidebarContext() // Dismiss nav when a board is opened
   const {
     attributes,
     listeners,
@@ -311,12 +312,13 @@ function SortableBoardItem({
           'flex items-center gap-1 pr-4 h-8 rounded-lg transition-colors text-sm group cursor-grab active:cursor-grabbing relative',
           isActive
             ? 'bg-blue-50 dark:bg-[#2a2a3a]'
-            : 'hover:bg-gray-50 dark:hover:bg-[#1f1f1f]', // CSS hover requires window focus (as intended)
+            // Hover bg only on real hover devices — iOS sticky :hover ate the first board tap
+            : '[@media(hover:hover)]:hover:bg-gray-50 dark:[@media(hover:hover)]:hover:bg-[#1f1f1f]',
           isDragging && 'cursor-grabbing opacity-50',
           // Clear nest-into affordance when hovering center of a page
           showNestHighlight && 'bg-blue-100 dark:bg-blue-950/50 ring-2 ring-inset ring-blue-500 dark:ring-blue-400'
         )}
-        style={{ paddingLeft: `${16 + depth * 14}px` }} // Indent nested sub-pages
+        style={{ paddingLeft: `${16 + depth * 14}px`, touchAction: 'manipulation' }} // Indent nested sub-pages; skip double-tap zoom delay
         title={showNestHighlight ? 'Drop to nest inside' : undefined}
       >
         {showNestHighlight && (
@@ -357,7 +359,9 @@ function SortableBoardItem({
             // Prevent navigation when dragging
             if (isDragging) {
               e.preventDefault()
+              return
             }
+            closeSidebar() // Board select dismisses the nav (same as outside click)
           }}
         >
           <span className="flex items-center gap-1.5 flex-1 min-w-0">
@@ -381,7 +385,8 @@ function SortableBoardItem({
               size="icon"
               className={cn(
                 'h-8 w-6 transition-opacity hover:bg-transparent',
-                'opacity-0 group-hover:opacity-100', // CSS group-hover requires window focus (as intended)
+                // Always visible on touch; fade in on hover-capable pointers only (avoids sticky first-tap)
+                'opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100',
                 isActive
                   ? 'text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-900'
                   : 'text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200'
@@ -1179,6 +1184,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
   }, [])
 
   // Configure drag sensors
+  // Mouse: small drag distance. Touch: hold ~long-press so a quick tap still opens the board.
   const sensors = useSensors(
     useSensor(MouseSensor, {
       activationConstraint: {
@@ -1187,8 +1193,8 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     }),
     useSensor(TouchSensor, {
       activationConstraint: {
-        delay: 250, // 250ms delay for touch
-        tolerance: 5, // 5px tolerance
+        delay: 450, // Match LONG_PRESS_MS — tap navigates; hold reorders
+        tolerance: 10, // Match LONG_PRESS_MOVE_PX so jitter doesn’t arm drag
       },
     }),
     useSensor(KeyboardSensor, {
@@ -2360,10 +2366,11 @@ export default function AppSidebar({ user }: AppSidebarProps) {
 
   return (
     <>
-      {/* Scrim when nav is open on compact/mobile — click closes */}
+      {/* Scrim below the top bar so the menu icon stays tappable (toggle close; no click-through reopen) */}
       {isSidebarOpen && isMobileMode && (
         <div
-          className="fixed inset-0 bg-black/20 z-40 transition-opacity"
+          className="fixed inset-x-0 bottom-0 bg-black/20 z-40 transition-opacity"
+          style={{ top: NAV_POPUP_TOP }} // Leave the 52px top bar (hamburger) above the scrim
           onClick={closeSidebar}
         />
       )}
