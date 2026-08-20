@@ -2765,6 +2765,25 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     getSetNodes,
     updateNodeInternals,
   ])
+  // Stack/hide unmounts the node while chrome is still on — without this, RF keeps the
+  // chrome-shifted XY and remount reapplies chrome → frame jumps up/left one gutter.
+  useLayoutEffect(() => {
+    if (!isBlock) return
+    return () => {
+      const applied = frameChromeOffsetRef.current // Chrome still baked into RF position
+      if (applied.x === 0 && applied.y === 0) return
+      frameChromeOffsetRef.current = { x: 0, y: 0 } // Remount starts from fill origin
+      const setNodesFunc = getSetNodes()
+      if (!setNodesFunc) return
+      setNodesFunc((nds: any[]) =>
+        nds.map((n) =>
+          n.id === id
+            ? { ...n, position: { x: n.position.x + applied.x, y: n.position.y + applied.y } }
+            : n
+        )
+      )
+    }
+  }, [isBlock, id, getSetNodes])
   // Stack lines: one per adjust-box side that has a mate further out on that side’s tree.
   // Equality fn is required — a fresh `[]` every store tick re-rendered every frame on pinch
   // (large Notion DB tables → phone Safari tab reload over tunnel).

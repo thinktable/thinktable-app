@@ -10,6 +10,18 @@ export type SideStackEntry = {
   index: number
   anchor?: boolean
   expanded?: boolean
+  /** Absolute flow XY at collapse — unstack/expand restores this exact spot. */
+  restoreAbs?: { x: number; y: number }
+  /** @deprecated Prefer restoreAbs; kept for stacks collapsed before the absolute fix. */
+  restoreDelta?: { x: number; y: number }
+}
+
+/** `{ x, y }` number pair, or null if missing / malformed. */
+export function readXY(v: unknown): { x: number; y: number } | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null // Need a plain object
+  const r = v as Record<string, unknown> // Indexable for x/y
+  if (typeof r.x !== 'number' || typeof r.y !== 'number') return null // Both axes required
+  return { x: r.x, y: r.y } // Copy so callers can mutate safely
 }
 
 export type SideStacks = Partial<Record<FrameStackSide, SideStackEntry>>
@@ -32,11 +44,15 @@ export function readSideStacks(meta?: Record<string, unknown> | null): SideStack
       const rec = e as Record<string, unknown>
       if (typeof rec.groupId !== 'string') continue
       const index = typeof rec.index === 'number' ? rec.index : rec.anchor === true ? 0 : 99
+      const restoreAbs = readXY(rec.restoreAbs) // Exact board XY to restore on unstack
+      const restoreDelta = readXY(rec.restoreDelta) // Legacy relative offset (pre-absolute fix)
       out[side] = {
         groupId: rec.groupId,
         index,
         ...(rec.anchor === true ? { anchor: true } : {}),
         ...(rec.expanded === true ? { expanded: true } : {}),
+        ...(restoreAbs ? { restoreAbs } : {}),
+        ...(restoreDelta ? { restoreDelta } : {}),
       }
     }
     if (Object.keys(out).length > 0) return out

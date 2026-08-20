@@ -1,17 +1,17 @@
 'use client' // Toolbar SVG — client so it can sit in the Layout dropdown
 
-import { Magnet } from 'lucide-react' // Snap option in the Thread layout alignment row
-import { DropdownMenuItem, DropdownMenuSeparator } from './ui/dropdown-menu' // Same chrome as the rest of the tool menus
+import { Magnet, ChevronsDownUp, ChevronsUpDown } from 'lucide-react' // Magnet snap + stack/unstack
+import { DropdownMenuItem } from './ui/dropdown-menu' // Same chrome as the rest of the tool menus
 import { cn } from '@/lib/utils' // Merge selected / size classes
 
 /** Growth direction of the layout tree (same as `arrowDirection`). */
 export type LayoutArrowDir = 'down' | 'up' | 'left' | 'right'
 
-/** Snap, one stem, or fork bias: snap / single / left / center / right. */
-export type LayoutForkAlign = 'snap' | 'single' | 'left' | 'center' | 'right'
+/** One stem, or fork bias: single / left / center / right. Magnet is a separate toggle. */
+export type LayoutForkAlign = 'single' | 'left' | 'center' | 'right'
 
-const FORK_ALIGNS: LayoutForkAlign[] = ['snap', 'single', 'left', 'center', 'right'] // Alignment row: snap, linear arrow, then forks
-const FORK_DIRS: LayoutArrowDir[] = ['down', 'right', 'left', 'up'] // Same order as the previous regular arrows
+const FORK_ALIGNS: LayoutForkAlign[] = ['single', 'left', 'center', 'right'] // Left column under the magnet
+const FORK_DIRS: LayoutArrowDir[] = ['down', 'right', 'left', 'up'] // Right column under stack/unstack
 
 /** Rotate a downward fork so its stem points along `direction` (SVG clockwise degrees). */
 const DIR_ROTATE: Record<LayoutArrowDir, number> = { down: 0, right: 270, up: 180, left: 90 }
@@ -27,6 +27,7 @@ const AD = 1.6 // Arrowhead depth (old chevron was 3.5)
 
 const ITEM = 'h-7 w-7 p-0 flex items-center justify-center rounded-sm' // Match the old 28px arrow cells
 const ITEM_ON = 'bg-gray-100 dark:bg-[#1f1f1f]' // Selected wash (same as other toolbar icon menus)
+const COL_RULE = 'mx-0.5 h-px w-6 self-center bg-muted' // Hairline inside a column (under magnet / collapse)
 
 /** Rounded T-fork body (downward); `single` is one stem, others pick which spine the stem uses. */
 function forkBody(align: LayoutForkAlign): string {
@@ -54,7 +55,7 @@ export function LayoutForkIcon({
   className,
 }: {
   direction: LayoutArrowDir // Which way the stem points
-  align: Exclude<LayoutForkAlign, 'snap'> // Fork / linear only — snap uses Magnet via LayoutAlignGlyph
+  align: LayoutForkAlign // Fork / linear — magnet is a separate toggle
   className?: string // Usually h-4 w-4 to match lucide
 }) {
   return (
@@ -83,21 +84,20 @@ export function LayoutForkIcon({
   )
 }
 
-/** Glyph for the alignment row / toolbar: magnet for snap, otherwise the (rotated) fork arrow. */
+/** Toolbar glyph: selected alignment fork in the selected direction (magnet is not the trigger). */
 export function LayoutAlignGlyph({
   direction,
   align,
   className,
 }: {
   direction: LayoutArrowDir // Which way the stem points
-  align: LayoutForkAlign // Snap, single, or a fork
+  align: LayoutForkAlign // Single or a fork
   className?: string // Usually h-4 w-4
 }) {
-  if (align === 'snap') return <Magnet className={className} aria-hidden="true" /> // Snap sits left of the linear arrow; canonical magnet, not rotated
-  return <LayoutForkIcon direction={direction} align={align} className={className} /> // Linear + forks follow selected direction
+  return <LayoutForkIcon direction={direction} align={align} className={className} />
 }
 
-/** Alignment row + direction forks for the Layout tool dropdown (and More overflow). */
+/** Alignment column + direction column for the Layout tool dropdown (and More overflow). */
 export function LayoutForkMenuItems({
   direction,
   align,
@@ -106,46 +106,73 @@ export function LayoutForkMenuItems({
   canSnap = false,
   snapActive = false,
   onSnapFrames,
+  canStack = false,
+  stackActive = false,
+  onStackFrames,
 }: {
   direction: LayoutArrowDir // Currently selected growth direction
   align: LayoutForkAlign // Currently selected fork alignment
   onDirectionChange: (dir: LayoutArrowDir) => void // Pick down / right / left / up
-  onAlignChange: (align: LayoutForkAlign) => void // Pick snap, single arrow, or left / center / right fork
+  onAlignChange: (align: LayoutForkAlign) => void // Pick single arrow, or left / center / right fork
   canSnap?: boolean // Need ≥2 selected frames
-  snapActive?: boolean // Magnet is the selected Thread layout align
-  onSnapFrames?: () => void // Pack selected frames flush — position only, no lock / stack link
+  snapActive?: boolean // Selection already shares a sideStacks link
+  onSnapFrames?: () => void // Toggle pack/unlink — does not change align
+  canStack?: boolean // Need ≥2 selected (or an already-stacked group)
+  stackActive?: boolean // Selection’s group has hidden mates
+  onStackFrames?: () => void // Toggle stack/unstack — does not change direction
 }) {
-  const dirAlign = align === 'snap' ? 'single' : align // Direction row: snap uses the linear arrow
-  const alignTitle = (next: LayoutForkAlign) => {
-    if (next !== 'snap') return next === 'single' ? 'Single arrow' : `${next} aligned fork` // Hover / a11y
-    if (!canSnap) return 'Select 2+ frames to snap together' // Disabled until a multi-frame selection
-    return 'Snap frames together'
-  }
+  const alignTitle = (next: LayoutForkAlign) =>
+    next === 'single' ? 'Single arrow' : `${next} aligned fork` // Hover / a11y
   return (
-    <>
-      <div className="flex justify-center"> {/* Snap, then linear arrow, then left/center/right forks */}
+    <div className="flex w-fit items-stretch"> {/* Two columns: align | direction */}
+      <div className="flex flex-col"> {/* Magnet toggle on top, then alignment arrows */}
+        <DropdownMenuItem
+          title={!canSnap ? 'Select 2+ frames to snap together' : snapActive ? 'Unsnap frames' : 'Snap frames together'}
+          aria-label={!canSnap ? 'Select 2+ frames to snap together' : snapActive ? 'Unsnap frames' : 'Snap frames together'}
+          disabled={!canSnap}
+          onSelect={(e) => {
+            e.preventDefault() // Keep the menu open; do not steal the alignment pick
+            onSnapFrames?.()
+          }}
+          className={cn(ITEM, snapActive && ITEM_ON)}
+        >
+          <Magnet className="h-4 w-4" aria-hidden="true" />
+        </DropdownMenuItem>
+        <div className={COL_RULE} aria-hidden="true" /> {/* Split magnet from alignment arrows */}
         {FORK_ALIGNS.map((next) => (
           <DropdownMenuItem
             key={next}
             title={alignTitle(next)}
             aria-label={alignTitle(next)}
-            disabled={next === 'snap' && !canSnap} // Snap is an action, not only a glyph
             onSelect={(e) => {
               e.preventDefault() // Keep the menu open so direction arrows can update in place
               onAlignChange(next)
-              if (next === 'snap') onSnapFrames?.() // Pack flush; does not lock or link stacks
             }}
-            className={cn(
-              ITEM,
-              (next === 'snap' ? snapActive || align === 'snap' : align === next) && ITEM_ON
-            )}
+            className={cn(ITEM, align === next && ITEM_ON)}
           >
             <LayoutAlignGlyph direction={direction} align={next} className="h-4 w-4" />
           </DropdownMenuItem>
         ))}
       </div>
-      <DropdownMenuSeparator className="mx-0 my-1" /> {/* Split alignment from direction */}
-      <div className="flex justify-center"> {/* Forked arrows — each points its own way, using selected align */}
+      <div className="mx-0.5 w-px self-stretch bg-muted" aria-hidden="true" /> {/* Vertical split */}
+      <div className="flex flex-col"> {/* Stack/unstack toggle on top, then direction arrows */}
+        <DropdownMenuItem
+          title={!canStack ? 'Select 2+ frames to stack' : stackActive ? 'Unstack frames' : 'Stack frames'}
+          aria-label={!canStack ? 'Select 2+ frames to stack' : stackActive ? 'Unstack frames' : 'Stack frames'}
+          disabled={!canStack}
+          onSelect={(e) => {
+            e.preventDefault() // Keep the menu open; do not steal the direction pick
+            onStackFrames?.()
+          }}
+          className={cn(ITEM, stackActive && ITEM_ON, 'text-gray-500 dark:text-gray-400')}
+        >
+          {stackActive ? (
+            <ChevronsUpDown className="h-4 w-4" aria-hidden="true" /> // Stacked — click to expand
+          ) : (
+            <ChevronsDownUp className="h-4 w-4" aria-hidden="true" /> // Expanded — click to stack
+          )}
+        </DropdownMenuItem>
+        <div className={COL_RULE} aria-hidden="true" /> {/* Split stack toggle from direction arrows */}
         {FORK_DIRS.map((next) => (
           <DropdownMenuItem
             key={next}
@@ -157,10 +184,10 @@ export function LayoutForkMenuItems({
             }}
             className={cn(ITEM, direction === next && ITEM_ON)}
           >
-            <LayoutForkIcon direction={next} align={dirAlign} className="h-4 w-4" /> {/* Follow selected alignment (single or fork) */}
+            <LayoutForkIcon direction={next} align={align} className="h-4 w-4" />
           </DropdownMenuItem>
         ))}
       </div>
-    </>
+    </div>
   )
 }

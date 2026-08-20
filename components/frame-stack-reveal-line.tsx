@@ -323,10 +323,13 @@ export function FrameStackRevealLine({
       const sizes = layoutMates.map((n) => nodeFlowSize(n))
       const posById = new Map<string, { x: number; y: number }>()
       layoutMates.forEach((n, order) => {
-        posById.set(
-          n.id,
-          stackExpandLayout(frontBox, stackSide, sizes[order], order, sizes.slice(0, order))
-        )
+        // Full open of the whole stack: keep each mate’s live XY (collapse left them put).
+        // Preview / open-one still fans from the host so the hover/line chrome has somewhere to go.
+        const pos =
+          expanded && !onlyId
+            ? absFlowPosition(n, live)
+            : stackExpandLayout(frontBox, stackSide, sizes[order], order, sizes.slice(0, order))
+        posById.set(n.id, pos)
       })
       // Nested satellites of the mates we’re showing (A’s bottom C, etc.)
       const showMateIds = layoutMates.map((n) => n.id)
@@ -673,20 +676,14 @@ export function FrameStackRevealLine({
       const sizes = sortedMates.map((n) => nodeFlowSize(n))
       const posById = new Map<string, { x: number; y: number }>()
       sortedMates.forEach((n, order) => {
+        const stamped = findStackEntry(nodeStackMeta(n), stackGroupId)?.entry.restoreAbs
+        const liveAbs = absFlowPosition(n, live) // Collapse left mates put — persist that
+        const onHost = Math.hypot(liveAbs.x - frontAbs.x, liveAbs.y - frontAbs.y) < 2
         posById.set(
           n.id,
-          stackExpandLayout(
-            {
-              x: frontAbs.x,
-              y: frontAbs.y,
-              width: frontSize.width,
-              height: frontSize.height,
-            },
-            stackSide,
-            sizes[order],
-            order,
-            sizes.slice(0, order)
-          )
+          stamped && onHost
+            ? stamped // Was parked on the host — write the stamped board XY
+            : liveAbs
         )
       })
       const nestedIds = collectNestedSatelliteIds(

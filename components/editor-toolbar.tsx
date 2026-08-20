@@ -80,7 +80,15 @@ import { AutomationsMenu } from './automations-menu' // Actions-bar Automations 
 import { CapturesMenu } from './captures-menu' // View-bar Capture list popover
 import { ToolbarTitle } from './toolbar-title' // Animated icon-adjacent titles
 import { LayoutAlignGlyph, LayoutForkMenuItems, type LayoutForkAlign } from './layout-fork-icon' // Layout dropdown: forked arrows + align
-import { packSelectedFramesTogether } from '@/components/use-frame-nest-stack-drag' // Magnet: pack far-apart frames flush
+import {
+  packSelectedFramesTogether,
+  sharedStackGroupId,
+  selectionIsStacked,
+  unlinkSelectedStack,
+  collapseSelectedStack,
+  expandSelectedStack,
+  type StackTogglePatch,
+} from '@/components/use-frame-nest-stack-drag' // Magnet pack + stack/unstack
 import { setSideStackEntry } from '@/lib/frame-side-stacks' // Stamp stack line link without lock
 import { PresentationsMenu } from './presentations-menu' // View-bar Presentation list popover
 import { useBoardAccess } from '@/lib/share/board-access-context' // Owner-only share menu
@@ -313,10 +321,12 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   
   // Track which dropdown is currently open - only one can be open at a time
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
-  const [layoutForkAlign, setLayoutForkAlign] = useState<LayoutForkAlign>('center') // Snap, single arrow, or left / center / right fork
+  const [layoutForkAlign, setLayoutForkAlign] = useState<LayoutForkAlign>('center') // Single arrow, or left / center / right fork
+  const [layoutLinkUi, setLayoutLinkUi] = useState({ linked: false, stacked: false }) // Magnet / stack toggles (independent of align/direction)
   useEffect(() => {
     const saved = localStorage.getItem('thinktable-layout-fork-align') // Sticky across reload; UI-only until layout is wired
-    if (saved === 'snap' || saved === 'single' || saved === 'left' || saved === 'center' || saved === 'right') setLayoutForkAlign(saved)
+    if (saved === 'single' || saved === 'left' || saved === 'center' || saved === 'right') setLayoutForkAlign(saved)
+    // Legacy 'snap' was an align pick — magnet is now a separate toggle; keep default center
   }, [])
   const pickLayoutForkAlign = (next: LayoutForkAlign) => {
     setLayoutForkAlign(next) // Update the open menu + trigger icon
@@ -740,12 +750,14 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     if (!reactFlowInstance) {
       setBoardLockUi({ hasSelection: false, locked: false })
       setFrameLockUi({ hasMulti: false, locked: false })
+      setLayoutLinkUi({ linked: false, stacked: false })
       return
     }
     const selected = getSelectedFrames()
     if (selected.length === 0) {
       setBoardLockUi({ hasSelection: false, locked: false })
       setFrameLockUi({ hasMulti: false, locked: false })
+      setLayoutLinkUi({ linked: false, stacked: false })
       return
     }
     const allBoardLocked = selected.every((n) => {
@@ -753,6 +765,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       return meta.boardLocked === true
     })
     setBoardLockUi({ hasSelection: true, locked: allBoardLocked })
+    const live = reactFlowInstance.getNodes()
+    setLayoutLinkUi({
+      linked: sharedStackGroupId(selected) != null, // Magnet stays on for a stacked host even if mates are hidden
+      stacked: selectionIsStacked(selected, live),
+    })
     if (selected.length < 2) {
       setFrameLockUi({ hasMulti: false, locked: false })
       return
@@ -859,13 +876,57 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     }).catch((err) => console.error('Failed to persist frame-group lock:', err))
   }
 
-  // Thread layout magnet: pull selected frames flush (they can start far apart)
+  // Apply magnet / stack patches to RF + persist metadata
+  const applyStackPatches = (patches: StackTogglePatch[]) => {
+    if (!reactFlowInstance || patches.length === 0) return
+    const byId = new Map(patches.map((p) => [p.id, p]))
+    reactFlowInstance.setNodes((nds) =>
+      nds.map((n) => {
+        const p = byId.get(n.id)
+        if (!p) return n
+        const pm = n.data?.promptMessage
+        return {
+          ...n,
+          ...(p.position ? { position: p.position } : {}),
+          hidden: p.hidden,
+          data: pm ? { ...n.data, promptMessage: { ...pm, metadata: p.metadata } } : n.data,
+        }
+      })
+    )
+    void (async () => {
+      const supabaseClient = createClient()
+      for (const p of patches) {
+        if (!p.messageId) continue
+        const { data: row } = await supabaseClient
+          .from('messages')
+          .select('metadata')
+          .eq('id', p.messageId)
+          .maybeSingle()
+        if (!row) continue
+        const next: Record<string, unknown> = {
+          ...((row.metadata as Record<string, unknown>) || {}),
+          ...p.metadata,
+          isBlock: true,
+        }
+        if (p.abs) next.position = p.abs // Expand/pack writes absolute flow coords
+        await supabaseClient.from('messages').update({ metadata: next }).eq('id', p.messageId)
+      }
+    })().catch((err) => console.error('Failed to persist stack toggle:', err))
+    refreshLockUi()
+  }
+
+  // Thread layout magnet: toggle pack/unlink (does not change alignment)
   const handleSnapFramesTogether = () => {
     if (!reactFlowInstance) return
     const selected = getSelectedFrames()
-    if (selected.length < 2) return
+    if (selected.length === 0) return
+    if (selected.length < 2 && !sharedStackGroupId(selected)) return // Unlink is allowed from a lone stacked host
     getMapTakeSnapshot()?.()
     const live = reactFlowInstance.getNodes()
+    if (sharedStackGroupId(selected)) {
+      applyStackPatches(unlinkSelectedStack(selected, live)) // Magnet off: drop the link
+      return
+    }
     const packed = packSelectedFramesTogether(selected, live, arrowDirection, layoutForkAlign)
     if (packed.length === 0) return
     const byId = new Map(packed.map((p) => [p.id, p]))
@@ -918,6 +979,22 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         await supabaseClient.from('messages').update({ metadata: next }).eq('id', p.messageId)
       }
     })().catch((err) => console.error('Failed to persist snap-together:', err))
+    refreshLockUi()
+  }
+
+  // Thread layout collapse: stack / unstack selected frames (does not change direction)
+  const handleStackFramesTogether = () => {
+    if (!reactFlowInstance) return
+    const selected = getSelectedFrames()
+    if (selected.length === 0) return
+    if (selected.length < 2 && !selectionIsStacked(selected, reactFlowInstance.getNodes())) return // Unstack is allowed from a lone stacked host
+    getMapTakeSnapshot()?.()
+    const live = reactFlowInstance.getNodes()
+    if (selectionIsStacked(selected, live)) {
+      applyStackPatches(expandSelectedStack(selected, live, arrowDirection)) // Unstack → pre-stack arrangement
+      return
+    }
+    applyStackPatches(collapseSelectedStack(selected, live, arrowDirection, live)) // Collapse in place — magnet is the pack
   }
 
   // Dim frames that do not match the Actions-bar search query
@@ -1640,9 +1717,12 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     align={layoutForkAlign}
                     onDirectionChange={setArrowDirection}
                     onAlignChange={pickLayoutForkAlign}
-                    canSnap={frameLockUi.hasMulti}
-                    snapActive={layoutForkAlign === 'snap'}
+                    canSnap={frameLockUi.hasMulti || layoutLinkUi.linked}
+                    snapActive={layoutLinkUi.linked}
                     onSnapFrames={handleSnapFramesTogether}
+                    canStack={frameLockUi.hasMulti || layoutLinkUi.stacked}
+                    stackActive={layoutLinkUi.stacked}
+                    onStackFrames={handleStackFramesTogether}
                   />
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -2827,9 +2907,12 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       align={layoutForkAlign}
                       onDirectionChange={setArrowDirection}
                       onAlignChange={pickLayoutForkAlign}
-                      canSnap={frameLockUi.hasMulti}
-                      snapActive={layoutForkAlign === 'snap'}
+                      canSnap={frameLockUi.hasMulti || layoutLinkUi.linked}
+                      snapActive={layoutLinkUi.linked}
                       onSnapFrames={handleSnapFramesTogether}
+                      canStack={frameLockUi.hasMulti || layoutLinkUi.stacked}
+                      stackActive={layoutLinkUi.stacked}
+                      onStackFrames={handleStackFramesTogether}
                     />
                     <DropdownMenuSeparator />
                   </>

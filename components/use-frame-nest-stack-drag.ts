@@ -20,7 +20,11 @@ import {
   setSideStackEntry,
   sideStackGroupId,
   stackIndexInGroup,
+  patchGroupEntry,
+  setParentStackHidden,
+  setGroupLocked,
   stripGroupFromMeta,
+  readXY,
   collectNestedSatelliteIds,
   type FrameStackSide,
   type SideStackEntry,
@@ -120,10 +124,10 @@ function packCrossAlign(
   anchor: { x: number; y: number; width: number; height: number },
   mate: { width: number; height: number },
   side: FrameStackSide,
-  align: 'snap' | 'single' | 'left' | 'center' | 'right',
+  align: 'single' | 'left' | 'center' | 'right',
   pos: { x: number; y: number }
 ): { x: number; y: number } {
-  const a = align === 'left' || align === 'right' ? align : 'center' // Snap / single = centered like stackExpandLayout
+  const a = align === 'left' || align === 'right' ? align : 'center' // Single = centered like stackExpandLayout
   if (side === 'bottom' || side === 'top') {
     if (a === 'left') return { x: anchor.x, y: pos.y } // Left edges on the anchor
     if (a === 'right') return { x: anchor.x + anchor.width - mate.width, y: pos.y } // Right edges
@@ -152,7 +156,7 @@ export function packSelectedFramesTogether(
   selected: Node[],
   live: Node[],
   direction: 'down' | 'up' | 'left' | 'right',
-  align: 'snap' | 'single' | 'left' | 'center' | 'right'
+  align: 'single' | 'left' | 'center' | 'right'
 ): PackedFrame[] {
   if (selected.length < 2) return []
   const side = PACK_SIDE[direction]
@@ -187,6 +191,291 @@ export function packSelectedFramesTogether(
         : null,
     })
     front = { x: abs.x, y: abs.y, width: size.width, height: size.height } // Next mate parks against this one
+  }
+  return out
+}
+
+/** Stamp `sideStacks` on the selection without moving anyone (stack/collapse must not pack). */
+export function linkSelectedFramesInPlace(
+  selected: Node[],
+  live: Node[],
+  direction: 'down' | 'up' | 'left' | 'right'
+): PackedFrame[] {
+  if (selected.length < 2) return [] // Need a host + at least one mate
+  const side = PACK_SIDE[direction] // Which adjust-box edge the group lives on
+  const sorted = [...selected].sort((a, b) => {
+    const aa = absFlowPosition(a, live)
+    const bb = absFlowPosition(b, live)
+    if (direction === 'down') return aa.y - bb.y || aa.x - bb.x // Same host pick as pack
+    if (direction === 'up') return bb.y - aa.y || aa.x - bb.x
+    if (direction === 'left') return bb.x - aa.x || aa.y - bb.y
+    return aa.x - bb.x || aa.y - bb.y
+  })
+  const host = sorted[0] // Visible keeper after collapse
+  const hostMsgId = host.data?.promptMessage?.id as string | undefined
+  const groupId = hostMsgId ? sideStackGroupId(hostMsgId, side) : null // Stable group from the host message
+  return sorted.map((n, i) => {
+    const abs = absFlowPosition(n, live) // Leave the frame where it is
+    return {
+      id: n.id,
+      messageId: n.data?.promptMessage?.id as string | undefined,
+      position: n.position, // RF pos unchanged
+      abs,
+      stack: groupId
+        ? { side, groupId, index: i, ...(i === 0 ? { anchor: true } : {}) } // Host anchors; mates keep their board spots
+        : null,
+    }
+  })
+}
+
+/** Overlay in-place stack links onto a live node list (no position writes). */
+function applyLinkToNodes(live: Node[], packed: PackedFrame[]): Node[] {
+  const byId = new Map(packed.map((p) => [p.id, p])) // Look up link stamps
+  return live.map((n) => {
+    const p = byId.get(n.id)
+    if (!p?.stack) return n // Not in this link pass
+    const pm = n.data?.promptMessage
+    if (!pm) return n
+    const metadata = setSideStackEntry(
+      { ...(pm.metadata || {}) } as Record<string, unknown>,
+      p.stack.side,
+      {
+        groupId: p.stack.groupId,
+        index: p.stack.index,
+        ...(p.stack.anchor ? { anchor: true } : {}),
+        expanded: true, // Still visible until collapse hides mates
+      }
+    )
+    return {
+      ...n,
+      data: { ...n.data, promptMessage: { ...pm, metadata } },
+    }
+  })
+}
+
+/** Shared sideStacks group id across the selection, or null if they are not linked. */
+export function sharedStackGroupId(nodes: Node[]): string | null {
+  if (nodes.length === 0) return null
+  const sets = nodes.map((n) => new Set(groupIdsOf(nodeMeta(n))))
+  if (sets.some((s) => s.size === 0)) return null
+  const common = [...sets[0]].filter((id) => sets.every((s) => s.has(id)))
+  return common[0] ?? null
+}
+
+/** All frames in a side-stack group. */
+export function collectStackGroupNodes(live: Node[], groupId: string): Node[] {
+  return live.filter((n) => n.type === 'chatPanel' && !!findStackEntry(nodeMeta(n), groupId))
+}
+
+/** True when the selection’s shared group has a hidden / collapsed mate. */
+export function selectionIsStacked(selected: Node[], live: Node[]): boolean {
+  const gid = sharedStackGroupId(selected)
+  if (!gid) return false
+  return collectStackGroupNodes(live, gid).some((n) => {
+    if (n.hidden === true) return true
+    const found = findStackEntry(nodeMeta(n), gid)
+    if (!found) return false
+    if (found.entry.anchor === true || found.entry.index === 0) return false
+    return found.entry.expanded !== true
+  })
+}
+
+/** Spatial first frame (same order as packSelectedFramesTogether). */
+function spatialHost(
+  nodes: Node[],
+  live: Node[],
+  direction: 'down' | 'up' | 'left' | 'right'
+): Node {
+  const sorted = [...nodes].sort((a, b) => {
+    const aa = absFlowPosition(a, live)
+    const bb = absFlowPosition(b, live)
+    if (direction === 'down') return aa.y - bb.y || aa.x - bb.x
+    if (direction === 'up') return bb.y - aa.y || aa.x - bb.x
+    if (direction === 'left') return bb.x - aa.x || aa.y - bb.y
+    return aa.x - bb.x || aa.y - bb.y
+  })
+  return sorted[0]
+}
+
+/** RF + persist patch for a toolbar magnet / stack toggle. */
+export type StackTogglePatch = {
+  id: string
+  messageId?: string
+  position?: { x: number; y: number }
+  abs?: { x: number; y: number }
+  hidden: boolean
+  metadata: Record<string, unknown>
+}
+
+/** Delink the selection’s shared stack (unhide; drop sideStacks for that group). */
+export function unlinkSelectedStack(selected: Node[], live: Node[]): StackTogglePatch[] {
+  const gid = sharedStackGroupId(selected)
+  if (!gid) return []
+  return collectStackGroupNodes(live, gid).map((n) => {
+    let metadata = stripGroupFromMeta(nodeMeta(n), gid)
+    metadata = setParentStackHidden(metadata, null)
+    return {
+      id: n.id,
+      messageId: n.data?.promptMessage?.id as string | undefined,
+      hidden: false,
+      metadata,
+    }
+  })
+}
+
+/** Absolute flow XY of `n` from `posLive` (layout at collapse — unstack restores this exact spot). */
+function restoreAbsOf(n: Node, posLive: Node[]): { x: number; y: number } {
+  const src = posLive.find((x) => x.id === n.id) ?? n // Prefer the pre-collapse copy
+  return absFlowPosition(src, posLive) // Live RF abs at collapse (chrome-on or off — expand unhides in place)
+}
+
+/** Hide non-host mates (link in place if needed — do not pack/snap). */
+export function collapseSelectedStack(
+  selected: Node[],
+  live: Node[],
+  direction: 'down' | 'up' | 'left' | 'right',
+  restoreFrom?: Node[] // Pre-collapse nodes so unstack can restore that arrangement
+): StackTogglePatch[] {
+  let working = live
+  let sel = selected
+  let gid = sharedStackGroupId(sel)
+  if (!gid) {
+    const linked = linkSelectedFramesInPlace(sel, working, direction) // Group without moving
+    if (linked.length === 0) return []
+    working = applyLinkToNodes(working, linked)
+    const ids = new Set(sel.map((s) => s.id))
+    sel = working.filter((n) => ids.has(n.id))
+    gid = sharedStackGroupId(sel)
+    if (!gid) return []
+  }
+  const group = collectStackGroupNodes(working, gid)
+  const visibleOrSelected = group.filter(
+    (n) => sel.some((s) => s.id === n.id) || n.hidden !== true
+  )
+  const keeper = spatialHost(visibleOrSelected.length > 0 ? visibleOrSelected : group, working, direction)
+  const posLive = restoreFrom ?? working // Absolute XY from the layout the user sees now
+  const hideNested = collectNestedSatelliteIds(
+    working,
+    group.filter((n) => n.id !== keeper.id).map((n) => n.id),
+    [gid]
+  )
+  const hideIds = new Set([...group.filter((n) => n.id !== keeper.id).map((n) => n.id), ...hideNested])
+  const out: StackTogglePatch[] = []
+  for (const n of working) {
+    if (n.type !== 'chatPanel') continue
+    if (!hideIds.has(n.id) && n.id !== keeper.id && !findStackEntry(nodeMeta(n), gid)) continue
+    let metadata = { ...nodeMeta(n) }
+    const restoreAbs = restoreAbsOf(n, posLive) // Exact board spot for later unstack
+    if (findStackEntry(metadata, gid)) {
+      metadata = patchGroupEntry(metadata, gid, {
+        expanded: n.id === keeper.id,
+        ...(n.id === keeper.id ? { anchor: true } : {}),
+        restoreAbs, // Absolute — not relative to the host
+      })
+      metadata = setGroupLocked(metadata, gid, true) // Hidden mates drag with the host
+    }
+    if (hideIds.has(n.id)) {
+      metadata = setParentStackHidden(metadata, gid)
+      if (!findStackEntry(metadata, gid)) {
+        metadata = { ...metadata, parentStackRestoreAbs: restoreAbs } // Nested satellite: same restore on unstack
+      }
+      out.push({
+        id: n.id,
+        messageId: n.data?.promptMessage?.id as string | undefined,
+        hidden: true,
+        metadata,
+      })
+    } else if (n.id === keeper.id || findStackEntry(metadata, gid)) {
+      metadata = setParentStackHidden(metadata, null)
+      out.push({
+        id: n.id,
+        messageId: n.data?.promptMessage?.id as string | undefined,
+        hidden: false,
+        metadata,
+      })
+    }
+  }
+  return out
+}
+
+/** Reveal stacked mates where they already sit (unlock; keep the stack line). */
+export function expandSelectedStack(
+  selected: Node[],
+  live: Node[],
+  direction: 'down' | 'up' | 'left' | 'right'
+): StackTogglePatch[] {
+  const gid = sharedStackGroupId(selected)
+  if (!gid) return []
+  const group = collectStackGroupNodes(live, gid)
+  const keeper =
+    group.find((n) => {
+      const e = findStackEntry(nodeMeta(n), gid)?.entry // Collapse stamped the visible host
+      return e?.anchor === true || e?.index === 0
+    }) ?? spatialHost(group, live, direction)
+  const keeperAbs = absFlowPosition(keeper, live)
+  const out: StackTogglePatch[] = []
+  for (const n of group) {
+    const found = findStackEntry(nodeMeta(n), gid)
+    const entry = found?.entry
+    const current = absFlowPosition(n, live)
+    // Unhide in place by default — after collapse, chrome-off already left the fill XY
+    // on the node. Rewriting a chrome-time stamp double-shifts the frame.
+    const stamped = entry?.restoreAbs
+    const onKeeper =
+      n.id !== keeper.id &&
+      Math.hypot(current.x - keeperAbs.x, current.y - keeperAbs.y) < 2
+    const abs =
+      stamped && onKeeper
+        ? stamped // Parked on the host — put back to the stamped board XY
+        : entry?.restoreDelta && onKeeper
+          ? { x: keeperAbs.x + entry.restoreDelta.x, y: keeperAbs.y + entry.restoreDelta.y }
+          : current
+    const moved =
+      Math.abs(abs.x - current.x) > 0.5 || Math.abs(abs.y - current.y) > 0.5 // Only write RF when needed
+    let metadata = patchGroupEntry(nodeMeta(n), gid, { expanded: true })
+    metadata = setGroupLocked(metadata, gid, false) // Unstack: independently draggable, still linked
+    metadata = setParentStackHidden(metadata, null)
+    if (moved) metadata = { ...metadata, position: abs } // Persist only when we actually moved
+    out.push({
+      id: n.id,
+      messageId: n.data?.promptMessage?.id as string | undefined,
+      ...(moved ? { position: absToNodePosition(n, abs, live), abs } : {}),
+      hidden: false,
+      metadata,
+    })
+  }
+  const nested = collectNestedSatelliteIds(live, group.map((n) => n.id), [gid])
+  for (const id of nested) {
+    const n = live.find((x) => x.id === id)
+    if (!n) continue
+    const meta0 = nodeMeta(n)
+    const current = absFlowPosition(n, live)
+    const stamped = readXY(meta0.parentStackRestoreAbs)
+    const onKeeper = Math.hypot(current.x - keeperAbs.x, current.y - keeperAbs.y) < 2
+    const abs =
+      stamped && onKeeper
+        ? stamped
+        : (() => {
+            const d = readXY(meta0.parentStackRestoreDelta)
+            return d && onKeeper ? { x: keeperAbs.x + d.x, y: keeperAbs.y + d.y } : undefined
+          })()
+    let metadata = setParentStackHidden(meta0, null)
+    if (metadata.parentStackRestoreAbs !== undefined || metadata.parentStackRestoreDelta !== undefined) {
+      const next = { ...metadata }
+      delete next.parentStackRestoreAbs
+      delete next.parentStackRestoreDelta
+      metadata = next
+    }
+    const moved =
+      abs != null && (Math.abs(abs.x - current.x) > 0.5 || Math.abs(abs.y - current.y) > 0.5)
+    if (moved && abs) metadata = { ...metadata, position: abs }
+    out.push({
+      id: n.id,
+      messageId: n.data?.promptMessage?.id as string | undefined,
+      hidden: false,
+      metadata,
+      ...(moved && abs ? { position: absToNodePosition(n, abs, live), abs } : {}),
+    })
   }
   return out
 }
