@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260820105819_desktop_frame_select_opens_menu` — Desktop frame select opens frame menu; phone tap-after-selected unchanged
 - `20260820105152_phone_boards_nav_tap_sticky_tunnel` — Phone boards nav tap/hold + sticky Cloudflare tunnel
 - `20260820103736_remove_style_bar_menu_toggle` — Remove Style bar; touch menu no Search autofocus; strip/path tap toggles closed
 - `20260820020104_style_bar_labels_and_menus` — Style bar Block/Frame/Thread menus + labels; Layout Threads

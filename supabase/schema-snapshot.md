@@ -1,13 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-20T10:52:53Z`
+- Snapped at: `2026-08-20T10:58:19Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260820105819_desktop_frame_select_opens_menu.sql`.
+- Desktop left-click select opens the frame menu (same as thread/block); Shift/Cmd multi-select does not; already-selected drag strip toggles; text/chrome dismisses if open.
+- Phone: first tap selects only; tap drag strip again for menu (unchanged).
+- Schema unchanged.
+
+## Prior: phone boards nav tap sticky tunnel
 
 - No DDL. Marker `20260820105152_phone_boards_nav_tap_sticky_tunnel.sql`.
 - Phone boards nav: scrim below top bar (hamburger toggles close); tap opens board + closes; hold reorders; hover styles only on hover devices; ghost-click reopen guard.

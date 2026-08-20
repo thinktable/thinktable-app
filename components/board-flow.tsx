@@ -8959,15 +8959,29 @@ function BoardFlowInner({
           // Frames: select on click release only (mousedown select is blocked so drag ≠ select)
           if (node?.type !== 'chatPanel') return
           if (justDraggedFrameRef.current.has(node.id)) return // Drag release is not a select / menu
-          // Phone: tap the drag strip of an already-selected frame → frame menu (drag still moves)
+          const alreadySelected = nodesRef.current.some((n) => n.id === node.id && n.selected)
+          // Phone: first tap selects only; tap drag strip again → frame menu (unchanged)
           if (isMobileMode) {
-            const alreadySelected = nodesRef.current.some((n) => n.id === node.id && n.selected)
             if (alreadySelected && isFrameDragAreaTarget(event.target)) {
               openFrameMenuAt(event.clientX, event.clientY, node as Node<ChatPanelNodeData>) // Opens or toggles closed
               return
             }
+          } else {
+            // Desktop: selecting a frame opens the frame menu (same as thread/block select)
+            const additive = event.metaKey || event.ctrlKey || event.shiftKey
+            if (!additive) {
+              if (!alreadySelected) {
+                openFrameMenuAt(event.clientX, event.clientY, node as Node<ChatPanelNodeData>)
+                return
+              }
+              // Already selected: drag strip toggles menu; text/chrome dismisses if open
+              if (isFrameDragAreaTarget(event.target)) {
+                openFrameMenuAt(event.clientX, event.clientY, node as Node<ChatPanelNodeData>)
+                return
+              }
+            }
           }
-          // Desktop left-click (or phone non-strip): dismiss an open menu on this frame
+          // Phone first-tap / desktop multi-select / text on selected: select, dismiss menu if open
           if (rightClickedNodeRef.current?.id === node.id) {
             setRightClickedNode(null)
             setNodePopupPosition({ x: 0, y: 0 })
