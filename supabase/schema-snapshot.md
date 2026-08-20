@@ -1,13 +1,25 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-19T23:37:57Z`
+- Snapped at: `2026-08-20T02:01:05Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260820020104_style_bar_labels_and_menus.sql`.
+- Style bar: Block / Frame / Thread menus (drop “style” from tool names); Layout bar Threads; Turn into + Notion top-bar pin preference polish.
+- Schema unchanged.
+
+## Prior: thread layout stack unstack restore
+
+- No DDL. Marker `20260820002722_thread_layout_stack_unstack_restore.sql`.
+- Thread layout: magnet and stack independent of align/direction; stack collapses in place; unstack restores fill XY (chrome unwind on hide remount).
+- Schema unchanged.
+
+## Prior: thread layout snap pack stack line
 
 - No DDL. Marker `20260819233757_thread_layout_snap_pack_stack_line.sql`.
 - Thread layout: magnet packs selected frames flush and links `sideStacks` (stack line; no lock). Line shows when either frame is selected, and always while mates are stacked.

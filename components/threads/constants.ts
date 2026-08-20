@@ -12,6 +12,29 @@ export const THREAD_SELECTED_COLOR = '#0375ff'
 /** Default stroke for idle threads. */
 export const THREAD_DEFAULT_COLOR = '#6b7280' // gray-500
 
+/** localStorage key for the Style-bar Thread color board default. */
+export const THREAD_STROKE_COLOR_KEY = 'thinktable-thread-stroke-color'
+
+/** Notion-style stroke swatches for the Thread style color picker (empty = default gray). */
+export const THREAD_COLOR_SWATCHES = [
+  { id: 'default', name: 'Default', value: '' },
+  { id: 'gray', name: 'Gray', value: '#787774' },
+  { id: 'brown', name: 'Brown', value: '#9F6B53' },
+  { id: 'orange', name: 'Orange', value: '#D9730D' },
+  { id: 'yellow', name: 'Yellow', value: '#CB912F' },
+  { id: 'green', name: 'Green', value: '#448361' },
+  { id: 'blue', name: 'Blue', value: '#337EA9' },
+  { id: 'purple', name: 'Purple', value: '#9065B0' },
+  { id: 'pink', name: 'Pink', value: '#C14C8A' },
+  { id: 'red', name: 'Red', value: '#E03E3E' },
+] as const
+
+/** Normalize a stored / picker stroke to a paint hex (empty → default gray). */
+export function resolveThreadStrokeColor(color?: string | null): string {
+  const t = (color || '').trim()
+  return t || THREAD_DEFAULT_COLOR
+}
+
 /** Default thread thickness in flow px (menu 1–4px options). */
 export const THREAD_DEFAULT_STROKE_WIDTH = 2
 

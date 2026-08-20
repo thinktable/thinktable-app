@@ -29,6 +29,7 @@ import {
   threadAlgorithmFromStyle,
   threadStyleFromAlgorithm,
   THREAD_DEFAULT_STROKE_WIDTH,
+  THREAD_STROKE_COLOR_KEY,
   normalizeHandleId,
   type ThreadEdgeData,
 } from '@/components/threads' // Miro-style editable threads + connection preview
@@ -1784,6 +1785,7 @@ function BoardFlowInner({
     algorithm: ThreadAlgorithm
     dotted: boolean
     strokeWidth: number
+    strokeColor?: string // Optional custom stroke from Copy style
   } | null>(null) // Copy style / Paste style payload
   const [hasThreadStyleClipboard, setHasThreadStyleClipboard] = useState(false) // Enables Paste style row
   const nodePopupZoomRef = useRef<number | null>(null) // Track zoom when node popup was opened
@@ -2955,6 +2957,9 @@ function BoardFlowInner({
                 points: savedEdge.metadata?.points ?? [],
                 dotted: savedEdge.metadata?.dotted ?? lineStyle === 'dotted',
                 strokeWidth: savedEdge.metadata?.strokeWidth ?? THREAD_DEFAULT_STROKE_WIDTH,
+                ...(typeof savedEdge.metadata?.strokeColor === 'string' && savedEdge.metadata.strokeColor
+                  ? { strokeColor: savedEdge.metadata.strokeColor }
+                  : {}),
               } satisfies ThreadEdgeData,
             })
             console.log(`🔄 BoardFlow: Prepared edge: ${finalSource}(${finalSourceHandle}) -> ${finalTarget}(${finalTargetHandle})`)
@@ -3063,6 +3068,12 @@ function BoardFlowInner({
                 ),
                 points: [],
                 dotted: lineStyle === 'dotted',
+                ...(typeof window !== 'undefined'
+                  ? (() => {
+                      const c = localStorage.getItem(THREAD_STROKE_COLOR_KEY) // Style-bar board default
+                      return c ? { strokeColor: c } : {}
+                    })()
+                  : {}),
               } satisfies ThreadEdgeData,
             }
             newEdges.push(newEdge)
@@ -7562,6 +7573,7 @@ function BoardFlowInner({
         points: prev.points ?? [],
         ...patch,
       }
+      if (!nextData.strokeColor) delete nextData.strokeColor // Empty / missing → default gray
       setEdges((eds) =>
         eds.map((e) =>
           e.id === clickedEdge.id ? { ...e, type: 'editable', data: nextData } : e
@@ -7613,6 +7625,7 @@ function BoardFlowInner({
             algorithm: prev.algorithm ?? DEFAULT_THREAD_ALGORITHM,
             dotted: prev.dotted === true || clickedEdge.type === 'animatedDotted',
             strokeWidth: prev.strokeWidth ?? THREAD_DEFAULT_STROKE_WIDTH,
+            strokeColor: prev.strokeColor,
           }
           setHasThreadStyleClipboard(true) // Re-render so Paste style enables
           return // Keep menu open
@@ -7623,6 +7636,7 @@ function BoardFlowInner({
             algorithm: clip.algorithm,
             dotted: clip.dotted,
             strokeWidth: clip.strokeWidth,
+            strokeColor: clip.strokeColor || '', // Empty clears a previous custom color
           })
           setClickedEdge(null)
           return
@@ -8696,6 +8710,12 @@ function BoardFlowInner({
                 ),
                 points: [],
                 dotted: lineStyle === 'dotted',
+                ...(typeof window !== 'undefined'
+                  ? (() => {
+                      const c = localStorage.getItem(THREAD_STROKE_COLOR_KEY) // Style-bar board default
+                      return c ? { strokeColor: c } : {}
+                    })()
+                  : {}),
               } satisfies ThreadEdgeData,
             }
 

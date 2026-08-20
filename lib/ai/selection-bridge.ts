@@ -133,6 +133,11 @@ export function setAiBlockSelection(sel: AiBlockSelection): void {
   notify()
 }
 
+/** Read armed ⋮⋮ block selection (top bar Turn into / Block style gates). */
+export function getAiBlockSelection(): AiBlockSelection {
+  return blockSelection
+}
+
 /** Publish TipTap text highlight (null clears). */
 export function setAiTextSelection(sel: AiTextSelection): void {
   const same =

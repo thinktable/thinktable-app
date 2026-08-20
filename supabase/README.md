@@ -25,6 +25,8 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260820020104_style_bar_labels_and_menus` — Style bar Block/Frame/Thread menus + labels; Layout Threads
+- `20260820002722_thread_layout_stack_unstack_restore` — Thread layout stack/unstack restore (magnet independent)
 - `20260819233757_thread_layout_snap_pack_stack_line` — Thread layout magnet pack + stack line (no lock)
 - `20260819103921_notion_import_picker_recents_cancel` — Notion Import pages Recents/Shared open; Adding/Generating Cancel
 - `20260818235211_boards_nav_dismiss_on_board_click` — Boards nav hides on board / outside chrome click

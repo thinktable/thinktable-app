@@ -158,19 +158,15 @@ export function NotionConnectProvider({ children }: { children: React.ReactNode 
     }
   }, [])
 
-  // After OAuth connect / Edit permissions, open the page picker and re-pin the top-bar mark
+  // After OAuth connect / Edit permissions, open the page picker (do not override Unpin)
   useEffect(() => {
     if (typeof window === 'undefined') return
     const params = new URLSearchParams(window.location.search)
     const shouldOpen = params.get('notion') === 'connected' || params.get('picker') === '1'
     if (!shouldOpen || !status?.connected) return
     setPickerOpen(true)
-    setTopBarPinnedState(true) // Fresh OAuth → show pin left of Share again
-    try {
-      window.localStorage.setItem(TOPBAR_PIN_KEY, '1')
-    } catch {
-      /* ignore quota */
-    }
+    // Default pin is already true when no preference exists; never force-pin here —
+    // Edit permissions / import used to rewrite localStorage and undo Unpin.
     params.delete('notion')
     params.delete('picker')
     params.delete('imported')
@@ -231,6 +227,12 @@ export function NotionConnectProvider({ children }: { children: React.ReactNode 
       await fetch('/api/notion/disconnect', { method: 'POST' }) // Remove stored tokens
       setStatus((prev) => ({ configured: prev?.configured ?? true, connected: false, workspaceName: null })) // Clear connected UI
       setPickerOpen(false)
+      setTopBarPinnedState(true) // Next connect defaults pinned again
+      try {
+        window.localStorage.removeItem(TOPBAR_PIN_KEY) // Forget unpin so reconnect uses default
+      } catch {
+        /* ignore */
+      }
     } finally {
       setLoading(false) // Re-enable
     }

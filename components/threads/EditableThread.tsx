@@ -33,6 +33,7 @@ export type ThreadEdgeData = {
   points?: ControlPointData[] // Active control points between source and target
   dotted?: boolean // Optional dashed stroke (View toolbar)
   strokeWidth?: number // Thickness in flow px (1–4 from thread menu; default 2)
+  strokeColor?: string // Idle stroke hex; empty/omit = THREAD_DEFAULT_COLOR
 }
 
 export type ThreadEdge = Edge<ThreadEdgeData>
@@ -190,7 +191,10 @@ export function EditableThread({
     ? smoothBezier.path
     : getPath({ points: routePoints, algorithm, sides })
 
-  const stroke = selected ? THREAD_SELECTED_COLOR : (style?.stroke as string) || THREAD_DEFAULT_COLOR
+  const stroke =
+    selected
+      ? THREAD_SELECTED_COLOR // Selection always reads Miro blue
+      : data?.strokeColor || (style?.stroke as string) || THREAD_DEFAULT_COLOR // Custom → style → gray
   const baseWidth = selected ? Math.max(strokeWidth, strokeWidth + 0.5) : strokeWidth // Selected reads slightly heavier
   const dash = 5 * comfort // Dash/gap tracks stroke comfort (thins when zoomed out)
 
