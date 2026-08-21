@@ -1,6 +1,7 @@
 // Board view captures + presentations (local until persisted). Searchable by board path, date/time, and captured words.
 
 import { htmlToPlain } from '@/lib/ai/context-pack' // Strip frame HTML → searchable text
+import { boardTitleOrDefault, DEFAULT_BOARD_TITLE } from '@/lib/board-title' // Capture path uses the same empty-board name
 
 const CAPTURES_KEY = 'thinktable-board-captures' // localStorage: capture list
 const PRESENTATIONS_KEY = 'thinktable-board-presentations' // localStorage: presentation list
@@ -156,13 +157,13 @@ export function pathLabelForBoard(boardId: string, boards: CapturePathBoard[]): 
     seen.add(id)
     const row = byId.get(id)
     if (!row) {
-      parts.unshift('Untitled')
+      parts.unshift(DEFAULT_BOARD_TITLE)
       break
     }
-    parts.unshift(row.title || 'Untitled')
+    parts.unshift(boardTitleOrDefault(row.title))
     id = row.parent_id
   }
-  return parts.join(' / ') || 'Untitled'
+  return parts.join(' / ') || DEFAULT_BOARD_TITLE
 }
 
 /** Haystack for capture search: board path, date/time, and words inside. */

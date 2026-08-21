@@ -190,8 +190,8 @@ Title (2-4 words, Title Case, noun phrase only):`,
         }).join(' ')
         console.log('✅ Generated fallback title:', title)
       } else {
-        // Last resort: use "New Conversation"
-        title = 'New Conversation'
+        // Last resort: keep the empty-board default
+        title = 'New board'
         console.warn('⚠️ Could not extract keywords, using default title')
       }
     }
@@ -228,7 +228,7 @@ Title (2-4 words, Title Case, noun phrase only):`,
       }
     }
     
-    return NextResponse.json({ title: 'New Conversation' })
+    return NextResponse.json({ title: 'New board' }) // Empty-board default when keyword fallback also fails
   }
 }
 

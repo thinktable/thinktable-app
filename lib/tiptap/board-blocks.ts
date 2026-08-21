@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js' // Persist child boa
 import { newBlockMetadata, isBlockContentEmpty } from '@/lib/blocks' // Frame metadata + empty check
 import { htmlForEditorRange, type EditorBlockRef } from '@/lib/tiptap/block-selection'
 import { htmlToPlainText } from '@/lib/blocks/turn-into' // Strip tags → plain-text title seed
+import { boardTitleOrDefault } from '@/lib/board-title' // Empty child boards start as New board
 
 /** Attributes carried by a boardLink node. */
 export type BoardLinkAttrs = {
@@ -36,7 +37,7 @@ export async function createChildBoardForBlock(
   const { error } = await supabase.from('conversations').insert({
     id: boardId,
     user_id: userId,
-    title: title || 'Untitled',
+    title: boardTitleOrDefault(title),
     metadata: {
       parent_id: parentId, // Nest under current board
       sourceBlockMessageId: sourceMessageId, // Reverse link to the hosting frame
@@ -61,7 +62,7 @@ export async function createChildBoardForBlock(
       content: bodyHtml,
       metadata: newBlockMetadata({
         isBoardBody: true, // This frame IS the board's body
-        blockTitle: title || 'Untitled',
+        blockTitle: boardTitleOrDefault(title),
         position: { x: 80, y: 80 },
         fadeIn: true,
       }),
@@ -149,5 +150,5 @@ export function setFrameToSoleBoardLink(
 /** Plain-text label for a block range (title seed). */
 export function titleForBlock(editor: Editor, block: EditorBlockRef): string {
   const html = htmlForEditorRange(editor, block.from, block.to) // Serialize the block range to HTML
-  return htmlToPlainText(html).split('\n')[0]?.trim() || 'Untitled' // First line becomes the board title
+  return htmlToPlainText(html).split('\n')[0]?.trim() || boardTitleOrDefault() // First line becomes the board title
 }

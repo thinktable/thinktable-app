@@ -105,6 +105,7 @@ import {
 } from '@/lib/ai/selection-bridge' // Armed ⋮⋮ block → enable Turn into
 import { LegoBrickIcon } from './lego-brick-icon' // Frame-group lock: two bricks, top one stud back
 import { TOOLBAR_MENU_PLACEMENT } from '@/lib/menu-placement' // Actions-style: under the trigger, never over the board path
+import { boardTitleOrDefault } from '@/lib/board-title' // Empty conversation names show New board
 import {
   TurnIntoMenuItems,
   applyToolbarTurnInto,
@@ -708,7 +709,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       ...convs
         .filter((c) => c.id !== conversationId)
         .slice(0, 40)
-        .map((c) => ({ id: c.id, title: c.title?.trim() || 'Untitled' })),
+        .map((c) => ({ id: c.id, title: boardTitleOrDefault(c.title) })),
     ]
   }
 

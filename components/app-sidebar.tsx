@@ -4,9 +4,10 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { DEFAULT_BOARD_TITLE } from '@/lib/board-title' // Nav + / nested mint use the same default as empty `/board`
 import type { User } from '@supabase/supabase-js'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Search, MoreHorizontal, Trash2, SquarePen, Pencil, ChevronDown, File, FileText, Folder, FolderOpen, Loader2, Share2, UserPlus, CornerUpLeft, Sparkles, HelpCircle, LogOut, ChevronRight as ChevronRightIcon, Settings } from 'lucide-react'
+import { Plus, Search, MoreHorizontal, Trash2, Pencil, ChevronDown, File, FileText, Folder, FolderOpen, Loader2, Share2, UserPlus, CornerUpLeft, Sparkles, HelpCircle, LogOut, ChevronRight as ChevronRightIcon, Settings } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { SettingsPanel } from '@/components/settings-panel'
@@ -377,16 +378,44 @@ function SortableBoardItem({
           </span>
         </Link>
 
-        {/* Dropdown menu button */}
+        {/* Hover actions: + nests a child board; … opens the rest of the options */}
+        <div
+          className={cn(
+            'flex items-center flex-shrink-0 transition-opacity',
+            // Always visible on touch; fade in on hover-capable pointers only (avoids sticky first-tap)
+            'opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100'
+          )}
+        >
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn(
+              'h-8 w-6 hover:bg-transparent',
+              isActive
+                ? 'text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-900'
+                : 'text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200'
+            )}
+            title="Add board inside" // Tooltip for the nested-board mint
+            aria-label="Add board inside"
+            disabled={isCreatingBoard} // One mint at a time
+            onClick={(e) => {
+              e.stopPropagation() // Don't navigate the row
+              e.preventDefault()
+              onCreateSubBoard?.(conversation) // Nest an Untitled board under this one
+            }}
+            onPointerDown={(e) => {
+              e.stopPropagation() // Don't start drag from +
+            }}
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
               size="icon"
               className={cn(
-                'h-8 w-6 transition-opacity hover:bg-transparent',
-                // Always visible on touch; fade in on hover-capable pointers only (avoids sticky first-tap)
-                'opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100',
+                'h-8 w-6 hover:bg-transparent',
                 isActive
                   ? 'text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-900'
                   : 'text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200'
@@ -411,8 +440,8 @@ function SortableBoardItem({
               }}
               disabled={isCreatingBoard} // One mint at a time
             >
-              <SquarePen className="h-4 w-4 mr-2" />
-              New board
+              <Plus className="h-4 w-4 mr-2" />
+              Add board inside
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={(e) => {
@@ -564,6 +593,8 @@ function SortableBoardItem({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>
+
       </div>
 
       {/* Drop indicator line below */}
@@ -922,7 +953,7 @@ function flattenBoardTree(
   return result
 }
 
-// Mint an Untitled board (root from +, nested from a row’s more menu). Client UUID avoids INSERT…RETURNING RLS races.
+// Mint a New board (root from +, nested from a row’s more menu). Client UUID avoids INSERT…RETURNING RLS races.
 async function createUntitledBoard(
   supabase: ReturnType<typeof createClient>,
   opts: {
@@ -939,7 +970,7 @@ async function createUntitledBoard(
   const { error } = await supabase.from('conversations').insert({
     id: boardId, // Use the client UUID as the primary key
     user_id: opts.userId, // RLS: owner is the signed-in user
-    title: 'Untitled', // Default name until the user renames
+    title: DEFAULT_BOARD_TITLE, // Same default as empty `/board` until the user renames
     metadata, // Nesting / project / list position
   })
   if (error) {
@@ -2075,7 +2106,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
     }
   }, [projectsWithBoardsKey, projects.length])
 
-  // Plus mints a root Untitled board; a row’s New board mints a nested child under that row
+  // Header + mints a root New board; a row’s Add board inside (+) mints a nested child under that row
   const handleCreateBoard = async (parent?: Conversation) => {
     if (isCreatingBoard) return // Ignore double-clicks while the insert is in flight
     setIsCreatingBoard(true) // Disable + and New board until this mint finishes
@@ -2100,7 +2131,7 @@ export default function AppSidebar({ user }: AppSidebarProps) {
       queryClient.setQueryData(['conversations'], (old: Conversation[] | undefined) => {
         const row: Conversation = {
           id: boardId,
-          title: 'Untitled',
+          title: DEFAULT_BOARD_TITLE, // Match the inserted conversations.title so the row doesn’t flash Untitled
           created_at: now,
           updated_at: now,
           ...(parentId ? {} : { position: -1 }), // Match list sort for root boards

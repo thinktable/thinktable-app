@@ -7,10 +7,14 @@ import { useEditorContext } from './editor-context'
 import { BOARD_LOAD_FADE_MS } from '@/components/frame-content-shimmer' // Same 300ms as board frame shells
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useSidebarContext } from './sidebar-context'
-import { ChevronRight, File, FileText, Menu } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, File, FileText, Menu } from 'lucide-react' // Check = current View; chevron = View menu
 import { createClient } from '@/lib/supabase/client'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query' // Invalidate path/nav after an inline rename
 import { useRouter } from 'next/navigation'
+import { replaceBoardUrl } from '@/lib/replace-board-url' // Empty `/board` rename mints a row without remounting
+import { syncBoardRenameToBlock } from '@/lib/blocks' // Keep the parent-map boardLink title in sync
+import { DEFAULT_BOARD_TITLE, boardTitleOrDefault } from '@/lib/board-title' // Same default as nav + / nested mint
+import { TOOLBAR_MENU_PLACEMENT } from '@/lib/menu-placement' // View menu sits under the bar, never over the path
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -65,7 +69,7 @@ const PATH_MENU_MOTION = 'data-[state=open]:duration-300' // Slow fade-in; hide 
 function PathSlash() {
   return (
     <span
-      className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none"
+      className="flex h-8 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none"
       aria-hidden
     >
       /
@@ -105,7 +109,7 @@ function slotsForPath(path: BoardPathSegment[]): PathSlot[] {
 // One crumb bar while the board path query is pending (holds left-chrome width)
 function BoardPathShimmer() {
   return (
-    <span className="truncate select-none flex items-center min-w-0" aria-busy="true" aria-label="Loading board path">
+    <span className="h-8 truncate select-none flex items-center min-w-0" aria-busy="true" aria-label="Loading board path">
       <span className="tt-topbar-path-shimmer w-32" /> {/* ~one title; not a fake ancestor / current pair */}
     </span>
   )
@@ -152,6 +156,188 @@ function sortPathBoards(a: PathBoard, b: PathBoard) {
   if (a.position !== undefined) return -1
   if (b.position !== undefined) return 1
   return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+}
+
+/** Write a board title (mint on empty `/board`); returns the board id or null on failure. */
+async function persistBoardTitle(boardId: string | undefined, title: string): Promise<string | null> {
+  const next = title.trim() || DEFAULT_BOARD_TITLE // Never persist a blank name
+  const supabase = createClient() // Browser client — RLS as the signed-in user
+  const { data: { user } } = await supabase.auth.getUser() // Owner required for insert/update
+  if (!user) return null // Anonymous / signed-out — keep the local draft
+
+  if (!boardId) {
+    const id = crypto.randomUUID() // Client UUID so INSERT need not RETURNING through SELECT RLS
+    const { error } = await supabase.from('conversations').insert({
+      id, // Primary key chosen client-side
+      user_id: user.id, // RLS: owner is the signed-in user
+      title: next, // Name they typed (or New board)
+      metadata: { position: -1, manuallyRenamed: true }, // Pin to nav top; AI must not overwrite
+    })
+    if (error) {
+      console.error('Failed to create board from title:', error) // Surface insert failures
+      return null // Caller reverts the draft
+    }
+    replaceBoardUrl(id) // Address bar only — Next router.replace would remount the board
+    return id // Parent picks up conversation-created
+  }
+
+  const { data: existing } = await supabase
+    .from('conversations')
+    .select('metadata')
+    .eq('id', boardId)
+    .maybeSingle() // Merge so we do not wipe parent_id / icon
+  const existingMeta = (existing?.metadata as Record<string, unknown>) || {}
+  const { error } = await supabase
+    .from('conversations')
+    .update({
+      title: next, // New display name
+      metadata: { ...existingMeta, manuallyRenamed: true }, // Preserve nesting; stop AI rename
+    })
+    .eq('id', boardId)
+  if (error) {
+    console.error('Failed to rename board:', error) // Surface update failures
+    return null // Caller reverts the draft
+  }
+  await syncBoardRenameToBlock(supabase, boardId, next) // Parent-map boardLink label follows
+  return boardId // Same board, new title
+}
+
+/** Click-to-edit board name — Notion-style: click the label, type, Enter/blur saves. */
+function BoardTitleEditor({
+  boardId,
+  title,
+}: {
+  boardId?: string // Undefined on empty `/board` until the first save mints a row
+  title: string // Last saved (or fallback) name
+}) {
+  const queryClient = useQueryClient() // Refresh path + nav after persist
+  const [editing, setEditing] = useState(false) // True while the input is the source of truth
+  const [draft, setDraft] = useState(title) // Live text while typing
+  const inputRef = useRef<HTMLInputElement>(null) // Focus + select-all on click
+  const savingRef = useRef(false) // Ignore blur while a save is in flight
+
+  useEffect(() => {
+    if (!editing) setDraft(title) // Stay in sync with the query when not typing
+  }, [title, editing])
+
+  useEffect(() => {
+    if (!editing) return // Only select when the field just opened
+    const el = inputRef.current
+    if (!el) return
+    el.focus() // I-bar in the title
+    el.select() // Notion: the whole name is selected so typing replaces it
+  }, [editing])
+
+  const commit = async () => {
+    if (savingRef.current) return // Already writing
+    const next = draft.trim() || DEFAULT_BOARD_TITLE // Blank → New board
+    const unchanged = next === (title.trim() || DEFAULT_BOARD_TITLE) // Same as what’s saved
+    if (unchanged && boardId) {
+      setEditing(false) // Click + blur with no change — just leave
+      setDraft(title)
+      return
+    }
+    if (unchanged && !boardId) {
+      setEditing(false) // Empty `/board` — don’t mint until they actually rename
+      setDraft(title)
+      return
+    }
+    savingRef.current = true // Block double-blur
+    setEditing(false) // Swap back to the label immediately
+    setDraft(next) // Optimistic label
+    const savedId = await persistBoardTitle(boardId, next)
+    savingRef.current = false
+    if (!savedId) {
+      setDraft(title) // Revert on failure
+      return
+    }
+    await queryClient.invalidateQueries({ queryKey: ['conversations'] }) // Sidebar list
+    await queryClient.invalidateQueries({ queryKey: ['path-board-menu'] }) // Sibling menus
+    await queryClient.invalidateQueries({ queryKey: ['edit-panel-title'] }) // This path
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('conversation-updated')) // Sidebar refresh hook
+    }
+  }
+
+  const cancel = () => {
+    setDraft(title) // Restore saved name
+    setEditing(false) // Back to the label
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)} // Local only until Enter/blur
+        onBlur={() => { void commit() }} // Click-away saves
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault() // Don’t submit a parent form
+            e.currentTarget.blur() // commit via onBlur
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            cancel() // Discard
+          }
+        }}
+        placeholder={DEFAULT_BOARD_TITLE} // Gray hint when they clear the field
+        aria-label="Board name"
+        className="min-w-0 max-w-full h-8 bg-transparent text-sm font-medium text-gray-900 dark:text-gray-100 outline-none border border-gray-200 dark:border-gray-700 rounded px-1"
+        style={{ width: `${Math.max(draft.length, DEFAULT_BOARD_TITLE.length) + 1}ch` }} // Hug the typed name
+      />
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEditing(true)} // Click the name to edit (Notion New page)
+      title={title}
+      aria-label={`Rename board: ${title}`}
+      className="min-w-0 max-w-full h-8 inline-flex items-center rounded px-0.5 text-sm font-medium text-gray-900 dark:text-gray-100 text-left hover:bg-gray-100 dark:hover:bg-gray-800 cursor-text"
+    >
+      <span className="truncate">{title || DEFAULT_BOARD_TITLE}</span>
+    </button>
+  )
+}
+
+/** Board views — UI stub until views are persisted. Sits beside the current title. */
+function BoardViewMenu() {
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex-shrink-0 h-8 inline-flex items-center gap-0.5 rounded px-1.5 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+          aria-label="Board views"
+          title="Views"
+        >
+          <span>View</span>
+          <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-44">
+        <DropdownMenuItem className="cursor-default" onSelect={(e) => e.preventDefault()}>
+          <Check className="h-3.5 w-3.5 mr-2 flex-shrink-0" aria-hidden />
+          <span>Default</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled>
+          New view
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/** Hidden width twin of BoardViewMenu so --tt-path-min never clips View. */
+function BoardViewMenuMeasure() {
+  return (
+    <span className="flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 text-sm font-medium" aria-hidden>
+      <span>View</span>
+      <span className="h-3.5 w-3.5" />
+    </span>
+  )
 }
 
 // Board row in a path menu — leaf item, or nested tree flyout with delayed hover
@@ -335,6 +521,7 @@ function PathSegmentMenu({
   const moreCount = Math.max(0, siblings.length - PATH_MENU_LIMIT)
 
   return (
+    <span className={cn('inline-flex items-center h-8 gap-1', isLast ? 'min-w-0' : 'flex-shrink-0')}>
     <DropdownMenu
       open={open}
       onOpenChange={(next) => {
@@ -353,20 +540,21 @@ function PathSegmentMenu({
             scheduleCloseMenu()
           }}
           onClick={(e) => {
+            if (isLast) return // Current name is BoardTitleEditor; icon click opens the sibling list
             e.preventDefault()
-            goTo(segment.id) // Click path name → open that page
+            goTo(segment.id) // Ancestor click → open that board
           }}
           className={cn(
-            'inline-flex items-center gap-1 rounded px-0.5 -mx-0.5 text-left transition-colors hover:bg-gray-100 dark:hover:bg-gray-800',
+            'inline-flex items-center gap-1 rounded px-0.5 -mx-0.5 text-left transition-colors hover:bg-gray-100 dark:hover:bg-gray-800 h-8',
             isLast
-              ? 'min-w-0 max-w-full text-gray-900 dark:text-gray-100' // Current board; title ellipsizes — icon stays flex-shrink-0
+              ? 'flex-shrink-0 text-gray-900 dark:text-gray-100' // Current icon only; title is the editor
               : 'flex-shrink-0 text-gray-400 dark:text-gray-500 font-normal' // Ancestors: full name or icon-only
           )}
           title={segment.title}
           aria-label={segment.title}
         >
           <PathPageIcon icon={segment.icon} hasContent={segment.hasContent} />
-          {!iconOnly && <span className={isLast ? 'min-w-0 truncate' : undefined}>{segment.title}</span>}
+          {!iconOnly && !isLast && <span>{segment.title}</span>}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -401,6 +589,10 @@ function PathSegmentMenu({
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+    {isLast && !iconOnly && (
+      <BoardTitleEditor boardId={segment.id} title={segment.title} /> // Current board — click to rename
+    )}
+    </span>
   )
 }
 
@@ -547,7 +739,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
         const projectIdMeta = metadata.project_id
         return {
           id: conv.id as string,
-          title: ((conv.title as string | undefined)?.trim() || 'Untitled'),
+          title: boardTitleOrDefault(conv.title as string | undefined),
           parent_id: getParentId(metadata),
           archived: metadata.archived === true,
           inProject: typeof projectIdMeta === 'string' && projectIdMeta.trim() !== '',
@@ -595,7 +787,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
           const parent_id = getParentId(meta)
           chain.push({
             id: data.id as string,
-            title: ((data.title as string | undefined)?.trim() || 'Untitled'),
+            title: boardTitleOrDefault(data.title as string | undefined),
             parent_id,
             icon: parseIcon(meta),
             hasContent: meta?.hasContent === true,
@@ -604,7 +796,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
         }
 
         const path = chain.reverse() // Root → current
-        const label = path.map((p) => p.title).join(' / ') || 'Untitled'
+        const label = path.map((p) => p.title).join(' / ') || DEFAULT_BOARD_TITLE
         return { path, label }
       }
       if (projectId) {
@@ -616,7 +808,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
         const name = (data?.name as string | undefined)?.trim() || 'Untitled project'
         return { path: [{ id: projectId, title: name, parent_id: null }], label: name }
       }
-      return { path: [{ id: 'home', title: 'Thinktable', parent_id: null }], label: 'Thinktable' }
+      return { path: [{ id: 'home', title: DEFAULT_BOARD_TITLE, parent_id: null }], label: DEFAULT_BOARD_TITLE } // Empty `/board` — product name is not a board title
     },
     enabled: Boolean(conversationId || projectId),
     staleTime: 30_000,
@@ -630,7 +822,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
   })
 
   const path = titleData?.path
-  const displayTitle = titleData?.label || (conversationId || projectId ? '' : 'Thinktable') // Empty while shimmering
+  const displayTitle = titleData?.label || (conversationId || projectId ? '' : DEFAULT_BOARD_TITLE) // Empty `/board` shows New board until a row is minted
   const showBoardPath = Boolean(conversationId && path && path.length > 0) // Interactive path on board pages
   const pathKey = conversationId || projectId || '' // Board/project we’re loading a title for
   const pathReady = Boolean(path?.length) // Titles have landed for this pathKey
@@ -745,11 +937,11 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
             </button>
           </div>
 
-          {/* Board path — highest / … / parent / current; ancestor names → icons; current title ellipsizes */}
+          {/* Board path — highest / … / parent / current (click to rename) + View; vertically centered on the bar */}
           <div
             ref={pathBoxRef}
             data-board-path
-            className="relative min-w-0 flex-shrink-0 overflow-hidden text-sm font-medium text-gray-900 dark:text-gray-100"
+            className="relative min-w-0 flex-shrink-0 overflow-hidden text-sm font-medium text-gray-900 dark:text-gray-100 flex items-center h-8"
             style={{ maxWidth: 'var(--tt-path-max, none)', minWidth: 'var(--tt-path-min, 0px)' }} // Cap against tools; never narrower than the current icon
           >
             {pathReady && showBoardPath && path ? (
@@ -758,7 +950,7 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
                   ref={pathFullRef}
                   data-path-full
                   aria-hidden
-                  className="pointer-events-none absolute left-0 top-0 -z-10 flex w-max items-center whitespace-nowrap opacity-0" // Full titles; compact measure only
+                  className="pointer-events-none absolute left-0 top-0 -z-10 flex h-8 w-max items-center whitespace-nowrap opacity-0" // Full titles + View; compact measure only
                 >
                   {pathSlots.map((slot, index) => (
                     <span key={slot.type === 'ellipsis' ? 'ellipsis' : slot.segment.id} className="inline-flex items-center flex-shrink-0">
@@ -773,12 +965,13 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
                       )}
                     </span>
                   ))}
+                  <BoardViewMenuMeasure />
                 </span>
                 <span
                   ref={pathMinRef}
                   data-path-min
                   aria-hidden
-                  className="pointer-events-none absolute left-0 top-0 -z-10 flex w-max items-center whitespace-nowrap opacity-0" // Ancestor icons + current icon; toolbar overflow uses this width
+                  className="pointer-events-none absolute left-0 top-0 -z-10 flex h-8 w-max items-center whitespace-nowrap opacity-0" // Ancestor icons + current icon + View; toolbar overflow uses this width
                 >
                   {pathSlots.map((slot, index) => (
                     <span key={slot.type === 'ellipsis' ? 'ellipsis' : slot.segment.id} className="inline-flex items-center flex-shrink-0">
@@ -792,20 +985,20 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
                       )}
                     </span>
                   ))}
+                  <BoardViewMenuMeasure />
                 </span>
                 <span
                   className={cn(
-                    'select-none flex w-max min-w-0 max-w-full items-center whitespace-nowrap', // Hug until the cap; current truncates
+                    'select-none flex h-8 w-max min-w-0 max-w-full items-center whitespace-nowrap', // Hug until the cap; current truncates
                     pathEntering && 'tt-board-load-fade-in' // Fade in under the dissolving crumb
                   )}
-                  title={displayTitle}
                 >
                   {pathSlots.map((slot, index) => {
                     const isCurrent = slot.type === 'crumb' && slot.role === 'current'
                     return (
                       <span
                         key={slot.type === 'ellipsis' ? 'ellipsis' : slot.segment.id}
-                        className={cn('inline-flex items-center', isCurrent ? 'min-w-0' : 'flex-shrink-0')}
+                        className={cn('inline-flex items-center h-8', isCurrent ? 'min-w-0' : 'flex-shrink-0')}
                       >
                         {index > 0 && <PathSlash />}
                         {slot.type === 'ellipsis' ? (
@@ -823,18 +1016,31 @@ export function EditPanel({ conversationId, projectId }: EditPanelProps) {
                       </span>
                     )
                   })}
+                  <BoardViewMenu />
                 </span>
               </>
             ) : pathReady || !pathKey ? (
-              <span
-                className={cn(
-                  'text-sm font-medium text-gray-900 dark:text-gray-100 select-none px-0.5 whitespace-nowrap truncate inline-block max-w-full',
-                  pathEntering && 'tt-board-load-fade-in' // Project title uses the same load fade
-                )}
-                title={displayTitle}
-              >
-                {displayTitle}
-              </span>
+              projectId && !conversationId ? (
+                <span
+                  className={cn(
+                    'h-8 inline-flex items-center text-sm font-medium text-gray-900 dark:text-gray-100 select-none px-0.5 whitespace-nowrap truncate max-w-full',
+                    pathEntering && 'tt-board-load-fade-in' // Project title uses the same load fade
+                  )}
+                  title={displayTitle}
+                >
+                  {displayTitle}
+                </span>
+              ) : (
+                <span
+                  className={cn(
+                    'flex h-8 min-w-0 max-w-full items-center', // Midline with the hamburger
+                    pathEntering && 'tt-board-load-fade-in'
+                  )}
+                >
+                  <BoardTitleEditor boardId={conversationId} title={displayTitle || DEFAULT_BOARD_TITLE} />
+                  <BoardViewMenu />
+                </span>
+              )
             ) : null}
             {showPathShimmer ? (
               <span

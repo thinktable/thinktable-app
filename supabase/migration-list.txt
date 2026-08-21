@@ -136,3 +136,4 @@
 20260820103736_remove_style_bar_menu_toggle.sql
 20260820105152_phone_boards_nav_tap_sticky_tunnel.sql
 20260820105819_desktop_frame_select_opens_menu.sql
+20260821141020_shift_drag_and_cmd_wheel_nav_flip.sql

@@ -10,6 +10,7 @@ import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react'
 import { useStore } from 'reactflow' // Live zoom → counter-scale the icon + open menu (screen-relative)
 import { navigationZoom } from '@/lib/board-navigating' // Freeze chrome mid-pinch
 import { FileText } from 'lucide-react'
+import { DEFAULT_BOARD_TITLE } from '@/lib/board-title' // Empty boardLink title hint matches nav +
 import { useTheme } from '@/components/theme-provider'
 import Picker from '@emoji-mart/react'
 import data from '@emoji-mart/data'
@@ -279,7 +280,7 @@ export function BoardLinkView({ node, updateAttributes }: NodeViewProps) {
         contentEditable
         suppressContentEditableWarning
         spellCheck={false}
-        data-placeholder="Untitled"
+        data-placeholder={DEFAULT_BOARD_TITLE}
         onKeyDown={(e) => {
           e.stopPropagation()
           if (e.key === 'Enter') {

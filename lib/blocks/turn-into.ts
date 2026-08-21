@@ -3,11 +3,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js' // Persist transforms
 import type { BlockTypeId } from '@/components/block-actions-menu' // Shared type ids
 import { looksLikeImageSrc } from '@/lib/tiptap/image-block' // URL-only blocks become image src
-import {
-  ensureBoardBodyBlock,
-  isBlockContentEmpty,
-  migrateLegacyBlockFlags,
-} from '@/lib/blocks'
+import { ensureBoardBodyBlock, isBlockContentEmpty, migrateLegacyBlockFlags } from '@/lib/blocks'
+import { boardTitleOrDefault } from '@/lib/board-title' // Turn into Board with no first line → New board
 
 /** Strip tags → plain text (title / list item seed). */
 export function htmlToPlainText(html: string): string {
@@ -257,10 +254,10 @@ export async function applyTurnInto(
   // Board / Board in — promote frame to a linked board; dual-read legacy page*
   const bt = blockType as string
   if (bt === 'board' || bt === 'boardIn' || bt === 'page' || bt === 'pageIn') {
-    const title =
+    const title = boardTitleOrDefault(
       htmlToPlainText(row.content || '').split('\n')[0]?.trim() ||
-      (typeof migrated.blockTitle === 'string' && migrated.blockTitle.trim()) ||
-      'Untitled'
+        (typeof migrated.blockTitle === 'string' ? migrated.blockTitle : '')
+    )
     const parentId =
       (bt === 'boardIn' || bt === 'pageIn') && opts.boardInParentId
         ? opts.boardInParentId

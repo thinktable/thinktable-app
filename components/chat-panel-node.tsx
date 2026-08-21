@@ -12,6 +12,7 @@ import {
 
 
 import { cn, generateUUID } from '@/lib/utils'
+import { boardTitleOrDefault } from '@/lib/board-title' // Empty conversation names show New board
 import { useEditor, EditorContent } from '@tiptap/react'
 import { DOMParser as PMDOMParser } from '@tiptap/pm/model' // Parse stored HTML → PM doc for exact (non-string) sync compare
 import { TextSelection } from '@tiptap/pm/state' // Only text ranges keep a frame "active" — not boardLink NodeSelection
@@ -3157,7 +3158,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       renameTitle: async (pid: string, title: string) => {
         try {
           const supabase = createClient()
-          await supabase.from('conversations').update({ title: title || 'Untitled' }).eq('id', pid)
+          await supabase.from('conversations').update({ title: boardTitleOrDefault(title) }).eq('id', pid)
           await queryClient.invalidateQueries({ queryKey: ['conversations'] })
         } catch (err) {
           console.error('Failed to rename linked page:', err)
@@ -6713,7 +6714,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                   ...convs
                     .filter((c) => c.id !== conversationId)
                     .slice(0, 40)
-                    .map((c) => ({ id: c.id, title: c.title?.trim() || 'Untitled' })),
+                    .map((c) => ({ id: c.id, title: boardTitleOrDefault(c.title) })),
                 ]
               })()}
               onPageTurnInto={async (blockType, boardInParentId) => {

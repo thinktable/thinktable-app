@@ -4,6 +4,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { newBlockMetadata } from '@/lib/blocks' // Canonical frame metadata
+import { boardTitleOrDefault } from '@/lib/board-title' // Empty snapshot boards start as New board
 
 /** Escape text for safe HTML attribute insertion. */
 function escapeHtml(text: string): string {
@@ -62,7 +63,7 @@ export async function snapshotSelectionToBoard(
     .from('conversations')
     .insert({
       user_id: userId,
-      title: title || 'Untitled',
+      title: boardTitleOrDefault(title),
       metadata: {
         parent_id: parentId, // Nest under current page in the Pages menu
         hasContent, // Filled icon when it carries a snapshot
@@ -138,7 +139,7 @@ export async function snapshotSelectionToBoard(
 
   // 5) Drop a title-variant boardLink frame on the SOURCE page linking to the snapshot
   const titleDiv = `<div data-type="boardLink" data-board-id="${pageId}" data-title="${escapeHtml(
-    title || 'Untitled'
+    boardTitleOrDefault(title)
   )}" data-variant="title"></div>`
   const { data: link, error: linkError } = await supabase
     .from('messages')
@@ -150,7 +151,7 @@ export async function snapshotSelectionToBoard(
       metadata: newBlockMetadata({
         position: linkPosition, // Where the popup was
         linkedBoardId: pageId,
-        blockTitle: title || 'Untitled',
+        blockTitle: boardTitleOrDefault(title),
         isBoard: true,
         blockType: 'board',
         fadeIn: true,

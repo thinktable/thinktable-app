@@ -111,6 +111,7 @@ import {
   ungroupBlocks,
 } from '@/lib/blocks' // blocks, groups (page-body ensure is promote-only — not cold load)
 import { transformHtmlToBlockType } from '@/lib/blocks/turn-into' // Seed empty-frame HTML for I-bar Turn into
+import { boardTitleOrDefault, DEFAULT_BOARD_TITLE } from '@/lib/board-title' // Empty board names start as New board
 import { PROPERTY_GROUP_H } from '@/lib/blocks/property' // Top property strip height — I-bar spawn offset
 import { propertyBlockHtml } from '@/lib/tiptap/property-block' // I-bar Turn into → Property seeds icon + Empty cell
 import { absFlowPosition, nodeFlowSize, useBlockGroupDrag } from './use-block-group-drag' // Drag attach/detach between groups / page
@@ -204,6 +205,19 @@ const BLOCK_CREATE_OFFSET_Y = 4 // contentFit paddingTop only (legacy 20 assumed
 const MULTI_SELECT_KEYS = ['Shift', 'Meta', 'Control'] // Shift/Cmd/Ctrl+click adds to selection
 const SELECTION_BOX_KEYS = ['Shift'] // Shift+drag draws a selection box
 const DELETE_KEYS = ['Backspace', 'Delete'] // Stable — inline arrays loop RF useKeyPress
+
+/** Mac trackpad pinch arrives as ctrl+wheel (not Cmd) — never treat as Scroll↔Zoom flip. */
+function isMacTrackpadPinch(e: WheelEvent): boolean {
+  const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform)
+  return isMac && e.ctrlKey && !e.metaKey
+}
+
+/** Cmd (Mac) / Ctrl (Win·Linux) — flips sticky Scroll↔Zoom for one wheel gesture. */
+function isWheelAlternateMod(e: WheelEvent): boolean {
+  if (e.metaKey) return true // Cmd+wheel on Mac
+  if (e.ctrlKey && !isMacTrackpadPinch(e)) return true // Ctrl+wheel off Mac (pinch uses ctrl on Mac)
+  return false
+}
 
 /** Right-click over text often targets a Text node, which has no `.closest`. */
 function eventElement(target: EventTarget | null): Element | null {
@@ -556,6 +570,8 @@ function BoardFlowInner({
   // Then update from localStorage in useEffect after hydration
   const [isScrollMode, setIsScrollMode] = useState(true) // true = Scroll (wheel pans); false = Zoom
   const [mapPointerTool, setMapPointerTool] = useState<'select' | 'pan'>('pan') // Pan default; select via nav toggle
+  // Shift flips the sticky tool for one drag: pan→marquee, select→pan (board click/type needs plain drag ≠ Figma)
+  const [shiftHeld, setShiftHeld] = useState(false)
   const [viewMode, setViewModeState] = useState<'linear' | 'canvas'>('canvas')
   
   // Linear mode navigation state
@@ -1828,6 +1844,34 @@ function BoardFlowInner({
     preferencesLoadedRef.current = true
   }, [])
 
+  // Track Shift for the pan↔select drag flip (ignore while typing in inputs / TipTap)
+  useEffect(() => {
+    if (embedded || typeof window === 'undefined') return // Embed / SSR: no Free-nav pointer tools
+    const isTypingTarget = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null
+      return !!(el && el.closest?.('input, textarea, [contenteditable="true"], .ProseMirror, .block-actions-menu'))
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Shift' || e.repeat) return // Only arm on the Shift edge
+      if (isTypingTarget(e.target)) return // Don’t steal Shift while editing text
+      setShiftHeld(true)
+    }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') setShiftHeld(false)
+    }
+    const clear = () => setShiftHeld(false) // Blur / tab hide mid-hold must not leave pan stuck
+    window.addEventListener('keydown', onKeyDown, true)
+    window.addEventListener('keyup', onKeyUp, true)
+    window.addEventListener('blur', clear)
+    document.addEventListener('visibilitychange', clear)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('keyup', onKeyUp, true)
+      window.removeEventListener('blur', clear)
+      document.removeEventListener('visibilitychange', clear)
+    }
+  }, [embedded])
+
   // Save preferences to localStorage (instant) and Supabase (sync) when they change
   useEffect(() => {
     if (!preferencesLoadedRef.current) return // Don't save before loading
@@ -1871,6 +1915,34 @@ function BoardFlowInner({
   useEffect(() => {
     setScrollMode(isScrollMode) // Phone two-finger: Scroll nav pans like trackpad; Zoom nav pinches
   }, [isScrollMode, setScrollMode])
+
+  // Track Shift for the pan↔select drag flip (ignore while typing in inputs / TipTap)
+  useEffect(() => {
+    if (embedded || typeof window === 'undefined') return // Embed / SSR: no Free-nav pointer tools
+    const isTypingTarget = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null
+      return !!(el && el.closest?.('input, textarea, [contenteditable="true"], .ProseMirror, .block-actions-menu'))
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Shift' || e.repeat) return // Only arm on the Shift edge
+      if (isTypingTarget(e.target)) return // Don’t steal Shift while editing text
+      setShiftHeld(true)
+    }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') setShiftHeld(false)
+    }
+    const clear = () => setShiftHeld(false) // Blur / tab hide mid-hold must not leave pan stuck
+    window.addEventListener('keydown', onKeyDown, true)
+    window.addEventListener('keyup', onKeyUp, true)
+    window.addEventListener('blur', clear)
+    document.addEventListener('visibilitychange', clear)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('keyup', onKeyUp, true)
+      window.removeEventListener('blur', clear)
+      document.removeEventListener('visibilitychange', clear)
+    }
+  }, [embedded])
 
   // Save minimap visibility to localStorage and Supabase when it changes
   useEffect(() => {
@@ -4980,214 +5052,164 @@ function BoardFlowInner({
     })
   }, [nodes, reactFlowInstance, setNodes])
 
-  // Handle wheel events for scroll mode (only vertical in Linear mode)
+  // Wheel: sticky Scroll pans / Zoom zooms; Cmd/Ctrl flips for one gesture; Mac pinch always zooms
   useEffect(() => {
     // In Linear mode, enable chronological panel navigation
-    // In Canvas mode, only enable if Scroll mode is active
-    if (viewMode === 'linear' || isScrollMode) {
-      const handleWheel = (e: WheelEvent) => {
-        // Check if we're over the React Flow canvas
-        const target = e.target as HTMLElement
-        const reactFlowElement = target.closest('.react-flow')
-        if (!reactFlowElement) {
-          return
-        }
+    // In Canvas mode, own Scroll pan + Zoom alternate-pan (plain Zoom wheel stays with RF)
+    if (!(viewMode === 'linear' || viewMode === 'canvas') || isDrawing) return
+    if (viewMode === 'canvas' && embedded) return // Embed keeps RF-only wheel
 
-        // In linear mode, handle chronological panel navigation
-        if (viewMode === 'linear') {
-          // Allow Ctrl/Cmd+scroll for zoom
-          if (e.ctrlKey || e.metaKey) {
-            return
-          }
+    const handleWheel = (e: WheelEvent) => {
+      // Check if we're over the React Flow canvas
+      const target = e.target as HTMLElement
+      const reactFlowElement = target.closest('.react-flow')
+      if (!reactFlowElement) {
+        return
+      }
 
-          e.preventDefault()
-          e.stopPropagation()
-
-          const panels = chronologicalPanels
-          if (panels.length === 0) {
-            // No panels available - allow normal scroll behavior
-            return
-          }
-
-          // Get current focused panel index (default to most recent if not set)
-          let currentIndex = focusedPanelIndex
-          if (currentIndex === null || currentIndex >= panels.length || currentIndex < 0) {
-            currentIndex = panels.length - 1
-            setFocusedPanelIndex(currentIndex)
-          }
-
-          // Determine direction: scroll up = backwards (earlier), scroll down = forwards (later)
-          const deltaY = e.deltaY
-          const currentDirection: 'up' | 'down' = deltaY < 0 ? 'up' : 'down'
-          
-          // Reset accumulator if scroll direction changed
-          if (lastScrollDirectionRef.current !== null && lastScrollDirectionRef.current !== currentDirection) {
-            scrollAccumulatorRef.current = 0
-          }
-          lastScrollDirectionRef.current = currentDirection
-
-          // Accumulate scroll delta
-          scrollAccumulatorRef.current += Math.abs(deltaY)
-
-          // Threshold for navigation (higher = less sensitive)
-          const SCROLL_THRESHOLD = 400 // Increased threshold - requires more scroll to navigate
-
-          // Only navigate if accumulated scroll exceeds threshold
-          if (scrollAccumulatorRef.current < SCROLL_THRESHOLD) {
-            return
-          }
-
-          // Reset accumulator after navigation
-          scrollAccumulatorRef.current = 0
-
-          let newIndex = currentIndex
-          if (deltaY < 0) {
-            // Scroll up - go to previous panel (earlier in history)
-            newIndex = Math.max(0, currentIndex - 1)
-          } else if (deltaY > 0) {
-            // Scroll down - go to next panel (later in history)
-            newIndex = Math.min(panels.length - 1, currentIndex + 1)
-          }
-
-          // Only update if index changed
-          if (newIndex !== currentIndex) {
-            setFocusedPanelIndex(newIndex)
-            const panelToCenter = panels[newIndex]
-            if (panelToCenter) {
-              // Select the panel (like flashcard navigation does)
-              setNodes((nds) =>
-                nds.map((n) => ({ ...n, selected: n.id === panelToCenter.id }))
-              )
-              
-              // Wait for selection to update, then center panel above prompt box
-              // Use setTimeout to ensure React Flow has processed the selection update
-              setTimeout(() => {
-                centerPanelAbovePrompt(panelToCenter.id, false)
-              }, 50) // Small delay to ensure selection has propagated
-            }
-          }
-
-          return
-        }
-
-        // Handle zoom in linear mode - zoom around horizontal center but free vertically (around cursor)
-        if (false && (e.ctrlKey || e.metaKey)) {
-          e.preventDefault()
-          e.stopPropagation()
-
-          const viewport = reactFlowInstance.getViewport()
-          const reactFlowRect = (reactFlowElement as HTMLElement).getBoundingClientRect()
-
-          // Calculate the horizontal center of the map area (for horizontal centering)
-          const mapCenterX = reactFlowRect.width / 2
-
-          // Get mouse cursor Y position (for free vertical zoom)
-          const mouseY = e.clientY - reactFlowRect.top
-
-          // Convert screen positions to flow coordinates at current zoom
-          // screenX = flowX * zoom + viewport.x
-          // flowX = (screenX - viewport.x) / zoom
-          const flowCenterX = (mapCenterX - viewport.x) / viewport.zoom
-          const flowMouseY = (mouseY - viewport.y) / viewport.zoom
-
-          // Calculate zoom delta (React Flow uses exponential zoom)
-          const zoomFactor = 1 + (e.deltaY > 0 ? -0.1 : 0.1)
-          const newZoom = Math.max(0.1, Math.min(2, viewport.zoom * zoomFactor))
-
-          // Calculate new viewport X to keep horizontal center fixed
-          // We want: mapCenterX = flowCenterX * newZoom + newViewportX
-          // Solving: newViewportX = mapCenterX - flowCenterX * newZoom
-          const newViewportX = mapCenterX - flowCenterX * newZoom
-
-          // Calculate new viewport Y to keep mouse cursor Y position fixed (free vertical zoom)
-          // We want: mouseY = flowMouseY * newZoom + newViewportY
-          // Solving: newViewportY = mouseY - flowMouseY * newZoom
-          const newViewportY = mouseY - flowMouseY * newZoom
-
-          // Apply zoom: centered horizontally, free vertically around cursor
-          reactFlowInstance.setViewport({
-            x: newViewportX,
-            y: newViewportY,
-            zoom: newZoom,
-          })
-
-          // Update zoom ref
-          prevZoomRef.current = newZoom
-          return
-        }
-
-        // Trackpad pinch is ctrl+wheel — always zoom around the cursor, even in Scroll nav
+      // In linear mode, handle chronological panel navigation
+      if (viewMode === 'linear') {
+        // Allow Ctrl/Cmd+scroll for zoom
         if (e.ctrlKey || e.metaKey) {
-          // Safari Mac pinch is GestureEvent (board-rotation); don’t double-zoom
-          if (typeof window !== 'undefined' && 'GestureEvent' in window && !/iPhone|iPad|iPod/.test(navigator.userAgent)) {
-            return
-          }
-          e.preventDefault()
-          e.stopPropagation()
-          if (!reactFlowInstance) return
-          const viewport = reactFlowInstance.getViewport()
-          const rect = (reactFlowElement as HTMLElement).getBoundingClientRect()
-          const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform)
-          const factor = e.ctrlKey && isMac ? 10 : 1
-          const pinchDelta =
-            -e.deltaY * (e.deltaMode === 1 ? 0.05 : e.deltaMode ? 1 : 0.002) * factor
-          const nextZoom = Math.min(2, Math.max(0.1, viewport.zoom * Math.pow(2, pinchDelta)))
-          if (nextZoom === viewport.zoom) return
-          reactFlowInstance.setViewport(
-            viewportKeepingPanePoint(
-              e.clientX - rect.left,
-              e.clientY - rect.top,
-              viewport,
-              boardRotation,
-              boardRotation,
-              nextZoom
-            )
-          )
-          prevZoomRef.current = nextZoom
           return
         }
 
         e.preventDefault()
         e.stopPropagation()
 
-        const viewport = reactFlowInstance.getViewport()
-        const deltaX = false ? 0 : e.deltaX // No horizontal scroll in Linear mode
-        const deltaY = e.deltaY
+        const panels = chronologicalPanels
+        if (panels.length === 0) {
+          // No panels available - allow normal scroll behavior
+          return
+        }
 
-        // In linear mode, prevent scrolling past bottom
-        if (false) {
-          const bottomLimit = getBottomScrollLimit()
-          if (bottomLimit !== null) {
-            const newY = viewport.y - deltaY
-            // Clamp to bottom limit (can't scroll past bottom)
-            const clampedY = Math.max(newY, bottomLimit as number)
-            reactFlowInstance.setViewport({
-              x: viewport.x - deltaX,
-              y: clampedY,
-              zoom: viewport.zoom,
-            })
-            // Check if at bottom after scroll
-            setTimeout(() => checkIfAtBottom(), 10)
-            return
+        // Get current focused panel index (default to most recent if not set)
+        let currentIndex = focusedPanelIndex
+        if (currentIndex === null || currentIndex >= panels.length || currentIndex < 0) {
+          currentIndex = panels.length - 1
+          setFocusedPanelIndex(currentIndex)
+        }
+
+        // Determine direction: scroll up = backwards (earlier), scroll down = forwards (later)
+        const deltaY = e.deltaY
+        const currentDirection: 'up' | 'down' = deltaY < 0 ? 'up' : 'down'
+        
+        // Reset accumulator if scroll direction changed
+        if (lastScrollDirectionRef.current !== null && lastScrollDirectionRef.current !== currentDirection) {
+          scrollAccumulatorRef.current = 0
+        }
+        lastScrollDirectionRef.current = currentDirection
+
+        // Accumulate scroll delta
+        scrollAccumulatorRef.current += Math.abs(deltaY)
+
+        // Threshold for navigation (higher = less sensitive)
+        const SCROLL_THRESHOLD = 400 // Increased threshold - requires more scroll to navigate
+
+        // Only navigate if accumulated scroll exceeds threshold
+        if (scrollAccumulatorRef.current < SCROLL_THRESHOLD) {
+          return
+        }
+
+        // Reset accumulator after navigation
+        scrollAccumulatorRef.current = 0
+
+        let newIndex = currentIndex
+        if (deltaY < 0) {
+          // Scroll up - go to previous panel (earlier in history)
+          newIndex = Math.max(0, currentIndex - 1)
+        } else if (deltaY > 0) {
+          // Scroll down - go to next panel (later in history)
+          newIndex = Math.min(panels.length - 1, currentIndex + 1)
+        }
+
+        // Only update if index changed
+        if (newIndex !== currentIndex) {
+          setFocusedPanelIndex(newIndex)
+          const panelToCenter = panels[newIndex]
+          if (panelToCenter) {
+            // Select the panel (like flashcard navigation does)
+            setNodes((nds) =>
+              nds.map((n) => ({ ...n, selected: n.id === panelToCenter.id }))
+            )
+            
+            // Wait for selection to update, then center panel above prompt box
+            // Use setTimeout to ensure React Flow has processed the selection update
+            setTimeout(() => {
+              centerPanelAbovePrompt(panelToCenter.id, false)
+            }, 50) // Small delay to ensure selection has propagated
           }
         }
 
-        // Pan the viewport based on scroll delta
+        return
+      }
+
+      // Canvas — Zoom sticky: only own Cmd/Ctrl→pan; pinch + plain wheel stay with RF / other handlers
+      if (!isScrollMode) {
+        if (isMacTrackpadPinch(e)) return // Pinch always zooms (RF zoomOnPinch / ctrl+wheel)
+        if (!isWheelAlternateMod(e)) return // Plain wheel → RF zoomOnScroll
+        e.preventDefault()
+        e.stopPropagation()
+        if (!reactFlowInstance) return
+        const viewport = reactFlowInstance.getViewport()
         reactFlowInstance.setViewport({
-          x: viewport.x - deltaX,
-          y: viewport.y - deltaY,
+          x: viewport.x - e.deltaX,
+          y: viewport.y - e.deltaY,
           zoom: viewport.zoom,
         })
+        return
       }
 
-      // Add event listener with capture to intercept before React Flow
-      document.addEventListener('wheel', handleWheel, { passive: false, capture: true })
-
-      return () => {
-        document.removeEventListener('wheel', handleWheel, { capture: true })
+      // Canvas — Scroll sticky: pinch or Cmd/Ctrl → zoom; plain wheel → pan
+      if (isMacTrackpadPinch(e) || isWheelAlternateMod(e)) {
+        // Safari Mac pinch is GestureEvent (board-rotation); don’t double-zoom
+        if (typeof window !== 'undefined' && 'GestureEvent' in window && !/iPhone|iPad|iPod/.test(navigator.userAgent)) {
+          if (isMacTrackpadPinch(e)) return // Leave Safari pinch to GestureEvent path
+        }
+        e.preventDefault()
+        e.stopPropagation()
+        if (!reactFlowInstance) return
+        const viewport = reactFlowInstance.getViewport()
+        const rect = (reactFlowElement as HTMLElement).getBoundingClientRect()
+        const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform)
+        const factor = e.ctrlKey && isMac ? 10 : 1
+        const pinchDelta =
+          -e.deltaY * (e.deltaMode === 1 ? 0.05 : e.deltaMode ? 1 : 0.002) * factor
+        const nextZoom = Math.min(2, Math.max(0.1, viewport.zoom * Math.pow(2, pinchDelta)))
+        if (nextZoom === viewport.zoom) return
+        reactFlowInstance.setViewport(
+          viewportKeepingPanePoint(
+            e.clientX - rect.left,
+            e.clientY - rect.top,
+            viewport,
+            boardRotation,
+            boardRotation,
+            nextZoom
+          )
+        )
+        prevZoomRef.current = nextZoom
+        return
       }
+
+      e.preventDefault()
+      e.stopPropagation()
+
+      const viewport = reactFlowInstance.getViewport()
+      // Pan the viewport based on scroll delta
+      reactFlowInstance.setViewport({
+        x: viewport.x - e.deltaX,
+        y: viewport.y - e.deltaY,
+        zoom: viewport.zoom,
+      })
     }
-  }, [isScrollMode, viewMode, reactFlowInstance, getBottomScrollLimit, checkIfAtBottom, chronologicalPanels, focusedPanelIndex, centerPanelAbovePrompt, boardRotation])
+
+    // Add event listener with capture to intercept before React Flow
+    document.addEventListener('wheel', handleWheel, { passive: false, capture: true })
+
+    return () => {
+      document.removeEventListener('wheel', handleWheel, { capture: true })
+    }
+  }, [isScrollMode, viewMode, reactFlowInstance, getBottomScrollLimit, checkIfAtBottom, chronologicalPanels, focusedPanelIndex, centerPanelAbovePrompt, boardRotation, isDrawing, embedded])
 
   // Check if at bottom when viewport changes in linear mode
   // Don't run when nodes change due to selection - only run when nodes are added/removed or viewMode changes
@@ -5974,7 +5996,7 @@ function BoardFlowInner({
           .from('conversations')
           .insert({
             user_id: user.id,
-            title: 'New Conversation',
+            title: 'New board', // Empty `/board` mint — same label as the top-bar fallback
             metadata: { position: -1 },
           })
           .select()
@@ -6056,7 +6078,7 @@ function BoardFlowInner({
             const supabase = createClient()
             const { data: { user } } = await supabase.auth.getUser()
             if (!user) return
-            const { applyTurnInto, htmlToPlainText } = await import('@/lib/blocks/turn-into')
+            const { applyTurnInto } = await import('@/lib/blocks/turn-into')
             const { linkedBoardId } = await applyTurnInto(supabase, {
               messageId,
               conversationId: boardId,
@@ -6071,7 +6093,7 @@ function BoardFlowInner({
               if (ed) {
                 setFrameToSoleBoardLink(ed, {
                   boardId: linkedBoardId,
-                  title: htmlToPlainText('') || 'Untitled',
+                  title: DEFAULT_BOARD_TITLE,
                   icon: null,
                   variant: 'title',
                 })
@@ -6493,7 +6515,7 @@ function BoardFlowInner({
           const { setFrameToSoleBoardLink } = await import('@/lib/tiptap/board-blocks')
           const ed = editorForHostNode(nodeId)
           if (ed) {
-            const title = htmlToPlainText(frameContent).split('\n')[0]?.trim() || 'Untitled'
+            const title = boardTitleOrDefault(htmlToPlainText(frameContent).split('\n')[0])
             setFrameToSoleBoardLink(ed, { boardId: linkedBoardId, title, icon: null, variant: 'title' })
           }
         }
@@ -8047,7 +8069,7 @@ function BoardFlowInner({
                 .from('conversations')
                 .insert({
                   user_id: user.id,
-                  title: 'New Conversation',
+                  title: 'New board', // Empty `/board` mint — same label as the top-bar fallback
                   metadata: { position: -1 },
                 })
                 .select()
@@ -8520,19 +8542,31 @@ function BoardFlowInner({
       const overHandle = !!target.closest(HANDLE_ZOOM_SEL)
       const overDb = !!target.closest(DB_ZOOM_SEL)
       if (!overHandle && !overDb) return // Pane/body: let RF / Scroll-nav handler own it
-      const isPinch = e.ctrlKey || e.metaKey
-      if (overHandle && !isPinch) return // Handles: only pinch / browser-zoom gestures
-      if (overDb && !isPinch && !zoomNav) return // Scroll nav: document handler pans; don’t fight it
+      const pinch = isMacTrackpadPinch(e) // Trackpad pinch — always zoom
+      const alternate = isWheelAlternateMod(e) // Cmd/Ctrl flip Scroll↔Zoom
+      if (overHandle && !pinch && !alternate) return // Handles: pinch zoom or Zoom-nav Cmd/Ctrl pan
+      if (overDb && !pinch && !alternate && !zoomNav) return // Scroll nav plain: document handler pans
 
       e.preventDefault() // Never let the browser zoom / the table scroll-steal
       e.stopPropagation() // Own this gesture (avoid double-zoom with RF)
 
       const flowEl = target.closest('.react-flow') as HTMLElement
-      const rect = flowEl.getBoundingClientRect()
       const viewport = reactFlowInstance.getViewport()
+
+      // Zoom sticky + Cmd/Ctrl → pan (same flip as pane); Scroll sticky + Cmd/Ctrl still zooms below
+      if (alternate && zoomNav) {
+        reactFlowInstance.setViewport({
+          x: viewport.x - e.deltaX,
+          y: viewport.y - e.deltaY,
+          zoom: viewport.zoom,
+        })
+        return
+      }
+
+      const rect = flowEl.getBoundingClientRect()
       const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform)
-      const factor = isPinch && isMac ? 10 : 1 // Match RF wheelDelta pinch feel
-      const pinchDelta = isPinch
+      const factor = pinch && isMac ? 10 : 1 // Match RF wheelDelta pinch feel
+      const pinchDelta = pinch
         ? -e.deltaY * (e.deltaMode === 1 ? 0.05 : e.deltaMode ? 1 : 0.002) * factor
         : e.deltaY > 0
           ? -0.1
@@ -8543,7 +8577,7 @@ function BoardFlowInner({
         maxZ,
         Math.max(
           minZ,
-          isPinch ? viewport.zoom * Math.pow(2, pinchDelta) : viewport.zoom * (1 + pinchDelta)
+          pinch ? viewport.zoom * Math.pow(2, pinchDelta) : viewport.zoom * (1 + pinchDelta)
         )
       )
       if (nextZoom === viewport.zoom) return
@@ -8797,7 +8831,7 @@ function BoardFlowInner({
                   .from('conversations')
                   .insert({
                     user_id: user.id,
-                    title: 'New Conversation',
+                    title: 'New board', // Empty `/board` mint — same label as the top-bar fallback
                     metadata: { position: -1 }, // Set position to -1 to appear at top
                   })
                   .select()
@@ -9066,7 +9100,10 @@ function BoardFlowInner({
         className={cn(
           'h-full w-full bg-gray-50 dark:bg-[#0f0f0f]',
           isThreadConnecting && 'tt-thread-connecting', // Invisible edge points stay snappable while dragging a thread
-          !embedded && mapPointerTool === 'pan' && !isDrawing && 'tt-map-pan-tool', // Grab cursor while pan tool is active
+          !embedded &&
+            !isDrawing &&
+            (mapPointerTool === 'pan' || (mapPointerTool === 'select' && shiftHeld)) &&
+            'tt-map-pan-tool', // Grab cursor while pan tool is active or Shift-pan in select
           boardLoadPhase === 'reveal' && 'tt-board-load-reveal' // Crossfade placeholder shells with real contents
         )}
         onInit={(instance) => {
@@ -9079,19 +9116,23 @@ function BoardFlowInner({
           setReactFlowInstance(instance)
           if (embedded) setEmbedFlowReady(true) // Host can drop loading veil once messages also resolve
         }}
-        // Host default = drag-select; pan tool / embed / middle-right mouse pan instead
+        // Sticky tool owns plain left-drag; Shift flips for one gesture (select↔pan). Embed always pans.
         panOnDrag={
           embedded
             ? true
             : isDrawing
               ? false
               : mapPointerTool === 'pan'
-                ? true
+                ? true // Pan tool: plain drag pans; Shift+drag marquees via selectionKeyCode
                 : isMobileMode
                   ? false // Phone: RF [1,2] only filters mousedown — touchstart still pans
-                  : [1, 2] // Desktop select: middle/right still pan; left drag = selection box
+                  : shiftHeld
+                    ? true // Select tool + Shift: left-drag pans (inverse of pan+Shift)
+                    : [1, 2] // Desktop select: middle/right still pan; left drag = selection box
         }
-        selectionOnDrag={!embedded && !isDrawing && mapPointerTool === 'select'} // Left-drag marquee without Shift
+        selectionOnDrag={
+          !embedded && !isDrawing && mapPointerTool === 'select' && !shiftHeld // Shift held → pan, not marquee
+        }
         zoomOnScroll={embedded ? true : !isScrollMode && !isDrawing}
         zoomOnPinch={embedded ? true : !isDrawing} // Pinch always zooms; Scroll nav only changes wheel pan vs wheel zoom
         zoomOnDoubleClick={false}
@@ -9103,8 +9144,8 @@ function BoardFlowInner({
         multiSelectionKeyCode={MULTI_SELECT_KEYS}
         selectionKeyCode={
           embedded || isDrawing || mapPointerTool === 'select'
-            ? null // Select tool uses selectionOnDrag; no Shift required
-            : SELECTION_BOX_KEYS // Pan tool: Shift+drag still draws a selection box
+            ? null // Select tool: plain drag marquees; Shift flips to pan above
+            : SELECTION_BOX_KEYS // Pan tool: Shift+drag draws a selection box
         }
         // Backspace/Delete remove selected frames/threads. TipTap editors use class `nokey` so RF
         // skips delete while typing (isInputDOMNode misses <p>/<br> without contenteditable).
@@ -9424,7 +9465,11 @@ function BoardFlowInner({
                 variant="ghost"
                 size="sm"
                 className="w-full h-auto py-1 px-0 text-xs rounded-lg bg-transparent text-gray-900 dark:text-gray-100 hover:bg-gray-200/60 dark:hover:bg-gray-700/60 focus-visible:ring-0 focus-visible:ring-offset-0 justify-center"
-                title={isScrollMode ? 'Scroll — click for Zoom' : 'Zoom — click for Scroll'}
+                title={
+                  isScrollMode
+                    ? 'Scroll — Cmd/Ctrl+wheel zooms; click for Zoom'
+                    : 'Zoom — Cmd/Ctrl+wheel pans; click for Scroll'
+                }
                 aria-label={isScrollMode ? 'Switch to Zoom' : 'Switch to Scroll'}
                 onClick={() => {
                   setIsScrollMode((s) => !s)
@@ -9450,7 +9495,11 @@ function BoardFlowInner({
                 variant="ghost"
                 size="sm"
                 className="h-7 w-7 p-0 shrink-0 rounded-lg text-gray-900 dark:text-gray-100 hover:bg-gray-200/60 dark:hover:bg-gray-700/60 focus-visible:ring-0 focus-visible:ring-offset-0"
-                title={mapPointerTool === 'select' ? 'Select — click for pan' : 'Pan — click for select'}
+                title={
+                  mapPointerTool === 'select'
+                    ? 'Select — Shift+drag pans; click for pan tool'
+                    : 'Pan — Shift+drag selects; click for select tool'
+                }
                 aria-label={mapPointerTool === 'select' ? 'Switch to pan' : 'Switch to select'}
                 onClick={() => setMapPointerTool((t) => (t === 'select' ? 'pan' : 'select'))}
               >
@@ -9658,7 +9707,7 @@ function BoardFlowInner({
               const targets = convs
                 .filter((c) => c.id !== conversationId)
                 .slice(0, 40)
-                .map((c) => ({ id: c.id, title: c.title?.trim() || 'Untitled' }))
+                .map((c) => ({ id: c.id, title: boardTitleOrDefault(c.title) }))
               return [
                 { id: conversationId || '', title: 'Current board' },
                 ...targets.filter((t) => t.id),
@@ -9814,7 +9863,7 @@ function BoardFlowInner({
             const targets = convs
               .filter((c) => c.id !== conversationId)
               .slice(0, 40)
-              .map((c) => ({ id: c.id, title: c.title?.trim() || 'Untitled' }))
+              .map((c) => ({ id: c.id, title: boardTitleOrDefault(c.title) }))
             // Always offer current map first
             return [
               { id: conversationId || '', title: 'Current board' },
