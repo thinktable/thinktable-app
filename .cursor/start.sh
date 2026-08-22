@@ -26,8 +26,23 @@ fi
 sudo chmod 666 /var/run/docker.sock || true
 
 # --- Local Supabase stack ----------------------------------------------------
-echo "[start] Bringing up local Supabase (idempotent)..."
-supabase start || supabase start # Second attempt tolerates first-boot image pull races.
+# A disk snapshot/build can bake stale Supabase container state (containers exist
+# but are not actually running post-boot), which makes `supabase start` fail with
+# "already running / container is not ready". Reset first, then start fresh so every
+# boot converges to a clean, migrated DB. Images stay cached, so this is still fast.
+echo "[start] Bringing up local Supabase (reset stale state, then start)..."
+supabase stop --no-backup >/dev/null 2>&1 || true
+sb_ok=0
+for attempt in 1 2 3; do
+  if supabase start; then sb_ok=1; break; fi
+  echo "[start] supabase start attempt ${attempt} failed; resetting and retrying..."
+  supabase stop --no-backup >/dev/null 2>&1 || true
+  sleep 5
+done
+if [ "$sb_ok" != "1" ]; then
+  echo "[start] ERROR: local Supabase failed to start" >&2
+  exit 1
+fi
 
 # --- App environment file ----------------------------------------------------
 echo "[start] Writing .env.local from live Supabase status..."
