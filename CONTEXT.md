@@ -150,3 +150,13 @@ Local copies live in `React Flow copy/*.zip` (xyflow Pro license — integrate i
 | **ai-workflow-editor-pro-example** | Same + Vercel AI SDK nodes | Pattern ref for AI node processors (less core to mind maps) |
 
 When adopting: copy hooks/components from the zip (or extracted `*-pro-example/`), adapt to message/`metadata` persistence, and keep Pro LICENSE notices. Prefer unzipping on demand over committing full example apps.
+
+## Local dev environment (Cloud Agent)
+
+`.cursor/environment.json` runs the app against a **local Supabase stack** (no prod DB, no external secrets). `install.sh`/`start.sh`/`gen-env-local.sh` handle it; `npm run dev` serves on **3031**.
+
+- **Missing base schema**: the original `create_saas_schema` migration was never committed, so `supabase/migrations/` alone can't build a fresh DB (the first real migration references `conversations`). `supabase/migrations/00000000000000_bootstrap_base_schema.sql` recreates the foundation (`profiles` + `handle_new_user` signup trigger, `conversations`, `messages`, `projects`) with owner-RLS policy names the share migration later drops. `projects` is also referenced by the app but created by no other migration.
+- **Missing grants**: migrations never `GRANT` table privileges to `anon`/`authenticated`; the remote has them historically. `supabase/seed.sql` adds them (local-only; not applied by `db push`).
+- **Docker-in-VM**: nested container needs storage-driver `fuse-overlayfs` (overlay2 mount fails) and Docker on the **iptables-legacy** backend (host FORWARD policy is DROP under legacy; nft backend is empty, so bridge traffic is dropped otherwise).
+- **AI features need `OPENAI_API_KEY`** (`/api/ai/chat`); board creation itself does not (plain `conversations` insert, e.g. double-click canvas → type). `.env.local` is gitignored and regenerated each boot.
+- Not pushed to remote Supabase; the bootstrap migration is for the local stack only.
