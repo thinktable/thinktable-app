@@ -1,0 +1,11 @@
+{
+  "name": "ThinkTable (Next.js + local Supabase)",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "Next.js dev",
+      "command": "npm run dev"
+    }
+  ]
+}
