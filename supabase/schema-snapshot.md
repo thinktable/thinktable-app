@@ -1,13 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-23T23:34:05Z`
+- Snapped at: `2026-08-23T23:48:30Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260823234830_frame_fit_free_restore.sql`.
+- Frame fit↔free toggle: unlock restores `unlockedFrameSize` / scale after fit-to-text; lock snapshots live free box before hugging.
+- Metadata sync guard — stale locked `resizeDimensions` no longer overwrite a fit→free restore.
+- Schema unchanged.
+
+## Prior: property strip scroll and DB hover preview
 
 - No DDL. Marker `20260823233405_property_strip_scroll_db_clip_preview.sql`.
 - Top property strip: horizontal scroll when icons overflow; **…** at the right when not fully scrolled (replaces ←/→ caret pagination).

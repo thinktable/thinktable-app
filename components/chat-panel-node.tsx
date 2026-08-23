@@ -2381,7 +2381,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const [frameTextWrap, setFrameTextWrap] = useState(false) // Unlocked only: wrap lines in the frame box instead of clipping
   const [wrapColWidth, setWrapColWidth] = useState<number | null>(null) // Unscaled wrap column width — fixed on locked resize, restored on rewrap
   const [frameScale, setFrameScale] = useState(1) // Uniform content scale while frame is locked
-  const [unlockedFrameSize, setUnlockedFrameSize] = useState<{ width: number; height: number } | null>(null) // Last free-resize shape (metadata continuity; unlock does NOT snap to this)
+  const [unlockedFrameSize, setUnlockedFrameSize] = useState<{ width: number; height: number } | null>(null) // Saved free-resize box — restored on unlock after fit-to-text
   const [unlockedFrameScale, setUnlockedFrameScale] = useState<number | null>(null) // Scale paired with unlockedFrameSize (bookkeeping only)
   const needsCollapsedDbFrameHealRef = useRef(false) // Load skipped corrupt DB clip — persist clear once persistFrameMeta exists
 
@@ -2401,6 +2401,10 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   frameScaleRef.current = frameScale // Keep ref in sync every render
   const frameUnlockedRef = useRef(frameUnlocked) // Live lock — resize callbacks stay identity-stable
   frameUnlockedRef.current = frameUnlocked // Sync every render so d3-drag can read without rebinding
+  const unlockedFrameSizeRef = useRef(unlockedFrameSize) // Last free-resize box — restore after fit-to-text
+  unlockedFrameSizeRef.current = unlockedFrameSize
+  const unlockedFrameScaleRef = useRef(unlockedFrameScale)
+  unlockedFrameScaleRef.current = unlockedFrameScale
   const frameTextWrapRef = useRef(frameTextWrap) // Live wrap flag for the same stable resize handlers
   frameTextWrapRef.current = frameTextWrap
   const wrapColWidthRef = useRef(wrapColWidth) // Live wrap columns — locked proportional math
@@ -2967,6 +2971,16 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     if (dims && typeof dims.width === 'number' && typeof dims.height === 'number') {
       const contentHtml =
         typeof promptMessage?.content === 'string' ? promptMessage.content : ''
+      // Don't re-apply locked hug dims while unlocked — metadata can lag after fit→free toggle.
+      if (meta.frameUnlocked) {
+        const cur = resizeDimensionsRef.current
+        if (
+          cur &&
+          (Math.abs(cur.width - dims.width) > 1 || Math.abs(cur.height - dims.height) > 1)
+        ) {
+          return
+        }
+      }
       // Don't re-apply a post-drag stub size onto a live Notion database frame
       if (
         hasDatabaseBlockHtml(contentHtml) &&
@@ -4007,7 +4021,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     if (width > 0 && height > 0) {
       setResizeDimensions({ width, height }) // Lock final box size into local state
     }
-    // Unlocked drag refreshes the last free-resize shape (bookkeeping only — unlock keeps current size).
+    // Unlocked drag refreshes the last free-resize shape (restored on unlock after fit-to-text).
     if (unlocked) {
       setUnlockedFrameSize({ width, height })
       setUnlockedFrameScale(finalScale)
@@ -4162,13 +4176,133 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     })
   }, [saveRotation, pushAabbAndSnapMates, getNodes, id])
 
-  // Toggle frame lock: lock hugs scaled text; unlock keeps the CURRENT visual box + scale
-  // (blocks stay the size they were adjusted to while locked — no snap-back to a pre-lock shape).
+  // Toggle frame lock: lock hugs scaled text; unlock restores prior free-resize box when set.
   const toggleFrameLock = useCallback((forceUnlocked?: boolean) => {
-    const nextUnlocked = typeof forceUnlocked === 'boolean' ? forceUnlocked : !frameUnlocked
-    if (nextUnlocked === frameUnlocked) return // Already in desired state
+    const wasUnlocked = frameUnlocked
+    const nextUnlocked = typeof forceUnlocked === 'boolean' ? forceUnlocked : !wasUnlocked
+    if (nextUnlocked === wasUnlocked) return // Already in desired state
+
+    const readSavedFreeBox = (): { width: number; height: number; scale: number } | null => {
+      const fromRef = unlockedFrameSizeRef.current
+      if (fromRef && fromRef.width > 0 && fromRef.height > 0) {
+        return {
+          width: fromRef.width,
+          height: fromRef.height,
+          scale:
+            unlockedFrameScaleRef.current != null && unlockedFrameScaleRef.current > 0
+              ? unlockedFrameScaleRef.current
+              : frameScaleRef.current,
+        }
+      }
+      const meta = promptMessage?.metadata as Record<string, unknown> | undefined
+      const fromMeta = meta?.unlockedFrameSize as { width?: number; height?: number } | undefined
+      if (fromMeta?.width && fromMeta?.height && fromMeta.width > 0 && fromMeta.height > 0) {
+        const metaScale = meta?.unlockedFrameScale
+        return {
+          width: fromMeta.width,
+          height: fromMeta.height,
+          scale:
+            typeof metaScale === 'number' && metaScale > 0 ? metaScale : frameScaleRef.current,
+        }
+      }
+      return null
+    }
+
+    const measureLiveBox = () => {
+      const el = panelRef.current
+      return {
+        width: Math.max(
+          blockMinFrameWidth(promptContent),
+          resizeDimensionsRef.current?.width ??
+            el?.offsetWidth ??
+            intrinsicSizeRef.current.width
+        ),
+        height: Math.max(
+          BLOCK_MIN_FRAME_H,
+          resizeDimensionsRef.current?.height ??
+            el?.offsetHeight ??
+            intrinsicSizeRef.current.height
+        ),
+        scale: frameScaleRef.current,
+      }
+    }
+
+    let metaPatch: Record<string, unknown> = { frameUnlocked: nextUnlocked }
+
+    if (nextUnlocked) {
+      const savedFree = readSavedFreeBox()
+      const fallback = measureLiveBox()
+      const nextDims = savedFree
+        ? { width: savedFree.width, height: savedFree.height }
+        : { width: fallback.width, height: fallback.height }
+      const nextScale = savedFree?.scale ?? fallback.scale
+      if (nextScale !== frameScale) setFrameScale(nextScale)
+      setResizeDimensions(nextDims)
+      setIsUserResized(true)
+      metaPatch = {
+        ...metaPatch,
+        frameScale: nextScale,
+        resizeDimensions: nextDims,
+        frameTextWrap,
+        ...(savedFree
+          ? {
+              unlockedFrameSize: { width: savedFree.width, height: savedFree.height },
+              unlockedFrameScale: nextScale,
+            }
+          : {}),
+      }
+    } else {
+      // Snapshot the live free box before hugging to fit (refs — not stale closure).
+      const freeSnapshot = wasUnlocked ? measureLiveBox() : readSavedFreeBox() ?? measureLiveBox()
+      setUnlockedFrameSize({ width: freeSnapshot.width, height: freeSnapshot.height })
+      setUnlockedFrameScale(freeSnapshot.scale)
+      const fitEl = contentFitRef.current
+      const naturalH = fitEl ? measureNaturalContentHeight(fitEl) : intrinsicSize.height
+      if (frameTextWrap && resizeDimensionsRef.current) {
+        const keepW = resizeDimensionsRef.current.width
+        const wrapH = Math.max(
+          BLOCK_MIN_FRAME_H,
+          Math.ceil(naturalH * Math.max(0.15, freeSnapshot.scale))
+        )
+        const nextDims = { width: keepW, height: wrapH }
+        setResizeDimensions(nextDims)
+        setIsUserResized(true)
+        metaPatch = {
+          ...metaPatch,
+          frameScale: freeSnapshot.scale,
+          resizeDimensions: nextDims,
+          frameTextWrap: true,
+          unlockedFrameSize: { width: freeSnapshot.width, height: freeSnapshot.height },
+          unlockedFrameScale: freeSnapshot.scale,
+        }
+      } else {
+        const naturalW = fitEl ? measureNaturalContentWidth(fitEl) : intrinsicSize.width
+        const minW = blockMinFrameWidth(promptContent)
+        const hugged = scaledFrameSize(
+          { width: naturalW, height: naturalH },
+          freeSnapshot.scale,
+          minW
+        )
+        const nextDims = { width: hugged.width, height: hugged.height }
+        setIntrinsicSize((prev) =>
+          Math.abs(prev.width - naturalW) <= 1 && Math.abs(prev.height - naturalH) <= 1
+            ? prev
+            : { width: naturalW, height: naturalH }
+        )
+        setResizeDimensions(nextDims)
+        setIsUserResized(true)
+        metaPatch = {
+          ...metaPatch,
+          frameScale: freeSnapshot.scale,
+          resizeDimensions: nextDims,
+          frameTextWrap: false,
+          unlockedFrameSize: { width: freeSnapshot.width, height: freeSnapshot.height },
+          unlockedFrameScale: freeSnapshot.scale,
+        }
+      }
+    }
+
     setFrameUnlocked(nextUnlocked)
-    // Keep RF node metadata in sync so top-bar frame lock reads correctly
     const setNodes = getSetNodes()
     if (setNodes) {
       setNodes((nds) =>
@@ -4182,90 +4316,16 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               ...n.data,
               promptMessage: {
                 ...pm,
-                metadata: { ...(pm.metadata || {}), frameUnlocked: nextUnlocked },
+                metadata: { ...(pm.metadata || {}), ...metaPatch },
               },
             },
           }
         })
       )
     }
-    window.dispatchEvent(new Event('tt-frame-lock-changed')) // Refresh top-bar frame lock icon
-    if (nextUnlocked) {
-      // Keep locked visual size: same box + same frameScale (proportional resize stays).
-      const el = panelRef.current
-      const nextDims = resizeDimensions ?? {
-        width: Math.max(blockMinFrameWidth(promptContent), el?.offsetWidth ?? intrinsicSize.width),
-        height: Math.max(BLOCK_MIN_FRAME_H, el?.offsetHeight ?? intrinsicSize.height),
-      }
-      setResizeDimensions(nextDims)
-      setIsUserResized(true)
-      // Also seed the unlocked returnable shape to the CURRENT size so later unlocked
-      // resize-end bookkeeping stays coherent (not used to snap size on unlock).
-      setUnlockedFrameSize(nextDims)
-      setUnlockedFrameScale(frameScale)
-      void persistFrameMeta({
-        frameUnlocked: true,
-        frameScale, // Preserve locked scale so block size does not jump
-        resizeDimensions: nextDims,
-        frameTextWrap,
-        unlockedFrameSize: nextDims,
-        unlockedFrameScale: frameScale,
-      })
-      return
-    }
-    // Locking: remember the CURRENT unlocked shape (+scale) for metadata continuity.
-    const unlockedShape =
-      resizeDimensions ?? {
-        width: Math.max(blockMinFrameWidth(promptContent), panelRef.current?.offsetWidth ?? intrinsicSize.width),
-        height: Math.max(BLOCK_MIN_FRAME_H, panelRef.current?.offsetHeight ?? intrinsicSize.height),
-      }
-    setUnlockedFrameSize(unlockedShape)
-    setUnlockedFrameScale(frameScale)
-    const fitEl = contentFitRef.current
-    const naturalH = fitEl ? measureNaturalContentHeight(fitEl) : intrinsicSize.height
-    // Relock WHILE wrapped: keep the unlocked wrap WIDTH (text stays wrapped at that width);
-    // hug HEIGHT only to the wrapped content. Wrap persists through lock.
-    if (frameTextWrap && resizeDimensions) {
-      const keepW = resizeDimensions.width // Same width the wrap had when unlocked
-      const wrapH = Math.max(BLOCK_MIN_FRAME_H, Math.ceil(naturalH * Math.max(0.15, frameScale)))
-      const nextDims = { width: keepW, height: wrapH }
-      setResizeDimensions(nextDims)
-      setIsUserResized(true)
-      void persistFrameMeta({
-        frameUnlocked: false,
-        frameScale,
-        resizeDimensions: nextDims,
-        frameTextWrap: true, // Keep wrap on through lock
-        unlockedFrameSize: unlockedShape,
-        unlockedFrameScale: frameScale,
-      })
-      return
-    }
-    // Relock (nowrap): hug width AND height to natural text (locked = hug to content)
-    const naturalW = fitEl ? measureNaturalContentWidth(fitEl) : intrinsicSize.width
-    const minW = blockMinFrameWidth(promptContent)
-    const hugged = scaledFrameSize(
-      { width: naturalW, height: naturalH },
-      frameScale,
-      minW
-    )
-    const nextDims = { width: hugged.width, height: hugged.height }
-    setIntrinsicSize((prev) =>
-      Math.abs(prev.width - naturalW) <= 1 && Math.abs(prev.height - naturalH) <= 1
-        ? prev
-        : { width: naturalW, height: naturalH }
-    )
-    setResizeDimensions(nextDims)
-    setIsUserResized(true)
-    void persistFrameMeta({
-      frameUnlocked: false,
-      frameScale,
-      resizeDimensions: nextDims,
-      frameTextWrap: false,
-      unlockedFrameSize: unlockedShape,
-      unlockedFrameScale: frameScale,
-    })
-  }, [frameUnlocked, frameScale, resizeDimensions, intrinsicSize, frameTextWrap, persistFrameMeta, promptContent, getSetNodes, id])
+    window.dispatchEvent(new Event('tt-frame-lock-changed'))
+    void persistFrameMeta({ ...metaPatch, frameTextWrap: metaPatch.frameTextWrap ?? frameTextWrap })
+  }, [frameUnlocked, frameScale, frameTextWrap, intrinsicSize, persistFrameMeta, promptContent, promptMessage?.metadata, getSetNodes, id])
 
   const handleToggleFrameLock = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()

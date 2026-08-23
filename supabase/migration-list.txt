@@ -140,3 +140,4 @@
 20260823024219_property_strip_pagination_tooltips.sql
 20260823223134_notion_db_table_perf_scroll.sql
 20260823233405_property_strip_scroll_db_clip_preview.sql
+20260823234830_frame_fit_free_restore.sql
