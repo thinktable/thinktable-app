@@ -2,7 +2,7 @@
 
 // Virtualized Notion DB table/list bodies + memoized row cells (perf).
 
-import { memo, useRef } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Check, ChevronDown, ChevronRight, GripVertical, Plus } from 'lucide-react'
 import { createPortal } from 'react-dom'
@@ -32,7 +32,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { useCallback, useEffect, useState } from 'react'
 
 export const DB_TABLE_ROW_HEIGHT = 32
 export const DB_TABLE_SCROLL_CAP = 480 // Internal scroll + virtualization above this height
@@ -849,6 +848,13 @@ export function VirtualizedTableBody({
       flatItems[i]?.kind === 'group' ? DB_TABLE_ROW_HEIGHT + 4 : DB_TABLE_ROW_HEIGHT,
     overscan: 10,
   })
+  useEffect(() => {
+    const el = scrollParentRef.current
+    if (!el || !useCap) return
+    const ro = new ResizeObserver(() => virtualizer.measure())
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [scrollParentRef, useCap, virtualizer])
   const virtualRows = virtualizer.getVirtualItems()
   const paddingTop = virtualRows.length > 0 ? virtualRows[0]?.start ?? 0 : 0
   const paddingBottom =
@@ -966,6 +972,13 @@ export function VirtualizedListBody({
     estimateSize: () => DB_TABLE_ROW_HEIGHT + 8,
     overscan: 8,
   })
+  useEffect(() => {
+    const el = scrollParentRef.current
+    if (!el || !useCap) return
+    const ro = new ResizeObserver(() => virtualizer.measure())
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [scrollParentRef, useCap, virtualizer])
   const virtualRows = virtualizer.getVirtualItems()
   const paddingTop = virtualRows.length > 0 ? virtualRows[0]?.start ?? 0 : 0
   const paddingBottom =

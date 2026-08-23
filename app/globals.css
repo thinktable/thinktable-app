@@ -1694,6 +1694,34 @@ span[data-added="true"] {
   .dark [data-tt-property-header].tt-block-highlight {
     background-color: rgba(59, 130, 246, 0.22);
   }
+  /* Top property strip — horizontal scroll when icons overflow the frame */
+  [data-tt-property-scroll] {
+    position: relative;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    touch-action: pan-x;
+  }
+  [data-tt-property-scroll].tt-property-strip-overflow:not(.tt-property-strip-at-end)::after {
+    content: '…';
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    padding-left: 1.25rem;
+    padding-right: 2px;
+    font-size: 0.75rem;
+    line-height: 1;
+    color: rgb(156 163 175);
+    pointer-events: none;
+    background: linear-gradient(to left, rgb(255 255 255) 55%, rgb(255 255 255 / 0.95) 75%, transparent);
+  }
+  .dark [data-tt-property-scroll].tt-property-strip-overflow:not(.tt-property-strip-at-end)::after {
+    color: rgb(156 163 175);
+    background: linear-gradient(to left, rgb(31 31 31) 55%, rgb(31 31 31 / 0.95) 75%, transparent);
+  }
   /* Connections bottom strip — strip wash only when ⋮⋮-armed (hover = mark only) */
   [data-tt-connections-header].tt-block-highlight {
     background-color: rgba(35, 131, 226, 0.14);
@@ -1877,6 +1905,26 @@ span[data-added="true"] {
     margin: 2px 0;
     width: max-content; /* Hug the table so locked frames size to columns */
     max-width: 100%;
+  }
+  /* Free-resize: full width only — height comes from scroll maxHeight (not flex, avoids 0-height collapse) */
+  .ProseMirror[data-frame-free-resize] .tt-database-block {
+    width: 100%;
+    max-width: 100%;
+  }
+  /* Hover clip preview: show the full table (all columns × rows), not the clipped viewport */
+  .ProseMirror[data-clip-preview] .tt-database-block,
+  .ProseMirror[data-frame-free-resize][data-clip-preview] .tt-database-block {
+    width: max-content;
+    max-width: none;
+  }
+  .ProseMirror[data-clip-preview] .tt-notion-db {
+    width: max-content;
+    max-width: none;
+  }
+  .ProseMirror[data-clip-preview] .tt-notion-db-scroll,
+  .ProseMirror[data-clip-preview] .tt-db-table-wrap {
+    max-height: none !important;
+    overflow: visible !important;
   }
   .ProseMirror .tt-database-block-row {
     display: inline-flex;

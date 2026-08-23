@@ -18,12 +18,14 @@ export function PropertyIconWithTooltip({
   name = '',
   className,
   iconClassName = 'h-4 w-4',
+  style,
   onPointerDown,
 }: {
   type: PropertyTypeId
   name?: string // Notion column name when set
   className?: string
   iconClassName?: string
+  style?: React.CSSProperties
   onPointerDown?: (e: React.PointerEvent<HTMLSpanElement>) => void
 }) {
   const label = name.trim() || propertyTypeLabel(type)
@@ -69,6 +71,7 @@ export function PropertyIconWithTooltip({
         ref={iconRef}
         data-tt-property-icon
         className={className}
+        style={style}
         aria-label={`Property · ${label}`}
         onMouseEnter={() => {
           clearDwell()

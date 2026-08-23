@@ -35,6 +35,9 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
   // Host sets TipTap editable only when the frame is selected — drive table nodrag from that
   const [frameSelected, setFrameSelected] = useState(() => !!editor?.isEditable)
   const [frameDragging, setFrameDragging] = useState(false)
+  const [frameFreeResize, setFrameFreeResize] = useState(false)
+  const [frameClipHeight, setFrameClipHeight] = useState<number | null>(null)
+  const [frameClipPreview, setFrameClipPreview] = useState(false)
 
   useEffect(() => {
     const dom = editor?.view?.dom as HTMLElement | undefined
@@ -53,6 +56,25 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
     sync()
     const mo = new MutationObserver(sync)
     mo.observe(dom, { attributes: true, attributeFilter: ['data-frame-dragging'] })
+    return () => mo.disconnect()
+  }, [editor])
+
+  useEffect(() => {
+    const dom = editor?.view?.dom as HTMLElement | undefined
+    if (!dom) return
+    const sync = () => {
+      setFrameFreeResize(dom.hasAttribute('data-frame-free-resize'))
+      setFrameClipPreview(dom.hasAttribute('data-clip-preview'))
+      const raw = dom.getAttribute('data-frame-clip-height')
+      const h = raw ? parseInt(raw, 10) : NaN
+      setFrameClipHeight(Number.isFinite(h) && h > 0 ? h : null)
+    }
+    sync()
+    const mo = new MutationObserver(sync)
+    mo.observe(dom, {
+      attributes: true,
+      attributeFilter: ['data-frame-free-resize', 'data-frame-clip-height', 'data-clip-preview'],
+    })
     return () => mo.disconnect()
   }, [editor])
 
@@ -90,12 +112,14 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
       as="div"
       className={cn(
         'tt-database-block group relative nokey', // nokey: RF must not steal Backspace while editing
-        editing && 'tt-database-block-editing'
+        editing && 'tt-database-block-editing',
+        frameFreeResize && 'tt-database-block-free-resize'
       )}
       data-notion-database-id={notionDatabaseId || undefined}
+      data-frame-free-resize={frameFreeResize ? 'true' : undefined}
     >
       {/* Title row — icon + label + open menu (preview / open / Notion) */}
-      <div className="tt-database-block-row relative inline-flex items-center gap-1.5 max-w-full mb-2">
+      <div className="tt-database-block-row relative inline-flex items-center gap-1.5 max-w-full mb-2 shrink-0">
         <button
           type="button"
           className="tt-database-block-icon flex-shrink-0 rounded hover:bg-black/5 dark:hover:bg-white/10"
@@ -166,6 +190,9 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
           hostMessageId={hostMessageId}
           frameSelected={frameSelected}
           frameDragging={frameDragging}
+          frameFreeResize={frameFreeResize}
+          frameClipHeight={frameClipHeight}
+          frameClipPreview={frameClipPreview}
         />
       ) : null}
     </NodeViewWrapper>

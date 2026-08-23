@@ -209,14 +209,36 @@ export function reorderHeaderPropertyOnStrip(
 export function findPropertyHeaderDropIndex(
   headerEl: HTMLElement,
   clientX: number,
-  pageStart: number
+  _pageStart = 0 // legacy — strip scrolls; all icons stay in the DOM
 ): number {
+  const scrollEl =
+    (headerEl.closest('[data-tt-property-scroll]') as HTMLElement | null) ??
+    (headerEl.parentElement as HTMLElement | null) ??
+    headerEl
+  const clip = scrollEl.getBoundingClientRect()
   const marks = headerEl.querySelectorAll('[data-tt-property-icon]')
+  if (marks.length === 0) return 0
+
+  if (clientX <= clip.left) {
+    for (let i = 0; i < marks.length; i++) {
+      const r = marks[i].getBoundingClientRect()
+      if (r.right > clip.left) return i
+    }
+    return 0
+  }
+
   for (let i = 0; i < marks.length; i++) {
     const r = marks[i].getBoundingClientRect()
-    if (clientX < r.left + r.width / 2) return pageStart + i
+    if (r.right <= clip.left) continue // Scrolled off the left
+    if (r.left >= clip.right) break // Off the right — rest are too
+    if (clientX < r.left + r.width / 2) return _pageStart + i
   }
-  return pageStart + marks.length
+
+  for (let i = marks.length - 1; i >= 0; i--) {
+    const r = marks[i].getBoundingClientRect()
+    if (r.left < clip.right && r.right > clip.left) return _pageStart + i + 1
+  }
+  return _pageStart + marks.length
 }
 
 export type PropertyIconDragCallbacks = {

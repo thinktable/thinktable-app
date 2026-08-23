@@ -139,3 +139,4 @@
 20260821141020_shift_drag_and_cmd_wheel_nav_flip.sql
 20260823024219_property_strip_pagination_tooltips.sql
 20260823223134_notion_db_table_perf_scroll.sql
+20260823233405_property_strip_scroll_db_clip_preview.sql

@@ -251,10 +251,16 @@ function measureNaturalContentWidth(contentFit: HTMLElement): number {
       // width:100%, so offsetWidth echoes the frame and atomExplicitBox/hug inflate forever.
       const table = dbBlock.querySelector('.tt-notion-db') as HTMLElement | null
       const tableEl = table?.querySelector('table') as HTMLElement | null
+      const styledW = tableEl ? parseFloat(tableEl.style.width) : 0
+      const wrap = tableEl?.closest('.tt-db-table-wrap') as HTMLElement | null
+      const gutter =
+        wrap != null
+          ? parseFloat(getComputedStyle(wrap).paddingLeft) || DB_TABLE_ROW_GUTTER
+          : DB_TABLE_ROW_GUTTER
       const w = Math.max(
+        styledW > 0 ? styledW + gutter : 0,
         tableEl?.scrollWidth || 0,
         table?.scrollWidth || 0,
-        // Title row only (loading shell) — still need a floor wider than the grip stub
         (dbBlock.querySelector('.tt-database-block-row') as HTMLElement | null)?.scrollWidth || 0
       )
       maxLine = Math.max(maxLine, w)
@@ -271,10 +277,49 @@ function measureNaturalContentWidth(contentFit: HTMLElement): number {
 
 /** Unscaled content height — prefer scrollHeight so clipped/wrapped overflow still counts. */
 function measureNaturalContentHeight(contentFit: HTMLElement): number {
+  const dbExtents = measureDatabaseBlockExtents(contentFit)
+  if (dbExtents) return dbExtents.height
   return Math.max(1, Math.ceil(contentFit.scrollHeight || contentFit.offsetHeight))
 }
 
 const CLIP_FADE_PX = 16 // Soft edge so half-cut glyphs fade instead of chopping
+const DB_TABLE_ROW_GUTTER = 20 // Keep in sync with notion-database-table ROW_GUTTER
+
+/** Full Notion table box (all columns × rows + title/toolbar) — not the free-resize clip viewport. */
+function measureDatabaseBlockExtents(contentFit: HTMLElement): { width: number; height: number } | null {
+  const dbBlock = contentFit.querySelector('.tt-database-block') as HTMLElement | null
+  if (!dbBlock) return null
+  const table = dbBlock.querySelector('.tt-notion-db table') as HTMLElement | null
+  const notionDb = dbBlock.querySelector('.tt-notion-db') as HTMLElement | null
+  if (!table || !notionDb) return null
+
+  const styledTableW = parseFloat(table.style.width)
+  const wrap = table.closest('.tt-db-table-wrap') as HTMLElement | null
+  const gutter =
+    wrap != null
+      ? parseFloat(getComputedStyle(wrap).paddingLeft) || DB_TABLE_ROW_GUTTER
+      : DB_TABLE_ROW_GUTTER
+  const tableW = styledTableW > 0 ? styledTableW + gutter : table.scrollWidth
+
+  const titleRow = dbBlock.querySelector('.tt-database-block-row') as HTMLElement | null
+  const titleH = titleRow ? titleRow.offsetHeight + 8 : 0 // mb-2 under title row
+  const notionH = notionDb.scrollHeight // Toolbar + full row stack (not scroll cap)
+
+  const cs = getComputedStyle(contentFit)
+  const padL = parseFloat(cs.paddingLeft) || 0
+  const padR = parseFloat(cs.paddingRight) || 0
+  const padT = parseFloat(cs.paddingTop) || 0
+  const padB = parseFloat(cs.paddingBottom) || 0
+  const pm = contentFit.querySelector('.ProseMirror') as HTMLElement | null
+  const row = pm?.closest('.relative') as HTMLElement | null
+  const gripGutter = row && row !== contentFit ? parseFloat(getComputedStyle(row).paddingLeft) || 0 : 0
+  const rightInset = gripGutter > 0 ? Math.max(padR, padL + GRIP_ICON_INSET) : Math.max(padR, padL)
+
+  return {
+    width: Math.ceil(padL + gripGutter + Math.max(tableW, 420) + rightInset),
+    height: Math.ceil(padT + padB + titleH + notionH),
+  }
+}
 
 /** Mask style that fades content out at overflowing frame edges (right / bottom). */
 function clipFadeMaskStyle(
@@ -451,32 +496,24 @@ function formatResponseContent(content: string): string {
   return htmlParagraphs
 }
 
-const PROPERTY_ICON_SIZE = 20 // h-5 w-5 top-strip glyph
-const PROPERTY_ICON_GAP = 6 // gap-1.5 between icons / carets
-const PROPERTY_CARET_SIZE = 20 // Chevron buttons match icon hit target
-
-/** Width of N property icons in a row (incl. gaps). */
-function propertyIconsRowWidth(count: number): number {
-  if (count <= 0) return 0
-  return count * PROPERTY_ICON_SIZE + (count - 1) * PROPERTY_ICON_GAP
-}
-
+const PROPERTY_SCROLL_EDGE = 2 // px slack for at-edge scroll detection
 
 /** Top strip: **empty** type icons in document order — one **block** (⋮⋮ comes from TipTapBlockHandles). */
 function FramePropertyGroup({
   items,
   className,
-  bandWidth,
-  layoutScale = 1,
   editor = null,
   editorRef,
+  scrollElRef,
+  iconScale = 1,
 }: {
-  items: PropertyHeaderItem[] // Same sequence as header-only property blocks in the frame
+  items: PropertyHeaderItem[]
   className?: string
-  bandWidth?: number // Constrained host width (chrome band) — self-measure grows with icons without this
-  layoutScale?: number // screenChromeScale on the wrapper — layout must be narrower so scaled glyphs fit
-  editor?: Editor | null // Live TipTap — drag into body + click-to-edit popups
-  editorRef?: React.MutableRefObject<Editor | null> // Host chrome reads the live editor from a ref
+  editor?: Editor | null
+  editorRef?: React.MutableRefObject<Editor | null>
+  /** Band element that clips + scrolls (must be `position: relative` for the … overlay). */
+  scrollElRef?: React.RefObject<HTMLElement | null>
+  iconScale?: number // screenChromeScale — icon px, not CSS transform (transform breaks overflow scroll)
 }) {
   const liveEditor = () => {
     const fromRef = editorRef?.current
@@ -484,13 +521,24 @@ function FramePropertyGroup({
     if (editor && !editor.isDestroyed) return editor
     return null
   }
-  const containerRef = useRef<HTMLDivElement>(null) // Clip + aria target
-  const [containerWidth, setContainerWidth] = useState(0) // Layout px available for icons (post-scale)
-  const [pageStart, setPageStart] = useState(0) // Index of first visible icon when paginated
-  const scale = layoutScale > 0 ? layoutScale : 1
+  const containerRef = useRef<HTMLDivElement>(null) // Icon row — drag target
+  const localBandRef = useRef<HTMLDivElement>(null) // In-fill scroll host when no external band ref
+  const getScrollEl = useCallback(
+    () => scrollElRef?.current ?? localBandRef.current,
+    [scrollElRef]
+  )
+  const scale = iconScale > 0 ? iconScale : 1
+  const iconPx = Math.max(16, Math.round(20 * scale))
+  const gapPx = Math.max(4, Math.round(6 * scale))
+  const bandH = Math.max(24, Math.round(28 * scale))
   const [editorOpen, setEditorOpen] = useState<PropertyEditorAnchor & { from: number; type: PropertyTypeId; name: string; value: string } | null>(null)
   const [dropLine, setDropLine] = useState<PropertyDropLine | null>(null)
   const [ghost, setGhost] = useState<{ x: number; y: number; type: PropertyTypeId } | null>(null)
+
+  const itemsKey = useMemo(
+    () => items.map((it) => `${it.type}\0${it.name}`).join('\x1e'),
+    [items]
+  )
 
   const openEditorAt = useCallback(
     (item: PropertyHeaderItem, el: HTMLElement) => {
@@ -523,130 +571,104 @@ function FramePropertyGroup({
         from,
         el: e.currentTarget,
         headerEl: containerRef.current,
-        pageStart,
         iconType: item.type,
         onClick: () => openEditorAt({ ...item, from }, e.currentTarget),
         callbacks: { setGhost, setDropLine },
       })
     },
-    [editor, editorRef, openEditorAt, pageStart]
+    [editor, editorRef, openEditorAt]
   )
 
-  useLayoutEffect(() => {
-    const el = containerRef.current
+  const syncScrollHint = useCallback(() => {
+    const el = getScrollEl()
     if (!el) return
-    const measureHost = () =>
-      (el.closest('[data-tt-property-band]') as HTMLElement | null) ??
-      (el.closest('[data-tt-frame-chrome-top]') as HTMLElement | null) ??
-      el.parentElement
-    const sync = () => {
-      const hostW = bandWidth ?? measureHost()?.clientWidth ?? 0
-      setContainerWidth(hostW > 0 ? hostW / scale : 0)
-    }
-    sync()
-    const ro = new ResizeObserver(sync)
-    ro.observe(el)
-    const host = measureHost()
-    if (host && host !== el) ro.observe(host)
-    return () => ro.disconnect()
-  }, [bandWidth, scale])
+    const hasOverflow = el.scrollWidth > el.clientWidth + PROPERTY_SCROLL_EDGE
+    const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - PROPERTY_SCROLL_EDGE
+    el.classList.toggle('tt-property-strip-overflow', hasOverflow)
+    el.classList.toggle('tt-property-strip-at-end', atEnd)
+  }, [getScrollEl])
 
-  const itemsKey = useMemo(
-    () => items.map((it) => `${it.type}\0${it.name}`).join('\x1e'),
-    [items]
-  ) // Reset page when the property list changes
+  const scheduleScrollHint = useCallback(() => {
+    syncScrollHint()
+    requestAnimationFrame(syncScrollHint)
+  }, [syncScrollHint])
+
+  useLayoutEffect(() => {
+    let ro: ResizeObserver | null = null
+    let scrollEl: HTMLElement | null = null
+    let raf = 0
+
+    const detach = () => {
+      if (scrollEl) scrollEl.removeEventListener('scroll', scheduleScrollHint)
+      ro?.disconnect()
+      ro = null
+      scrollEl = null
+    }
+
+    const attach = () => {
+      scrollEl = getScrollEl()
+      if (!scrollEl) {
+        raf = requestAnimationFrame(attach)
+        return
+      }
+      scheduleScrollHint()
+      ro = new ResizeObserver(scheduleScrollHint)
+      ro.observe(scrollEl)
+      const row = containerRef.current
+      if (row) ro.observe(row)
+      scrollEl.addEventListener('scroll', scheduleScrollHint, { passive: true })
+    }
+
+    attach()
+    return () => {
+      cancelAnimationFrame(raf)
+      detach()
+    }
+  }, [itemsKey, scheduleScrollHint, getScrollEl])
+
   useEffect(() => {
-    setPageStart(0)
-  }, [itemsKey])
+    getScrollEl()?.scrollTo({ left: 0 })
+    scheduleScrollHint()
+  }, [itemsKey, scheduleScrollHint, getScrollEl])
 
-  const { perPage, needsPagination } = useMemo(() => {
-    const total = items.length
-    if (!total) return { perPage: 0, needsPagination: false }
-    if (containerWidth <= 0) {
-      return { perPage: 1, needsPagination: total > 1 } // Conservative until the band is measured
-    }
-    if (propertyIconsRowWidth(total) <= containerWidth) {
-      return { perPage: total, needsPagination: false } // Everything fits — no carets
-    }
-    const showLeft = pageStart > 0
-    let available = containerWidth
-    if (showLeft) available -= PROPERTY_CARET_SIZE + PROPERTY_ICON_GAP
-    available -= PROPERTY_CARET_SIZE + PROPERTY_ICON_GAP // Reserve right caret
-    const perPage = Math.max(
-      1,
-      Math.floor((available + PROPERTY_ICON_GAP) / (PROPERTY_ICON_SIZE + PROPERTY_ICON_GAP))
-    )
-    return { perPage, needsPagination: true }
-  }, [items.length, containerWidth, pageStart])
+  if (items.length === 0) return null
 
-  useEffect(() => {
-    if (!needsPagination) {
-      if (pageStart !== 0) setPageStart(0)
-      return
-    }
-    const maxStart = Math.max(0, items.length - perPage)
-    if (pageStart > maxStart) setPageStart(maxStart) // Clamp after resize / perPage shift
-  }, [needsPagination, items.length, perPage, pageStart])
-
-  if (items.length === 0) return null // No property cells → no top chrome
-
-  const visibleItems = needsPagination ? items.slice(pageStart, pageStart + perPage) : items
-  const canGoBack = needsPagination && pageStart > 0
-  const canGoForward = needsPagination && pageStart + perPage < items.length
   const markClass =
-    'nodrag nopan flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-500 hover:bg-gray-100 dark:hover:bg-[#2a2a2a]'
-  const layoutMaxW = bandWidth != null && bandWidth > 0 ? bandWidth / scale : containerWidth > 0 ? containerWidth : undefined
-
-  return (
-    <>
+    'nodrag nopan flex shrink-0 items-center justify-center rounded text-gray-500 hover:bg-gray-100 dark:hover:bg-[#2a2a2a]'
+  const iconRow = (
     <div
       ref={containerRef}
       data-tt-property-header
-      className={cn('flex h-7 w-full min-w-0 max-w-full items-center gap-1.5 overflow-hidden', className)}
-      style={layoutMaxW != null ? { width: layoutMaxW, maxWidth: layoutMaxW } : undefined}
+      className={cn('flex w-max max-w-none items-center', className)}
+      style={{ height: bandH, gap: gapPx }}
     >
-      {canGoBack && (
-        <button
-          type="button"
-          className={markClass}
-          title="Previous properties"
-          aria-label="Previous properties"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation()
-            setPageStart((s) => Math.max(0, s - perPage))
-          }}
-        >
-          <ChevronLeft className="h-4 w-4" aria-hidden />
-        </button>
-      )}
-      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-        {visibleItems.map((item, i) => (
-          <PropertyIconWithTooltip
-            key={`${item.type}-${item.name}-${item.from}-${pageStart + i}`}
-            type={item.type}
-            name={item.name}
-            className={cn(markClass, item.from >= 0 && liveEditor() && 'cursor-grab active:cursor-grabbing')}
-            onPointerDown={(e) => onHeaderPointerDown(e, item)}
-          />
-        ))}
-      </div>
-      {canGoForward && (
-        <button
-          type="button"
-          className={markClass}
-          title="Next properties"
-          aria-label="Next properties"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation()
-            setPageStart((s) => Math.min(s + perPage, Math.max(0, items.length - perPage)))
-          }}
-        >
-          <ChevronRight className="h-4 w-4" aria-hidden />
-        </button>
-      )}
+      {items.map((item, i) => (
+        <PropertyIconWithTooltip
+          key={`${item.type}-${item.name}-${item.from}-${i}`}
+          type={item.type}
+          name={item.name}
+          iconClassName="h-4 w-4"
+          className={cn(markClass, item.from >= 0 && liveEditor() && 'cursor-grab active:cursor-grabbing')}
+          style={{ width: iconPx, height: iconPx }}
+          onPointerDown={(e) => onHeaderPointerDown(e, item)}
+        />
+      ))}
     </div>
+  )
+
+  return (
+    <>
+    {scrollElRef ? (
+      iconRow
+    ) : (
+      <div
+        ref={localBandRef}
+        data-tt-property-scroll
+        className="relative block w-full min-w-0 max-w-full overflow-x-auto overflow-y-hidden [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {iconRow}
+      </div>
+    )}
     {ghost &&
       typeof document !== 'undefined' &&
       createPortal(
@@ -781,6 +803,9 @@ function TipTapContent({
   suspendContentSync = false, // True while RF frame-dragging — skip setContent remounts
   dragSuspendRef, // Sync flag armed on pointerdown (React state alone is one frame late)
   frameDragging = false, // RF frame drag — databaseBlock swaps to a light shell
+  frameFreeResize = false, // Unlocked user-sized frame — DB table fills clip box
+  frameClipHeight = null, // Host clipBoxH (layout px) for DB scroll sizing
+  frameClipPreview = false, // Hover peek — show full table, not the clip viewport
   forceContentSyncKey = 0, // Bump to setContent even while editor is focused (AI eye / remove / save)
   notionConnected = false, // Connections → Notion selected
   notionSync = 'live', // Live Sync vs Manual
@@ -825,6 +850,9 @@ function TipTapContent({
   suspendContentSync?: boolean
   dragSuspendRef?: React.MutableRefObject<boolean> // Parent mutates sync on pointerdown
   frameDragging?: boolean
+  frameFreeResize?: boolean
+  frameClipHeight?: number | null
+  frameClipPreview?: boolean
   forceContentSyncKey?: number
   notionConnected?: boolean
   notionSync?: NotionSyncMode
@@ -1074,7 +1102,7 @@ function TipTapContent({
     storage.frameHost.hostMessageId = hostMessageId || null
   }, [editor, conversationId, hostMessageId])
 
-  // Sync RF drag so databaseBlock can drop the heavy table DOM while the frame moves
+  // Sync RF drag + free-resize so databaseBlock can drop the heavy table / size scroll to the clip box
   useEffect(() => {
     if (!editor || editor.isDestroyed) return
     const storage = editor.storage as {
@@ -1090,8 +1118,17 @@ function TipTapContent({
     if (dom) {
       if (frameDragging) dom.setAttribute('data-frame-dragging', 'true')
       else dom.removeAttribute('data-frame-dragging')
+      if (frameFreeResize) dom.setAttribute('data-frame-free-resize', 'true')
+      else dom.removeAttribute('data-frame-free-resize')
+      if (frameFreeResize && frameClipHeight != null && frameClipHeight > 0) {
+        dom.setAttribute('data-frame-clip-height', String(Math.round(frameClipHeight)))
+      } else {
+        dom.removeAttribute('data-frame-clip-height')
+      }
+      if (frameClipPreview) dom.setAttribute('data-clip-preview', 'true')
+      else dom.removeAttribute('data-clip-preview')
     }
-  }, [editor, frameDragging])
+  }, [editor, frameDragging, frameFreeResize, frameClipHeight, frameClipPreview])
 
   // Top icons = **empty** propertyBlock headers in doc order (filled cells stay in the body only)
   const [propertyHeaders, setPropertyHeaders] = useState<PropertyHeaderItem[]>(() => {
@@ -1399,28 +1436,37 @@ function TipTapContent({
   }, [editor, comments, onCommentClick])
 
   useEffect(() => {
-    if (editor) {
-      // Caret owns the doc while typing — except when AI review forces a content swap
-      if (editor.isFocused && forceContentSyncKey === lastAiForceSyncRef.current) return
-      // While RF is dragging the frame, never setContent AND never consume a force-sync key
-      // (consuming here dropped the post-drag restore and left row cards empty until a 2nd drag).
-      if (suspendContentSync || dragSuspendRef?.current) return
-      if (forceContentSyncKey !== lastAiForceSyncRef.current) {
-        lastAiForceSyncRef.current = forceContentSyncKey
-      }
-      // Compare DOCUMENTS, not HTML strings. The boardLink NodeView adds a class and TipTap emits
-      // attributes in its own order, so editor.getHTML() never byte-equals the stored HTML once a
-      // boardLink exists — a raw string compare re-ran setContent every sync (infinite loop / page
-      // unresponsive). doc.eq() ignores cosmetic class/attr-order/whitespace, so it's exact + stable.
-      let differs = true
+    if (!editor || editor.isDestroyed || !editor.view) return
+    // Caret owns the doc while typing — except when AI review forces a content swap
+    if (editor.isFocused && forceContentSyncKey === lastAiForceSyncRef.current) return
+    // While RF is dragging the frame, never setContent AND never consume a force-sync key
+    // (consuming here dropped the post-drag restore and left row cards empty until a 2nd drag).
+    if (suspendContentSync || dragSuspendRef?.current) return
+    if (forceContentSyncKey !== lastAiForceSyncRef.current) {
+      lastAiForceSyncRef.current = forceContentSyncKey
+    }
+    const readEditorHtml = (): string | null => {
+      if (editor.isDestroyed || !editor.view) return null
       try {
-        const tmp = document.createElement('div') // Off-DOM parse target
-        tmp.innerHTML = unwrapNestedFramesHtml(content || '<p></p>')
-        const parsed = PMDOMParser.fromSchema(editor.schema).parse(tmp) // Stored HTML → PM doc
-        differs = !editor.state.doc.eq(parsed) // Semantic equality (not string)
+        return editor.getHTML()
       } catch {
-        differs = editor.getHTML() !== content // Fallback to string compare on parse error
+        return null
       }
+    }
+    // Compare DOCUMENTS, not HTML strings. The boardLink NodeView adds a class and TipTap emits
+    // attributes in its own order, so editor.getHTML() never byte-equals the stored HTML once a
+    // boardLink exists — a raw string compare re-ran setContent every sync (infinite loop / page
+    // unresponsive). doc.eq() ignores cosmetic class/attr-order/whitespace, so it's exact + stable.
+    let differs = true
+    try {
+      const tmp = document.createElement('div') // Off-DOM parse target
+      tmp.innerHTML = unwrapNestedFramesHtml(content || '<p></p>')
+      const parsed = PMDOMParser.fromSchema(editor.schema).parse(tmp) // Stored HTML → PM doc
+      differs = !editor.state.doc.eq(parsed) // Semantic equality (not string)
+    } catch {
+      const live = readEditorHtml()
+      differs = live == null ? true : live !== content // View torn down mid-sync → restore on remount
+    }
       // Same Notion DB atom already in the editor — skip setContent (avoids table remount on drag-end)
       if (differs && hasDatabaseBlockHtml(content)) {
         const propId = content.match(/data-notion-database-id=["']([^"']+)["']/i)?.[1]
@@ -1438,11 +1484,13 @@ function TipTapContent({
       }
       // Row card / atom frames: editor may look “eq” after a remount stripped propertyBlocks — force restore
       if (hasFrameAtomHtml(content)) {
-        const live = editor.getHTML()
-        const lostProps =
-          countPropertyBlocks(content) > 0 && countPropertyBlocks(live) < countPropertyBlocks(content)
-        const lostAtoms = !hasFrameAtomHtml(live) || isBlockContentEmpty(live)
-        if (lostProps || lostAtoms) differs = true
+        const live = readEditorHtml()
+        if (live != null) {
+          const lostProps =
+            countPropertyBlocks(content) > 0 && countPropertyBlocks(live) < countPropertyBlocks(content)
+          const lostAtoms = !hasFrameAtomHtml(live) || isBlockContentEmpty(live)
+          if (lostProps || lostAtoms) differs = true
+        }
       }
       // Sync prop → editor only when the document actually changed
       if (differs) {
@@ -1479,7 +1527,6 @@ function TipTapContent({
           }, 0)
         }
       }
-    }
   }, [editor, content, comments, suspendContentSync, forceContentSyncKey])
 
   // Reposition extension UI elements (like Grammarly) when panel moves
@@ -1595,7 +1642,7 @@ function TipTapContent({
               enableBlockHandles &&
               !isFlashcard &&
               !showFrameShimmer && (
-                <div className="w-full min-w-0 overflow-hidden" data-tt-property-band>
+                <div className="w-full min-w-0 max-w-full" data-tt-property-band>
                   <FramePropertyGroup items={propertyHeaders} editor={editor} />
                 </div>
               )}
@@ -2340,14 +2387,14 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
 
   // Seed at plain-text hug (grip+3ch × one line) — boardLink floor inflated empty frames before first measure
   const [intrinsicSize, setIntrinsicSize] = useState({ width: BLOCK_LOCKED_MIN_W, height: BLOCK_MIN_FRAME_H })
+  const [databaseExtents, setDatabaseExtents] = useState<{ width: number; height: number } | null>(null) // Full table box for clip preview / overflow
   const [intrinsicMeasured, setIntrinsicMeasured] = useState(false) // True after first contentFit measure (avoid hug flash)
   const [isFrameHovering, setIsFrameHovering] = useState(false) // Frame hover — page-open menu (not lock/rotate)
   const [clipPreviewReady, setClipPreviewReady] = useState(false) // True after hover dwell — delayed full-content peek
   const [rotation, setRotation] = useState(0) // Degrees of item rotation (persisted in message metadata)
   const [frameShape, setFrameShape] = useState<FrameShapeType | null>(null) // Silhouette (null = default frame)
   const [chromePropertyHeaders, setChromePropertyHeaders] = useState<PropertyHeaderItem[]>([])
-  const propBandRef = useRef<HTMLDivElement>(null) // Top property band — width cap for pagination
-  const [propBandWidth, setPropBandWidth] = useState(0) // Measured band px (pre screenChromeScale)
+  const propBandRef = useRef<HTMLDivElement>(null) // Top property band — horizontal scroll host
   const isResizingRef = useRef(false) // Track if currently resizing
   const contentFitRef = useRef<HTMLDivElement>(null) // Inner unscaled content wrapper for intrinsic measure
   const frameScaleRef = useRef(1) // Latest scale — resize-end must not close over a stale render
@@ -2979,18 +3026,6 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // T/B bands only while selected — even empty strips keep the blue box balanced
   const adjustChromeYTop = showFrameChrome ? chromeBandH : 0
   const adjustChromeYBottom = showFrameChrome ? chromeBandH : 0
-  useLayoutEffect(() => {
-    const el = propBandRef.current
-    if (!el || !hasPropBand) {
-      setPropBandWidth(0)
-      return
-    }
-    const sync = () => setPropBandWidth(el.clientWidth)
-    sync()
-    const ro = new ResizeObserver(sync)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [hasPropBand, adjustChromeX, chromePadX, screenChromeScale]) // Re-measure when frame chrome insets change
   // Keep the filled frame glued when selection chrome appears/disappears (grow left/up).
   // Do NOT shift RF position when chrome scale changes with zoom — that deferred setNodes
   // jumped the frame (looked like the board slid) after phone pinch over DB tables.
@@ -3512,6 +3547,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         }
         const width = Math.max(1, Math.round(measureNaturalContentWidth(el)))
         const height = Math.max(1, Math.round(measureNaturalContentHeight(el)))
+        const dbBox = measureDatabaseBlockExtents(el)
+        setDatabaseExtents(dbBox)
         if (
           (dbHost || hasDatabaseBlockHtml(promptContent)) &&
           isCollapsedDatabaseFrameSize(width, height)
@@ -5032,9 +5069,14 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     !!resizeDimensions &&
     !pagePreviewOpen // Free frame may hide overflow when not wrapping
   const huggedSize = scaledFrameSize(intrinsicSize, frameScale, frameMinW) // Scaled content (no phantom border)
+  const scaledDbSize = databaseExtents
+    ? scaledFrameSize(databaseExtents, frameScale, frameMinW)
+    : null
+  const contentVisualW = scaledDbSize?.width ?? huggedSize.width
+  const contentVisualH = scaledDbSize?.height ?? huggedSize.height
   const applyFrameScale = isBlock && isUserResized && frameScale !== 1 // Layout spacer + CSS scale
-  const scaledLayoutW = Math.ceil(intrinsicSize.width * Math.max(0.15, frameScale)) // Visual content width (no border)
-  const scaledLayoutH = Math.ceil(intrinsicSize.height * Math.max(0.15, frameScale)) // Visual content height (no border)
+  const scaledLayoutW = Math.ceil(contentVisualW) // Visual content width (full table when DB)
+  const scaledLayoutH = Math.ceil(contentVisualH) // Visual content height (full table when DB)
   const unlockedResized = wrapUnlocked || clipUnlocked // Free-resized frame (wrap or nowrap-clip)
   // Selected/adjust chrome forces borderWidth 0 — do not subtract a phantom 2px or content clips
   // and the blue box looks larger than the block (⋮⋮ / text sit above the left connection mid).
@@ -5054,10 +5096,10 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     : null
   // Unlocked frame smaller than its visual content → blocks are clipped (nowrap: both axes; wrap: height only)
   const overflowRight =
-    clipUnlocked && unlockedInnerW! < huggedSize.width // Nowrap may hide trailing glyphs
+    clipUnlocked && unlockedInnerW! < contentVisualW // Nowrap may hide trailing glyphs / table columns
   const overflowBottom =
-    (clipUnlocked && unlockedInnerH! < huggedSize.height) ||
-    (wrapUnlocked && unlockedInnerH! < huggedSize.height) // Short frame cuts lower blocks
+    (clipUnlocked && unlockedInnerH! < contentVisualH) ||
+    (wrapUnlocked && unlockedInnerH! < contentVisualH) // Short frame cuts lower blocks
   const contentOverflows = overflowRight || overflowBottom
   // Hover dwell can arm a preview — hide immediately while dragging / page preview / connecting
   const clipPreviewEligible =
@@ -5986,6 +6028,20 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     return () => window.clearTimeout(t)
   }, [clipPreviewEligible])
 
+  // Re-measure full table extents once hover preview arms (CSS drops scroll cap / width:100%)
+  useLayoutEffect(() => {
+    if (!showClipPreview) return
+    const el = contentFitRef.current
+    if (!el) return
+    const run = () => {
+      const dbBox = measureDatabaseBlockExtents(el)
+      if (dbBox) setDatabaseExtents(dbBox)
+    }
+    run()
+    const raf = requestAnimationFrame(run)
+    return () => cancelAnimationFrame(raf)
+  }, [showClipPreview])
+
   // Hover clip-preview: lift this RF node above siblings so spilled blocks paint on top
   useEffect(() => {
     const rfNode = panelRef.current?.closest('.react-flow__node') as HTMLElement | null
@@ -6692,8 +6748,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           ref={propBandRef}
           data-tt-frame-chrome-top
           data-tt-property-band
-          // Band body may drag the frame; individual property marks are nodrag
-          className="absolute z-[2] flex min-w-0 items-end overflow-hidden" // Clip scaled icons to the frame width
+          data-tt-property-scroll
+          className="absolute z-[2] block min-w-0 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
           style={{
             top: 0,
             left: adjustChromeX + chromePadX,
@@ -6701,21 +6757,12 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             height: adjustChromeYTop,
           }}
         >
-          {/* Screen-comfort icons — do not grow with locked frameScale */}
-          <div
-            className="min-w-0 w-full overflow-hidden"
-            style={{
-              transform: screenChromeScale !== 1 ? `scale(${screenChromeScale})` : undefined,
-              transformOrigin: 'left bottom',
-            }}
-          >
-            <FramePropertyGroup
-              items={chromePropertyHeaders}
-              bandWidth={propBandWidth}
-              layoutScale={screenChromeScale}
-              editorRef={promptEditorRef}
-            />
-          </div>
+          <FramePropertyGroup
+            items={chromePropertyHeaders}
+            scrollElRef={propBandRef}
+            iconScale={screenChromeScale}
+            editorRef={promptEditorRef}
+          />
         </div>
       )}
       {/* Connections — below the fill, same horizontal inset as properties / cell */}
@@ -6803,8 +6850,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             className="pointer-events-none absolute left-0 top-0 -z-[1]"
             style={{
               borderRadius: frameCornerRadius || undefined, // Same as fill so hover-unclip corners don’t snap square
-              width: Math.max(resizeDimensions.width, huggedSize.width),
-              height: Math.max(resizeDimensions.height, huggedSize.height),
+              width: Math.max(resizeDimensions.width, contentVisualW),
+              height: Math.max(resizeDimensions.height, contentVisualH),
               backgroundColor: responseAreaBackgroundColor || panelBackgroundColor,
               boxShadow:
                 resolvedTheme === 'dark'
@@ -6952,6 +6999,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               isPanelSelected={!!selected} // Keep editable on tap — !dragging was flipping off mid-gesture (I-bar needed 2 taps)
               suspendContentSync={!!dragging || dragAtomGuard} // Freeze TipTap before RF sets dragging (first-drag race)
               frameDragging={!!dragging || dragAtomGuard}
+              frameFreeResize={unlockedResized}
+              frameClipHeight={unlockedResized ? clipBoxH : null}
+              frameClipPreview={showClipPreview}
               dragSuspendRef={frameDragSuspendRef} // Sync arm on pointerdown — state lags one frame
               forceContentSyncKey={aiForceSyncKey} // AI eye / remove / save swaps content even while focused
               isLoading={false}

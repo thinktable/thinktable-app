@@ -1,13 +1,21 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-23T22:31:34Z`
+- Snapped at: `2026-08-23T23:34:05Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260823233405_property_strip_scroll_db_clip_preview.sql`.
+- Top property strip: horizontal scroll when icons overflow; **…** at the right when not fully scrolled (replaces ←/→ caret pagination).
+- Free-resize Notion DB frames: hover clip-preview (`data-clip-preview`) expands to full table width × height — not the clipped viewport.
+- TipTap `getHTML` guard when editor/view is destroyed mid-sync.
+- Schema unchanged.
+
+## Prior: Notion DB table perf and wheel scroll
 
 - No DDL. Marker `20260823223134_notion_db_table_perf_scroll.sql`.
 - Notion DB table perf: paginated fetch (50 rows + Load more), `@tanstack/react-virtual` row virtualization, lazy cell editors, memoized rows, frame-drag light shell.

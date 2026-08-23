@@ -1,4 +1,67 @@
+import { DB_TABLE_ROW_HEIGHT } from '@/components/notion-db-virtual-body'
+
 const EDGE = 4 // px slack for at-edge detection
+const LOAD_MORE_RESERVE = 36 // px under scroll body for Load more row
+
+/** Innermost overflow:hidden ancestor — the unlocked-resize spacer (not the outer fill shell). */
+function findFrameClipEl(from: HTMLElement): HTMLElement | null {
+  let node: HTMLElement | null = from.parentElement
+  while (node) {
+    const st = getComputedStyle(node)
+    const clips = st.overflowY === 'hidden' || st.overflow === 'hidden'
+    if (clips && node.clientHeight >= 48) return node
+    if (node.classList.contains('react-flow__node')) break
+    node = node.parentElement
+  }
+  return null
+}
+
+/** Uniform scale on el (1 when untransformed). */
+function uniformScale(el: HTMLElement): number {
+  const rect = el.getBoundingClientRect()
+  const oh = el.offsetHeight
+  if (oh > 0 && rect.height > 0) {
+    const s = rect.height / oh
+    if (s > 0.05 && s < 20) return s
+  }
+  let node: HTMLElement | null = el.parentElement
+  while (node) {
+    const r = node.getBoundingClientRect()
+    const h = node.offsetHeight
+    if (h > 0 && r.height > 0) {
+      const s = r.height / h
+      if (Math.abs(s - 1) > 0.02 && s > 0.05 && s < 20) return s
+    }
+    if (node.classList.contains('react-flow__node')) break
+    node = node.parentElement
+  }
+  return 1
+}
+
+/**
+ * Free-resize: scroll max-height in layout px (as many rows as fit in the clip box).
+ * Screen clip bottom → scroll top, ÷ CSS scale; falls back to host clipBoxH − chrome.
+ */
+export function notionDbFreeResizeScrollCap(
+  scrollEl: HTMLElement,
+  clipHeightHint?: number | null
+): number | null {
+  const clip = findFrameClipEl(scrollEl)
+  const scale = Math.max(0.15, uniformScale(scrollEl))
+
+  if (clip) {
+    const clipRect = clip.getBoundingClientRect()
+    const scrollRect = scrollEl.getBoundingClientRect()
+    const available = (clipRect.bottom - scrollRect.top - LOAD_MORE_RESERVE) / scale
+    if (available >= DB_TABLE_ROW_HEIGHT * 2) return Math.floor(available)
+  }
+
+  if (clipHeightHint != null && clipHeightHint > 96) {
+    return Math.max(DB_TABLE_ROW_HEIGHT * 3, Math.floor(clipHeightHint - 88))
+  }
+
+  return null
+}
 
 /** Mac trackpad pinch arrives as ctrl+wheel — never treat as table scroll. */
 function isMacTrackpadPinch(e: WheelEvent): boolean {

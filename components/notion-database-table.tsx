@@ -2,7 +2,7 @@
 
 // Editable Notion database with Thinktable view settings (layout / filter / sort / group / color / sub-tasks).
 
-import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, memo, type CSSProperties } from 'react'
 import {
   Check,
   Hash,
@@ -56,6 +56,7 @@ import { DatabaseViewToolbar } from '@/components/database-view-settings'
 import {
   buildFlatTableItems,
   CellDisplay,
+  DB_TABLE_ROW_HEIGHT,
   DB_TABLE_SCROLL_CAP,
   DB_TABLE_VIRTUALIZE_MIN,
   VirtualizedListBody,
@@ -63,6 +64,7 @@ import {
   type SaveFn,
 } from '@/components/notion-db-virtual-body'
 import { rowTitleFromCells } from '@/lib/notion/property-map'
+import { notionDbFreeResizeScrollCap } from '@/lib/notion/db-table-scroll'
 import { cn } from '@/lib/utils'
 
 const ROW_GUTTER = 20 // Left padding so overlay ⋮⋮ / + sit outside the first property column
@@ -81,6 +83,12 @@ type NotionDatabaseTableViewProps = {
   frameSelected?: boolean
   /** RF frame drag — swap heavy table DOM for a light shell. */
   frameDragging?: boolean
+  /** Unlocked user-sized frame — scroll body fills the clip box (as many rows as fit). */
+  frameFreeResize?: boolean
+  /** Host clipBoxH in layout px (from data-frame-clip-height). */
+  frameClipHeight?: number | null
+  /** Hover clip preview — expand to full table, not the free-resize viewport. */
+  frameClipPreview?: boolean
 }
 
 /** Column-type icon for property headers. */
@@ -105,6 +113,9 @@ export function NotionDatabaseTableView({
   hostMessageId: hostMessageIdProp,
   frameSelected = false,
   frameDragging = false,
+  frameFreeResize = false,
+  frameClipHeight = null,
+  frameClipPreview = false,
 }: NotionDatabaseTableViewProps) {
   const queryClient = useQueryClient()
   const boardLink = useBoardLinkActions() // Fallback when props missing
@@ -159,6 +170,7 @@ export function NotionDatabaseTableView({
   const [bringDialogRowId, setBringDialogRowId] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const [showBottomFade, setShowBottomFade] = useState(false)
+  const [freeResizeScrollCap, setFreeResizeScrollCap] = useState<number | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   /** Patch cached table rows (optimistic edits survive NodeView remount). */
@@ -615,18 +627,73 @@ export function NotionDatabaseTableView({
     [flatItems]
   )
   const useScrollCap = rowItemCount > DB_TABLE_VIRTUALIZE_MIN
+  const useFrameFill = frameFreeResize && !frameClipPreview // Free-resize: fill clip box unless hover preview
+  const useBoundedScroll = useScrollCap || useFrameFill
+
+  /** Free-resize: measure clip box so the table shows as many rows as fit (not a fixed 480px cap). */
+  const syncFreeResizeScrollCap = useCallback(() => {
+    if (!frameFreeResize) {
+      setFreeResizeScrollCap(null)
+      return
+    }
+    const scrollEl = scrollRef.current
+    if (!scrollEl) return
+    setFreeResizeScrollCap(notionDbFreeResizeScrollCap(scrollEl, frameClipHeight))
+  }, [frameFreeResize, frameClipHeight])
+
+  useEffect(() => {
+    if (!frameFreeResize) {
+      setFreeResizeScrollCap(null)
+      return
+    }
+    let raf = 0
+    const run = () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => syncFreeResizeScrollCap())
+    }
+    run()
+    const scrollEl = scrollRef.current
+    if (!scrollEl) return () => cancelAnimationFrame(raf)
+    const ro = new ResizeObserver(run)
+    ro.observe(scrollEl)
+    let ancestor: HTMLElement | null = scrollEl.parentElement
+    for (let i = 0; i < 14 && ancestor; i++) {
+      ro.observe(ancestor)
+      if (ancestor.classList.contains('react-flow__node')) break
+      ancestor = ancestor.parentElement
+    }
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+    }
+  }, [syncFreeResizeScrollCap, frameFreeResize, frameClipHeight, rowItemCount, settings.layout])
+
+  const scrollBodyStyle = useMemo((): CSSProperties | undefined => {
+    if (frameClipPreview) return undefined // Hover preview — full table height, no scroll cap
+    if (frameFreeResize) {
+      const cap =
+        freeResizeScrollCap ??
+        (frameClipHeight != null && frameClipHeight > 96
+          ? Math.max(DB_TABLE_ROW_HEIGHT * 3, frameClipHeight - 88)
+          : null) ??
+        DB_TABLE_SCROLL_CAP
+      return { maxHeight: cap }
+    }
+    if (useScrollCap) return { maxHeight: DB_TABLE_SCROLL_CAP }
+    return undefined
+  }, [frameFreeResize, freeResizeScrollCap, frameClipHeight, useScrollCap, frameClipPreview])
 
   /** Bottom fade when capped content continues below (or more rows on server). */
   const syncScrollFade = useCallback(() => {
     const el = scrollRef.current
-    if (!el || !useScrollCap) {
+    if (!el || !useBoundedScroll) {
       setShowBottomFade(false)
       return
     }
     const hasOverflow = el.scrollHeight > el.clientHeight + 2
     const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 4
     setShowBottomFade(hasOverflow && (!atBottom || !!data?.rowsHasMore))
-  }, [useScrollCap, data?.rowsHasMore])
+  }, [useBoundedScroll, data?.rowsHasMore])
 
   useEffect(() => {
     syncScrollFade()
@@ -639,7 +706,7 @@ export function NotionDatabaseTableView({
       el.removeEventListener('scroll', syncScrollFade)
       ro.disconnect()
     }
-  }, [syncScrollFade, rowItemCount, filteredRows.length, settings.layout, frameSelected])
+  }, [syncScrollFade, rowItemCount, filteredRows.length, settings.layout, frameSelected, scrollBodyStyle])
 
   const rowBgFn = useCallback(
     (row: NotionDbRow) => rowBackground(row, settings.conditionalColors),
@@ -973,7 +1040,7 @@ export function NotionDatabaseTableView({
       onPointerDown={frameSelected ? (e) => e.stopPropagation() : undefined}
     >
       {settings.layoutOptions.showDataSourceTitle ? (
-        <div className="px-1 pb-1 text-[12px] font-medium text-gray-500 truncate">
+        <div className="px-1 pb-1 text-[12px] font-medium text-gray-500 truncate shrink-0">
           {data.title || fallbackTitle}
         </div>
       ) : null}
@@ -982,6 +1049,7 @@ export function NotionDatabaseTableView({
         onChange={updateSettings}
         properties={data.properties}
         sourceTitle={data.title}
+        className="shrink-0"
       />
       {saveError ? (
         <div className="px-2 py-1 text-[11px] text-red-600 border-b border-red-100 bg-red-50">
@@ -993,14 +1061,14 @@ export function NotionDatabaseTableView({
           ref={scrollRef}
           className={cn(
             'tt-notion-db-scroll w-full min-w-0',
-            useScrollCap
+            useBoundedScroll
               ? frameSelected
                 ? 'overflow-y-auto overflow-x-auto tt-notion-db-scroll-active'
                 : 'overflow-y-hidden overflow-x-auto'
               : 'overflow-auto',
-            useScrollCap && frameSelected && 'tt-notion-db-scroll-active'
+            useBoundedScroll && frameSelected && 'tt-notion-db-scroll-active'
           )}
-          style={useScrollCap ? { maxHeight: DB_TABLE_SCROLL_CAP } : undefined}
+          style={scrollBodyStyle}
         >
           {body}
           {data.rowsHasMore ? (
