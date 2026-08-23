@@ -71,30 +71,37 @@ export function notionCellDisplayValue(cell: NotionDbCell | undefined): string {
 /** Build propertyBlock HTML for one schema column + row cell. */
 export function propertyCellHtmlForNotion(
   prop: NotionDbProperty,
-  cell: NotionDbCell | undefined
+  cell: NotionDbCell | undefined,
+  opts?: { inlineNames?: ReadonlySet<string> | null } // Names that stay inline when empty
 ): string {
   const type = notionPropTypeToPropertyType(prop.type) // Map Notion → Thinktable type
   const value = notionCellDisplayValue(cell) // Plain value for the cell
-  return propertyBlockHtml(type, value) // Atom HTML TipTap round-trips
+  const inline = !!opts?.inlineNames?.has(prop.name) // Restored from prior card layout
+  return propertyBlockHtml(type, value, {
+    inline, // Empty + !inline → top strip only on the card
+    propertyName: prop.name, // Key for card↔table inline preference
+  })
 }
 
 /** Concatenate property cells for every column except title (card frame body under the boardLink). */
 export function nonTitlePropertyCellsHtml(
   properties: NotionDbProperty[],
-  cells: Record<string, NotionDbCell>
+  cells: Record<string, NotionDbCell>,
+  opts?: { inlineNames?: ReadonlySet<string> | null }
 ): string {
   return properties
     .filter((p) => p.type !== 'title') // Title is the boardLink, not a cell on the card
-    .map((p) => propertyCellHtmlForNotion(p, cells[p.name]))
+    .map((p) => propertyCellHtmlForNotion(p, cells[p.name], opts))
     .join('')
 }
 
 /** All property cells including title (child board body — properties above notes). */
 export function allPropertyCellsHtml(
   properties: NotionDbProperty[],
-  cells: Record<string, NotionDbCell>
+  cells: Record<string, NotionDbCell>,
+  opts?: { inlineNames?: ReadonlySet<string> | null }
 ): string {
-  return properties.map((p) => propertyCellHtmlForNotion(p, cells[p.name])).join('')
+  return properties.map((p) => propertyCellHtmlForNotion(p, cells[p.name], opts)).join('')
 }
 
 /** Title-variant boardLink HTML for a row’s name → linked Thinktable board. */

@@ -37,10 +37,8 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { BlockTypeId, AiAutofillId, BoardInTarget } from '@/components/block-actions-menu'
 import {
-  PROPERTY_GROUP_H,
   propertyTypeIcon,
   propertyTypeLabel,
-  readFramePropertyType,
   type PropertyTypeId,
 } from '@/lib/blocks/property'
 import {
@@ -180,42 +178,7 @@ export async function applyToolbarTurnInto(opts: {
   }
 
   if (pick.kind === 'property') {
-    turnEditorBlockIntoProperty(editor, block, pick.propertyType)
-    // Stamp propertyType on the host frame (top chrome) — same as ⋮⋮ path
-    const nodes = reactFlowInstance?.getNodes?.() || []
-    const host = nodes.find((n: any) => n.selected && n.type === 'chatPanel' && n.data?.promptMessage?.id)
-    const promptMessage = host?.data?.promptMessage
-    if (host && promptMessage?.id) {
-      const existing = { ...((promptMessage.metadata as Record<string, unknown>) || {}) }
-      const firstProperty = readFramePropertyType(existing) == null
-      existing.propertyType = pick.propertyType
-      const setNodes = getSetNodes?.()
-      if (setNodes) {
-        setNodes((nds: any[]) =>
-          nds.map((n) => {
-            if (n.id !== host.id) return n
-            const nextPos = firstProperty
-              ? { x: n.position.x, y: n.position.y - PROPERTY_GROUP_H }
-              : n.position
-            if (firstProperty) existing.position = nextPos
-            return {
-              ...n,
-              position: nextPos,
-              data: {
-                ...n.data,
-                promptMessage: { ...promptMessage, metadata: { ...existing } },
-              },
-            }
-          })
-        )
-      }
-      try {
-        const supabase = createClient()
-        await supabase.from('messages').update({ metadata: existing }).eq('id', promptMessage.id)
-      } catch (err) {
-        console.error('Failed to save frame property type:', err)
-      }
-    }
+    turnEditorBlockIntoProperty(editor, block, pick.propertyType) // Inline Empty cell — not top strip
     onDone?.()
     return
   }

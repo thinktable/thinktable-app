@@ -5937,7 +5937,7 @@ function BoardFlowInner({
 
     const html =
       opts?.html ??
-      (opts?.propertyType ? propertyBlockHtml(opts.propertyType) : '<p></p>') // Property spawn = icon + Empty cell
+      (opts?.propertyType ? propertyBlockHtml(opts.propertyType, '', { inline: true }) : '<p></p>') // User property = inline Empty cell
     const messageId = generateUUID() // Client id so the RF node and DB row match
 
     const optimisticMessage = {
@@ -6059,7 +6059,7 @@ function BoardFlowInner({
 
       if (action === 'turnInto' && payload?.propertyType && pos) {
         await createBlockAtFlowPosition(pos.x, pos.y, {
-          html: propertyBlockHtml(payload.propertyType), // Icon + Empty cell (frame top icon via metadata)
+          html: propertyBlockHtml(payload.propertyType, '', { inline: true }), // User Turn into → stay in body
           propertyType: payload.propertyType, // New frame with property chrome at top
         })
         return
@@ -6929,6 +6929,9 @@ function BoardFlowInner({
           await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
           await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
         }
+        // Card→table restores a peeled row — refetch so the live table has that row again
+        // (peel had dropped it from the React Query cache)
+        await queryClient.invalidateQueries({ queryKey: ['notion-database'] })
         await queryClient.invalidateQueries({ queryKey: ['panel-edges', refreshId] })
         await queryClient.invalidateQueries({ queryKey: ['panel-edges', conversationId] })
         await queryClient.invalidateQueries({ queryKey: ['conversations'] })

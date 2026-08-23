@@ -1,6 +1,7 @@
 // Client-side: peel one Notion DB row into a Card frame on the current board
 // (boardLink + property cells, child board, thread from the DB frame).
 
+import type { QueryClient } from '@tanstack/react-query'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { newBlockMetadata } from '@/lib/blocks'
 import {
@@ -11,9 +12,79 @@ import {
 } from '@/lib/notion/property-map'
 import type { NotionDbProperty, NotionDbRow } from '@/lib/notion/database'
 import { normalizeNotionId } from '@/lib/notion/pages'
+import { notionPageIdKey } from '@/lib/notion/card-convert-bring'
 
 const THREAD_ALGORITHM = 'Bezier Catmull-Rom'
 const CARD_GAP_X = 320
+
+/** Message-shaped stub for React Query cache (cardedPageIdsFromMessages reads metadata). */
+export type PeeledCardCacheMessage = {
+  id: string
+  role: 'user'
+  content: string
+  metadata: Record<string, unknown>
+}
+
+/** Read peeled Notion page ids stored on the host DB frame. */
+export function readPeeledNotionPageIds(meta?: Record<string, unknown> | null): string[] {
+  const raw = meta?.peeledNotionPageIds
+  if (!Array.isArray(raw)) return []
+  return raw.filter((id): id is string => typeof id === 'string' && id.trim() !== '')
+}
+
+/** Append peeled page ids to the host DB frame metadata (table row hide survives refetch). */
+export async function appendPeeledPageIdsOnHostFrame(opts: {
+  supabase: SupabaseClient
+  hostMessageId: string
+  pageIds: string[]
+  queryClient: QueryClient
+  conversationId: string
+}): Promise<void> {
+  const { supabase, hostMessageId, pageIds, queryClient, conversationId } = opts
+  if (pageIds.length === 0) return
+  const { data: host } = await supabase
+    .from('messages')
+    .select('metadata')
+    .eq('id', hostMessageId)
+    .maybeSingle()
+  const meta = { ...((host?.metadata as Record<string, unknown>) || {}) }
+  const prev = readPeeledNotionPageIds(meta)
+  const keys = new Set(prev.map(notionPageIdKey))
+  for (const id of pageIds) {
+    if (!keys.has(notionPageIdKey(id))) {
+      prev.push(id)
+      keys.add(notionPageIdKey(id))
+    }
+  }
+  meta.peeledNotionPageIds = prev
+  const { error } = await supabase.from('messages').update({ metadata: meta }).eq('id', hostMessageId)
+  if (error) console.error('Failed to save peeled row ids on DB frame:', error)
+  const patchHost = (old: unknown) => {
+    if (!Array.isArray(old)) return old
+    return old.map((m: { id?: string; metadata?: Record<string, unknown> }) =>
+      m.id === hostMessageId ? { ...m, metadata: meta } : m
+    )
+  }
+  queryClient.setQueriesData({ queryKey: ['messages-for-panels', conversationId] }, patchHost)
+  queryClient.setQueriesData({ queryKey: ['messages-for-panels', conversationId, 'full'] }, patchHost)
+  queryClient.setQueriesData({ queryKey: ['messages-for-panels', conversationId, 'embed'] }, patchHost)
+}
+
+/** Optimistically add a peeled card message to panel caches so the table hides the row immediately. */
+export function appendPeeledCardToMessagesCache(
+  queryClient: QueryClient,
+  conversationId: string,
+  message: PeeledCardCacheMessage
+): void {
+  const patch = (old: unknown) => {
+    const list = Array.isArray(old) ? old : []
+    if (list.some((m: { id?: string }) => m.id === message.id)) return list
+    return [...list, message]
+  }
+  queryClient.setQueriesData({ queryKey: ['messages-for-panels', conversationId] }, patch)
+  queryClient.setQueriesData({ queryKey: ['messages-for-panels', conversationId, 'full'] }, patch)
+  queryClient.setQueriesData({ queryKey: ['messages-for-panels', conversationId, 'embed'] }, patch)
+}
 
 export const NOTION_ROW_DRAG_MIME = 'application/x-thinktable-notion-row'
 
@@ -73,7 +144,7 @@ export async function createRowCardOnBoard(opts: {
   cardMessageId?: string
   /** Merged into frame metadata (e.g. sideStacks for bring-along stack). */
   frameMetadataExtras?: Record<string, unknown>
-}): Promise<{ cardMessageId: string; boardId: string }> {
+}): Promise<{ cardMessageId: string; boardId: string; cacheMessage: PeeledCardCacheMessage }> {
   const {
     supabase,
     userId,
@@ -159,6 +230,27 @@ export async function createRowCardOnBoard(opts: {
     }),
   })
   if (frameError) throw new Error(frameError.message || 'Failed to create card frame')
+  const cacheMessage: PeeledCardCacheMessage = {
+    id: cardMessageId,
+    role: 'user',
+    content: frameHtml,
+    metadata: newBlockMetadata({
+      position,
+      fadeIn: true,
+      blockTitle: title || 'Untitled',
+      linkedBoardId: boardId,
+      isBoard: true,
+      blockType: 'board',
+      notionPageId: row.id,
+      notionUrl: row.url ?? null,
+      notionObject: 'page',
+      notionDatabaseId: dbNorm,
+      notionDatabaseTitle: dbTitle,
+      dbLayout: 'card',
+      notionIcon: icon,
+      ...(opts.frameMetadataExtras || {}),
+    }),
+  }
   // Thread DB frame → card when we know the host frame (best-effort)
   if (sourceMessageId) {
     const edge = {
@@ -183,5 +275,5 @@ export async function createRowCardOnBoard(opts: {
     }
   }
 
-  return { cardMessageId, boardId }
+  return { cardMessageId, boardId, cacheMessage }
 }

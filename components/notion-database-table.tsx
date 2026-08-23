@@ -34,8 +34,11 @@ import {
 } from '@/lib/notion/card-convert-bring'
 import { setGroupLocked, setSideStackEntry, sideStackGroupId } from '@/lib/frame-side-stacks'
 import {
+  appendPeeledCardToMessagesCache,
+  appendPeeledPageIdsOnHostFrame,
   createRowCardOnBoard,
   NOTION_ROW_DRAG_MIME,
+  readPeeledNotionPageIds,
   type NotionRowDragPayload,
 } from '@/lib/notion/row-to-card-client'
 import {
@@ -850,7 +853,7 @@ export function NotionDatabaseTableView({
             meta = setGroupLocked(meta, stackGroupId, true) // Match first Stack-under lock
             frameMetadataExtras = meta
           }
-          await createRowCardOnBoard({
+          const { cacheMessage } = await createRowCardOnBoard({
             supabase,
             userId: user.id,
             conversationId,
@@ -864,6 +867,21 @@ export function NotionDatabaseTableView({
             cardMessageId,
             frameMetadataExtras,
           })
+          // Hide row immediately — don't wait for messages refetch
+          appendPeeledCardToMessagesCache(queryClient, conversationId, cacheMessage)
+        }
+
+        setMessagesTick((n) => n + 1) // Recompute cardedRowIds now
+
+        if (hostMessageId) {
+          await appendPeeledPageIdsOnHostFrame({
+            supabase,
+            hostMessageId,
+            pageIds: ordered.map((r) => r.id),
+            queryClient,
+            conversationId,
+          })
+          setMessagesTick((n) => n + 1)
         }
 
         // Drop converted rows from the table cache so they don’t sit beside their cards
@@ -1158,16 +1176,23 @@ export function NotionDatabaseTableView({
     const queries = queryClient.getQueriesData({
       queryKey: ['messages-for-panels', conversationId],
     })
-    const all: Array<{ metadata?: Record<string, unknown> | null }> = []
+    const all: Array<{ id?: string; metadata?: Record<string, unknown> | null }> = []
+    let hostPeeled: string[] | null = null
     for (const [, cached] of queries) {
       if (Array.isArray(cached)) {
-        for (const msg of cached) all.push(msg as { metadata?: Record<string, unknown> | null })
+        for (const msg of cached) {
+          const m = msg as { id?: string; metadata?: Record<string, unknown> | null }
+          all.push(m)
+          if (hostMessageId && m.id === hostMessageId && !hostPeeled) {
+            hostPeeled = readPeeledNotionPageIds(m.metadata || undefined)
+          }
+        }
       }
     }
-    return cardedPageIdsFromMessages(all, notionDatabaseId)
+    return cardedPageIdsFromMessages(all, notionDatabaseId, hostPeeled)
     // messagesTick forces refresh when panel messages cache updates
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationId, notionDatabaseId, queryClient, messagesTick])
+  }, [conversationId, notionDatabaseId, hostMessageId, queryClient, messagesTick])
 
   const filteredRows = useMemo(() => {
     if (!data) return []

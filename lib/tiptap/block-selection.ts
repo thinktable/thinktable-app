@@ -93,6 +93,12 @@ function blockScreenYBand(
           ? dom.parentElement
           : null
     if (el) {
+      if (
+        el.classList.contains('tt-property-block-header-only') ||
+        el.getAttribute('data-header-only') === 'true'
+      ) {
+        return null // Top-strip only — no inline band to hover
+      }
       const rect = el.getBoundingClientRect()
       if (rect.height > 0) return { top: rect.top, bottom: rect.bottom }
     }
@@ -506,25 +512,25 @@ export function turnEditorBlockIntoProperty(
 ): boolean {
   if (!editor || editor.isDestroyed) return false // Unmounted editor — nothing to convert
   const { from, to, typeName, node } = block
-  // Already a property cell — just switch the type (keep any typed value)
+  // Already a property cell — switch type; mark inline so it stays in the body when empty
   if (typeName === 'propertyBlock') {
     return editor
       .chain()
       .focus()
       .command(({ tr }) => {
-        tr.setNodeMarkup(from, undefined, { ...node.attrs, propertyType }) // Same cell, new type glyph
+        tr.setNodeMarkup(from, undefined, { ...node.attrs, propertyType, inline: true })
         return true
       })
       .run()
   }
-  // Replace this block with an empty property cell (placeholder Empty — do not seed from old text)
+  // Replace this block with an empty **inline** property cell (user Turn into — stay in body)
   return editor
     .chain()
     .focus()
     .deleteRange({ from, to })
     .insertContentAt(from, {
       type: 'propertyBlock',
-      attrs: { propertyType, value: '' },
+      attrs: { propertyType, value: '', inline: true },
     } as JSONContent)
     .run()
 }

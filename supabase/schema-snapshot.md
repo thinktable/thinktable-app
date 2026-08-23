@@ -1,13 +1,21 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-21T14:10:20Z`
+- Snapped at: `2026-08-23T02:42:19Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260823024219_property_strip_pagination_tooltips.sql`.
+- Top property strip paginates with ←/→ carets when icons overflow the frame width (chrome band measure + screenChromeScale).
+- Property icons (top strip + in-frame cells): shared `PropertyIconWithTooltip` (~200ms hover) — Notion column name, else type label.
+- Card↔table property round-trip improvements (`propertyName`, inline harvest, convert layout).
+- Schema unchanged.
+
+## Prior: Shift+drag and Cmd/Ctrl+wheel nav flip
 
 - No DDL. Marker `20260821141020_shift_drag_and_cmd_wheel_nav_flip.sql`.
 - Shift+drag flips Free-nav pointer tool (pan↔select); Cmd/Ctrl+wheel flips sticky Scroll↔Zoom (Mac trackpad pinch always zooms).

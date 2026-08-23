@@ -17,6 +17,7 @@ import {
   rowBoardLinkHtml,
   rowTitleFromCells,
 } from '@/lib/notion/property-map'
+import { readInlinePropertyNamesFromHtml } from '@/lib/tiptap/property-block' // Survive card↔table
 
 /** Default Smooth thread algorithm (matches board-flow / EditableThread). */
 const THREAD_ALGORITHM = 'Bezier Catmull-Rom'
@@ -80,13 +81,16 @@ function cardFrameHtml(opts: {
   icon?: string | null
   table: NotionDatabaseTable
   row: NotionDbRow
+  inlineNames?: ReadonlySet<string> | null // Empty props that stay in the body
 }): string {
   const link = rowBoardLinkHtml({
     boardId: opts.boardId,
     title: opts.title,
     icon: opts.icon,
   })
-  const props = nonTitlePropertyCellsHtml(opts.table.properties, opts.row.cells)
+  const props = nonTitlePropertyCellsHtml(opts.table.properties, opts.row.cells, {
+    inlineNames: opts.inlineNames,
+  })
   return `${link}${props}` || link // Always at least the boardLink
 }
 
@@ -95,8 +99,11 @@ function boardBodyHtml(opts: {
   table: NotionDatabaseTable
   row: NotionDbRow
   notesHtml: string
+  inlineNames?: ReadonlySet<string> | null
 }): string {
-  const props = allPropertyCellsHtml(opts.table.properties, opts.row.cells)
+  const props = allPropertyCellsHtml(opts.table.properties, opts.row.cells, {
+    inlineNames: opts.inlineNames,
+  })
   const notes = (opts.notesHtml || '').trim() || '<p></p>' // TipTap needs a node
   return `${props}${notes}`
 }
@@ -238,11 +245,29 @@ async function insertRowCardFrame(opts: {
   table: NotionDatabaseTable
   row: NotionDbRow
   position: { x: number; y: number }
+  /** Notion property names that stay inline when empty (from prior card layout). */
+  inlineNamesByPage?: Record<string, string[]> | null
 }): Promise<string> {
-  const { admin, accessToken, userId, cardsConversationId, databaseId, dbTitle, table, row, position } =
-    opts
+  const {
+    admin,
+    accessToken,
+    userId,
+    cardsConversationId,
+    databaseId,
+    dbTitle,
+    table,
+    row,
+    position,
+    inlineNamesByPage,
+  } = opts
   const title = rowTitleFromCells(table.properties, row.cells)
   const icon = typeof row.icon === 'string' ? row.icon : null
+  const pageKey = normalizeNotionId(row.id)
+  const inlineList =
+    inlineNamesByPage?.[pageKey] ||
+    inlineNamesByPage?.[row.id] ||
+    []
+  const inlineNames = inlineList.length > 0 ? new Set(inlineList) : null
 
   let notesHtml = '<p></p>'
   try {
@@ -254,8 +279,8 @@ async function insertRowCardFrame(opts: {
 
   const boardId = crypto.randomUUID()
   const cardMessageId = crypto.randomUUID()
-  const bodyHtml = boardBodyHtml({ table, row, notesHtml })
-  const frameHtml = cardFrameHtml({ boardId, title, icon, table, row })
+  const bodyHtml = boardBodyHtml({ table, row, notesHtml, inlineNames })
+  const frameHtml = cardFrameHtml({ boardId, title, icon, table, row, inlineNames })
 
   const { error: boardError } = await admin.from('conversations').insert({
     id: boardId,
@@ -369,7 +394,10 @@ async function convertRowToCard(opts: ConvertDbLayoutOpts): Promise<ConvertDbLay
     table,
     row,
     position,
+    inlineNamesByPage: readInlineNamesByPageMeta(meta), // Prefer prior peel prefs on this DB frame
   })
+
+  await appendPeeledPageIdsOnTableFrameServer(admin, sourceMessageId, [row.id])
 
   // Thread DB frame → this card (table stays)
   await upsertCardThreads(admin, [
@@ -419,6 +447,9 @@ async function convertTableToCards(opts: ConvertDbLayoutOpts): Promise<ConvertDb
   const table = await fetchNotionDatabaseTable(accessToken, databaseId)
   if (!table.rows.length) throw new Error('Database has no rows to convert')
 
+  // Restore which empty properties were user-inlined on a prior card layout
+  const inlineNamesByPage = readInlineNamesByPageMeta(meta)
+
   const target = await resolveCardConvertTarget(admin, {
     userId,
     conversationId,
@@ -452,6 +483,7 @@ async function convertTableToCards(opts: ConvertDbLayoutOpts): Promise<ConvertDb
       table,
       row,
       position: cardPosition(origin, i),
+      inlineNamesByPage,
     })
     createdMessageIds.push(cardMessageId)
 
@@ -510,9 +542,117 @@ function isBlockContentEmptyish(content: string): boolean {
   return text.length === 0 && !/data-type=/.test(content)
 }
 
+/** Read `inlinePropertyNamesByPage` from table-frame metadata (card↔table round-trip). */
+function readInlineNamesByPageMeta(
+  meta?: Record<string, unknown> | null
+): Record<string, string[]> | null {
+  const raw = meta?.inlinePropertyNamesByPage
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const out: Record<string, string[]> = {}
+  for (const [pageId, names] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(names)) continue
+    const list = names.filter((n): n is string => typeof n === 'string' && n.trim() !== '')
+    if (list.length > 0) out[normalizeNotionId(pageId)] = list
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/** Append peeled page ids on the host DB table frame (server-side peel). */
+async function appendPeeledPageIdsOnTableFrameServer(
+  admin: SupabaseClient,
+  tableFrameId: string,
+  pageIds: string[]
+): Promise<void> {
+  if (pageIds.length === 0) return
+  const { data: host } = await admin
+    .from('messages')
+    .select('metadata')
+    .eq('id', tableFrameId)
+    .maybeSingle()
+  const meta = { ...((host?.metadata as Record<string, unknown>) || {}) }
+  const prev = Array.isArray(meta.peeledNotionPageIds)
+    ? (meta.peeledNotionPageIds as string[]).filter((id) => typeof id === 'string')
+    : []
+  const keys = new Set(prev.map((id) => normalizeNotionId(id)))
+  for (const id of pageIds) {
+    const k = normalizeNotionId(id)
+    if (!keys.has(k)) {
+      prev.push(id)
+      keys.add(k)
+    }
+  }
+  meta.peeledNotionPageIds = prev
+  const { error } = await admin.from('messages').update({ metadata: meta }).eq('id', tableFrameId)
+  if (error) console.error('Failed to save peeled row ids on DB frame:', error)
+}
+
+/** Remove one peeled page id from the host table frame (card → table). */
+async function removePeeledPageIdFromTableFrame(
+  admin: SupabaseClient,
+  tableFrameId: string,
+  pageId: string
+): Promise<void> {
+  const { data: host } = await admin
+    .from('messages')
+    .select('metadata')
+    .eq('id', tableFrameId)
+    .maybeSingle()
+  if (!host) return
+  const meta = { ...((host.metadata as Record<string, unknown>) || {}) }
+  const prev = Array.isArray(meta.peeledNotionPageIds)
+    ? (meta.peeledNotionPageIds as string[]).filter((id) => typeof id === 'string')
+    : []
+  const key = normalizeNotionId(pageId)
+  const next = prev.filter((id) => normalizeNotionId(id) !== key)
+  if (next.length === prev.length) return // Already absent
+  meta.peeledNotionPageIds = next.length > 0 ? next : undefined
+  if (!meta.peeledNotionPageIds) delete meta.peeledNotionPageIds
+  const { error } = await admin.from('messages').update({ metadata: meta }).eq('id', tableFrameId)
+  if (error) console.error('Failed to clear peeled row id on DB frame:', error)
+}
+
+/** Find an existing table frame for this Notion database on the board (not a Card-view frame). */
+function findTableFrameOnBoard(
+  messages: Array<{ id: string; content?: string | null; metadata?: unknown }>,
+  databaseId: string
+): { id: string; content: string; metadata: Record<string, unknown> } | null {
+  const dbKey = normalizeNotionId(databaseId)
+  for (const m of messages) {
+    const meta = (m.metadata as Record<string, unknown>) || {}
+    if (meta.dbLayout === 'card') continue // Peel cards are not the table
+    const content = String(m.content || '')
+    const resolved = resolveNotionDatabaseIdFromFrame(content, meta)
+    if (!resolved || normalizeNotionId(resolved) !== dbKey) continue
+    if (isNotionDatabaseTableFrame(content, meta) || meta.dbLayout === 'table') {
+      return { id: m.id as string, content, metadata: meta }
+    }
+  }
+  return null
+}
+
+/** Drop a card frame + its threads (+ linked child board). Row reappears in the live table. */
+async function removeCardFrame(
+  admin: SupabaseClient,
+  card: { id: string; metadata: Record<string, unknown> }
+): Promise<void> {
+  const cardId = card.id
+  await admin.from('panel_edges').delete().or(`source_message_id.eq.${cardId},target_message_id.eq.${cardId}`)
+  const { error: deleteError } = await admin.from('messages').delete().eq('id', cardId)
+  if (deleteError) throw new Error(deleteError.message || 'Failed to remove card frame')
+  const linkedBoardId =
+    typeof card.metadata.linkedBoardId === 'string' ? card.metadata.linkedBoardId : null
+  if (linkedBoardId) {
+    // Child board was only for this card — drop it with the frame
+    await admin.from('messages').delete().eq('conversation_id', linkedBoardId)
+    await admin.from('conversations').delete().eq('id', linkedBoardId)
+  }
+}
+
 /**
- * Convert Card-view frames (same Notion database) back into one table frame.
- * Uses the right-clicked card (or any card in the group) as the anchor position.
+ * Convert a Card-view frame back to Table: return that row to the live table.
+ * If a table frame for the same DB already exists (peel case), only the source card is removed.
+ * If not (full Card layout), a table frame is created and the source card is removed; other
+ * cards stay peeled until converted one by one.
  */
 async function convertCardsToTable(opts: ConvertDbLayoutOpts): Promise<ConvertDbLayoutResult> {
   const { admin, userId, conversationId, sourceMessageId } = opts
@@ -537,49 +677,35 @@ async function convertCardsToTable(opts: ConvertDbLayoutOpts): Promise<ConvertDb
 
   const { data: allMessages, error: listError } = await admin
     .from('messages')
-    .select('id, metadata')
+    .select('id, content, metadata')
     .eq('conversation_id', conversationId)
     .eq('user_id', userId)
   if (listError) throw new Error(listError.message || 'Failed to list frames')
 
-  const cardIds = (allMessages || [])
-    .filter((m) => {
-      const mMeta = (m.metadata as Record<string, unknown>) || {}
-      if (mMeta.dbLayout !== 'card') return false
-      const id = typeof mMeta.notionDatabaseId === 'string' ? mMeta.notionDatabaseId : ''
-      return normalizeNotionId(id) === normalizeNotionId(databaseId)
-    })
-    .map((m) => m.id as string)
+  // Inline empties on this card — merge onto the table so a later peel restores them
+  const pageId =
+    typeof meta.notionPageId === 'string' ? normalizeNotionId(meta.notionPageId) : ''
+  const inlineNames = readInlinePropertyNamesFromHtml(String(source.content || ''))
+  const inlinePatch: Record<string, string[]> =
+    pageId && inlineNames.length > 0 ? { [pageId]: inlineNames } : {}
 
-  if (cardIds.length === 0) throw new Error('No Card view frames found for this database')
+  let tableFrame = findTableFrameOnBoard(allMessages || [], databaseId)
 
-  const origin = originFromMeta(meta)
-  const dbTitle =
-    (typeof meta.notionDatabaseTitle === 'string' && meta.notionDatabaseTitle) ||
-    (typeof meta.blockTitle === 'string' && meta.blockTitle) ||
-    'Database'
-  const notionUrl = typeof meta.notionUrl === 'string' ? meta.notionUrl : null
-  const tableMessageId = crypto.randomUUID()
-  const titleEsc = dbTitle.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
-  const urlAttr = notionUrl
-    ? ` data-url="${notionUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"`
-    : ''
-  const content = `<div data-type="databaseBlock" data-notion-database-id="${normalizeNotionId(databaseId)}" data-title="${titleEsc}"${urlAttr}></div>`
-
-  // Drop card frames + their threads first
-  for (const id of cardIds) {
-    await admin.from('panel_edges').delete().or(`source_message_id.eq.${id},target_message_id.eq.${id}`)
-  }
-  const { error: deleteError } = await admin.from('messages').delete().in('id', cardIds)
-  if (deleteError) throw new Error(deleteError.message || 'Failed to remove card frames')
-
-  const { error: insertError } = await admin.from('messages').insert({
-    id: tableMessageId,
-    conversation_id: conversationId,
-    user_id: userId,
-    role: 'user',
-    content,
-    metadata: newBlockMetadata({
+  if (!tableFrame) {
+    // No live table yet (full Card layout) — mint one at this card’s position
+    const origin = originFromMeta(meta)
+    const dbTitle =
+      (typeof meta.notionDatabaseTitle === 'string' && meta.notionDatabaseTitle) ||
+      (typeof meta.blockTitle === 'string' && meta.blockTitle) ||
+      'Database'
+    const notionUrl = typeof meta.notionUrl === 'string' ? meta.notionUrl : null
+    const tableMessageId = crypto.randomUUID()
+    const titleEsc = dbTitle.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+    const urlAttr = notionUrl
+      ? ` data-url="${notionUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"`
+      : ''
+    const content = `<div data-type="databaseBlock" data-notion-database-id="${normalizeNotionId(databaseId)}" data-title="${titleEsc}"${urlAttr}></div>`
+    const tableMeta = newBlockMetadata({
       position: origin,
       fadeIn: true,
       blockTitle: dbTitle,
@@ -590,15 +716,50 @@ async function convertCardsToTable(opts: ConvertDbLayoutOpts): Promise<ConvertDb
       isBoard: true,
       blockType: 'text',
       dbLayout: 'table',
-    }),
-  })
-  if (insertError) throw new Error(insertError.message || 'Failed to create table frame')
+      ...(Object.keys(inlinePatch).length > 0 ? { inlinePropertyNamesByPage: inlinePatch } : {}),
+    })
+    const { error: insertError } = await admin.from('messages').insert({
+      id: tableMessageId,
+      conversation_id: conversationId,
+      user_id: userId,
+      role: 'user',
+      content,
+      metadata: tableMeta,
+    })
+    if (insertError) throw new Error(insertError.message || 'Failed to create table frame')
+    tableFrame = { id: tableMessageId, content, metadata: tableMeta }
+  } else if (Object.keys(inlinePatch).length > 0) {
+    // Merge inline prefs onto the existing table frame
+    const prev =
+      (tableFrame.metadata.inlinePropertyNamesByPage as Record<string, string[]> | undefined) ||
+      {}
+    const next = { ...prev, ...inlinePatch }
+    const nextMeta = { ...tableFrame.metadata, inlinePropertyNamesByPage: next }
+    const { error: updateError } = await admin
+      .from('messages')
+      .update({ metadata: nextMeta })
+      .eq('id', tableFrame.id)
+    if (updateError) console.error('Failed to merge inline property prefs:', updateError)
+    tableFrame = { ...tableFrame, metadata: nextMeta }
+  }
 
-  return { layout: 'table', cardCount: 0, messageIds: [tableMessageId], boardId: conversationId }
+  // Return this card’s row to the table (other peeled cards stay cards)
+  await removeCardFrame(admin, { id: source.id as string, metadata: meta })
+  if (pageId) {
+    await removePeeledPageIdFromTableFrame(admin, tableFrame.id, pageId)
+  }
+
+  return {
+    layout: 'table',
+    cardCount: 0,
+    messageIds: [tableFrame.id],
+    boardId: conversationId,
+  }
 }
 
 /** Convert the focused frame’s Notion database between Table and Card layouts.
  * Pass `rowId` with layout=card to peel one row into a card threaded to the DB frame.
+ * Pass layout=table on a card to add that row back to the table.
  */
 export async function convertNotionDbLayout(
   opts: ConvertDbLayoutOpts

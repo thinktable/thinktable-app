@@ -58,7 +58,6 @@ import {
   Sparkles,
   Circle,
   Grid3x3,
-  Boxes, // Layout Smart Align — multi-box glyph
   Presentation, // View presentation mode
   Scan, // View capture — 4 disconnected rounded corners
   Table,
@@ -73,6 +72,7 @@ import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useQueryClient } from '@tanstack/react-query'
 import { useTheme } from './theme-provider'
+import { TidyUpIcon } from './tidy-up-icon' // Layout bar — 2×2 rounded squares
 import { ShareBoardMenu } from './share-board-menu' // Share dropdown: Notion people + role links
 import { BoardTopBarShare } from './board-top-bar-share' // Copy link / favorite / More (board actions + Connections)
 import {
@@ -1746,7 +1746,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 title="Tidy up"
                 aria-label="Tidy up"
               >
-                <Boxes className="h-4 w-4 flex-shrink-0" /> {/* Multi-box: Tidy up (UI until wired) */}
+                <TidyUpIcon className="h-4 w-4 flex-shrink-0" /> {/* 2×2 rounded squares */}
                 <ToolbarTitle show={!compactLabels}>Tidy up</ToolbarTitle>
               </Button>
             )}
@@ -2941,7 +2941,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 {isItemHidden('smartAlign') && (
                   <>
                     <DropdownMenuItem>
-                      <Boxes className="h-4 w-4 mr-2" />
+                      <TidyUpIcon className="h-4 w-4 mr-2" />
                       Tidy up
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />

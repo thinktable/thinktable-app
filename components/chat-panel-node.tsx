@@ -44,16 +44,17 @@ import {
 } from '@/lib/board-navigating' // Freeze zoom selectors + skip hug while pinching
 import { deleteLinkedBoardForBlock, getLinkedBoardId, isBlockContentEmpty, isBlockMeta, isBoardBodyMeta, readNotionConnection, type NotionSyncMode } from '@/lib/blocks' // Block detection + Notion connection
 import {
-  propertyTypeIcon,
-  propertyTypeLabel,
   readFramePropertyType,
   PROPERTY_GROUP_H,
   type PropertyTypeId,
 } from '@/lib/blocks/property' // Turn into → Property → top chrome
 import {
-  readPropertyBlockTypesFromDoc,
-  readPropertyBlockTypesFromHtml,
-} from '@/lib/tiptap/property-block' // Top icons follow propertyBlock order in the frame
+  htmlHasPropertyBlocks,
+  readPropertyBlockHeadersFromDoc,
+  readPropertyBlockHeadersFromHtml,
+  type PropertyHeaderItem,
+} from '@/lib/tiptap/property-block' // Top icons = empty propertyBlocks only
+
 import { NotionMarkIcon } from '@/components/notion-mark-icon' // Logo at bottom of a Notion-connected frame
 import { createPortal } from 'react-dom'
 import {
@@ -439,36 +440,147 @@ function formatResponseContent(content: string): string {
   return htmlParagraphs
 }
 
-/** Top strip: type icons in document order — one **block** (⋮⋮ comes from TipTapBlockHandles). */
+const PROPERTY_ICON_SIZE = 20 // h-5 w-5 top-strip glyph
+const PROPERTY_ICON_GAP = 6 // gap-1.5 between icons / carets
+const PROPERTY_CARET_SIZE = 20 // Chevron buttons match icon hit target
+
+/** Width of N property icons in a row (incl. gaps). */
+function propertyIconsRowWidth(count: number): number {
+  if (count <= 0) return 0
+  return count * PROPERTY_ICON_SIZE + (count - 1) * PROPERTY_ICON_GAP
+}
+
+import { PropertyIconWithTooltip } from '@/components/property-icon-with-tooltip' // Top-strip icon + name popup
+/** Top strip: **empty** type icons in document order — one **block** (⋮⋮ comes from TipTapBlockHandles). */
 function FramePropertyGroup({
-  types,
+  items,
   className,
+  bandWidth,
+  layoutScale = 1,
 }: {
-  types: PropertyTypeId[] // Same sequence as property blocks in the frame
+  items: PropertyHeaderItem[] // Same sequence as header-only property blocks in the frame
   className?: string
+  bandWidth?: number // Constrained host width (chrome band) — self-measure grows with icons without this
+  layoutScale?: number // screenChromeScale on the wrapper — layout must be narrower so scaled glyphs fit
 }) {
-  if (types.length === 0) return null // No property cells → no top chrome
+  const containerRef = useRef<HTMLDivElement>(null) // Clip + aria target
+  const [containerWidth, setContainerWidth] = useState(0) // Layout px available for icons (post-scale)
+  const [pageStart, setPageStart] = useState(0) // Index of first visible icon when paginated
+  const scale = layoutScale > 0 ? layoutScale : 1
+
+  useLayoutEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const measureHost = () =>
+      (el.closest('[data-tt-property-band]') as HTMLElement | null) ??
+      (el.closest('[data-tt-frame-chrome-top]') as HTMLElement | null) ??
+      el.parentElement
+    const sync = () => {
+      const hostW = bandWidth ?? measureHost()?.clientWidth ?? 0
+      setContainerWidth(hostW > 0 ? hostW / scale : 0)
+    }
+    sync()
+    const ro = new ResizeObserver(sync)
+    ro.observe(el)
+    const host = measureHost()
+    if (host && host !== el) ro.observe(host)
+    return () => ro.disconnect()
+  }, [bandWidth, scale])
+
+  const itemsKey = useMemo(
+    () => items.map((it) => `${it.type}\0${it.name}`).join('\x1e'),
+    [items]
+  ) // Reset page when the property list changes
+  useEffect(() => {
+    setPageStart(0)
+  }, [itemsKey])
+
+  const { perPage, needsPagination } = useMemo(() => {
+    const total = items.length
+    if (!total) return { perPage: 0, needsPagination: false }
+    if (containerWidth <= 0) {
+      return { perPage: 1, needsPagination: total > 1 } // Conservative until the band is measured
+    }
+    if (propertyIconsRowWidth(total) <= containerWidth) {
+      return { perPage: total, needsPagination: false } // Everything fits — no carets
+    }
+    const showLeft = pageStart > 0
+    let available = containerWidth
+    if (showLeft) available -= PROPERTY_CARET_SIZE + PROPERTY_ICON_GAP
+    available -= PROPERTY_CARET_SIZE + PROPERTY_ICON_GAP // Reserve right caret
+    const perPage = Math.max(
+      1,
+      Math.floor((available + PROPERTY_ICON_GAP) / (PROPERTY_ICON_SIZE + PROPERTY_ICON_GAP))
+    )
+    return { perPage, needsPagination: true }
+  }, [items.length, containerWidth, pageStart])
+
+  useEffect(() => {
+    if (!needsPagination) {
+      if (pageStart !== 0) setPageStart(0)
+      return
+    }
+    const maxStart = Math.max(0, items.length - perPage)
+    if (pageStart > maxStart) setPageStart(maxStart) // Clamp after resize / perPage shift
+  }, [needsPagination, items.length, perPage, pageStart])
+
+  if (items.length === 0) return null // No property cells → no top chrome
+
+  const visibleItems = needsPagination ? items.slice(pageStart, pageStart + perPage) : items
+  const canGoBack = needsPagination && pageStart > 0
+  const canGoForward = needsPagination && pageStart + perPage < items.length
+  const markClass =
+    'nodrag nopan flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-500 hover:bg-gray-100 dark:hover:bg-[#2a2a2a]'
+  const layoutMaxW = bandWidth != null && bandWidth > 0 ? bandWidth / scale : containerWidth > 0 ? containerWidth : undefined
+
   return (
     <div
+      ref={containerRef}
       data-tt-property-header
-      className={cn('flex h-7 w-full items-center gap-1.5', className)} // Full-width Y band like other blocks
+      className={cn('flex h-7 w-full min-w-0 max-w-full items-center gap-1.5 overflow-hidden', className)}
+      style={layoutMaxW != null ? { width: layoutMaxW, maxWidth: layoutMaxW } : undefined}
     >
-      {types.map((type, i) => {
-        const label = propertyTypeLabel(type) // Title / aria for this glyph
-        return (
-          <span
-            key={`${type}-${i}`} // Duplicate types are allowed (two Number cells, etc.)
-            // Square hover only (like Notion connection mark) — not the whole property band
-            // nodrag: interacting with a mark must not start RF frame drag
-            className="nodrag nopan flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-500 hover:bg-gray-100 dark:hover:bg-[#2a2a2a]"
-            title={label}
-            aria-label={`Property · ${label}`}
-            onPointerDown={(e) => e.stopPropagation()} // Own the gesture; band body may still drag the frame
-          >
-            {propertyTypeIcon(type, 'h-4 w-4')}
-          </span>
-        )
-      })}
+      {canGoBack && (
+        <button
+          type="button"
+          className={markClass}
+          title="Previous properties"
+          aria-label="Previous properties"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation()
+            setPageStart((s) => Math.max(0, s - perPage))
+          }}
+        >
+          <ChevronLeft className="h-4 w-4" aria-hidden />
+        </button>
+      )}
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+        {visibleItems.map((item, i) => (
+          <PropertyIconWithTooltip
+            key={`${item.type}-${item.name}-${pageStart + i}`}
+            type={item.type}
+            name={item.name}
+            className={markClass}
+            onPointerDown={(e) => e.stopPropagation()}
+          />
+        ))}
+      </div>
+      {canGoForward && (
+        <button
+          type="button"
+          className={markClass}
+          title="Next properties"
+          aria-label="Next properties"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation()
+            setPageStart((s) => Math.min(s + perPage, Math.max(0, items.length - perPage)))
+          }}
+        >
+          <ChevronRight className="h-4 w-4" aria-hidden />
+        </button>
+      )}
     </div>
   )
 }
@@ -587,7 +699,7 @@ function TipTapContent({
   pinConnectionsToFrame = false, // Free-frame clip: hug spacer only; real group is pinned to the frame
   loadCrossfade = false, // Board load: keep the shell overlay and fade it out; new frames skip this
   chromeBandsOutside = false, // Host paints property / connections in adjust chrome (selected only)
-  onPropertyTypesChange,
+  onPropertyHeadersChange,
   contentPadLeft = 0, // contentFit paddingLeft — ⋮⋮ centers in the blue gutter past this pad
   frameScale = 1, // Locked-resize CSS scale — grips remeasure when it changes
   handleGutterFlow = 0, // Blue L/R gutter width (flow px) — ⋮⋮ local left compensates contentFit scale
@@ -630,7 +742,7 @@ function TipTapContent({
   pinConnectionsToFrame?: boolean
   loadCrossfade?: boolean // Fade the load shell out as TipTap fades in (skip for fadeIn creates)
   chromeBandsOutside?: boolean // Host paints property / connections in adjust chrome
-  onPropertyTypesChange?: (types: PropertyTypeId[]) => void // Live types for host chrome bands
+  onPropertyHeadersChange?: (items: PropertyHeaderItem[]) => void // Live headers for host chrome bands
   contentPadLeft?: number // contentFit padL — grip centering past the fill edge
   frameScale?: number // Locked-resize scale — ⋮⋮ remeasure (CSS transform skips RO)
   handleGutterFlow?: number // Adjust-box L gutter (flow px); grips inverse-scale into it
@@ -866,32 +978,45 @@ function TipTapContent({
     storage.frameHost.hostMessageId = hostMessageId || null
   }, [editor, conversationId, hostMessageId])
 
-  // Top icons = propertyBlock types in doc order (live; reorder / add / delete updates the strip)
-  const [propertyTypes, setPropertyTypes] = useState<PropertyTypeId[]>(() => {
-    const fromHtml = readPropertyBlockTypesFromHtml(content) // Seed from saved HTML before TipTap mounts
+  // Top icons = **empty** propertyBlock headers in doc order (filled cells stay in the body only)
+  const [propertyHeaders, setPropertyHeaders] = useState<PropertyHeaderItem[]>(() => {
+    const fromHtml = readPropertyBlockHeadersFromHtml(content)
     if (fromHtml.length > 0) return fromHtml
-    return propertyType ? [propertyType] : [] // Legacy: frame metadata only, no cells yet
+    if (htmlHasPropertyBlocks(content)) return []
+    return propertyType ? [{ type: propertyType, name: '' }] : []
   })
   useEffect(() => {
     if (!editor || editor.isDestroyed) return
     const sync = () => {
-      const fromDoc = readPropertyBlockTypesFromDoc(editor.state.doc) // Walk blocks top → bottom
-      const next =
-        fromDoc.length > 0 ? fromDoc : propertyType ? [propertyType] : [] // Keep metadata fallback
-      setPropertyTypes((prev) =>
-        prev.length === next.length && prev.every((t, i) => t === next[i]) ? prev : next
+      const fromDoc = readPropertyBlockHeadersFromDoc(editor.state.doc)
+      let next = fromDoc
+      if (fromDoc.length === 0) {
+        let anyProp = false
+        editor.state.doc.descendants((node) => {
+          if (node.type.name === 'propertyBlock') {
+            anyProp = true
+            return false
+          }
+          return true
+        })
+        next = !anyProp && propertyType ? [{ type: propertyType, name: '' }] : []
+      }
+      setPropertyHeaders((prev) =>
+        prev.length === next.length &&
+        prev.every((it, i) => it.type === next[i].type && it.name === next[i].name)
+          ? prev
+          : next
       )
     }
     sync()
-    editor.on('update', sync) // Turn into / ⋮⋮ reorder / delete
+    editor.on('update', sync)
     return () => {
       editor.off('update', sync)
     }
   }, [editor, propertyType])
-  // Host paints property icons in the blue-box top band when selected
   useEffect(() => {
-    onPropertyTypesChange?.(propertyTypes)
-  }, [propertyTypes, onPropertyTypesChange])
+    onPropertyHeadersChange?.(propertyHeaders)
+  }, [propertyHeaders, onPropertyHeadersChange])
 
   // Editable only when this frame is selected (and share role allows). Unselected = no iOS text loupe.
   useEffect(() => {
@@ -1348,10 +1473,14 @@ function TipTapContent({
           <div>
             {/* Unselected: icons stay in the fill. Selected: host paints them in the top chrome band. */}
             {!chromeBandsOutside &&
-              propertyTypes.length > 0 &&
+              propertyHeaders.length > 0 &&
               enableBlockHandles &&
               !isFlashcard &&
-              !showFrameShimmer && <FramePropertyGroup types={propertyTypes} />}
+              !showFrameShimmer && (
+                <div className="w-full min-w-0 overflow-hidden" data-tt-property-band>
+                  <FramePropertyGroup items={propertyHeaders} />
+                </div>
+              )}
             {/* ⋮⋮ paints outside the fill (negative left into panel chrome); no pl-6 inside the frame.
                 Keep mounted during RF drag (invisible) — unmounting mid-drag remounted atom NodeViews. */}
             <div
@@ -2098,7 +2227,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const [clipPreviewReady, setClipPreviewReady] = useState(false) // True after hover dwell — delayed full-content peek
   const [rotation, setRotation] = useState(0) // Degrees of item rotation (persisted in message metadata)
   const [frameShape, setFrameShape] = useState<FrameShapeType | null>(null) // Silhouette (null = default frame)
-  const [chromePropertyTypes, setChromePropertyTypes] = useState<PropertyTypeId[]>([]) // Live types for top adjust-chrome band
+  const [chromePropertyHeaders, setChromePropertyHeaders] = useState<PropertyHeaderItem[]>([])
+  const propBandRef = useRef<HTMLDivElement>(null) // Top property band — width cap for pagination
+  const [propBandWidth, setPropBandWidth] = useState(0) // Measured band px (pre screenChromeScale)
   const isResizingRef = useRef(false) // Track if currently resizing
   const contentFitRef = useRef<HTMLDivElement>(null) // Inner unscaled content wrapper for intrinsic measure
   const frameScaleRef = useRef(1) // Latest scale — resize-end must not close over a stale render
@@ -2705,7 +2836,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // Blue-box L/R gutters when selected. Property / connections bands sit OUTSIDE the fill
   // — only while selected (hide entirely when the frame is idle).
   const showFrameChrome = Boolean(isBlock && (selected || dragging) && !isThreadConnecting)
-  const hasPropBand = Boolean(showFrameChrome && chromePropertyTypes.length > 0)
+  const hasPropBand = Boolean(showFrameChrome && chromePropertyHeaders.length > 0)
   const hasConnBand = Boolean(showFrameChrome && notionConnected && isBlock && !isFlashcard)
   // Screen-relative L/R gutter fits the ⋮⋮ (zoom comfort) — not × frameScale (that left empty
   // blue pad when grips counter-scaled). Grips use localGutter = adjustChromeX/chromeScale so
@@ -2730,6 +2861,18 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // T/B bands only while selected — even empty strips keep the blue box balanced
   const adjustChromeYTop = showFrameChrome ? chromeBandH : 0
   const adjustChromeYBottom = showFrameChrome ? chromeBandH : 0
+  useLayoutEffect(() => {
+    const el = propBandRef.current
+    if (!el || !hasPropBand) {
+      setPropBandWidth(0)
+      return
+    }
+    const sync = () => setPropBandWidth(el.clientWidth)
+    sync()
+    const ro = new ResizeObserver(sync)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [hasPropBand, adjustChromeX, chromePadX, screenChromeScale]) // Re-measure when frame chrome insets change
   // Keep the filled frame glued when selection chrome appears/disappears (grow left/up).
   // Do NOT shift RF position when chrome scale changes with zoom — that deferred setNodes
   // jumped the frame (looked like the board slid) after phone pinch over DB tables.
@@ -6427,9 +6570,11 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       {/* Property icons — above the fill, inset to match fill content (not flush to fill’s left edge) */}
       {hasPropBand && (
         <div
+          ref={propBandRef}
           data-tt-frame-chrome-top
+          data-tt-property-band
           // Band body may drag the frame; individual property marks are nodrag
-          className="absolute z-[2] flex items-end" // Sit on the fill (extra band air is above)
+          className="absolute z-[2] flex min-w-0 items-end overflow-hidden" // Clip scaled icons to the frame width
           style={{
             top: 0,
             left: adjustChromeX + chromePadX,
@@ -6439,12 +6584,17 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         >
           {/* Screen-comfort icons — do not grow with locked frameScale */}
           <div
+            className="min-w-0 w-full overflow-hidden"
             style={{
               transform: screenChromeScale !== 1 ? `scale(${screenChromeScale})` : undefined,
               transformOrigin: 'left bottom',
             }}
           >
-            <FramePropertyGroup types={chromePropertyTypes} />
+            <FramePropertyGroup
+              items={chromePropertyHeaders}
+              bandWidth={propBandWidth}
+              layoutScale={screenChromeScale}
+            />
           </div>
         </div>
       )}
@@ -6703,7 +6853,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               contentPadLeft={isBlock ? BLOCK_FRAME_PAD_X : 0}
               frameScale={frameScale}
               handleGutterFlow={handleGutterFlow}
-              onPropertyTypesChange={setChromePropertyTypes}
+              onPropertyHeadersChange={setChromePropertyHeaders}
               boardInTargets={(() => {
                 const convs =
                   (queryClient.getQueryData(['conversations']) as

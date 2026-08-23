@@ -43,7 +43,7 @@ import {
   wrapJsonForInsert,
   type EditorBlockRef,
 } from '@/lib/tiptap/block-selection'
-import { collectPropertyBlocks } from '@/lib/tiptap/property-block' // Top icon row is one block; ⋮⋮ arms all property cells
+import { collectPropertyBlocks } from '@/lib/tiptap/property-block' // Top icon row = empty cells; ⋮⋮ arms those
 import { setAiBlockSelection } from '@/lib/ai/selection-bridge' // Live block pills in AI composer (⋮⋮ only)
 import { htmlToPlain } from '@/lib/ai/context-pack' // Block hover preview from HTML
 import { type NotionSyncMode } from '@/lib/blocks' // Connections ⋮⋮ → Live Sync / Manual
@@ -151,16 +151,16 @@ function layoutForConnectionsHeader(
   }
 }
 
-/** One EditorBlockRef spanning every propertyBlock (the top icon list as a single block). */
+/** One EditorBlockRef spanning every **header-only** propertyBlock (top icon list as a single block). */
 function propertyHeaderBlock(editor: Editor): { block: EditorBlockRef; insertFrom: number; insertTo: number } | null {
-  const blocks = collectPropertyBlocks(editor)
+  const blocks = collectPropertyBlocks(editor, { emptyOnly: true }) // Match top strip icons
   if (blocks.length === 0) return null
   const first = blocks[0]
   const last = blocks[blocks.length - 1]
   return {
     block: {
       from: first.from,
-      to: last.to, // Inclusive of the last property cell
+      to: last.to, // Inclusive of the last empty property cell
       node: first.node,
       typeName: 'propertyBlock',
     },
@@ -306,6 +306,13 @@ function layoutForBlock(
     if (block.from < 0 || block.from >= size || block.to > size || block.from >= block.to) return null
     const root = container
     const el = blockDom(editor, block)
+    // Header-only DB-card cells are display:none — skip phantom grips in the gutter
+    if (
+      el?.classList?.contains('tt-property-block-header-only') ||
+      el?.getAttribute?.('data-header-only') === 'true'
+    ) {
+      return null
+    }
 
     const dbHeader = el
       ? ((el.querySelector?.('.tt-database-block-row') as HTMLElement | null) ||
@@ -375,6 +382,8 @@ function layoutForBlock(
         blockTop,
         blockBottom,
         block,
+        insertFrom: block.from, // Atom blocks (property/image) — explicit doc edges for add-block
+        insertTo: block.to,
       }
     }
 
@@ -843,7 +852,7 @@ export function TipTapBlockHandles({
     (block: EditorBlockRef, clientX: number, clientY: number, asPropertyHeader = false) => {
       if (!editor) return
       if (asPropertyHeader) {
-        const props = collectPropertyBlocks(editor) // Arm every property cell (the list is one block)
+        const props = collectPropertyBlocks(editor, { emptyOnly: true }) // Arm header-only cells (top strip)
         if (props.length === 0) return
         applySelection(props, { asPropertyHeader: true }) // One header ⋮⋮ — not a grip per cell
         anchorRef.current = props[0]
@@ -884,12 +893,20 @@ export function TipTapBlockHandles({
       e.stopPropagation() // Don't bubble to frame / RF
       e.preventDefault()
       if (!editor || editor.isDestroyed) return
-      editor
+      const doc = editor.state.doc
+      const pos = Math.max(0, Math.min(insertPos, doc.content.size))
+      // Clear atom NodeSelection (propertyBlock) so insertContentAt is not blocked
+      const ok = editor
         .chain()
-        .insertContentAt(insertPos, { type: 'paragraph' }) // New empty block at the gap
-        .setTextSelection(insertPos + 1) // Caret inside the new block
         .focus()
+        .insertContentAt(pos, { type: 'paragraph' })
+        .setTextSelection(Math.min(pos + 1, doc.content.size + 1))
         .run()
+      if (!ok) {
+        editor.commands.insertContentAt(pos, { type: 'paragraph' })
+        editor.commands.setTextSelection(Math.min(pos + 1, editor.state.doc.content.size))
+        editor.commands.focus()
+      }
     },
     [editor, isPanelSelected]
   )
@@ -1163,8 +1180,8 @@ export function TipTapBlockHandles({
         : [menu.block]
 
       if (action === 'turnInto' && payload?.propertyType) {
-        for (const b of ordered) turnEditorBlockIntoProperty(editor, b, payload.propertyType) // Block → icon + Empty cell
-        onPropertyTurnInto?.(payload.propertyType) // Stamp propertyType on the host frame (top icon)
+        for (const b of ordered) turnEditorBlockIntoProperty(editor, b, payload.propertyType) // Block → inline Empty cell
+        // Do not stamp frame top chrome / Y-shift — user inline stays in the body only
         clearBlockSelection()
         return
       }
@@ -1240,6 +1257,7 @@ export function TipTapBlockHandles({
                 queryKey: ['messages-for-panels', conversationId],
               })
             }
+            await queryClient.invalidateQueries({ queryKey: ['notion-database'] })
             await queryClient.invalidateQueries({ queryKey: ['panel-edges', refreshId] })
             await queryClient.invalidateQueries({ queryKey: ['panel-edges', conversationId] })
             await queryClient.invalidateQueries({ queryKey: ['conversations'] })
@@ -1536,8 +1554,9 @@ export function TipTapBlockHandles({
         const insertBelowTop = insertBelowY - gutterTop - localInsertHit / 2
         const insertAbove = gl.insertFrom ?? gl.block.from
         const insertBelow = gl.insertTo ?? gl.block.to
-        // Property / connections chrome strips — ⋮⋮ only, no between-block hairlines
-        const showInsertLines = isPanelSelected && !gl.propertyHeader && !gl.connectionsHeader
+        // Connections strip — ⋮⋮ only. Property header keeps add-block hairlines (header-only
+        // cells are hidden in the body, so this is the only way to insert above/below them).
+        const showInsertLines = isPanelSelected && !gl.connectionsHeader
         const grip = (
           <div
             key={gripKey}

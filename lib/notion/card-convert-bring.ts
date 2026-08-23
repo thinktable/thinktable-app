@@ -52,8 +52,13 @@ export function saveCardConvertBringPrefs(prefs: CardConvertBringPrefs): void {
 }
 
 /** Normalize Notion page ids for Map lookups. */
-function idKey(id: string): string {
+export function notionPageIdKey(id: string): string {
   return id.replace(/-/g, '').toLowerCase()
+}
+
+/** @deprecated Use notionPageIdKey */
+function idKey(id: string): string {
+  return notionPageIdKey(id)
 }
 
 /** Resolve Parent-item relation name from settings or schema heuristics. */
@@ -190,18 +195,22 @@ export function collectRowsForCardConvert(opts: {
  */
 export function cardedPageIdsFromMessages(
   messages: Array<{ metadata?: Record<string, unknown> | null } | null | undefined>,
-  notionDatabaseId: string
+  notionDatabaseId: string,
+  hostPeeledPageIds?: string[] | null
 ): Set<string> {
-  const dbKey = idKey(notionDatabaseId)
+  const dbKey = notionPageIdKey(notionDatabaseId)
   const out = new Set<string>()
   for (const msg of messages) {
     const meta = msg?.metadata
     if (!meta || meta.dbLayout !== 'card') continue
     const msgDb =
-      typeof meta.notionDatabaseId === 'string' ? idKey(meta.notionDatabaseId) : ''
+      typeof meta.notionDatabaseId === 'string' ? notionPageIdKey(meta.notionDatabaseId) : ''
     if (msgDb && msgDb !== dbKey) continue // Other DB’s cards
     const pageId = typeof meta.notionPageId === 'string' ? meta.notionPageId : ''
-    if (pageId) out.add(idKey(pageId))
+    if (pageId) out.add(notionPageIdKey(pageId))
+  }
+  for (const id of hostPeeledPageIds || []) {
+    if (typeof id === 'string' && id.trim()) out.add(notionPageIdKey(id))
   }
   return out
 }
