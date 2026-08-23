@@ -77,7 +77,7 @@ export default async function ConversationPage({
     <EditorProvider>
       <ReactFlowContextProvider conversationId={conversationId}>
         <PreviewFocusProvider>
-          <AiEditSessionProvider>
+          <AiEditSessionProvider conversationId={conversationId}>
             <BoardAccessProvider role={role} boardId={conversationId}>
               <div className="h-full flex">
                 <div className="flex-1 relative min-w-0 h-full">

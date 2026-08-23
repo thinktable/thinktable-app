@@ -67,6 +67,7 @@ export function PropertyIconWithTooltip({
     <>
       <span
         ref={iconRef}
+        data-tt-property-icon
         className={className}
         aria-label={`Property · ${label}`}
         onMouseEnter={() => {

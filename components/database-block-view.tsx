@@ -34,6 +34,7 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
   const titleRef = useRef<HTMLSpanElement>(null) // contentEditable span
   // Host sets TipTap editable only when the frame is selected — drive table nodrag from that
   const [frameSelected, setFrameSelected] = useState(() => !!editor?.isEditable)
+  const [frameDragging, setFrameDragging] = useState(false)
 
   useEffect(() => {
     const dom = editor?.view?.dom as HTMLElement | undefined
@@ -42,6 +43,16 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
     sync()
     const mo = new MutationObserver(sync)
     mo.observe(dom, { attributes: true, attributeFilter: ['contenteditable'] })
+    return () => mo.disconnect()
+  }, [editor])
+
+  useEffect(() => {
+    const dom = editor?.view?.dom as HTMLElement | undefined
+    if (!dom) return
+    const sync = () => setFrameDragging(dom.hasAttribute('data-frame-dragging'))
+    sync()
+    const mo = new MutationObserver(sync)
+    mo.observe(dom, { attributes: true, attributeFilter: ['data-frame-dragging'] })
     return () => mo.disconnect()
   }, [editor])
 
@@ -154,6 +165,7 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
           conversationId={hostConversationId}
           hostMessageId={hostMessageId}
           frameSelected={frameSelected}
+          frameDragging={frameDragging}
         />
       ) : null}
     </NodeViewWrapper>

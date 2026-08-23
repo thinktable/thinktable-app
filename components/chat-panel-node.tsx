@@ -52,8 +52,19 @@ import {
   htmlHasPropertyBlocks,
   readPropertyBlockHeadersFromDoc,
   readPropertyBlockHeadersFromHtml,
+  readPropertyBlockAt,
+  setPropertyBlockValue,
   type PropertyHeaderItem,
 } from '@/lib/tiptap/property-block' // Top icons = empty propertyBlocks only
+import {
+  bindPropertyIconDrag,
+  resolvePropertyHeaderFrom,
+  type PropertyDropLine,
+} from '@/lib/tiptap/property-block-drag' // Drag between property cells
+import { PropertyDropLinePortal } from '@/components/property-drop-line-portal' // Blue dashed insert line
+import type { Editor } from '@tiptap/core' // Property header drag + popup edits
+import { PropertyIconWithTooltip } from '@/components/property-icon-with-tooltip' // Top-strip icon + name popup
+import { PropertyValuePopup, type PropertyEditorAnchor } from '@/components/property-value-popup' // Calendar / checkbox / text
 
 import { NotionMarkIcon } from '@/components/notion-mark-icon' // Logo at bottom of a Notion-connected frame
 import { createPortal } from 'react-dom'
@@ -450,23 +461,76 @@ function propertyIconsRowWidth(count: number): number {
   return count * PROPERTY_ICON_SIZE + (count - 1) * PROPERTY_ICON_GAP
 }
 
-import { PropertyIconWithTooltip } from '@/components/property-icon-with-tooltip' // Top-strip icon + name popup
+
 /** Top strip: **empty** type icons in document order — one **block** (⋮⋮ comes from TipTapBlockHandles). */
 function FramePropertyGroup({
   items,
   className,
   bandWidth,
   layoutScale = 1,
+  editor = null,
+  editorRef,
 }: {
   items: PropertyHeaderItem[] // Same sequence as header-only property blocks in the frame
   className?: string
   bandWidth?: number // Constrained host width (chrome band) — self-measure grows with icons without this
   layoutScale?: number // screenChromeScale on the wrapper — layout must be narrower so scaled glyphs fit
+  editor?: Editor | null // Live TipTap — drag into body + click-to-edit popups
+  editorRef?: React.MutableRefObject<Editor | null> // Host chrome reads the live editor from a ref
 }) {
+  const liveEditor = () => {
+    const fromRef = editorRef?.current
+    if (fromRef && !fromRef.isDestroyed) return fromRef
+    if (editor && !editor.isDestroyed) return editor
+    return null
+  }
   const containerRef = useRef<HTMLDivElement>(null) // Clip + aria target
   const [containerWidth, setContainerWidth] = useState(0) // Layout px available for icons (post-scale)
   const [pageStart, setPageStart] = useState(0) // Index of first visible icon when paginated
   const scale = layoutScale > 0 ? layoutScale : 1
+  const [editorOpen, setEditorOpen] = useState<PropertyEditorAnchor & { from: number; type: PropertyTypeId; name: string; value: string } | null>(null)
+  const [dropLine, setDropLine] = useState<PropertyDropLine | null>(null)
+  const [ghost, setGhost] = useState<{ x: number; y: number; type: PropertyTypeId } | null>(null)
+
+  const openEditorAt = useCallback(
+    (item: PropertyHeaderItem, el: HTMLElement) => {
+      const ed = liveEditor()
+      if (!ed || item.from < 0) return
+      const live = readPropertyBlockAt(ed, item.from)
+      const r = el.getBoundingClientRect()
+      setEditorOpen({
+        from: item.from,
+        type: live?.type ?? item.type,
+        name: live?.name || item.name,
+        value: live?.value ?? '',
+        left: r.left,
+        top: r.top,
+        width: r.width,
+        height: r.height,
+      })
+    },
+    [editor, editorRef]
+  )
+
+  const onHeaderPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLSpanElement>, item: PropertyHeaderItem) => {
+      const ed = liveEditor()
+      if (!ed) return
+      const from = resolvePropertyHeaderFrom(ed, item)
+      if (from < 0) return
+      bindPropertyIconDrag(e, {
+        getEditor: liveEditor,
+        from,
+        el: e.currentTarget,
+        headerEl: containerRef.current,
+        pageStart,
+        iconType: item.type,
+        onClick: () => openEditorAt({ ...item, from }, e.currentTarget),
+        callbacks: { setGhost, setDropLine },
+      })
+    },
+    [editor, editorRef, openEditorAt, pageStart]
+  )
 
   useLayoutEffect(() => {
     const el = containerRef.current
@@ -534,6 +598,7 @@ function FramePropertyGroup({
   const layoutMaxW = bandWidth != null && bandWidth > 0 ? bandWidth / scale : containerWidth > 0 ? containerWidth : undefined
 
   return (
+    <>
     <div
       ref={containerRef}
       data-tt-property-header
@@ -558,11 +623,11 @@ function FramePropertyGroup({
       <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
         {visibleItems.map((item, i) => (
           <PropertyIconWithTooltip
-            key={`${item.type}-${item.name}-${pageStart + i}`}
+            key={`${item.type}-${item.name}-${item.from}-${pageStart + i}`}
             type={item.type}
             name={item.name}
-            className={markClass}
-            onPointerDown={(e) => e.stopPropagation()}
+            className={cn(markClass, item.from >= 0 && liveEditor() && 'cursor-grab active:cursor-grabbing')}
+            onPointerDown={(e) => onHeaderPointerDown(e, item)}
           />
         ))}
       </div>
@@ -582,6 +647,31 @@ function FramePropertyGroup({
         </button>
       )}
     </div>
+    {ghost &&
+      typeof document !== 'undefined' &&
+      createPortal(
+        <div
+          className="pointer-events-none fixed z-[120] flex h-6 w-6 items-center justify-center rounded bg-white shadow-md ring-1 ring-gray-200 dark:bg-[#1f1f1f] dark:ring-[#2f2f2f]"
+          style={{ left: ghost.x + 8, top: ghost.y + 8 }}
+        >
+          <PropertyIconWithTooltip type={ghost.type} name="" className="flex h-5 w-5 items-center justify-center text-gray-500" />
+        </div>,
+        document.body
+      )}
+    <PropertyDropLinePortal line={dropLine} />
+    <PropertyValuePopup
+      open={!!editorOpen}
+      anchor={editorOpen}
+      type={editorOpen?.type ?? 'text'}
+      name={editorOpen?.name ?? ''}
+      value={editorOpen?.value ?? ''}
+      onCommit={(next) => {
+        const ed = liveEditor()
+        if (ed && editorOpen && editorOpen.from >= 0) setPropertyBlockValue(ed, editorOpen.from, next)
+      }}
+      onClose={() => setEditorOpen(null)}
+    />
+    </>
   )
 }
 
@@ -690,6 +780,7 @@ function TipTapContent({
   onPageTurnInto,
   suspendContentSync = false, // True while RF frame-dragging — skip setContent remounts
   dragSuspendRef, // Sync flag armed on pointerdown (React state alone is one frame late)
+  frameDragging = false, // RF frame drag — databaseBlock swaps to a light shell
   forceContentSyncKey = 0, // Bump to setContent even while editor is focused (AI eye / remove / save)
   notionConnected = false, // Connections → Notion selected
   notionSync = 'live', // Live Sync vs Manual
@@ -733,6 +824,7 @@ function TipTapContent({
   onPageTurnInto?: (blockType: 'board' | 'boardIn', boardInParentId?: string | null) => void
   suspendContentSync?: boolean
   dragSuspendRef?: React.MutableRefObject<boolean> // Parent mutates sync on pointerdown
+  frameDragging?: boolean
   forceContentSyncKey?: number
   notionConnected?: boolean
   notionSync?: NotionSyncMode
@@ -971,19 +1063,42 @@ function TipTapContent({
   useEffect(() => {
     if (!editor || editor.isDestroyed) return
     const storage = editor.storage as {
-      frameHost?: { conversationId: string | null; hostMessageId: string | null }
+      frameHost?: {
+        conversationId: string | null
+        hostMessageId: string | null
+        frameDragging: boolean
+      }
     }
     if (!storage.frameHost) return
     storage.frameHost.conversationId = conversationId || null
     storage.frameHost.hostMessageId = hostMessageId || null
   }, [editor, conversationId, hostMessageId])
 
+  // Sync RF drag so databaseBlock can drop the heavy table DOM while the frame moves
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return
+    const storage = editor.storage as {
+      frameHost?: {
+        conversationId: string | null
+        hostMessageId: string | null
+        frameDragging: boolean
+      }
+    }
+    if (!storage.frameHost) return
+    storage.frameHost.frameDragging = !!frameDragging
+    const dom = editor.view?.dom as HTMLElement | undefined
+    if (dom) {
+      if (frameDragging) dom.setAttribute('data-frame-dragging', 'true')
+      else dom.removeAttribute('data-frame-dragging')
+    }
+  }, [editor, frameDragging])
+
   // Top icons = **empty** propertyBlock headers in doc order (filled cells stay in the body only)
   const [propertyHeaders, setPropertyHeaders] = useState<PropertyHeaderItem[]>(() => {
     const fromHtml = readPropertyBlockHeadersFromHtml(content)
     if (fromHtml.length > 0) return fromHtml
     if (htmlHasPropertyBlocks(content)) return []
-    return propertyType ? [{ type: propertyType, name: '' }] : []
+    return propertyType ? [{ type: propertyType, name: '', from: -1 }] : []
   })
   useEffect(() => {
     if (!editor || editor.isDestroyed) return
@@ -999,11 +1114,14 @@ function TipTapContent({
           }
           return true
         })
-        next = !anyProp && propertyType ? [{ type: propertyType, name: '' }] : []
+        next = !anyProp && propertyType ? [{ type: propertyType, name: '', from: -1 }] : []
       }
       setPropertyHeaders((prev) =>
         prev.length === next.length &&
-        prev.every((it, i) => it.type === next[i].type && it.name === next[i].name)
+        prev.every(
+          (it, i) =>
+            it.type === next[i].type && it.name === next[i].name && it.from === next[i].from
+        )
           ? prev
           : next
       )
@@ -1478,7 +1596,7 @@ function TipTapContent({
               !isFlashcard &&
               !showFrameShimmer && (
                 <div className="w-full min-w-0 overflow-hidden" data-tt-property-band>
-                  <FramePropertyGroup items={propertyHeaders} />
+                  <FramePropertyGroup items={propertyHeaders} editor={editor} />
                 </div>
               )}
             {/* ⋮⋮ paints outside the fill (negative left into panel chrome); no pl-6 inside the frame.
@@ -6080,6 +6198,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         paddingLeft: adjustChromeX || undefined,
         boxSizing: 'border-box',
         opacity: isInitialShrinkComplete ? 1 : 0,
+        willChange: dragging && isBlock ? 'transform' : undefined,
         // Fill always paints on the inner frame shell (shape-capable surface) — not here
         backgroundColor:
           frameShape || isContentRotated || isBlock ? 'transparent' : panelBackgroundColor,
@@ -6594,6 +6713,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               items={chromePropertyHeaders}
               bandWidth={propBandWidth}
               layoutScale={screenChromeScale}
+              editorRef={promptEditorRef}
             />
           </div>
         </div>
@@ -6831,6 +6951,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               isFlashcard={isFlashcard}
               isPanelSelected={!!selected} // Keep editable on tap — !dragging was flipping off mid-gesture (I-bar needed 2 taps)
               suspendContentSync={!!dragging || dragAtomGuard} // Freeze TipTap before RF sets dragging (first-drag race)
+              frameDragging={!!dragging || dragAtomGuard}
               dragSuspendRef={frameDragSuspendRef} // Sync arm on pointerdown — state lags one frame
               forceContentSyncKey={aiForceSyncKey} // AI eye / remove / save swaps content even while focused
               isLoading={false}

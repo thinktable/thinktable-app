@@ -3,7 +3,8 @@
 // React NodeView for propertyBlock: cell box with the type icon inside + Empty placeholder.
 // Header-only (empty + !inline) renders nothing in the body — icon lives on the frame top strip.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react'
 import { cn } from '@/lib/utils'
 import {
@@ -12,48 +13,99 @@ import {
   type PropertyTypeId,
 } from '@/lib/blocks/property'
 import { PropertyIconWithTooltip } from '@/components/property-icon-with-tooltip' // Type glyph + name popup
+import { PropertyValuePopup, type PropertyEditorAnchor } from '@/components/property-value-popup' // Calendar / checkbox / text
+import {
+  bindPropertyIconDrag,
+  type PropertyDropLine,
+} from '@/lib/tiptap/property-block-drag' // Reorder among property cells
+import { PropertyDropLinePortal } from '@/components/property-drop-line-portal' // Blue dashed insert line
 import {
   isPropertyBlockHeaderOnly,
   isPropertyBlockInline,
 } from '@/lib/tiptap/property-block'
 
-export function PropertyBlockView({ node, updateAttributes, selected, editor }: NodeViewProps) {
-  const rawType = node.attrs.propertyType as string // Attr from Turn into / HTML
-  const propertyType: PropertyTypeId = isPropertyTypeId(rawType) ? rawType : 'text' // Safe glyph
-  const stored = typeof node.attrs.value === 'string' ? node.attrs.value : '' // Persisted cell text
-  const inline = isPropertyBlockInline(node.attrs as Record<string, unknown>) // Stay in body when empty
-  const headerOnly = isPropertyBlockHeaderOnly(node.attrs as Record<string, unknown>) // Top strip only
+function propertyTypeNeedsPopup(type: PropertyTypeId): boolean {
+  return (
+    type === 'date' ||
+    type === 'createdTime' ||
+    type === 'lastEditedTime' ||
+    type === 'checkbox' ||
+    type === 'select' ||
+    type === 'status' ||
+    type === 'multiSelect'
+  )
+}
+
+export function PropertyBlockView({ node, updateAttributes, selected, editor, getPos }: NodeViewProps) {
+  const rawType = node.attrs.propertyType as string
+  const propertyType: PropertyTypeId = isPropertyTypeId(rawType) ? rawType : 'text'
+  const stored = typeof node.attrs.value === 'string' ? node.attrs.value : ''
   const propertyName = typeof node.attrs.propertyName === 'string' ? node.attrs.propertyName : ''
-  const [draft, setDraft] = useState(stored) // Local while typing so each keystroke isn't a TipTap attr write
-  const label = propertyTypeLabel(propertyType) // Input aria when no Notion name
-  // Frame deselected → TipTap editable=false; keep the native input from stealing clicks / re-focusing.
-  // Host `setOptions({ editable })` fires no transaction, so a one-shot `editor.isEditable` read goes
-  // stale until the next doc change — that left the cell inert (no hover border, first click lost).
+  const inline = isPropertyBlockInline(node.attrs as Record<string, unknown>)
+  const headerOnly = isPropertyBlockHeaderOnly(node.attrs as Record<string, unknown>)
+  const [draft, setDraft] = useState(stored)
+  const label = propertyTypeLabel(propertyType)
+  const iconRef = useRef<HTMLSpanElement>(null)
+  const [editorOpen, setEditorOpen] = useState<PropertyEditorAnchor | null>(null)
+  const [ghost, setGhost] = useState<{ x: number; y: number; type: PropertyTypeId } | null>(null)
+  const [dropLine, setDropLine] = useState<PropertyDropLine | null>(null)
   const [canEditCell, setCanEditCell] = useState(() => !!editor?.isEditable)
 
   useEffect(() => {
     const dom = editor?.view?.dom as HTMLElement | undefined
     if (!dom) return
     const sync = () => setCanEditCell(!!editor?.isEditable)
-    sync() // Catch a toggle that landed before this effect ran
-    // PM mirrors `editable` onto the editor DOM's contenteditable — observe that instead of polling
+    sync()
     const mo = new MutationObserver(sync)
     mo.observe(dom, { attributes: true, attributeFilter: ['contenteditable'] })
     return () => mo.disconnect()
   }, [editor])
 
   useEffect(() => {
-    setDraft(stored) // Remote / Turn-into attr updates win over a stale draft
+    setDraft(stored)
   }, [stored])
 
-  // Commit the cell into node attrs (survives reload via message HTML)
   const commit = useCallback(() => {
-    const next = draft.trim() // Don't persist whitespace-only as a value
-    if (next === stored) return // No-op when unchanged
+    const next = draft.trim()
+    if (next === stored) return
     updateAttributes({ value: next })
   }, [draft, stored, updateAttributes])
 
-  // Empty DB-card cells stay in the doc for the top strip + table round-trip, but take no body space
+  const openValuePopup = useCallback(() => {
+    const el = iconRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    setEditorOpen({ left: r.left, top: r.top, width: r.width, height: r.height })
+  }, [])
+
+  const focusInput = useCallback(() => {
+    const input = iconRef.current
+      ?.closest('.tt-property-block-cell')
+      ?.querySelector('input') as HTMLInputElement | null
+    input?.focus()
+    input?.setSelectionRange(input.value.length, input.value.length)
+  }, [])
+
+  const onIconPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLElement>) => {
+      if (!canEditCell || !editor || editor.isDestroyed) return
+      const from = getPos?.()
+      if (from == null || from < 0) return
+      bindPropertyIconDrag(e, {
+        getEditor: () => editor,
+        from,
+        el: e.currentTarget,
+        iconType: propertyType,
+        onClick: () => {
+          if (propertyTypeNeedsPopup(propertyType)) openValuePopup()
+          else focusInput()
+        },
+        callbacks: { setGhost, setDropLine },
+      })
+    },
+    [canEditCell, editor, getPos, propertyType, openValuePopup, focusInput]
+  )
+
   if (headerOnly) {
     return (
       <NodeViewWrapper
@@ -61,7 +113,7 @@ export function PropertyBlockView({ node, updateAttributes, selected, editor }: 
         className="tt-property-block tt-property-block-header-only nokey"
         data-type="propertyBlock"
         data-header-only="true"
-        style={{ display: 'none' }} // No inline row — icon is on the frame top band
+        style={{ display: 'none' }}
       />
     )
   }
@@ -70,53 +122,46 @@ export function PropertyBlockView({ node, updateAttributes, selected, editor }: 
     <NodeViewWrapper
       as="div"
       className={cn(
-        'tt-property-block nokey', // nokey: typing stays in the cell when selected
-        canEditCell && 'nodrag', // Only while the frame is selected — else RF must drag/select the frame
+        'tt-property-block nokey',
+        canEditCell && 'nodrag',
         selected && canEditCell && 'tt-property-block-selected'
       )}
       data-type="propertyBlock"
       data-inline={inline ? 'true' : undefined}
     >
-      {/* First-line band the ⋮⋮ grip measures (same idea as imageBlock / databaseBlock) */}
       <div className="tt-property-block-row">
         <div
           className="tt-property-block-cell"
           onPointerDown={(e) => {
-            if (!canEditCell) return // Unselected: let RF select the frame
-            if ((e.target as HTMLElement).closest('.tt-property-block-input')) return // Input handles itself
-            // Icon / cell padding is still the cell — claim it before PM turns this into a
-            // NodeSelection, and put the caret in the value so one click lands the I-bar
+            if (!canEditCell) return
+            if ((e.target as HTMLElement).closest('.tt-property-block-input')) return
+            if ((e.target as HTMLElement).closest('[data-tt-property-icon]')) return
             e.stopPropagation()
             e.preventDefault()
-            const input = e.currentTarget.querySelector('input') as HTMLInputElement | null
-            input?.focus()
-            input?.setSelectionRange(input.value.length, input.value.length)
+            focusInput()
           }}
         >
-          <PropertyIconWithTooltip
-            type={propertyType}
-            name={propertyName}
-            className="tt-property-block-icon"
-          />
+          <span ref={iconRef} className="inline-flex">
+            <PropertyIconWithTooltip
+              type={propertyType}
+              name={propertyName}
+              className={cn('tt-property-block-icon', canEditCell && 'cursor-grab active:cursor-grabbing')}
+              onPointerDown={onIconPointerDown}
+            />
+          </span>
           <input
             type="text"
-            className={cn(
-              'tt-property-block-input',
-              // Only the input ignores hits while unselected — the cell/row stay hoverable so the
-              // border still paints, and the select click falls through to PM instead of focusing here
-              !canEditCell && 'pointer-events-none'
-            )}
+            className={cn('tt-property-block-input', !canEditCell && 'pointer-events-none')}
             value={draft}
             placeholder="Empty"
             aria-label={`${propertyName.trim() || label} value`}
-            readOnly={!canEditCell} // Unselected frame: display only — click selects the frame
-            tabIndex={canEditCell ? 0 : -1} // Don't park focus in a deselected frame
+            readOnly={!canEditCell}
+            tabIndex={canEditCell ? 0 : -1}
             onPointerDown={(e) => {
-              if (!canEditCell) return // Let the event reach RF so the frame selects
-              e.stopPropagation() // Selected: don't start frame drag from the cell
+              if (!canEditCell) return
+              e.stopPropagation()
             }}
             onMouseDown={(e) => {
-              // Belt-and-suspenders if pointer-events is overridden: never focus while unselected
               if (!canEditCell) {
                 e.preventDefault()
                 return
@@ -124,31 +169,53 @@ export function PropertyBlockView({ node, updateAttributes, selected, editor }: 
             }}
             onClick={(e) => {
               if (!canEditCell) return
-              e.stopPropagation() // Keep caret in the cell (second click while selected)
+              e.stopPropagation()
             }}
             onChange={(e) => {
               const v = e.target.value
-              setDraft(v) // Local while typing
-              // Flip top-strip ↔ body as soon as emptiness changes (don't wait for blur)
+              setDraft(v)
               const wasEmpty = !stored.trim()
               const nowEmpty = !v.trim()
               if (wasEmpty !== nowEmpty) {
-                // Clearing a non-inline cell moves it to the top strip; keep inline as-is
                 updateAttributes({ value: nowEmpty ? '' : v.trim() })
               }
             }}
-            onBlur={commit} // Persist full text on leave
+            onBlur={commit}
             onKeyDown={(e) => {
               if (!canEditCell) return
-              e.stopPropagation() // Don't let TipTap / RF eat keys
+              e.stopPropagation()
               if (e.key === 'Enter') {
-                e.preventDefault() // Property cell is single-line
-                ;(e.currentTarget as HTMLInputElement).blur() // Commit via onBlur
+                e.preventDefault()
+                ;(e.currentTarget as HTMLInputElement).blur()
               }
             }}
           />
         </div>
       </div>
+      <PropertyValuePopup
+        open={!!editorOpen}
+        anchor={editorOpen}
+        type={propertyType}
+        name={propertyName}
+        value={stored}
+        onCommit={(next) => {
+          setDraft(next)
+          updateAttributes({ value: next })
+        }}
+        onClose={() => setEditorOpen(null)}
+      />
+      {ghost &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="pointer-events-none fixed z-[120] flex h-6 w-6 items-center justify-center rounded bg-white shadow-md ring-1 ring-gray-200 dark:bg-[#1f1f1f] dark:ring-[#2f2f2f]"
+            style={{ left: ghost.x + 8, top: ghost.y + 8 }}
+          >
+            <PropertyIconWithTooltip type={ghost.type} name="" className="flex h-5 w-5 items-center justify-center text-gray-500" />
+          </div>,
+          document.body
+        )}
+      <PropertyDropLinePortal line={dropLine} />
     </NodeViewWrapper>
   )
 }

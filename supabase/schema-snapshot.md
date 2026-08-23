@@ -1,13 +1,21 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-23T02:42:19Z`
+- Snapped at: `2026-08-23T22:31:34Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260823223134_notion_db_table_perf_scroll.sql`.
+- Notion DB table perf: paginated fetch (50 rows + Load more), `@tanstack/react-virtual` row virtualization, lazy cell editors, memoized rows, frame-drag light shell.
+- DB wheel UX: scroll in Scroll nav; block pan at table edges; pinch / Cmd+Ctrl+wheel still zooms map; bottom fade when truncated.
+- Property block drag/drop, value popup, drop-line portal, AI origin toggle (ongoing chrome work).
+- Schema unchanged.
+
+## Prior: property strip pagination and tooltips
 
 - No DDL. Marker `20260823024219_property_strip_pagination_tooltips.sql`.
 - Top property strip paginates with ←/→ carets when icons overflow the frame width (chrome band measure + screenChromeScale).

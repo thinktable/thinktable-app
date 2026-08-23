@@ -3,7 +3,7 @@
 // Database view settings panel — layout, property visibility/order, filter, sort,
 // group, conditional color, sub-tasks. Thinktable chrome (not a Notion pixel clone).
 
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import {
   ArrowDownAZ,
   ArrowLeft,
@@ -955,7 +955,7 @@ function ColorRuleCard({
 }
 
 /** Compact toolbar: search + filter/sort/settings triggers. */
-export function DatabaseViewToolbar({
+export const DatabaseViewToolbar = memo(function DatabaseViewToolbar({
   settings,
   onChange,
   properties,
@@ -1029,4 +1029,4 @@ export function DatabaseViewToolbar({
       />
     </div>
   )
-}
+})

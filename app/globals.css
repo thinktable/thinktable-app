@@ -1890,6 +1890,26 @@ span[data-added="true"] {
     /* Let board-rotation receive two-finger pinch immediately (pan-x/pan-y blocks pinch on iOS) */
     touch-action: none;
   }
+  /* Selected frame: internal DB scroll (wheel / touch) — parent keeps touch-action:none for pinch */
+  .ProseMirror .tt-notion-db-scroll-active {
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+  /* Soft bottom edge when capped table has more rows below */
+  .ProseMirror .tt-notion-db-bottom-fade {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 28px;
+    z-index: 3;
+    background: linear-gradient(to bottom, transparent, rgba(249, 250, 251, 0.98));
+    pointer-events: none;
+  }
+  .dark .ProseMirror .tt-notion-db-bottom-fade {
+    background: linear-gradient(to bottom, transparent, rgba(15, 15, 15, 0.98));
+  }
   /* During pinch: don’t let the table steal touches for scroll (viewport still transforms live) */
   .react-flow.tt-board-navigating .ProseMirror .tt-notion-db {
     pointer-events: none;

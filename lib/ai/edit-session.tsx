@@ -11,7 +11,8 @@ import {
   type ReactNode,
 } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { promotePendingToOrigin } from '@/lib/ai/wrap-ai-html'
+import { htmlHasAiOrigin, htmlHasAiPending, promotePendingToOrigin } from '@/lib/ai/wrap-ai-html'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   buildProposedHtml,
   type AiTextReplacement,
@@ -57,10 +58,15 @@ interface AiEditSessionValue {
   pendingEdits: AiPendingEdit[]
   previewOriginal: boolean
   showAiOrigin: boolean
+  /** Board has persisted AI-origin spans (top-bar toggle only when true). */
+  hasAiContent: boolean
+  /** Sparkles control pinned left of Share; default unpinned → lives in More menu. */
+  aiTopBarPinned: boolean
   focusedEditId: string | null
   /** messageId → original HTML right after Remove (panel consumes once). */
   justRestoredByMessage: Record<string, string>
   setShowAiOrigin: (v: boolean) => void
+  setAiTopBarPinned: (pinned: boolean) => void
   setPreviewOriginal: (v: boolean) => void
   setFocusedEditId: (id: string | null) => void
   consumeRestoredContent: (messageId: string) => void
@@ -78,6 +84,19 @@ interface AiEditSessionValue {
 const AiEditSessionContext = createContext<AiEditSessionValue | null>(null)
 
 const SHOW_AI_ORIGIN_KEY = 'thinktable-show-ai-origin'
+const AI_TOPBAR_PIN_KEY = 'thinktable-ai-topbar-pinned'
+
+/** Default unpinned — AI highlight toggle starts in More menu. */
+function readAiTopBarPinned(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    const raw = window.localStorage.getItem(AI_TOPBAR_PIN_KEY)
+    if (raw === null) return false
+    return raw !== '0' && raw !== 'false'
+  } catch {
+    return false
+  }
+}
 
 function bumpMessages(detail?: {
   contentUpdates?: Array<{ messageId: string; content: string }>
@@ -95,16 +114,47 @@ async function markActionStatus(actionLogId: string | undefined, status: 'applie
 
 export function AiEditSessionProvider({
   children,
+  conversationId,
   onMessagesMutated,
 }: {
   children: ReactNode
+  conversationId?: string
   onMessagesMutated?: () => void
 }) {
+  const queryClient = useQueryClient()
   const [pendingEdits, setPendingEdits] = useState<AiPendingEdit[]>([])
   const [previewOriginal, setPreviewOriginal] = useState(false)
   const [focusedEditId, setFocusedEditId] = useState<string | null>(null)
   const [showAiOrigin, setShowAiOriginState] = useState(false)
+  const [hasAiContent, setHasAiContent] = useState(false)
+  const [aiTopBarPinned, setAiTopBarPinnedState] = useState(false)
   const [justRestoredByMessage, setJustRestoredByMessage] = useState<Record<string, string>>({})
+
+  const scanHasAiContent = useCallback(() => {
+    if (pendingEdits.length > 0) return true
+    if (!conversationId) return false
+    const msgs =
+      (queryClient.getQueryData([
+        'messages-for-panels',
+        conversationId,
+        'full',
+      ]) as Array<{ content?: string; metadata?: Record<string, unknown> }> | undefined) ||
+      (queryClient.getQueryData([
+        'messages-for-panels',
+        conversationId,
+        'embed',
+      ]) as Array<{ content?: string; metadata?: Record<string, unknown> }> | undefined) ||
+      (queryClient.getQueryData([
+        'messages-for-panels',
+        conversationId,
+      ]) as Array<{ content?: string; metadata?: Record<string, unknown> }> | undefined) ||
+      []
+    return msgs.some((m) => {
+      const meta = (m.metadata || {}) as Record<string, unknown>
+      if (meta.hasAiOrigin === true) return true
+      return htmlHasAiOrigin(m.content) || htmlHasAiPending(m.content)
+    })
+  }, [conversationId, pendingEdits, queryClient])
 
   const consumeRestoredContent = useCallback((messageId: string) => {
     setJustRestoredByMessage((prev) => {
@@ -123,7 +173,32 @@ export function AiEditSessionProvider({
     } catch {
       /* ignore */
     }
+    setAiTopBarPinnedState(readAiTopBarPinned())
   }, [])
+
+  useEffect(() => {
+    if (!conversationId) {
+      setHasAiContent(false)
+      return
+    }
+    const apply = () => setHasAiContent(scanHasAiContent())
+    apply()
+    const unsub = queryClient.getQueryCache().subscribe((event) => {
+      const key = event?.query?.queryKey
+      if (!Array.isArray(key) || key[0] !== 'messages-for-panels' || key[1] !== conversationId) return
+      apply()
+    })
+    window.addEventListener('ai-edits-mutated', apply)
+    // Messages often land after the provider mounts — rescan once the board query settles
+    const t1 = window.setTimeout(apply, 400)
+    const t2 = window.setTimeout(apply, 1200)
+    return () => {
+      unsub()
+      window.removeEventListener('ai-edits-mutated', apply)
+      window.clearTimeout(t1)
+      window.clearTimeout(t2)
+    }
+  }, [conversationId, queryClient, scanHasAiContent])
 
   const setShowAiOrigin = useCallback((v: boolean) => {
     setShowAiOriginState(v)
@@ -133,6 +208,19 @@ export function AiEditSessionProvider({
       /* ignore */
     }
     document.documentElement.classList.toggle('tt-show-ai-origin', v)
+  }, [])
+
+  useEffect(() => {
+    if (!hasAiContent && showAiOrigin) setShowAiOrigin(false)
+  }, [hasAiContent, showAiOrigin, setShowAiOrigin])
+
+  const setAiTopBarPinned = useCallback((pinned: boolean) => {
+    setAiTopBarPinnedState(pinned)
+    try {
+      window.localStorage.setItem(AI_TOPBAR_PIN_KEY, pinned ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
   }, [])
 
   const persistFrameContent = useCallback(async (messageId: string, content: string) => {
@@ -454,9 +542,12 @@ export function AiEditSessionProvider({
       pendingEdits,
       previewOriginal,
       showAiOrigin,
+      hasAiContent,
+      aiTopBarPinned,
       focusedEditId,
       justRestoredByMessage,
       setShowAiOrigin,
+      setAiTopBarPinned,
       setPreviewOriginal,
       setFocusedEditId,
       consumeRestoredContent,
@@ -474,9 +565,12 @@ export function AiEditSessionProvider({
       pendingEdits,
       previewOriginal,
       showAiOrigin,
+      hasAiContent,
+      aiTopBarPinned,
       focusedEditId,
       justRestoredByMessage,
       setShowAiOrigin,
+      setAiTopBarPinned,
       consumeRestoredContent,
       addPendingEdits,
       saveEdit,
@@ -502,9 +596,12 @@ export function useAiEditSession(): AiEditSessionValue {
       pendingEdits: [],
       previewOriginal: false,
       showAiOrigin: false,
+      hasAiContent: false,
+      aiTopBarPinned: false,
       focusedEditId: null,
       justRestoredByMessage: {},
       setShowAiOrigin: () => {},
+      setAiTopBarPinned: () => {},
       setPreviewOriginal: () => {},
       setFocusedEditId: () => {},
       consumeRestoredContent: () => {},

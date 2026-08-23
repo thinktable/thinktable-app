@@ -20,6 +20,8 @@ import {
   MessageSquarePlus,
   MoreHorizontal,
   Play,
+  Pin,
+  PinOff,
   RefreshCw,
   Search,
   SlidersHorizontal,
@@ -47,6 +49,7 @@ import { cn } from '@/lib/utils' // Class merge
 import { useReactFlowContext } from './react-flow-context' // Present switches to View mode
 import { useSidebarContext } from './sidebar-context' // Phone hides copy/star into More
 import { NotionConnectMenuItems } from './notion-connect-button' // Connections → Notion (provider wraps share cluster)
+import { useAiEditSession } from '@/lib/ai/edit-session' // AI highlight toggle in More when unpinned
 
 type BoardTopBarShareProps = {
   conversationId?: string // Board id; copy/favorite wait until the board is saved
@@ -88,13 +91,14 @@ function matchesQuery(label: string, q: string): boolean {
 }
 
 /** Notion-style switch parked on the right of a toggle row. */
-function MenuToggle({ on }: { on: boolean }) {
+function MenuToggle({ on, className }: { on: boolean; className?: string }) {
   return (
     <span
       aria-hidden
       className={cn(
         'ml-auto relative h-4 w-7 rounded-full transition-colors',
-        on ? 'bg-blue-500' : 'bg-gray-200'
+        on ? 'bg-blue-500' : 'bg-gray-200',
+        className
       )}
     >
       <span
@@ -111,6 +115,13 @@ export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
   const queryClient = useQueryClient() // Patch conversations cache after favorite
   const { setEditMenuPillMode } = useReactFlowContext() // Present → View bar
   const { isMobileMode } = useSidebarContext() // Phone: copy + star collapse into More
+  const {
+    hasAiContent,
+    showAiOrigin,
+    setShowAiOrigin,
+    aiTopBarPinned,
+    setAiTopBarPinned,
+  } = useAiEditSession()
   const [copied, setCopied] = useState(false) // Brief checkmark after copy
   const [favorited, setFavorited] = useState(false) // Star fill from metadata.favorite
   const [menuOpen, setMenuOpen] = useState(false) // Load footer stats when More opens
@@ -270,10 +281,13 @@ export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
   const showFont = !q || matchesQuery('font default serif mono', q) // Keep font row unless search misses
   const showFooter = !q // Metadata stays at the bottom when not filtering
   const showConnections = !q || matchesQuery('connections notion', q) // Same hay as Connections row
+  const showAiHighlightMenu =
+    !q || matchesQuery('show ai content highlight sparkles pin unpin', q)
   const hasSearchHit =
     !q ||
     showFont ||
     showConnections ||
+    showAiHighlightMenu ||
     [
       'Copy link',
       'Add to favorites',
@@ -452,6 +466,58 @@ export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
                   </span>
                   <DropdownMenuShortcut>⌘⌥P</DropdownMenuShortcut>
                 </DropdownMenuItem>
+              )}
+
+              {showAiHighlightMenu && (
+                <>
+                  {!q && <DropdownMenuSeparator />}
+                  <DropdownMenuItem
+                    className="group"
+                    disabled={!hasAiContent}
+                    title={
+                      hasAiContent
+                        ? showAiOrigin
+                          ? 'Hide reddish highlight on AI-written text'
+                          : 'Show reddish highlight on AI-written text'
+                        : 'No AI-written content on this board yet'
+                    }
+                    onSelect={(e) => {
+                      e.preventDefault()
+                      if (!hasAiContent) return
+                      setShowAiOrigin(!showAiOrigin)
+                    }}
+                  >
+                    <Sparkles className="h-4 w-4 mr-2 shrink-0" />
+                    Show AI content
+                    <span className="ml-auto flex items-center gap-1.5 shrink-0">
+                      {hasAiContent && (
+                        <button
+                          type="button"
+                          className={cn(
+                            'h-6 w-6 inline-flex items-center justify-center rounded-md text-gray-400',
+                            'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100',
+                            'hover:bg-gray-100 hover:text-gray-700',
+                            aiTopBarPinned && 'opacity-100 text-gray-600'
+                          )}
+                          title={aiTopBarPinned ? 'Unpin from top bar' : 'Pin to top bar'}
+                          onPointerDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            setAiTopBarPinned(!aiTopBarPinned)
+                          }}
+                        >
+                          {aiTopBarPinned ? (
+                            <PinOff className="h-3.5 w-3.5" />
+                          ) : (
+                            <Pin className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                      )}
+                      <MenuToggle on={hasAiContent && showAiOrigin} className="ml-0" />
+                    </span>
+                  </DropdownMenuItem>
+                </>
               )}
 
               {!q && <DropdownMenuSeparator />}

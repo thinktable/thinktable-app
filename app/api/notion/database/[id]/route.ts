@@ -4,7 +4,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { createNotionDatabaseRow, fetchNotionDatabaseTable } from '@/lib/notion/database'
+import {
+  createNotionDatabaseRow,
+  fetchNotionDatabaseTable,
+  NOTION_DB_CLIENT_ROW_PAGE,
+} from '@/lib/notion/database'
 
 async function notionTokenForUser(): Promise<
   { token: string } | { error: NextResponse }
@@ -30,7 +34,7 @@ async function notionTokenForUser(): Promise<
 }
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -41,7 +45,15 @@ export async function GET(
     const auth = await notionTokenForUser()
     if ('error' in auth) return auth.error
 
-    const table = await fetchNotionDatabaseTable(auth.token, id)
+    const limitParam = request.nextUrl.searchParams.get('limit')
+    const cursor = request.nextUrl.searchParams.get('cursor') || undefined
+    const rowLimit = limitParam
+      ? Math.min(200, Math.max(1, parseInt(limitParam, 10) || NOTION_DB_CLIENT_ROW_PAGE))
+      : NOTION_DB_CLIENT_ROW_PAGE
+    const table = await fetchNotionDatabaseTable(auth.token, id, {
+      rowLimit,
+      rowCursor: cursor,
+    })
     return NextResponse.json(table)
   } catch (error) {
     console.error('Notion database fetch failed:', error)

@@ -44,6 +44,11 @@ import {
   type EditorBlockRef,
 } from '@/lib/tiptap/block-selection'
 import { collectPropertyBlocks } from '@/lib/tiptap/property-block' // Top icon row = empty cells; ⋮⋮ arms those
+import {
+  endOfPropertyGroupInsertPos,
+  findPropertyBlockDropTarget,
+  isSingleVisiblePropertyCell,
+} from '@/lib/tiptap/property-block-drag' // Property ⋮⋮ → reorder among property cells
 import { setAiBlockSelection } from '@/lib/ai/selection-bridge' // Live block pills in AI composer (⋮⋮ only)
 import { htmlToPlain } from '@/lib/ai/context-pack' // Block hover preview from HTML
 import { type NotionSyncMode } from '@/lib/blocks' // Connections ⋮⋮ → Live Sync / Manual
@@ -467,6 +472,8 @@ export function TipTapBlockHandles({
   // Top icon row armed as ONE block — selection still lists every property cell for drag/delete,
   // but grips/wash stay on the header only (not a ⋮⋮ per cell). Cleared with the selection.
   const [propertyHeaderArmed, setPropertyHeaderArmed] = useState(false)
+  const propertyHeaderArmedRef = useRef(false) // Sync arm for grip pointerdown (before React re-render)
+  propertyHeaderArmedRef.current = propertyHeaderArmed
   // Bottom connections strip armed — chrome-only (no TipTap cells). Cleared with the selection.
   const [connectionsHeaderArmed, setConnectionsHeaderArmed] = useState(false)
   const anchorRef = useRef<EditorBlockRef | null>(null) // Anchor block for Shift range-select
@@ -506,6 +513,8 @@ export function TipTapBlockHandles({
   // Drop block wash + selection + menu (frame deselect, click away, etc.)
   const clearBlockSelection = useCallback(() => {
     if (editor) setEditorBlockHighlight(editor, null) // Wipe single + multi wash
+    selectionRef.current = []
+    propertyHeaderArmedRef.current = false
     setSelection([])
     setPropertyHeaderArmed(false) // Header is not a separate selection — drop with the cells
     setConnectionsHeaderArmed(false) // Connections strip wash / grip arm
@@ -536,6 +545,8 @@ export function TipTapBlockHandles({
   const applySelection = useCallback(
     (blocks: EditorBlockRef[], opts?: { asPropertyHeader?: boolean }) => {
       const asHeader = !!opts?.asPropertyHeader
+      selectionRef.current = blocks
+      propertyHeaderArmedRef.current = asHeader
       setSelection(blocks)
       setPropertyHeaderArmed(asHeader)
       setConnectionsHeaderArmed(false) // Content / property arm clears connections strip
@@ -919,7 +930,12 @@ export function TipTapBlockHandles({
 
   // Block drag only when frame + this block are selected; otherwise let RF drag the frame
   const onGripPointerDown = useCallback(
-    (e: ReactPointerEvent, target?: EditorBlockRef, asConnectionsHeader = false) => {
+    (
+      e: ReactPointerEvent,
+      target?: EditorBlockRef,
+      asConnectionsHeader = false,
+      asPropertyHeader = false
+    ) => {
       if (e.button !== 0 || !editor) return // Left button + live editor
       // Connections strip: arm via click only — no TipTap range to drag
       if (asConnectionsHeader) {
@@ -933,10 +949,37 @@ export function TipTapBlockHandles({
       }
       const block = target ?? (hover ?? focusLayout)?.block
       if (!block) return
-      // Frame not selected, or block not armed via ⋮⋮ click → do not steal the pointer (RF drags the frame)
-      if (!isPanelSelected || !isBlockArmed(block)) {
+      if (!isPanelSelected) {
         gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
-        return // No stopPropagation / no nodrag path — frame moves
+        return
+      }
+      // Property ⋮⋮: arm on press so drag works in one gesture (icon drag does not need a prior click).
+      let dragBlock = block
+      if (asPropertyHeader && !propertyHeaderArmedRef.current) {
+        const props = collectPropertyBlocks(editor, { emptyOnly: true })
+        if (props.length === 0) {
+          gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
+          return
+        }
+        applySelection(props, { asPropertyHeader: true })
+        anchorRef.current = props[0]
+        dragBlock = propertyHeaderBlock(editor)?.block ?? props[0]
+      } else if (
+        !asPropertyHeader &&
+        block.typeName === 'propertyBlock' &&
+        !isBlockArmed(block)
+      ) {
+        const fresh = findEditorBlockAtPos(editor, block.from) ?? block
+        applySelection([fresh])
+        anchorRef.current = fresh
+        dragBlock = fresh
+      }
+      const armedForDrag = asPropertyHeader
+        ? propertyHeaderArmedRef.current
+        : isBlockArmed(dragBlock)
+      if (!armedForDrag) {
+        gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
+        return // No stopPropagation — RF may drag the frame
       }
       e.stopPropagation() // Armed block drag — never start RF frame drag from ⋮⋮
       // Modifier+click is a multi-select gesture (handled in onClick) — don't start a drag
@@ -948,8 +991,10 @@ export function TipTapBlockHandles({
       setMenu(null) // Dismiss actions while dragging the armed block
       setConnectionsMenu(null)
       const sourceHostId = hostNodeId // Frame this block currently lives in
-      const sourceFrom = block.from // Snapshot — docs shift after delete
-      const sourceTo = block.to
+      const sourceFrom = dragBlock.from // Snapshot — docs shift after delete
+      const sourceTo = dragBlock.to
+      const propertyCellDrag =
+        !asPropertyHeader && isSingleVisiblePropertyCell(editor, dragBlock) // ⋮⋮ on one body property row
       const ghostText = editor.state.doc.textBetween(sourceFrom, sourceTo, ' ').trim() || ' ' // Preview label
       const ghostWidth = Math.max(80, Math.min(360, ghostText.length * 8)) // Approximate line width
       setEditorBlockHighlight(editor, { from: sourceFrom, to: sourceTo }) // Keep blue wash while dragging
@@ -968,6 +1013,24 @@ export function TipTapBlockHandles({
         const hit = findHostEditorAtPoint(ev.clientX, ev.clientY)
         if (!hit) {
           setDropLine(null) // Over empty canvas — extract on drop
+          return
+        }
+        if (propertyCellDrag) {
+          const skipFrom = hit.hostNodeId === sourceHostId ? sourceFrom : undefined
+          const drop = findPropertyBlockDropTarget(hit.editor, ev.clientY, skipFrom)
+          if (!drop) {
+            setDropLine(null)
+            return
+          }
+          if (
+            hit.hostNodeId === sourceHostId &&
+            drop.insertPos >= sourceFrom &&
+            drop.insertPos <= sourceTo
+          ) {
+            setDropLine(null)
+            return
+          }
+          setDropLine(drop.line)
           return
         }
         const dropTarget = findContentBlockDropTarget(hit.editor, ev.clientY)
@@ -1002,15 +1065,27 @@ export function TipTapBlockHandles({
         }
 
         if (hit && hit.hostNodeId === sourceHostId) {
-          const dropTarget = findContentBlockDropTarget(hit.editor, ev.clientY)
-          if (dropTarget) moveEditorBlockToPos(editor, sourceFrom, sourceTo, dropTarget.insertPos) // Reorder in this frame
+          if (propertyCellDrag) {
+            const drop = findPropertyBlockDropTarget(hit.editor, ev.clientY, sourceFrom)
+            const insertPos = drop?.insertPos ?? endOfPropertyGroupInsertPos(hit.editor, sourceFrom)
+            moveEditorBlockToPos(editor, sourceFrom, sourceTo, insertPos)
+          } else {
+            const dropTarget = findContentBlockDropTarget(hit.editor, ev.clientY)
+            if (dropTarget) moveEditorBlockToPos(editor, sourceFrom, sourceTo, dropTarget.insertPos) // Reorder in this frame
+          }
           clearBlockSelection()
           return
         }
 
         if (hit && hit.hostNodeId !== sourceHostId) {
-          const dropTarget = findContentBlockDropTarget(hit.editor, ev.clientY)
-          const insertPos = dropTarget?.insertPos ?? hit.editor.state.doc.content.size
+          const dropTarget = propertyCellDrag
+            ? findPropertyBlockDropTarget(hit.editor, ev.clientY)
+            : findContentBlockDropTarget(hit.editor, ev.clientY)
+          const insertPos =
+            dropTarget?.insertPos ??
+            (propertyCellDrag
+              ? endOfPropertyGroupInsertPos(hit.editor)
+              : hit.editor.state.doc.content.size)
           let toInsert = payload // List items stay bare inside a list
           try {
             const $ins = hit.editor.state.doc.resolve(Math.min(insertPos, hit.editor.state.doc.content.size))
@@ -1070,6 +1145,7 @@ export function TipTapBlockHandles({
       window.addEventListener('pointerup', onUp, true)
     },
     [
+      applySelection,
       clearBlockSelection,
       connectionsHeaderArmed,
       conversationId,
@@ -1663,7 +1739,9 @@ export function TipTapBlockHandles({
                       ? 'Click to select block · drag moves frame'
                       : 'Drag to move frame · click to select frame'
               }
-              onPointerDown={(e) => onGripPointerDown(e, gl.block, !!gl.connectionsHeader)}
+              onPointerDown={(e) =>
+                onGripPointerDown(e, gl.block, !!gl.connectionsHeader, !!gl.propertyHeader)
+              }
               onClick={(e) => onGripClick(e, gl.block, !!gl.propertyHeader, !!gl.connectionsHeader)}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter' && e.key !== ' ') return

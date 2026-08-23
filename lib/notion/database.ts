@@ -35,6 +35,16 @@ export type NotionDbRow = {
   cells: Record<string, NotionDbCell> // property name → cell
 }
 
+/** Default row page size for in-app table loads (Load more uses rowsNextCursor). */
+export const NOTION_DB_CLIENT_ROW_PAGE = 50
+
+export type FetchNotionDatabaseOptions = {
+  /** Cap rows returned; omit to fetch all (convert-layout / server paths). */
+  rowLimit?: number
+  /** Notion data_source query cursor, or numeric offset string for view-id slices. */
+  rowCursor?: string
+}
+
 /** Full payload for the structured database table UI. */
 export type NotionDatabaseTable = {
   id: string
@@ -44,6 +54,9 @@ export type NotionDatabaseTable = {
   icon?: string | null
   properties: NotionDbProperty[] // Column order (title first)
   rows: NotionDbRow[]
+  /** More rows available — client passes rowsNextCursor on Load more. */
+  rowsHasMore?: boolean
+  rowsNextCursor?: string | null
   /** Notion Views API slice — filter/sorts already applied server-side; layout for client seed. */
   notionView?: NotionViewSummary | null
 }
@@ -329,7 +342,8 @@ async function resolveDataSourceByTitleSearch(
  */
 export async function fetchNotionDatabaseTable(
   accessToken: string,
-  databaseOrDataSourceId: string
+  databaseOrDataSourceId: string,
+  options?: FetchNotionDatabaseOptions
 ): Promise<NotionDatabaseTable> {
   const headers = {
     Authorization: `Bearer ${accessToken}`,
@@ -560,12 +574,36 @@ export async function fetchNotionDatabaseTable(
   const viewSorts =
     Array.isArray(notionView?.sorts) && notionView!.sorts!.length > 0 ? notionView!.sorts : null
 
-  /** Paginate data_source query; optionally apply view filter/sorts as a secondary path. */
-  const queryAllRows = async (withView: boolean): Promise<NotionDbRow[]> => {
+  type QueryRowsResult = { rows: NotionDbRow[]; hasMore: boolean; nextCursor: string | null }
+
+  const rowFromPage = (result: Record<string, unknown>): NotionDbRow | null => {
+    if (result?.object !== 'page') return null
+    const pageProps = (result.properties || {}) as Record<string, Record<string, unknown>>
+    const cells: Record<string, NotionDbCell> = {}
+    for (const [name, prop] of Object.entries(pageProps)) {
+      cells[name] = cellFromProperty(prop)
+    }
+    return {
+      id: String(result.id),
+      url: result.url as string | undefined,
+      icon: emojiFromIcon(result.icon as { type?: string; emoji?: string } | null | undefined),
+      cells,
+    }
+  }
+
+  /** Paginate data_source query; optionally apply view filter/sorts. */
+  const queryRowsPaged = async (
+    withView: boolean,
+    pageOpts?: { limit?: number; startCursor?: string }
+  ): Promise<QueryRowsResult> => {
     const out: NotionDbRow[] = []
-    let cursor: string | undefined
-    do {
-      const body: Record<string, unknown> = { page_size: 100, start_cursor: cursor }
+    let cursor: string | undefined = pageOpts?.startCursor || undefined
+    const limit = pageOpts?.limit
+
+    while (true) {
+      const pageSize = limit ? Math.min(100, Math.max(1, limit - out.length)) : 100
+      const body: Record<string, unknown> = { page_size: pageSize }
+      if (cursor) body.start_cursor = cursor
       if (withView && viewFilter) body.filter = viewFilter
       if (withView && viewSorts) body.sorts = viewSorts
       const qRes = await fetch(`https://api.notion.com/v1/data_sources/${dataSourceId}/query`, {
@@ -578,35 +616,64 @@ export async function fetchNotionDatabaseTable(
         throw new Error(qPayload?.message || `Failed to query Notion data source ${dataSourceId}`)
       }
       for (const result of qPayload.results || []) {
-        if (result?.object !== 'page') continue
-        const pageProps = (result.properties || {}) as Record<string, Record<string, unknown>>
-        const cells: Record<string, NotionDbCell> = {}
-        for (const [name, prop] of Object.entries(pageProps)) {
-          cells[name] = cellFromProperty(prop)
+        const row = rowFromPage(result as Record<string, unknown>)
+        if (!row) continue
+        out.push(row)
+        if (limit && out.length >= limit) {
+          return {
+            rows: out.slice(0, limit),
+            hasMore: !!qPayload.has_more,
+            nextCursor: qPayload.has_more ? (qPayload.next_cursor as string) : null,
+          }
         }
-        out.push({
-          id: result.id,
-          url: result.url,
-          icon: emojiFromIcon(result.icon),
-          cells,
-        })
       }
-      cursor = qPayload.has_more ? qPayload.next_cursor : undefined
-    } while (cursor)
-    return out
+      if (!qPayload.has_more) {
+        return { rows: out, hasMore: false, nextCursor: null }
+      }
+      cursor = qPayload.next_cursor as string | undefined
+    }
+  }
+
+  const sliceRows = (
+    ordered: NotionDbRow[],
+    limit?: number,
+    offsetCursor?: string
+  ): { rows: NotionDbRow[]; hasMore: boolean; nextCursor: string | null } => {
+    if (limit == null) return { rows: ordered, hasMore: false, nextCursor: null }
+    const offset = offsetCursor ? parseInt(offsetCursor, 10) : 0
+    const safeOffset = Number.isFinite(offset) && offset >= 0 ? offset : 0
+    const page = ordered.slice(safeOffset, safeOffset + limit)
+    const hasMore = safeOffset + limit < ordered.length
+    return {
+      rows: page,
+      hasMore,
+      nextCursor: hasMore ? String(safeOffset + limit) : null,
+    }
   }
 
   let rows: NotionDbRow[]
+  let rowsHasMore = false
+  let rowsNextCursor: string | null = null
+  const rowLimit = options?.rowLimit
+  const rowCursor = options?.rowCursor
+
   if (viewPageIds) {
     // Hydrate properties from data_source, then keep/order only view-query page ids
-    const all = await queryAllRows(false)
+    const all = (await queryRowsPaged(false)).rows
     const byId = new Map(all.map((r) => [r.id.replace(/-/g, '').toLowerCase(), r]))
-    rows = viewPageIds
+    const ordered = viewPageIds
       .map((id) => byId.get(id.replace(/-/g, '').toLowerCase()))
       .filter((r): r is NotionDbRow => !!r)
+    const sliced = sliceRows(ordered, rowLimit, rowCursor)
+    rows = sliced.rows
+    rowsHasMore = sliced.hasMore
+    rowsNextCursor = sliced.nextCursor
   } else if (viewFilter || viewSorts) {
     try {
-      rows = await queryAllRows(true)
+      const paged = await queryRowsPaged(true, { limit: rowLimit, startCursor: rowCursor })
+      rows = paged.rows
+      rowsHasMore = paged.hasMore
+      rowsNextCursor = paged.nextCursor
     } catch (e) {
       console.warn('[notion/database] filter query failed; not dumping full DB', e)
       rows = []
@@ -619,7 +686,10 @@ export async function fetchNotionDatabaseTable(
     })
     rows = []
   } else {
-    rows = await queryAllRows(false)
+    const paged = await queryRowsPaged(false, { limit: rowLimit, startCursor: rowCursor })
+    rows = paged.rows
+    rowsHasMore = paged.hasMore
+    rowsNextCursor = paged.nextCursor
   }
 
   const notionViewSummary: NotionViewSummary | null = notionView
@@ -642,6 +712,8 @@ export async function fetchNotionDatabaseTable(
     icon,
     properties,
     rows,
+    rowsHasMore: rowsHasMore || undefined,
+    rowsNextCursor: rowsNextCursor ?? undefined,
     notionView: notionViewSummary,
   }
 }

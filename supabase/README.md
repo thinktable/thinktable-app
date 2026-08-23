@@ -25,6 +25,8 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260823223134_notion_db_table_perf_scroll` — Notion DB virtualization + pagination; wheel scroll/zoom over selected DB; property block drag
+- `20260823024219_property_strip_pagination_tooltips` — Property strip caret paging; icon name tooltips
 - `20260821141020_shift_drag_and_cmd_wheel_nav_flip` — Shift+drag pan↔select; Cmd/Ctrl+wheel Scroll↔Zoom; New board title/rename
 - `20260820105819_desktop_frame_select_opens_menu` — Desktop frame select opens frame menu; phone tap-after-selected unchanged
 - `20260820105152_phone_boards_nav_tap_sticky_tunnel` — Phone boards nav tap/hold + sticky Cloudflare tunnel

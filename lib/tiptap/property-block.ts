@@ -8,6 +8,7 @@ import { ReactNodeViewRenderer } from '@tiptap/react' // React NodeView for icon
 import { PropertyBlockView } from '@/components/property-block-view' // The rendered chrome
 import { isPropertyTypeId, type PropertyTypeId } from '@/lib/blocks/property' // Known type ids
 import type { EditorBlockRef } from '@/lib/tiptap/block-selection' // Top ⋮⋮ click → that propertyBlock
+import { moveEditorBlockToPos } from '@/lib/tiptap/block-selection' // Header drag reorder
 
 export interface PropertyBlockOptions {
   HTMLAttributes: Record<string, unknown> // Passthrough HTML attrs for mergeAttributes
@@ -59,27 +60,28 @@ export function isPropertyBlockHeaderOnly(attrs: Record<string, unknown> | null 
   return isPropertyBlockValueEmpty(attrs.value) && !isPropertyBlockInline(attrs)
 }
 
-/** One top-strip icon: type glyph + optional Notion column name. */
+/** One top-strip icon: type glyph + optional Notion column name + doc position. */
 export type PropertyHeaderItem = {
   type: PropertyTypeId
   name: string // `data-property-name` when set (card view)
+  from: number // PM position of the header-only propertyBlock (-1 before mount)
 }
 
 /** Property headers in doc order (header-only cells). */
 export function readPropertyBlockHeadersFromDoc(doc: {
   descendants: (
-    fn: (node: { type: { name: string }; attrs: Record<string, unknown> }) => boolean | void
+    fn: (node: { type: { name: string }; attrs: Record<string, unknown> }, pos: number) => boolean | void
   ) => void
 }): PropertyHeaderItem[] {
   const items: PropertyHeaderItem[] = []
-  doc.descendants((node) => {
+  doc.descendants((node, pos) => {
     if (node.type.name !== 'propertyBlock') return true
     if (!isPropertyBlockHeaderOnly(node.attrs)) return false
     const t = node.attrs.propertyType
     if (!isPropertyTypeId(t)) return false
     const raw = node.attrs.propertyName
     const name = typeof raw === 'string' ? raw.trim() : ''
-    items.push({ type: t, name })
+    items.push({ type: t, name, from: pos })
     return false
   })
   return items
@@ -94,7 +96,7 @@ export function readPropertyBlockHeadersFromHtml(html: string): PropertyHeaderIt
   while ((m = re.exec(html))) {
     const { type, empty, inline, propertyName } = parsePropertyBlockTag(m[0])
     if (!empty || inline || !type) continue
-    items.push({ type, name: propertyName })
+    items.push({ type, name: propertyName, from: -1 })
   }
   return items
 }
@@ -183,6 +185,59 @@ export function collectPropertyBlocks(
     return false // Atom — don't walk inside
   })
   return refs
+}
+
+/** Move a header-only property into the frame body (empty inline cell). */
+export function inlinePropertyBlockInBody(
+  editor: Editor,
+  from: number,
+  insertPos?: number
+): boolean {
+  if (!editor || editor.isDestroyed) return false
+  const node = editor.state.doc.nodeAt(from)
+  if (!node || node.type.name !== 'propertyBlock') return false
+  const to = from + node.nodeSize
+  const ok = editor
+    .chain()
+    .command(({ tr }) => {
+      tr.setNodeMarkup(from, undefined, { ...node.attrs, inline: true })
+      return true
+    })
+    .run()
+  if (!ok) return false
+  if (insertPos != null && insertPos !== from && insertPos !== to) {
+    return moveEditorBlockToPos(editor, from, to, insertPos)
+  }
+  return true
+}
+
+/** Persist a property cell value (filled cells leave the top strip). */
+export function setPropertyBlockValue(editor: Editor, from: number, value: string): boolean {
+  if (!editor || editor.isDestroyed) return false
+  const node = editor.state.doc.nodeAt(from)
+  if (!node || node.type.name !== 'propertyBlock') return false
+  return editor
+    .chain()
+    .command(({ tr }) => {
+      tr.setNodeMarkup(from, undefined, { ...node.attrs, value: value.trim() })
+      return true
+    })
+    .run()
+}
+
+/** Read attrs for a propertyBlock at `from` (null when missing). */
+export function readPropertyBlockAt(
+  editor: Editor,
+  from: number
+): { type: PropertyTypeId; name: string; value: string } | null {
+  if (!editor || editor.isDestroyed || from < 0) return null
+  const node = editor.state.doc.nodeAt(from)
+  if (!node || node.type.name !== 'propertyBlock') return null
+  const raw = node.attrs.propertyType
+  const type = isPropertyTypeId(raw) ? raw : 'text'
+  const name = typeof node.attrs.propertyName === 'string' ? node.attrs.propertyName.trim() : ''
+  const value = typeof node.attrs.value === 'string' ? node.attrs.value : ''
+  return { type, name, value }
 }
 
 /** A block whose payload is a property type + optional cell value + placement. */

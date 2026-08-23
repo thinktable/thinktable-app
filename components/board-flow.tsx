@@ -136,6 +136,7 @@ import { NavZoomControl } from './nav-zoom-control' // Zoom % lives in bottom na
 import { NavRotateControl } from './nav-rotate-control' // Board rotate icon — right of zoom %
 import { BoardRotationProvider, useBoardRotation } from './board-rotation-context' // Two-finger twist + nav camera heading
 import { applyBoardRotationToPositionChanges, flowToPane, paneToFlow, viewportKeepingPanePoint } from '@/lib/board-rotation' // Camera-aware pane ↔ flow
+import { notionDbConsumeWheelScroll } from '@/lib/notion/db-table-scroll'
 import { LeftVerticalMenu } from './left-vertical-menu'
 import { FreehandNode } from './freehand/FreehandNode' // Freehand drawing node component
 import { Freehand, retryFailedSaves } from './freehand/Freehand' // Freehand drawing overlay component and retry function
@@ -5067,6 +5068,11 @@ function BoardFlowInner({
         return
       }
 
+      // Selected Notion DB — plain wheel scrolls rows (Scroll nav); pinch/Cmd+wheel still zoom
+      if (notionDbConsumeWheelScroll(target, e, { isScrollMode })) {
+        return
+      }
+
       // In linear mode, handle chronological panel navigation
       if (viewMode === 'linear') {
         // Allow Ctrl/Cmd+scroll for zoom
@@ -8542,6 +8548,9 @@ function BoardFlowInner({
     const onWheel = (e: WheelEvent) => {
       const target = e.target as Element | null
       if (!target?.closest?.('.react-flow')) return // Outside the page map
+      // Selected capped DB — plain wheel scroll (Scroll nav); pinch / Cmd+wheel still zoom
+      if (notionDbConsumeWheelScroll(target, e, { isScrollMode: embedded ? false : isScrollMode }))
+        return
       const overHandle = !!target.closest(HANDLE_ZOOM_SEL)
       const overDb = !!target.closest(DB_ZOOM_SEL)
       if (!overHandle && !overDb) return // Pane/body: let RF / Scroll-nav handler own it
