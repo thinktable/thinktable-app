@@ -971,24 +971,11 @@ function TipTapContent({
           ) {
             return false
           }
-          pe.preventDefault()
+          // stopPropagation alone keeps RF/d3 from starting a frame drag; preventDefault here
+          // would kill the native selection gesture, so press+drag could never select text.
           pe.stopPropagation()
           selectOnlyClickRef.current = false
-          try {
-            const hit = view.posAtCoords({ left: pe.clientX, top: pe.clientY })
-            if (hit != null && hit.pos >= 0) {
-              const sel = TextSelection.near(view.state.doc.resolve(hit.pos))
-              view.dispatch(view.state.tr.setSelection(sel).scrollIntoView())
-            }
-            view.focus()
-          } catch {
-            try {
-              view.focus()
-            } catch {
-              /* ignore */
-            }
-          }
-          return true
+          return false // Browser/PM own caret placement + drag-select
         },
         mousedown: (view: any, event: Event) => {
           const mouseEvent = event as MouseEvent
@@ -1009,9 +996,9 @@ function TipTapContent({
             return false
           }
           selectOnlyClickRef.current = false
-          // Selected frame: keep pointer inside the editor so RF does not start a frame drag
+          // Selected frame: keep pointer inside the editor so RF does not start a frame drag.
+          // No preventDefault — the browser needs the default mousedown to run a drag-select.
           mouseEvent.stopPropagation()
-          mouseEvent.preventDefault() // Sync with pointerdown — own caret placement
 
           // Temporary reveal: click a hazed span to clear blur until click-away / blur
           const hazeTarget = (mouseEvent.target as HTMLElement | null)?.closest?.(
@@ -1024,21 +1011,7 @@ function TipTapContent({
             hazeTarget.classList.add('tt-haze-revealed') // Reveal this hazed block temporarily
           }
 
-          try {
-            const hit = view.posAtCoords({ left: mouseEvent.clientX, top: mouseEvent.clientY })
-            if (hit != null && hit.pos >= 0) {
-              const sel = TextSelection.near(view.state.doc.resolve(hit.pos))
-              view.dispatch(view.state.tr.setSelection(sel).scrollIntoView())
-            }
-            view.focus()
-          } catch {
-            try {
-              view.focus()
-            } catch {
-              /* ignore */
-            }
-          }
-          return true
+          return false // PM's own mousedown owns caret + shift/double/triple-click + drag-select
         },
         contextmenu: (_view: any, event: Event) => {
           event.preventDefault() // Block native Cut/Copy so the frame menu can show

@@ -34,6 +34,14 @@ export const AI_SKILLS: AiSkill[] = [
     enabled: true,
   },
   {
+    id: 'flashcards',
+    name: 'Flashcards',
+    description: 'Generate cards with hideable Q/A sides',
+    systemHint:
+      'The Flashcards skill is attached. Create frames with a clear question block and answer block. Hide one side with [[hide]]…[[/hide]] or haze spans (blur until click). Default: hide the answer. When asked to switch which side is hidden, edit existing cards — do not duplicate frames.',
+    enabled: true,
+  },
+  {
     id: 'learn',
     name: 'Learn',
     description: 'Quiz yourself and explore answers',

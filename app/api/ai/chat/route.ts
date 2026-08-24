@@ -11,6 +11,7 @@ import { isSelectableAiMode } from '@/lib/ai/modes'
 import { newBlockMetadata } from '@/lib/blocks'
 import { markHtmlWithAiPending } from '@/lib/ai/wrap-ai-html'
 import { frameContentFromAi, markdownToTipTapHtml } from '@/lib/ai/markdown-to-tiptap'
+import { expandHideMarkersInHtml } from '@/lib/ai/hide-text'
 import type { AiProposedEdit } from '@/lib/ai/types'
 import { NextRequest } from 'next/server'
 import OpenAI from 'openai'
@@ -29,7 +30,7 @@ function sse(data: unknown): string {
 function normalizeEditHtml(contentHtml: string): string {
   const raw = (contentHtml || '').trim()
   if (!raw) return ''
-  return markdownToTipTapHtml(raw)
+  return expandHideMarkersInHtml(markdownToTipTapHtml(raw))
 }
 
 export async function POST(request: NextRequest) {

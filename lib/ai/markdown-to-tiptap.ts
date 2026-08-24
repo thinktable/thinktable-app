@@ -1,5 +1,7 @@
 // Convert markdown-ish AI content into TipTap-ready HTML (task lists, bullets, tables→checklists)
 
+import { inlineHtmlWithHideMarkers } from '@/lib/ai/hide-text'
+
 /** Escape plain text for TipTap HTML. */
 export function escapeHtmlText(text: string): string {
   return text
@@ -10,17 +12,17 @@ export function escapeHtmlText(text: string): string {
 
 /** One TipTap task-list item (unchecked). */
 function taskItemHtml(text: string): string {
-  return `<li data-type="taskItem" data-checked="false"><label><input type="checkbox"><span></span></label><div><p>${escapeHtmlText(text) || '<br>'}</p></div></li>`
+  return `<li data-type="taskItem" data-checked="false"><label><input type="checkbox"><span></span></label><div><p>${inlineHtmlWithHideMarkers(text) || '<br>'}</p></div></li>`
 }
 
 /** One TipTap bullet list item. */
 function bulletItemHtml(text: string): string {
-  return `<li><p>${escapeHtmlText(text) || '<br>'}</p></li>`
+  return `<li><p>${inlineHtmlWithHideMarkers(text) || '<br>'}</p></li>`
 }
 
 /** One TipTap ordered list item. */
 function orderedItemHtml(text: string): string {
-  return `<li><p>${escapeHtmlText(text) || '<br>'}</p></li>`
+  return `<li><p>${inlineHtmlWithHideMarkers(text) || '<br>'}</p></li>`
 }
 
 /** True when line looks like a markdown pipe-table row. */
@@ -134,7 +136,7 @@ export function markdownToTipTapHtml(input: string): string {
       para.push(n)
       i += 1
     }
-    out.push(`<p>${escapeHtmlText(para.join(' '))}</p>`)
+    out.push(`<p>${inlineHtmlWithHideMarkers(para.join(' '))}</p>`)
   }
 
   return out.join('') || '<p></p>'
@@ -148,5 +150,5 @@ export function frameContentFromAi(title: string, body: string): string {
   // Avoid duplicating title when body already starts with it
   const plainStart = bodyHtml.replace(/<[^>]+>/g, '').trim().toLowerCase()
   if (plainStart.startsWith(t.toLowerCase())) return bodyHtml
-  return `<p><strong>${escapeHtmlText(t)}</strong></p>${bodyHtml}`
+  return `<p><strong>${inlineHtmlWithHideMarkers(t)}</strong></p>${bodyHtml}`
 }

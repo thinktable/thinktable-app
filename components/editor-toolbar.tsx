@@ -59,7 +59,6 @@ import {
   Grid3x3,
   Presentation, // View presentation mode
   Scan, // View capture — 4 disconnected rounded corners
-  Table,
   Anchor,
   ListFilter,
   ArrowUpDown,
@@ -1153,8 +1152,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       // Icon-only widths (after all titles have condensed)
       const iconGroups = editMenuPillMode === 'insert'
         ? [
-          { id: 'insertGroup1', width: 40 }, // Table icon — hides first
-          { id: 'arrows', width: 40 }, // Thread layout
+          { id: 'arrows', width: 40 }, // Thread layout — Layout rightmost, hides first
           { id: 'smartAlign', width: 40 }, // Tidy up
           { id: 'lock', width: 64 }, // Anchor + Lock frames — Layout leftmost
           { id: 'undoRedo', width: 70 },
@@ -1183,7 +1181,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       // Early cluster icon-only; remaining titles still shown (Filter/ink collapse first)
       const midGroups = editMenuPillMode === 'insert'
         ? [
-          { id: 'insertGroup1', width: titledToolWidth('Table') + 16 },
           { id: 'arrows', width: titledToolWidth('Threads') },
           { id: 'smartAlign', width: titledToolWidth('Tidy up') },
           { id: 'lock', width: titledToolWidth('Anchor') + 2 + titledToolWidth('Lock frames') + 12 },
@@ -1198,7 +1195,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           ]
           : editMenuPillMode === 'draw'
             ? [
-              { id: 'drawGroup1', width: titledToolWidth('Lasso') + 4 + titledToolWidth('Vertical space') + 4 + titledToolWidth('Horizontal space') + 16 }, // Rightmost
+              { id: 'drawGroup1', width: titledToolWidth('Lasso') + 4 + titledToolWidth('V-space') + 4 + titledToolWidth('H-space') + 16 }, // Rightmost
               { id: 'drawGroup3', width: 76 }, // Ink titles already collapsed
               { id: 'drawGroup2', width: 28 + 4 + 5 }, // Eraser + slash after ink cluster
               { id: 'undoRedo', width: 70 },
@@ -1217,7 +1214,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
           ? midGroups // View has no early cluster
           : editMenuPillMode === 'draw'
             ? [
-              { id: 'drawGroup1', width: titledToolWidth('Lasso') + 4 + titledToolWidth('Vertical space') + 4 + titledToolWidth('Horizontal space') + 16 }, // Rightmost
+              { id: 'drawGroup1', width: titledToolWidth('Lasso') + 4 + titledToolWidth('V-space') + 4 + titledToolWidth('H-space') + 16 }, // Rightmost
               { id: 'drawGroup3', width: titledToolWidth('Pencil') + 4 + titledToolWidth('Highlighter') + 16 }, // Ink titles
               { id: 'drawGroup2', width: titledToolWidth('Eraser') + 4 + 5 }, // Eraser + slash after ink cluster
               { id: 'undoRedo', width: 70 },
@@ -1749,33 +1746,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             )}
           </div>
         )}
-        {/* Slash between Thread layout cluster and Table */}
-        {editMenuPillMode === 'insert' && (!isItemHidden('lock') || !isItemHidden('smartAlign') || !isItemHidden('arrows')) && !isItemHidden('insertGroup1') && (
-          <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
-        )}
-
-        {/* Table — right of Thread layout */}
-        {editMenuPillMode === 'insert' && !isItemHidden('insertGroup1') && (
-          <div className="flex items-center gap-1 px-2 flex-shrink-0">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                // TODO: Implement table insertion
-              }}
-              className={cn(
-                'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center',
-                'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
-              )}
-              title="Table"
-            >
-              <Table className="h-4 w-4 flex-shrink-0" />
-              <ToolbarTitle show={!compactLabels}>Table</ToolbarTitle>
-            </Button>
-          </div>
-        )}
         {/* Slash before More menu when Layout tools overflow */}
-        {editMenuPillMode === 'insert' && (!isItemHidden('lock') || !isItemHidden('smartAlign') || !isItemHidden('arrows') || !isItemHidden('insertGroup1')) && hiddenItems.size > 0 && (
+        {editMenuPillMode === 'insert' && (!isItemHidden('lock') || !isItemHidden('smartAlign') || !isItemHidden('arrows')) && hiddenItems.size > 0 && (
           <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
         )}
 
@@ -1955,19 +1927,19 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                           ? 'bg-gray-100 dark:bg-gray-800' // Armed wash matches lasso / eraser / ink tools
                           : 'hover:bg-gray-100 dark:hover:bg-gray-800'
                       )}
-                      title={drawTool === 'insert-v' ? 'Vertical space active (click to deselect)' : 'Insert vertical space'}
+                      title={drawTool === 'insert-v' ? 'V-space active (click to deselect)' : 'Insert V-space'}
                     >
                       <img 
                         ref={insertVerticalSpaceIconRef}
                         src="/insert%20space%20v%20icon%202.svg" 
-                        alt="Insert Vertical Space" 
+                        alt="V-space" 
                         className="w-4 h-4 flex-shrink-0 transition-all duration-200"
                         style={{ 
                           filter: 'brightness(0) saturate(100%) invert(38%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(98%) contrast(100%)',
                           opacity: 0.8
                         }}
                       />
-                      <ToolbarTitle show={!compactLabels}>Vertical space</ToolbarTitle>
+                      <ToolbarTitle show={!compactLabels}>V-space</ToolbarTitle>
                     </Button>
                     <Button
                       ref={insertHorizontalSpaceButtonRef}
@@ -1988,19 +1960,19 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                           ? 'bg-gray-100 dark:bg-gray-800' // Armed wash matches lasso / eraser / ink tools
                           : 'hover:bg-gray-100 dark:hover:bg-gray-800'
                       )}
-                      title={drawTool === 'insert-h' ? 'Horizontal space active (click to deselect)' : 'Insert horizontal space'}
+                      title={drawTool === 'insert-h' ? 'H-space active (click to deselect)' : 'Insert H-space'}
                     >
                       <img 
                         ref={insertHorizontalSpaceIconRef}
                         src="/insert%20space%20h%20icon%201.svg" 
-                        alt="Insert Horizontal Space" 
+                        alt="H-space" 
                         className="w-4 h-4 flex-shrink-0 transition-all duration-200"
                         style={{ 
                           filter: 'brightness(0) saturate(100%) invert(38%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(98%) contrast(100%)',
                           opacity: 0.8
                         }}
                       />
-                      <ToolbarTitle show={!compactLabels}>Horizontal space</ToolbarTitle>
+                      <ToolbarTitle show={!compactLabels}>H-space</ToolbarTitle>
                     </Button>
                 </div>
               </>
@@ -2894,7 +2866,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
             {/* Show hidden items in more menu - different items based on edit menu mode */}
             {editMenuPillMode === 'insert' ? (
               <>
-                {/* Layout overflow — visual order: Anchor, Lock frames, Tidy up, Thread layout, Table */}
+                {/* Layout overflow — visual order: Anchor, Lock frames, Tidy up, Thread layout */}
                 {isItemHidden('lock') && reactFlowInstance && (
                   <>
                     <DropdownMenuItem
@@ -2937,19 +2909,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       stackActive={layoutLinkUi.stacked}
                       onStackFrames={handleStackFramesTogether}
                     />
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                {isItemHidden('insertGroup1') && editor && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={() => {
-                        // TODO: Implement table insertion
-                      }}
-                    >
-                      <Table className="h-4 w-4 mr-2" />
-                      Table
-                    </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>
                 )}
@@ -3106,10 +3065,10 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     >
                       <img 
                         src="/insert%20space%20v%20icon%202.svg" 
-                        alt="Insert Vertical Space" 
+                        alt="V-space" 
                         className="h-4 w-4 mr-2"
                       />
-                      Insert Vertical Space
+                      V-space
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => {
@@ -3120,10 +3079,10 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     >
                       <img 
                         src="/insert%20space%20h%20icon%201.svg" 
-                        alt="Insert Horizontal Space" 
+                        alt="H-space" 
                         className="h-4 w-4 mr-2"
                       />
-                      Insert Horizontal Space
+                      H-space
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>

@@ -1,17 +1,10 @@
 // Apply surgical text replacements inside TipTap HTML; mark only the new bits as pending/origin
 import { markHtmlWithAiPending } from '@/lib/ai/wrap-ai-html'
+import { expandHideMarkersInHtml, parseHideMarkerOldText, pendingWrapReplacementHtml, replaceHazeSpanInHtml } from '@/lib/ai/hide-text'
 
 export interface AiTextReplacement {
   oldText: string // Exact plain substring to find (first match)
   newText: string // Replacement plain text
-}
-
-/** Escape HTML special chars in plain text. */
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
 }
 
 /** Strip tags to plain for locating matches (lossy but good enough for word edits). */
@@ -41,13 +34,23 @@ export function applyReplacementsToHtml(
     const newText = r.newText ?? ''
     if (!oldText) continue
 
+    const hiddenInner = parseHideMarkerOldText(oldText)
+    if (hiddenInner) {
+      const mapped = replaceHazeSpanInHtml(next, hiddenInner, newText)
+      if (mapped) {
+        next = mapped
+        applied += 1
+        continue
+      }
+    }
+
     // Prefer replacing inside text (avoid matching across tags when oldText is simple)
     const escapedOld = oldText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const re = new RegExp(escapedOld)
     if (!re.test(next.replace(/<[^>]+>/g, '\0'))) {
       // Fallback: raw HTML includes the plain substring (no tags inside the match)
       if (!next.includes(oldText)) continue
-      const marked = `<span data-ai-pending="true" class="tt-ai-pending">${escapeHtml(newText)}</span>`
+      const marked = pendingWrapReplacementHtml(newText)
       next = next.replace(oldText, marked)
       applied += 1
       continue
@@ -125,7 +128,7 @@ function replacePlainInHtml(html: string, oldText: string, newText: string): str
 
   if (htmlStart < 0 || htmlEnd < 0) return null
 
-  const marked = `<span data-ai-pending="true" class="tt-ai-pending">${escapeHtml(newText)}</span>`
+  const marked = pendingWrapReplacementHtml(newText)
   return html.slice(0, htmlStart) + marked + html.slice(htmlEnd)
 }
 
@@ -173,9 +176,11 @@ export function buildProposedHtml(opts: {
   }
 
   const full = opts.contentHtml?.trim()
-    ? opts.contentHtml.includes('<')
-      ? opts.contentHtml
-      : `<p>${escapeHtml(opts.contentHtml)}</p>`
+    ? expandHideMarkersInHtml(
+        opts.contentHtml.includes('<')
+          ? opts.contentHtml
+          : `<p>${opts.contentHtml}</p>`
+      )
     : ''
 
   // Model often returns a full rewrite — derive the smallest plain diff and mark only that span

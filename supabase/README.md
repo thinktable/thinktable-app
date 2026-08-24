@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260824040420_ai_hide_text_and_frame_text_select` — AI hide-text (haze) for flashcards; frame text drag-select fix
 - `20260824033903_on_thread_frame_content_center` — On-thread compact chip layout + centered content; visual-size path projection; blocks import fix
 - `20260824033035_on_thread_side_flip_drag_commit` — On-thread offset drag commit fix; flip side when crossing thread; live drag anchor; skip block-group drag-stop on thread frames
 - `20260824031611_on_thread_perp_drag_toolbar_guard` — On-thread perpendicular drag (offset + dot); live gap during drag; render-storm guard; editor toolbar destroyed-editor undo/redo guard

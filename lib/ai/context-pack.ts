@@ -1,5 +1,6 @@
 // Build a structured context pack for Ask mode (page frames + selection + snapshots)
 import type { SupabaseClient } from '@supabase/supabase-js' // Server/browser client
+import { htmlToPlainWithHideAnnotations } from '@/lib/ai/hide-text'
 
 export interface FrameSummary { // Compact frame for the model
   id: string // messages.id
@@ -19,7 +20,7 @@ export interface AiContextPack { // Sent as a system/user context block
 const MAX_FRAMES = 40 // Cap context size
 const MAX_TEXT_CHARS = 800 // Per-frame truncation
 
-/** Strip HTML to plain text for model context. */
+/** Strip HTML to plain text for model context (no hide annotations). */
 export function htmlToPlain(html: string | null | undefined): string {
   if (!html) return '' // Empty
   return html // Raw HTML
@@ -80,7 +81,7 @@ export async function buildContextPack(
 
       for (const m of messages || []) { // Map to summaries
         const meta = (m.metadata || {}) as Record<string, unknown> // Metadata bag
-        const text = htmlToPlain(m.content).slice(0, MAX_TEXT_CHARS) // Truncate
+        const text = htmlToPlainWithHideAnnotations(m.content).slice(0, MAX_TEXT_CHARS) // [[hide]] marks blurred spans
         if (!text && !meta.blockTitle) continue // Skip empty noise
         frames.push({
           id: m.id, // Frame message id
@@ -185,7 +186,16 @@ export function editSystemPrompt(extraSkillHints: string[] = []): string {
     '  • Real spreadsheet/data tables → no table extension; closest = checkbox checklist (task list) with "Label — detail" text.',
     '  • Notion database embeds, drawings, shapes, flashcards → say you cannot create those yet.',
     '- Only after the user confirms (e.g. "yes", "do it", "go ahead") may you fill edits/creates/threads with the approximation. Then set capabilityGap to "".',
-    '- Small supported requests (create frames, link them, edit text, bullet/numbered/checklist lists) → capabilityGap "" and proceed immediately.',
+    '- Small supported requests (create frames, link them, edit text, bullet/numbered/checklist lists, hide/reveal text) → capabilityGap "" and proceed immediately.',
+    '',
+    'HIDE TEXT (blur until click — flashcards, answers, spoilers):',
+    '- TipTap haze mark: <span data-haze="true" class="tt-haze">hidden text</span> inside a paragraph.',
+    '- In contentMarkdown / contentHtml you may also use plain markers: [[hide]]text[[/hide]] (server converts to haze).',
+    '- Frame text in context shows hidden spans as [[hide]]…[[/hide]] so you can see what is blurred.',
+    '- To hide: wrap that text in haze (full contentHtml rewrite, or replacement newText with [[hide]]…[[/hide]]).',
+    '- To reveal: remove the haze span / [[hide]] markers from that text (contentHtml with unwrapped text, or replacement).',
+    '- Flashcards: one frame per card — question block + answer block; hide one side (usually the answer).',
+    '- "Switch which side is hidden" → edit existing frames: move [[hide]] from answer to question (or vice versa).',
     '',
     'CRITICAL — prefer edits over creates:',
     '- If the user asks to change, reformat, or improve something that already exists on the board, use edits[] with that frame\'s real id from the context pack.',
@@ -206,6 +216,7 @@ export function editSystemPrompt(extraSkillHints: string[] = []): string {
     '- Numbered steps: 1. Mix dry ingredients',
     '- Bullets: - item',
     '- Never emit markdown | pipe | tables as final content; that is a capability gap (offer checklist instead).',
+    '- Hide text: [[hide]]answer[[/hide]] or <span data-haze="true" class="tt-haze">answer</span> inside <p>.',
     '',
     'CREATE new frames via creates[] only for genuinely new frames:',
     '- Invent sensible content when the user says to make it up.',
