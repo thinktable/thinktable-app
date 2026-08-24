@@ -26,7 +26,7 @@ import {
   connectionPointOnNode,
   sideFromHandleId,
 } from './connection-point-on-node' // Frame-edge attach from node box
-import { onThreadFrameSize, readOnThread, isOnThreadInline, ON_THREAD_DOT_R, ON_THREAD_PERP_THRESHOLD } from '@/lib/threads/on-thread-frame'
+import { onThreadFrameVisualSize, readOnThread, isOnThreadInline, ON_THREAD_DOT_R, ON_THREAD_PERP_THRESHOLD } from '@/lib/threads/on-thread-frame'
 import {
   buildThreadPathGeometry,
   threadGapsForFrames,
@@ -226,7 +226,7 @@ export function EditableThread({
       const anchor = readOnThread(n.data?.promptMessage?.metadata as Record<string, unknown>)
       if (!anchor) continue
       if (anchor.sourceMessageId !== srcMsg || anchor.targetMessageId !== tgtMsg) continue
-      const size = onThreadFrameSize(n)
+      const size = onThreadFrameVisualSize(n)
       const cx = n.position.x + size.width / 2
       const cy = n.position.y + size.height / 2
       const closest = pathGeom.closestT(cx, cy)

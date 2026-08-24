@@ -67,6 +67,21 @@ export function onThreadFrameSize(node: Node): { width: number; height: number }
   return { width: w, height: h }
 }
 
+/** Measured RF node box in flow px — includes selection chrome padding when mounted. */
+export function onThreadFrameVisualSize(node: Node): { width: number; height: number } {
+  if (typeof document !== 'undefined') {
+    const el = document.querySelector(
+      `.react-flow__node[data-id="${CSS.escape(node.id)}"]`
+    ) as HTMLElement | null
+    if (el) {
+      const w = el.offsetWidth
+      const h = el.offsetHeight
+      if (w > 0 && h > 0) return { width: w, height: h }
+    }
+  }
+  return onThreadFrameSize(node)
+}
+
 /** Hash endpoint geometry for edges that carry on-thread frames (not whole nodes array). */
 export function onThreadPathSyncKey(edges: Edge[], nodes: Node[]): string {
   const parts: string[] = []
@@ -172,7 +187,7 @@ export function projectFrameOntoThreadPath(
   if (!edge) return null
   const geom = geometryForEdge(edge, nodes)
   if (!geom) return null
-  const size = onThreadFrameSize(node)
+  const size = onThreadFrameVisualSize(node)
   const cx = proposedTopLeft.x + size.width / 2
   const cy = proposedTopLeft.y + size.height / 2
   const closest = geom.closestT(cx, cy)
@@ -251,7 +266,7 @@ export function projectFrameOntoThreadPath(
 export function onThreadFrameGapT(geom: ThreadPathGeometry, node: Node): number | null {
   const anchor = readOnThread(node.data?.promptMessage?.metadata as Record<string, unknown>)
   if (!anchor || !isOnThreadInline(anchor)) return null
-  const size = onThreadFrameSize(node)
+  const size = onThreadFrameVisualSize(node)
   const cx = node.position.x + size.width / 2
   const cy = node.position.y + size.height / 2
   return geom.closestT(cx, cy).t

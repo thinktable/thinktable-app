@@ -12,7 +12,7 @@ import {
   readOnThread,
   findEdgeForOnThread,
   ON_THREAD_DEFAULT_SIZE,
-  onThreadFrameSize,
+  onThreadFrameVisualSize,
   onThreadPathSyncKey,
   persistOnThreadPlacement,
   detachOnThreadFrame,
@@ -135,7 +135,7 @@ export function useOnThreadFrames({
         if (!edge) return n
         const geom = geometryForEdge(edge, nds)
         if (!geom) return n
-        const size = onThreadFrameSize(n)
+        const size = onThreadFrameVisualSize(n)
         const target = positionForOnThreadFrame(geom, anchor, size)
         if (
           Math.abs(n.position.x - target.x) < 0.5 &&
@@ -291,7 +291,7 @@ export function useOnThreadFrames({
       const anchor = { ...session.anchor }
       const edge = findEdgeForOnThread(edges, live, anchor)
       const geom = edge ? geometryForEdge(edge, live) : null
-      const size = onThreadFrameSize(current)
+      const size = onThreadFrameVisualSize(current)
 
       let position = node.position
       let finalAnchor = anchor

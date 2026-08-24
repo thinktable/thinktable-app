@@ -42,7 +42,16 @@ import {
   isBoardNavigating,
   navigationZoom,
 } from '@/lib/board-navigating' // Freeze zoom selectors + skip hug while pinching
-import { deleteLinkedBoardForBlock, getLinkedBoardId, isBlockContentEmpty, isBlockMeta, isBoardBodyMeta, readNotionConnection, type NotionSyncMode } from '@/lib/blocks' // Block detection + Notion connection
+import { readOnThread } from '@/lib/threads/on-thread-frame' // Compact chip layout for frames on threads
+import {
+  deleteLinkedBoardForBlock,
+  getLinkedBoardId,
+  isBlockContentEmpty,
+  isBlockMeta,
+  isBoardBodyMeta,
+  readNotionConnection,
+  type NotionSyncMode,
+} from '@/lib/blocks' // Block detection + Notion connection
 import {
   readFramePropertyType,
   PROPERTY_GROUP_H,
@@ -3031,6 +3040,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     (promptMessage?.role === 'user' && 
      !responseMessage && 
      (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
+  const isOnThreadFrame = Boolean(
+    readOnThread(promptMessage?.metadata as Record<string, unknown> | undefined)
+  )
   const { connected: notionConnected, sync: notionSync } = readNotionConnection(
     promptMessage?.metadata as Record<string, unknown> | undefined
   ) // Frame Connections → Notion
@@ -3127,7 +3139,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const chromePadX = Math.round(BLOCK_FRAME_PAD_X * chromeScale) // Band inset matches scaled fill pad
   // T/B bands only while selected — bottom keeps the blue box balanced when connections show
   const adjustChromeYTop = 0 // Empty property icons live inside the fill (under the card title when present)
-  const adjustChromeYBottom = showFrameChrome ? chromeBandH : 0
+  const adjustChromeYBottom =
+    showFrameChrome && (!isOnThreadFrame || hasConnBand) ? chromeBandH : 0
   // Keep the filled frame glued when selection chrome appears/disappears (grow left/up).
   // Do NOT shift RF position when chrome scale changes with zoom — that deferred setNodes
   // jumped the frame (looked like the board slid) after phone pinch over DB tables.
@@ -6358,6 +6371,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         ref={panelRef}
         data-panel-container="true" // Data attribute to help find panel container for comment popup
         data-block-node={isBlock ? 'true' : undefined} // Marks blocks for selected connection-dot styling
+        data-on-thread={isOnThreadFrame ? 'true' : undefined}
         data-block-resized={wrapActive ? 'wrap' : undefined} // Wrap (locked/unlocked): soft-wrap in fixed width; else nowrap / clip
         data-clip-preview={showClipPreview ? 'true' : undefined} // Unlocked hover: full-content peek
         data-frame-shape={frameShape || undefined} // Silhouette id when frames act as shapes
@@ -6972,7 +6986,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           This shell IS the shape-capable frame surface: same fill + radius selected or not. */}
       <div
         className={cn(
-          'relative z-[1] w-full h-full', // Above shape backdrop; fills the padded content box
+          'relative z-[1] w-full', // Above shape backdrop; fills the padded content box
+          isOnThreadFrame ? 'h-auto flex items-center' : 'h-full',
           !isFillTransparent && !frameShape && 'backdrop-blur-sm',
           !isBlock && 'p-1',
           pagePreviewOpen && 'flex flex-col h-full min-h-0',
