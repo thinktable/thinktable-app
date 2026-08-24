@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260824033035_on_thread_side_flip_drag_commit` — On-thread offset drag commit fix; flip side when crossing thread; live drag anchor; skip block-group drag-stop on thread frames
 - `20260824031611_on_thread_perp_drag_toolbar_guard` — On-thread perpendicular drag (offset + dot); live gap during drag; render-storm guard; editor toolbar destroyed-editor undo/redo guard
 - `20260824024921_draw_lasso_insert_space_thread_frames` — Freehand lasso select; Insert space drag-to-gap; Insert frame on thread + thickness; property icons inside fill
 - `20260823234830_frame_fit_free_restore` — Fit→free restores saved free-resize box; lock snapshots before hug; metadata sync guard

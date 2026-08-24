@@ -18,6 +18,7 @@ import {
   detachOnThreadFrame,
   projectFrameOntoThreadPath,
   patchNodeOnThreadMeta,
+  nodeWithOnThreadAnchor,
   type OnThreadMeta,
 } from '@/lib/threads/on-thread-frame'
 import {
@@ -248,9 +249,13 @@ export function useOnThreadFrames({
         if (change.type !== 'position' || !change.position) return change
         const node = currentNodes.find((n) => n.id === change.id)
         if (!node || node.type !== 'chatPanel') return change
-        const projected = projectFrameOntoThreadPath(edges, currentNodes, node, change.position)
+        const liveNode =
+          dragRef.current?.nodeId === change.id
+            ? nodeWithOnThreadAnchor(node, dragRef.current.anchor)
+            : node
+        const projected = projectFrameOntoThreadPath(edges, currentNodes, liveNode, change.position)
         if (!projected) return change
-        if (change.dragging === true && dragRef.current?.nodeId === change.id) {
+        if (dragRef.current?.nodeId === change.id) {
           dragRef.current.anchor = projected.anchor
         }
         return { ...change, position: projected.position }
@@ -263,22 +268,46 @@ export function useOnThreadFrames({
     if (node.type !== 'chatPanel') return
     const session = dragRef.current
     if (!session || session.nodeId !== node.id) return
-    const projected = projectFrameOntoThreadPath(edges, getNodes(), node, node.position)
+    const projected = projectFrameOntoThreadPath(
+      edges,
+      getNodes(),
+      nodeWithOnThreadAnchor(node, session.anchor),
+      node.position
+    )
     if (projected) dragRef.current.anchor = projected.anchor
   }, [edges, getNodes])
 
   const onNodeDragStop = useCallback(
     (_event: unknown, node: Node) => {
       const session = dragRef.current
-      dragRef.current = null
-      if (!session || session.nodeId !== node.id) return
+      if (!session || session.nodeId !== node.id) {
+        dragRef.current = null
+        return
+      }
 
       const live = getNodes()
-      const current = live.find((n) => n.id === node.id) || node
-      const projected = projectFrameOntoThreadPath(edges, live, current, current.position)
-      if (projected) {
-        commitOnThreadPlacement(node.id, projected.position, projected.anchor)
+      const rfNode = live.find((n) => n.id === node.id)
+      const current = rfNode ? { ...rfNode, position: node.position } : node
+      const anchor = { ...session.anchor }
+      const edge = findEdgeForOnThread(edges, live, anchor)
+      const geom = edge ? geometryForEdge(edge, live) : null
+      const size = onThreadFrameSize(current)
+
+      let position = node.position
+      let finalAnchor = anchor
+      if (geom) {
+        position = positionForOnThreadFrame(geom, anchor, size)
+        finalAnchor = anchor
+      } else {
+        const projected = projectFrameOntoThreadPath(edges, live, current, node.position)
+        if (projected) {
+          position = projected.position
+          finalAnchor = projected.anchor
+        }
       }
+
+      commitOnThreadPlacement(node.id, position, finalAnchor)
+      dragRef.current = null
     },
     [commitOnThreadPlacement, edges, getNodes]
   )

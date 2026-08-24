@@ -8794,8 +8794,10 @@ function BoardFlowInner({
           if (snapEnabled) {
             rebuildIndex(nodes)
           }
-          void onBlockGroupNodeDragStop(event, node) // Attach to group / detach onto the page + persist
-          void onFrameNestStackDragStop(event, node) // Link snap pair → stack line (no hide)
+          if (!isOnThreadNode(node)) {
+            void onBlockGroupNodeDragStop(event, node) // Attach to group / detach onto the page + persist
+            void onFrameNestStackDragStop(event, node) // Link snap pair → stack line (no hide)
+          }
           void onOnThreadDragStop(event, node)
 
           // Only skip click-select when the frame actually moved (threshold-0 still fires drag start/stop on tap)

@@ -1,13 +1,21 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-24T03:16:11Z`
+- Snapped at: `2026-08-24T03:30:35Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260824033035_on_thread_side_flip_drag_commit.sql`.
+- On-thread offset frames: drag-end commit uses live `dragRef.anchor` + final RF position (fixes snap-back on release).
+- Crossing the thread flips to the opposite side (no longer locked to the first normal); collapse to inline only when pulling back on the same side.
+- Projection during drag reads the live session anchor (`nodeWithOnThreadAnchor`); block-group / nest-stack drag-stop skipped for on-thread frames.
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: on-thread perpendicular drag and toolbar guard
 
 - No DDL. Marker `20260824031611_on_thread_perp_drag_toolbar_guard.sql`.
 - On-thread frames: perpendicular drag (>12px) snaps beside the thread (`metadata.onThread.offset` + normal); thread shows a **dot** on the path instead of a stroke gap; drag back collapses to inline gap mode.

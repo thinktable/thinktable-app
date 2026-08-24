@@ -38,6 +38,18 @@ export function onThreadSnapOffset(size: { width: number; height: number }): num
   return Math.max(size.width, size.height) / 2 + ON_THREAD_EDGE_GAP
 }
 
+/** Distance from path point to frame center along a stored offset normal. */
+function alongAnchorNormal(vx: number, vy: number, nx: number, ny: number): number {
+  return vx * nx + vy * ny
+}
+
+/** Left (1) vs right (-1) side for a normal at the current tangent. */
+function sideFromNormalAtTangent(nx: number, ny: number, tan: XYPosition): 1 | -1 {
+  const leftNx = -tan.y
+  const leftNy = tan.x
+  return nx * leftNx + ny * leftNy >= 0 ? 1 : -1
+}
+
 /** Stable size for path projection — avoid nodeFlowSize 280×160 fallback oscillation. */
 export function onThreadFrameSize(node: Node): { width: number; height: number } {
   const w =
@@ -84,6 +96,22 @@ export function onThreadPathSyncKey(edges: Edge[], nodes: Node[]): string {
     )
   }
   return parts.join(';')
+}
+
+/** Patch a node so projection reads the live drag anchor instead of stale metadata. */
+export function nodeWithOnThreadAnchor(node: Node, anchor: OnThreadMeta): Node {
+  const pm = node.data?.promptMessage
+  if (!pm) return node
+  return {
+    ...node,
+    data: {
+      ...node.data,
+      promptMessage: {
+        ...pm,
+        metadata: { ...((pm.metadata as Record<string, unknown>) || {}), onThread: anchor },
+      },
+    },
+  }
 }
 
 /** Read on-thread anchor from frame metadata, if any. */
@@ -154,9 +182,14 @@ export function projectFrameOntoThreadPath(
   const perp = vx * -tan.y + vy * tan.x // Signed distance along left normal
   const perpAbs = Math.abs(perp)
   const wasOffset = (anchor.offset ?? 0) > 0
+  const hasStoredNormal = anchor.normalX != null && anchor.normalY != null
+  const alongStored =
+    hasStoredNormal && wasOffset
+      ? alongAnchorNormal(vx, vy, anchor.normalX!, anchor.normalY!)
+      : 0
 
-  // Drag back onto the thread — inline gap mode
-  if (wasOffset && perpAbs < ON_THREAD_PERP_THRESHOLD * 0.65) {
+  // Drag back onto the thread from the same side — inline gap mode (not when crossing through).
+  if (wasOffset && hasStoredNormal && alongStored > 0 && alongStored < ON_THREAD_PERP_THRESHOLD * 0.65) {
     const nextAnchor: OnThreadMeta = {
       sourceMessageId: anchor.sourceMessageId,
       targetMessageId: anchor.targetMessageId,
@@ -168,13 +201,21 @@ export function projectFrameOntoThreadPath(
     }
   }
 
-  // Beside the thread — dot on path, frame offset perpendicular
+  // Beside the thread — dot on path, frame offset perpendicular.
   if (wasOffset || perpAbs > ON_THREAD_PERP_THRESHOLD) {
-    const side: 1 | -1 = perp >= 0 ? 1 : -1
-    const normal =
-      wasOffset && anchor.normalX != null && anchor.normalY != null
-        ? { x: anchor.normalX, y: anchor.normalY }
-        : geom.normalAt(closest.t, side)
+    let side: 1 | -1
+    if (wasOffset && hasStoredNormal) {
+      if (alongStored < -ON_THREAD_PERP_THRESHOLD * 0.5) {
+        // Crossed to the opposite side — flip from live pointer position.
+        side = perp >= 0 ? 1 : -1
+      } else {
+        // Same side — slide along t; refresh normal at the new tangent.
+        side = sideFromNormalAtTangent(anchor.normalX!, anchor.normalY!, tan)
+      }
+    } else {
+      side = perp >= 0 ? 1 : -1
+    }
+    const normal = geom.normalAt(closest.t, side)
     const offset = anchor.offset && anchor.offset > 0 ? anchor.offset : onThreadSnapOffset(size)
     const pathPt = geom.pointAt(closest.t)
     const nextAnchor: OnThreadMeta = {
