@@ -100,9 +100,8 @@ const isContentEmpty = (content: string | undefined | null) => {
 }
 
 const BLOCK_HANDLE_GUTTER_W = 24 // TipTap ⋮⋮ column inside the blue adjust strip
-/** Extra air between blue adjust ring and fill (beyond ⋮⋮ / property band) — × screenChromeScale */
-const ADJUST_CONTENT_GAP_Y = 6 // Top/bottom band air
-const ADJUST_CONTENT_GAP_X = 1 // L/R — tighter than T/B
+/** Extra air between blue adjust ring and fill (beyond the ⋮⋮ column) — × screenChromeScale */
+const ADJUST_CONTENT_GAP_X = 1 // L/R only — T/B chrome is 0 (strips live inside the fill)
 const BOARD_LINK_ICON_W = 22 // Title emoji / page icon column
 const BOARD_OPEN_MENU_W = 52 // Open-menu pill ≈ preview + open (Notion adds a bit more)
 const BLOCK_THREE_CHARS_W = 28 // ~3ch of body text for plain frames
@@ -194,11 +193,9 @@ function contentSizeFromAabb(
   }
 }
 
-// Row-card hug caps — mirror `defaultColumnWidthPx` so a card reads like its table row.
-// A single long value (a note, a Notion relation id) must not stretch the whole card; the
-// cell ellipsizes past this instead.
-const PROPERTY_VALUE_HUG_MAX_W = 160 // Non-title column default
-const ROW_CARD_TITLE_HUG_MAX_W = 280 // Title column default
+// Wrap-mode property column — the value re-wraps to the frame box, so the intrinsic hug uses
+// this nominal column (mirrors Notion `defaultColumnWidthPx`) instead of the full glyph run.
+const PROPERTY_VALUE_WRAP_W = 160
 
 /**
  * Natural content width = longest rendered line of real text, not the stretched w-full box.
@@ -225,7 +222,7 @@ function measureTextWidthLocal(
   return w
 }
 
-/** Filled property cell — icon + value text (ignores width:100% stretch). */
+/** Filled property cell — icon + value box (never the width:100% stretch of the textarea). */
 function measurePropertyBlockWidth(
   block: HTMLElement,
   toLocal: (screenW: number) => number
@@ -233,19 +230,25 @@ function measurePropertyBlockWidth(
   if (block.getAttribute('data-header-only') === 'true') return 0
   if (getComputedStyle(block).display === 'none') return 0
   const icon = block.querySelector('.tt-property-block-icon') as HTMLElement | null
-  const input = block.querySelector('.tt-property-block-input') as HTMLInputElement | null
+  const input = block.querySelector('.tt-property-block-input') as HTMLTextAreaElement | null
   const cell = block.querySelector('.tt-property-block-cell') as HTMLElement | null
   const iconW = icon?.offsetWidth ?? 20
   const gap = cell ? parseFloat(getComputedStyle(cell).gap) || 6 : 6
   const cellPadL = cell ? parseFloat(getComputedStyle(cell).paddingLeft) || 4 : 4
   const cellPadR = cell ? parseFloat(getComputedStyle(cell).paddingRight) || 8 : 8
-  // Inputs are width:100% — measure glyphs, never the stretched box. Cap so one long
-  // value can't widen the card; the input ellipsizes past the cap.
   let textW = 48 // "Empty" placeholder
   if (input) {
-    const text = input.value || input.placeholder || 'Empty'
-    const glyphs = measureTextWidthLocal(text, input, toLocal)
-    textW = Math.max(textW, Math.min(PROPERTY_VALUE_HUG_MAX_W, glyphs))
+    if (block.closest('.ProseMirror')?.getAttribute('data-single-line') === 'true') {
+      // Fit to text: hug the one-line cell. Prefer the width the NodeView already set from the
+      // glyph run (a style read, not layout) so render and hug agree exactly to the pixel.
+      const styled = parseFloat(input.style.width)
+      const text = input.value || input.placeholder || 'Empty'
+      textW = Number.isFinite(styled) && styled > 0
+        ? styled
+        : measureTextWidthLocal(text, input, toLocal)
+    } else {
+      textW = PROPERTY_VALUE_WRAP_W // Wrap mode: value re-wraps to the frame, so hug the column
+    }
   }
   // Honor the cell's CSS floor, or a measure below it would clip the rendered cell.
   const cssMinW = parseFloat(getComputedStyle(block).minWidth) || 0
@@ -258,6 +261,13 @@ function measureRowCardContentWidth(contentFit: HTMLElement): number {
   const padL = parseFloat(cs.paddingLeft) || 0
   const pm = contentFit.querySelector('.ProseMirror') as HTMLElement | null
   if (!pm) return Math.max(1, contentFit.scrollWidth)
+  // Wrap mode (no `data-single-line`): the content box is the fixed `wrapContentWidth` column
+  // that the text has already re-wrapped into, so hug THAT box — glyph runs would under-hug the
+  // wrapped lines, and the width:100% cells have no fixed point in the sum below.
+  if (pm.getAttribute('data-single-line') !== 'true') {
+    return Math.max(1, Math.ceil(contentFit.offsetWidth))
+  }
+
   const row = pm.closest('.relative') as HTMLElement | null
   const gutter = row && row !== contentFit ? parseFloat(getComputedStyle(row).paddingLeft) || 0 : 0
   const fitRect = contentFit.getBoundingClientRect()
@@ -276,9 +286,7 @@ function measureRowCardContentWidth(contentFit: HTMLElement): number {
     const gap = link ? parseFloat(getComputedStyle(link).gap) || 6 : 6
     const iconW = icon?.offsetWidth ?? 0
     const labelText = label.textContent || ''
-    const labelW = labelText.trim()
-      ? Math.min(ROW_CARD_TITLE_HUG_MAX_W, measureTextWidthLocal(labelText, label, toLocal))
-      : 0
+    const labelW = labelText.trim() ? measureTextWidthLocal(labelText, label, toLocal) : 0
     maxLine = Math.max(maxLine, iconW + gap + labelW)
   }
 
@@ -316,10 +324,6 @@ function measureNaturalContentWidth(contentFit: HTMLElement): number {
     }
   }
 
-  /** Filled property cell — icon + value text (ignores width:100% stretch). */
-  const measurePropertyBlockWidthLocal = (block: HTMLElement): number =>
-    measurePropertyBlockWidth(block, toLocal)
-
   let maxLine = 0
   for (const child of Array.from(pm.children) as HTMLElement[]) {
     const boardLink =
@@ -350,7 +354,7 @@ function measureNaturalContentWidth(contentFit: HTMLElement): number {
       (child.classList.contains('tt-property-block') && child) ||
       (child.querySelector('.tt-property-block:not([data-header-only="true"])') as HTMLElement | null)
     if (propBlock) {
-      maxLine = Math.max(maxLine, measurePropertyBlockWidthLocal(propBlock))
+      maxLine = Math.max(maxLine, measurePropertyBlockWidth(propBlock, toLocal))
       continue
     }
     // databaseBlock: Range over the live Notion table is transform-fragile during RF frame
@@ -853,7 +857,6 @@ function TipTapContent({
   onPropertyTurnInto,
   pinConnectionsToFrame = false, // Free-frame clip: hug spacer only; real group is pinned to the frame
   loadCrossfade = false, // Board load: keep the shell overlay and fade it out; new frames skip this
-  chromeBandsOutside = false, // Host paints connections in adjust chrome (selected only)
   contentPadLeft = 0, // contentFit paddingLeft — ⋮⋮ centers in the blue gutter past this pad
   frameScale = 1, // Locked-resize CSS scale — grips remeasure when it changes
   handleGutterFlow = 0, // Blue L/R gutter width (flow px) — ⋮⋮ local left compensates contentFit scale
@@ -899,7 +902,6 @@ function TipTapContent({
   onPropertyTurnInto?: (propertyType: PropertyTypeId) => void // ⋮⋮ Turn into → Property
   pinConnectionsToFrame?: boolean
   loadCrossfade?: boolean // Fade the load shell out as TipTap fades in (skip for fadeIn creates)
-  chromeBandsOutside?: boolean // Host paints connections in adjust chrome (selected only)
   contentPadLeft?: number // contentFit padL — grip centering past the fill edge
   frameScale?: number // Locked-resize scale — ⋮⋮ remeasure (CSS transform skips RO)
   handleGutterFlow?: number // Adjust-box L gutter (flow px); grips inverse-scale into it
@@ -1731,9 +1733,8 @@ function TipTapContent({
             />
           </div>
         ) : null}
-        {/* Connections: unselected stay in the fill; selected → host bottom chrome band */}
-        {!chromeBandsOutside &&
-          notionConnected &&
+        {/* Connections: last block INSIDE the fill (host pins it only when the frame clips) */}
+        {notionConnected &&
           enableBlockHandles &&
           !isFlashcard &&
           !showFrameShimmer &&
@@ -3090,10 +3091,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const showAdjustFrame = Boolean(selected && isBlock && !isThreadConnecting && !dragging)
   // Transient blue outline while moving; selected frames keep `selected` and regain adjust chrome on release
   const showDragBorderOnly = Boolean((dragging || manualDragNodeId === id) && isBlock)
-  // Blue-box L/R gutters when selected. Property / connections bands sit OUTSIDE the fill
-  // — only while selected (hide entirely when the frame is idle).
+  // Blue-box L/R gutters when selected. Property / connections strips paint INSIDE the fill,
+  // so the blue box never reserves an empty band above or below the frame.
   const showFrameChrome = Boolean(isBlock && (selected || dragging) && !isThreadConnecting)
-  const hasConnBand = Boolean(showFrameChrome && notionConnected && isBlock && !isFlashcard)
   // Screen-relative L/R gutter fits the ⋮⋮ (zoom comfort) — not × frameScale (that left empty
   // blue pad when grips counter-scaled). Grips use localGutter = adjustChromeX/chromeScale so
   // after contentFit CSS scale they still sit centered in this strip.
@@ -3110,14 +3110,12 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const adjustChromeX = showFrameChrome
     ? Math.round((BLOCK_HANDLE_GUTTER_W + ADJUST_CONTENT_GAP_X) * screenChromeScale)
     : 0 // Blue→fill = handle column + extra gap (tighter on L/R)
-  const chromeBandH = Math.round(
-    (CONNECTIONS_GROUP_H + ADJUST_CONTENT_GAP_Y) * screenChromeScale
-  ) // Property / connections strip + T/B blue→content air
+  const connStripH = Math.round(CONNECTIONS_GROUP_H * screenChromeScale) // In-fill bottom connections strip
   const chromePadX = Math.round(BLOCK_FRAME_PAD_X * chromeScale) // Band inset matches scaled fill pad
-  // T/B bands only while selected — bottom keeps the blue box balanced when connections show
-  const adjustChromeYTop = 0 // Empty property icons live inside the fill (under the card title when present)
-  const adjustChromeYBottom =
-    showFrameChrome && (!isOnThreadFrame || hasConnBand) ? chromeBandH : 0
+  // No T/B chrome bands: property icons and the connections strip both live inside the fill,
+  // so the blue adjust box hugs the blocks vertically (no empty strip under the last block).
+  const adjustChromeYTop = 0
+  const adjustChromeYBottom = 0
   // Keep the filled frame glued when selection chrome appears/disappears (grow left/up).
   // Do NOT shift RF position when chrome scale changes with zoom — that deferred setNodes
   // jumped the frame (looked like the board slid) after phone pinch over DB tables.
@@ -5275,7 +5273,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const clipBoxH =
     unlockedInnerH != null
       ? pinConnectionsToFrame
-        ? Math.max(1, unlockedInnerH - adjustChromeYBottom) // Leave a strip for the scaled pinned group
+        ? Math.max(1, unlockedInnerH - connStripH) // Leave a strip for the scaled pinned group
         : unlockedInnerH
       : undefined
   // Soften chopped edges while clipped (removed during hover preview)
@@ -6933,33 +6931,6 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         </>
       )}
 
-      {/* Connections — below the fill, same horizontal inset as properties / cell */}
-      {hasConnBand && (
-        <div
-          data-tt-frame-chrome-bottom
-          // Band body may drag the frame; Notion mark button is nodrag
-          className="absolute z-[2] flex items-start" // Sit on the fill (extra band air is below)
-          style={{
-            bottom: 0,
-            left: adjustChromeX + chromePadX,
-            right: adjustChromeX + chromePadX,
-            height: adjustChromeYBottom,
-          }}
-        >
-          <div
-            style={{
-              transform: screenChromeScale !== 1 ? `scale(${screenChromeScale})` : undefined,
-              transformOrigin: 'left top',
-            }}
-          >
-            <FrameConnectionsGroup
-              notionSync={notionSync}
-              onNotionConnection={handleNotionConnection}
-            />
-          </div>
-        </div>
-      )}
-
       {/* Single text body — when rotated, one centered shell holds fill + shape + blocks (no double card).
           This shell IS the shape-capable frame surface: same fill + radius selected or not. */}
       <div
@@ -7191,7 +7162,6 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               onPropertyTurnInto={handlePropertyTurnInto}
               pinConnectionsToFrame={pinConnectionsToFrame}
               loadCrossfade={promptMessage?.metadata?.fadeIn !== true} // Load: dissolve the shell; new frames use note-fade-in
-              chromeBandsOutside // Suppress in-fill connections — host paints only while selected
               contentPadLeft={isBlock ? BLOCK_FRAME_PAD_X : 0}
               frameScale={frameScale}
               handleGutterFlow={handleGutterFlow}
@@ -7232,12 +7202,12 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
             </BoardLinkProvider>
           </div>
           </div>
-          {showFrameChrome && pinConnectionsToFrame && !hasConnBand && (
+          {pinConnectionsToFrame && (
             <div
               className="flex-shrink-0"
               style={{
                 paddingLeft: chromePadX, // Match scaled fill content inset when pinned in-flow
-                height: chromeBandH,
+                height: connStripH,
                 display: 'flex',
                 alignItems: 'center',
                 backgroundColor: frameShape ? 'transparent' : responseAreaBackgroundColor,

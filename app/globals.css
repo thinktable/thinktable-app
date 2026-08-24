@@ -2205,7 +2205,7 @@ span[data-added="true"] {
     align-items: center;
     justify-content: center;
     width: 20px;
-    height: 20px;
+    height: 24px; /* Centers the glyph on the first value line (line-height 1.7 × 14px) */
     color: #6b7280;
   }
   .dark .ProseMirror .tt-property-block-icon {
@@ -2215,10 +2215,10 @@ span[data-added="true"] {
     flex: 1 1 auto;
     min-width: 140px; /* Icon + Empty placeholder inside the box */
     display: flex;
-    align-items: center;
+    align-items: flex-start; /* Wrapped value grows down; icon stays on the first line */
     gap: 6px;
-    height: 28px;
-    padding: 0 8px 0 4px; /* Tighter left so the type icon sits nearer the cell edge */
+    min-height: 28px; /* Single-line box unchanged; wrapped values grow taller */
+    padding: 2px 8px 2px 4px; /* Tighter left so the type icon sits nearer the cell edge */
     border: 1px solid transparent; /* Visible only when frame selected + block hovered */
     border-radius: 6px;
     background: transparent; /* No fill — sits on the frame wash */
@@ -2239,10 +2239,19 @@ span[data-added="true"] {
   .tt-frame-unselected .ProseMirror .tt-property-block-cell {
     border-color: transparent; /* Unselected hover must not reveal the cell chrome */
   }
+  .ProseMirror .tt-property-block-value {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+  }
   .ProseMirror .tt-property-block-input {
+    /* Wrap mode: stretch with the box and wrap at the frame width (height fits scrollHeight) */
     width: 100%;
-    min-width: 0; /* Flex child must be allowed to shrink to the hug cap */
-    text-overflow: ellipsis; /* Long values read as truncated, not hard-clipped */
+    min-width: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere; /* Unbroken ids (Notion relations) break instead of overflowing */
+    overflow: hidden; /* Height is fitted to scrollHeight — no inner scrollbar */
+    resize: none;
     border: none;
     background: transparent;
     outline: none;
@@ -2250,6 +2259,13 @@ span[data-added="true"] {
     font-size: 14px;
     line-height: 1.7;
     color: inherit;
+  }
+  /* Fit-to-text frame: value stays on ONE line like every other block; the NodeView sets an
+     explicit glyph width (a textarea sizes from `cols`, not its value) and the frame hug reads
+     that same width, so the frame fits the cell instead of clipping it. */
+  .ProseMirror[data-single-line="true"] .tt-property-block-input {
+    white-space: pre;
+    overflow-wrap: normal;
   }
   .ProseMirror .tt-property-block-input::placeholder {
     color: #9ca3af;

@@ -14,10 +14,16 @@ import { Eye, Lock, ArrowLeft, ArrowRight, ArrowUp, ArrowDown } from 'lucide-rea
 import { createClient } from '@/lib/supabase/client'
 import {
   stackExpandLayout,
+  stackExpandRfAbs,
   STACK_LINE_GAP,
-  frameScreenRect,
   type FrameStackSide,
 } from '@/components/use-frame-nest-stack-drag'
+import {
+  frameAdjustFlowBoxAt,
+  frameAdjustFlowSize,
+  frameAdjustScreenRect,
+  rfAbsFromAdjustOrigin,
+} from '@/lib/frame-adjust-box'
 import {
   collectNestedSatelliteIds,
   findOwningMateId,
@@ -31,7 +37,7 @@ import {
   stackIndexInGroup,
   FRAME_STACK_SIDES,
 } from '@/lib/frame-side-stacks'
-import { absFlowPosition, nodeFlowSize } from '@/components/use-block-group-drag'
+import { absFlowPosition } from '@/components/use-block-group-drag'
 import { persistBlockPlacement } from '@/lib/blocks'
 import { cn } from '@/lib/utils'
 
@@ -174,13 +180,11 @@ function collectGroup(
 function layoutNestedFromMates(
   live: ReturnType<ReturnType<typeof useReactFlow>['getNodes']>,
   placedPos: Map<string, { x: number; y: number }>,
-  excludeGroupId: string
+  excludeGroupId: string,
+  zoom: number
 ): Map<string, { x: number; y: number }> {
   const nestedPos = new Map<string, { x: number; y: number }>()
-  const sizeOf = (id: string) => {
-    const n = live.find((x) => x.id === id)
-    return n ? nodeFlowSize(n) : { width: 280, height: 120 }
-  }
+  const sizeOf = (id: string) => frameAdjustFlowSize(live.find((x) => x.id === id)!, zoom)
   const queue = [...placedPos.keys()]
   const visitedGroups = new Set<string>([excludeGroupId])
   while (queue.length > 0) {
@@ -189,8 +193,7 @@ function layoutNestedFromMates(
     if (!pPos) continue
     const pNode = live.find((n) => n.id === pid)
     if (!pNode) continue
-    const pSize = sizeOf(pid)
-    const pBox = { x: pPos.x, y: pPos.y, width: pSize.width, height: pSize.height }
+    const pAdjust = frameAdjustFlowBoxAt(pNode, pPos, zoom)
     const stacks = readSideStacks(nodeStackMeta(pNode))
     for (const side of FRAME_STACK_SIDES) {
       const entry = stacks[side]
@@ -210,7 +213,14 @@ function layoutNestedFromMates(
         )
       const sizes = mates.map((n) => sizeOf(n.id))
       mates.forEach((mate, order) => {
-        const pos = stackExpandLayout(pBox, side, sizes[order], order, sizes.slice(0, order))
+        const adjustOrigin = stackExpandLayout(
+          pAdjust,
+          side,
+          sizes[order],
+          order,
+          sizes.slice(0, order)
+        )
+        const pos = rfAbsFromAdjustOrigin(adjustOrigin, mate, zoom)
         nestedPos.set(mate.id, pos)
         placedPos.set(mate.id, pos) // Allow deeper nesting from this mate
         queue.push(mate.id)
@@ -296,14 +306,7 @@ export function FrameStackRevealLine({
       const live = getNodes()
       const host = live.find((n) => n.id === nodeId)
       if (!host) return
-      const frontAbs = absFlowPosition(host, live)
-      const frontSize = nodeFlowSize(host)
-      const frontBox = {
-        x: frontAbs.x,
-        y: frontAbs.y,
-        width: frontSize.width,
-        height: frontSize.height,
-      }
+      const zoom = Number(String(viewportKey).split(',')[2]) || 1
       const sortedMates = collectMates(getNodes, nodeId, stackGroupId)
       // Layout order: single open → just that mate at host edge;
       // preview/show-all → already-open mates stay closest, then stacked ones further out
@@ -320,7 +323,6 @@ export function FrameStackRevealLine({
         }
         layoutMates = [...openFirst, ...rest]
       }
-      const sizes = layoutMates.map((n) => nodeFlowSize(n))
       const posById = new Map<string, { x: number; y: number }>()
       layoutMates.forEach((n, order) => {
         // Full open of the whole stack: keep each mate’s live XY (collapse left them put).
@@ -328,13 +330,13 @@ export function FrameStackRevealLine({
         const pos =
           expanded && !onlyId
             ? absFlowPosition(n, live)
-            : stackExpandLayout(frontBox, stackSide, sizes[order], order, sizes.slice(0, order))
+            : stackExpandRfAbs(host, live, stackSide, n, order, layoutMates.slice(0, order), zoom)
         posById.set(n.id, pos)
       })
       // Nested satellites of the mates we’re showing (A’s bottom C, etc.)
       const showMateIds = layoutMates.map((n) => n.id)
       const nestedIds = collectNestedSatelliteIds(live, showMateIds, [stackGroupId])
-      const nestedPos = layoutNestedFromMates(live, new Map(posById), stackGroupId)
+      const nestedPos = layoutNestedFromMates(live, new Map(posById), stackGroupId, zoom)
       for (const [id, pos] of nestedPos) {
         if (nestedIds.includes(id)) posById.set(id, pos)
       }
@@ -426,7 +428,7 @@ export function FrameStackRevealLine({
         })
       )
     },
-    [getNodes, nodeId, setNodes, stackGroupId, stackSide]
+    [getNodes, nodeId, setNodes, stackGroupId, stackSide, viewportKey]
   )
 
   /** Stack under `keeperId` — that frame stays visible; others (+ nested side packs) hide. Locks this side’s group. */
@@ -670,10 +672,9 @@ export function FrameStackRevealLine({
       const live = getNodes()
       const host = live.find((n) => n.id === nodeId)
       if (!host) return
+      const zoom = Number(String(viewportKey).split(',')[2]) || 1
       const frontAbs = absFlowPosition(host, live)
-      const frontSize = nodeFlowSize(host)
       const sortedMates = collectMates(getNodes, nodeId, stackGroupId)
-      const sizes = sortedMates.map((n) => nodeFlowSize(n))
       const posById = new Map<string, { x: number; y: number }>()
       sortedMates.forEach((n, order) => {
         const stamped = findStackEntry(nodeStackMeta(n), stackGroupId)?.entry.restoreAbs
@@ -691,7 +692,7 @@ export function FrameStackRevealLine({
         sortedMates.map((n) => n.id),
         [stackGroupId]
       )
-      const nestedPos = layoutNestedFromMates(live, new Map(posById), stackGroupId)
+      const nestedPos = layoutNestedFromMates(live, new Map(posById), stackGroupId, zoom)
       for (const [id, pos] of nestedPos) {
         if (nestedIds.includes(id)) posById.set(id, pos)
       }
@@ -735,7 +736,7 @@ export function FrameStackRevealLine({
         await persistBlockPlacement(supabase, { messageId: msgId, position: pos })
       }
     },
-    [getNodes, nodeId, stackGroupId, stackSide]
+    [getNodes, nodeId, stackGroupId, stackSide, viewportKey]
   )
 
   /** Eye — fully open all mates. */
@@ -812,19 +813,13 @@ export function FrameStackRevealLine({
         const live = getNodes()
         const host = live.find((n) => n.id === nodeId)
         if (!host) return
-        const frontAbs = absFlowPosition(host, live)
-        const frontSize = nodeFlowSize(host)
-        const frontBox = {
-          x: frontAbs.x,
-          y: frontAbs.y,
-          width: frontSize.width,
-          height: frontSize.height,
-        }
+        const zoom = Number(String(viewportKey).split(',')[2]) || 1
         const sorted = collectMates(getNodes, nodeId, stackGroupId)
         const target = sorted.find((n) => n.id === mateId)
-        const targetSize = target ? nodeFlowSize(target) : { width: 280, height: 120 }
         // Always adjacent to host (order 0), even if this mate was deeper in the stack
-        const adjacentPos = stackExpandLayout(frontBox, stackSide, targetSize, 0, [])
+        const adjacentPos = target
+          ? stackExpandRfAbs(host, live, stackSide, target, 0, [], zoom)
+          : absFlowPosition(host, live)
         // Promote clicked mate to stackIndex 1; renumber others 2..n in prior order
         const indexById = new Map<string, number>()
         indexById.set(mateId, 1)
@@ -838,7 +833,7 @@ export function FrameStackRevealLine({
         const hideMateIds = sorted.filter((n) => n.id !== mateId).map((n) => n.id)
         const hideNested = collectNestedSatelliteIds(live, hideMateIds, [stackGroupId])
         const placed = new Map<string, { x: number; y: number }>([[mateId, adjacentPos]])
-        const nestedPos = layoutNestedFromMates(live, placed, stackGroupId)
+        const nestedPos = layoutNestedFromMates(live, placed, stackGroupId, zoom)
 
         for (const mate of sorted) {
           const msgId = nodeMessageId(mate)
@@ -915,6 +910,7 @@ export function FrameStackRevealLine({
       showMatesOut,
       stackGroupId,
       stackSide,
+      viewportKey,
     ]
   )
 
@@ -1136,9 +1132,8 @@ export function FrameStackRevealLine({
   // Expanded snap: show when either frame on this gap is selected. Collapsed stack: always show.
   const mateStacked = outwardMates.some((n) => n.hidden === true || !entryExpanded(nodeStackMeta(n), stackGroupId))
   const showLine = anyHidden || mateStacked || !!hostNode?.selected || !!outwardMates[0]?.selected
-  void viewportKey // Re-place after pan/zoom
   const zoom = Number(String(viewportKey).split(',')[2]) || 1
-  const hostRect = showLine ? frameScreenRect(nodeId) : null
+  const hostRect = showLine ? frameAdjustScreenRect(nodeId, hostNode, zoom) : null
   if (!showLine || !hostRect || typeof document === 'undefined') return null
   const lineBox = stackLineScreenBox(stackSide, hostRect, zoom, frameUiScale)
   const stroke = LINE_THICKNESS * zoom // Match former in-node thickness (viewport-scaled)

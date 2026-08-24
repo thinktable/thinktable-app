@@ -893,7 +893,13 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       applyStackPatches(unlinkSelectedStack(selected, live)) // Magnet off: drop the link
       return
     }
-    const packed = packSelectedFramesTogether(selected, live, arrowDirection, layoutForkAlign)
+    const packed = packSelectedFramesTogether(
+      selected,
+      live,
+      arrowDirection,
+      layoutForkAlign,
+      reactFlowInstance.getViewport().zoom
+    )
     if (packed.length === 0) return
     const byId = new Map(packed.map((p) => [p.id, p]))
     reactFlowInstance.setNodes((nds) =>

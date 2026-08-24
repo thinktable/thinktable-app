@@ -1,13 +1,22 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-24T04:18:24Z`
+- Snapped at: `2026-08-24T12:25:44Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260824122544_property_value_wrap_and_frame_adjust_box.sql`.
+- Property cells are `<textarea>` (`components/property-block-view.tsx`): fit-to-text → one nowrap line at a measured glyph width; wrap mode → `pre-wrap` + fit height. Values never ellipsize; `nowrap` tracked via `MutationObserver` on `data-single-line`.
+- Row-card hug (`chat-panel-node.tsx`): nowrap reads the cell width; wrap returns `contentFit.offsetWidth` (fixed point); title hug uncapped.
+- Connections strip is the last block inside the fill; blue adjust box reserves no top/bottom band (`pinConnectionsToFrame` only for clipped free-resize).
+- Snap/stack now measured on upright adjust boxes (`lib/frame-adjust-box.ts`, `use-frame-nest-stack-drag.ts`, `frame-stack-reveal-line.tsx`).
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Phone unselected frame drag and minimap pan
 
 - No DDL. Marker `20260824041824_phone_unselected_frame_drag_minimap_pan.sql`.
 - Phone unselected frames: panel `nodrag` + hold ~450ms then drag (`lib/phone-unselected-frame-drag.ts`); blue move border (`PhoneFrameDragProvider`); nest-stack / on-thread drag hooks wired.

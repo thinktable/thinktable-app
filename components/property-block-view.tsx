@@ -24,6 +24,30 @@ import {
   isPropertyBlockInline,
 } from '@/lib/tiptap/property-block'
 
+// Caret room past the last glyph — the frame hug reads the width we set here, so any slack
+// has to live in this one number or the cell ends up wider than the frame and clips.
+const VALUE_CARET_PAD = 2
+
+/**
+ * Glyph run of `text` in the cell's own font. Probe lives on `document.body` (outside the RF
+ * transform), so the result is already local px — and it never reads the cell's own layout,
+ * which would make the width depend on the width we are about to set.
+ */
+function measureValueWidth(el: HTMLElement, text: string): number {
+  const probe = document.createElement('span')
+  const cs = getComputedStyle(el)
+  probe.style.position = 'absolute'
+  probe.style.visibility = 'hidden'
+  probe.style.whiteSpace = 'pre'
+  probe.style.font = cs.font
+  probe.style.letterSpacing = cs.letterSpacing
+  probe.textContent = text
+  document.body.appendChild(probe)
+  const w = probe.getBoundingClientRect().width
+  probe.remove()
+  return Math.ceil(w) + VALUE_CARET_PAD
+}
+
 function propertyTypeNeedsPopup(type: PropertyTypeId): boolean {
   return (
     type === 'date' ||
@@ -46,18 +70,25 @@ export function PropertyBlockView({ node, updateAttributes, selected, editor, ge
   const [draft, setDraft] = useState(stored)
   const label = propertyTypeLabel(propertyType)
   const iconRef = useRef<HTMLSpanElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const [editorOpen, setEditorOpen] = useState<PropertyEditorAnchor | null>(null)
   const [ghost, setGhost] = useState<{ x: number; y: number; type: PropertyTypeId } | null>(null)
   const [dropLine, setDropLine] = useState<PropertyDropLine | null>(null)
   const [canEditCell, setCanEditCell] = useState(() => !!editor?.isEditable)
+  // Frame is in "fit to text" (nowrap) mode — same flag the text blocks key off. The host
+  // toggles both attributes via setOptions/DOM (no transaction), so watch, never read once.
+  const [nowrap, setNowrap] = useState(false)
 
   useEffect(() => {
     const dom = editor?.view?.dom as HTMLElement | undefined
     if (!dom) return
-    const sync = () => setCanEditCell(!!editor?.isEditable)
+    const sync = () => {
+      setCanEditCell(!!editor?.isEditable)
+      setNowrap(dom.getAttribute('data-single-line') === 'true')
+    }
     sync()
     const mo = new MutationObserver(sync)
-    mo.observe(dom, { attributes: true, attributeFilter: ['contenteditable'] })
+    mo.observe(dom, { attributes: true, attributeFilter: ['contenteditable', 'data-single-line'] })
     return () => mo.disconnect()
   }, [editor])
 
@@ -79,12 +110,37 @@ export function PropertyBlockView({ node, updateAttributes, selected, editor, ge
   }, [])
 
   const focusInput = useCallback(() => {
-    const input = iconRef.current
-      ?.closest('.tt-property-block-cell')
-      ?.querySelector('input') as HTMLInputElement | null
+    const input = inputRef.current
     input?.focus()
     input?.setSelectionRange(input.value.length, input.value.length)
   }, [])
+
+  // A textarea has no intrinsic size: `cols` (not the value) drives width and `rows` drives
+  // height. Nowrap frames get an explicit glyph width so the cell stays on ONE line and the
+  // frame hug (which reads this same width) fits it; wrap frames stretch and grow taller.
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    const fitHeight = () => {
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight}px`
+    }
+    if (nowrap) {
+      el.style.width = `${measureValueWidth(el, draft || 'Empty')}px`
+      fitHeight()
+      return
+    }
+    el.style.width = ''
+    fitHeight()
+    let lastW = el.clientWidth
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth === lastW) return // Height-only change — must not re-enter
+      lastW = el.clientWidth
+      fitHeight()
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [draft, nowrap, canEditCell])
 
   const onIconPointerDown = useCallback(
     (e: React.PointerEvent<HTMLElement>) => {
@@ -149,47 +205,53 @@ export function PropertyBlockView({ node, updateAttributes, selected, editor, ge
               onPointerDown={onIconPointerDown}
             />
           </span>
-          <input
-            type="text"
-            className={cn('tt-property-block-input', !canEditCell && 'pointer-events-none')}
-            value={draft}
-            placeholder="Empty"
-            aria-label={`${propertyName.trim() || label} value`}
-            readOnly={!canEditCell}
-            tabIndex={canEditCell ? 0 : -1}
-            onPointerDown={(e) => {
-              if (!canEditCell) return
-              e.stopPropagation()
-            }}
-            onMouseDown={(e) => {
-              if (!canEditCell) {
-                e.preventDefault()
-                return
-              }
-            }}
-            onClick={(e) => {
-              if (!canEditCell) return
-              e.stopPropagation()
-            }}
-            onChange={(e) => {
-              const v = e.target.value
-              setDraft(v)
-              const wasEmpty = !stored.trim()
-              const nowEmpty = !v.trim()
-              if (wasEmpty !== nowEmpty) {
-                updateAttributes({ value: nowEmpty ? '' : v.trim() })
-              }
-            }}
-            onBlur={commit}
-            onKeyDown={(e) => {
-              if (!canEditCell) return
-              e.stopPropagation()
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                ;(e.currentTarget as HTMLInputElement).blur()
-              }
-            }}
-          />
+          {/* Textarea, not input: a long value **wraps** inside the fixed column instead of
+              ellipsizing, so the frame grows in height and never cuts text off. Enter still
+              blurs (below), so the value stays single-line data. */}
+          <span className="tt-property-block-value">
+            <textarea
+              ref={inputRef}
+              rows={1}
+              className={cn('tt-property-block-input', !canEditCell && 'pointer-events-none')}
+              value={draft}
+              placeholder="Empty"
+              aria-label={`${propertyName.trim() || label} value`}
+              readOnly={!canEditCell}
+              tabIndex={canEditCell ? 0 : -1}
+              onPointerDown={(e) => {
+                if (!canEditCell) return
+                e.stopPropagation()
+              }}
+              onMouseDown={(e) => {
+                if (!canEditCell) {
+                  e.preventDefault()
+                  return
+                }
+              }}
+              onClick={(e) => {
+                if (!canEditCell) return
+                e.stopPropagation()
+              }}
+              onChange={(e) => {
+                const v = e.target.value
+                setDraft(v)
+                const wasEmpty = !stored.trim()
+                const nowEmpty = !v.trim()
+                if (wasEmpty !== nowEmpty) {
+                  updateAttributes({ value: nowEmpty ? '' : v.trim() })
+                }
+              }}
+              onBlur={commit}
+              onKeyDown={(e) => {
+                if (!canEditCell) return
+                e.stopPropagation()
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  e.currentTarget.blur()
+                }
+              }}
+            />
+          </span>
         </div>
       </div>
       <PropertyValuePopup
