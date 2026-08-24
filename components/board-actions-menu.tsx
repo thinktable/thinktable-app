@@ -153,7 +153,7 @@ export function BoardActionsMenu({
       tabIndex={-1}
       className={cn(
         // Same shell as ThreadActionsMenu / BlockActionsMenu
-        'board-actions-menu node-popup z-[1000] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[240px] outline-none',
+        'board-actions-menu node-popup z-[1000] tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[240px] outline-none',
         'absolute',
         className
       )}

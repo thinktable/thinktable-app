@@ -39,7 +39,6 @@ import {
   Triangle,
   Ungroup,
   FolderInput,
-  PencilLine,
   Type,
   Anchor,
   AlignJustify,
@@ -178,7 +177,6 @@ export type BlockActionId =
   | 'listFormat'
   | 'moveTo'
   | 'comment'
-  | 'suggestEdits'
   | 'presentFromHere'
   | 'askAI'
   | 'skills'
@@ -336,7 +334,7 @@ type RowDef =
       shortcut?: string
       icon: React.ReactNode
       danger?: boolean
-      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape' | 'frameColor' | 'connections' | 'notionConnection' | 'convertLayout'
+      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape' | 'frameColor' | 'connections' | 'convertLayout'
       hidden?: boolean
       beta?: boolean
     }
@@ -503,7 +501,6 @@ export function BlockActionsMenu({
     | 'frameShape'
     | 'frameColor'
     | 'connections'
-    | 'notionConnection'
     | 'convertLayout'
     | null
   >(null) // Flyout
@@ -511,7 +508,6 @@ export function BlockActionsMenu({
   const propertySearchRef = useRef<HTMLInputElement>(null) // Focus when Property search opens
   const rootRef = useRef<HTMLDivElement>(null) // Position flyout
   const connectionsRowRef = useRef<HTMLButtonElement>(null) // Align Connections picker to that row
-  const notionRowRef = useRef<HTMLButtonElement>(null) // Align Notion sync menu to that row
   const colorRowRef = useRef<HTMLButtonElement>(null) // Align frame Color flyout to Color row
   const [lastFrameColor, setLastFrameColor] = useState<FrameLastColor | null>(null) // Last used fill/border
   const [borderWeightDraft, setBorderWeightDraft] = useState<number | null>(null) // Live slider value while dragging
@@ -552,11 +548,9 @@ export function BlockActionsMenu({
     const row =
       openSubmenu === 'connections'
         ? connectionsRowRef.current
-        : openSubmenu === 'notionConnection'
-          ? notionRowRef.current
-          : openSubmenu === 'frameColor'
-            ? colorRowRef.current
-            : null // Turn into / Shape align to the cluster top
+        : openSubmenu === 'frameColor'
+          ? colorRowRef.current
+          : null // Turn into / Shape align to the cluster top
     const place = () =>
       applyMenuPlacement(root, {
         anchorX: x, // Grip / click X
@@ -568,7 +562,14 @@ export function BlockActionsMenu({
         fromExisting: openSubmenu != null,
       })
     place() // Before paint so the first frame is already in-bounds
-    return watchMenuSafeRect(place) // Window + phone keyboard move the chat dock
+    // The frame's selection chrome (blue ring / connection dots) mounts in the same commit, so the
+    // first measure can read a frame box that is still missing it — re-place once it has laid out.
+    const raf = requestAnimationFrame(place)
+    const stop = watchMenuSafeRect(place) // Window + phone keyboard move the chat dock
+    return () => {
+      cancelAnimationFrame(raf)
+      stop()
+    }
   }, [x, y, positionMode, openLeft, openSubmenu, notionConnected, query, propertyQuery, showPropertySearch, turnIntoPane])
 
   /** Apply fill or border, remember as Last used, keep the flyout open. */
@@ -680,7 +681,7 @@ export function BlockActionsMenu({
       {
         kind: 'action',
         id: 'lockToBoard',
-        label: boardLocked ? 'Unlock from board' : 'Lock to board',
+        label: boardLocked ? 'Unanchor from board' : 'Anchor to board',
         icon: <Anchor className="h-4 w-4" />, // Same anchor as Actions-bar board lock
         hidden: !showFrameShape, // Pin this frame (and selection) to the board
       },
@@ -698,18 +699,6 @@ export function BlockActionsMenu({
         icon: <Cable className="h-4 w-4" />,
         submenu: 'connections', // Click → Notion picker
         hidden: !showFrameShape, // Frame menu only
-      },
-      {
-        kind: 'action',
-        id: 'setNotionSync',
-        label: 'Notion',
-        icon: (
-          <NotionMarkIcon
-            className={cn('h-4 w-4', notionSync === 'live' ? 'text-[#2383e2]' : 'text-gray-500')}
-          />
-        ),
-        submenu: 'notionConnection', // Hover → Live Sync / Manual / Remove
-        hidden: !showFrameShape || !notionConnected, // Only after Notion is selected
       },
       {
         kind: 'action',
@@ -732,13 +721,6 @@ export function BlockActionsMenu({
         label: 'Comment',
         shortcut: '⌘⇧M',
         icon: <MessageSquare className="h-4 w-4" />,
-      },
-      {
-        kind: 'action',
-        id: 'suggestEdits',
-        label: 'Suggest edits',
-        shortcut: '⌘⇧X',
-        icon: <PencilLine className="h-4 w-4" />,
       },
       { kind: 'separator', hidden: !showFrameShape }, // Only when Present is shown (frame menu)
       {
@@ -784,7 +766,7 @@ export function BlockActionsMenu({
                 .includes(q)
             )))
     )
-  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape, boardLocked, framesLockedTogether, canLockFramesTogether, notionConnected, notionSync, convertLayoutMode, showOpen])
+  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape, boardLocked, framesLockedTogether, canLockFramesTogether, notionConnected, convertLayoutMode, showOpen])
 
   // When searching, also surface matching Turn into types as flat picks
   const turnIntoMatches = useMemo(() => {
@@ -842,7 +824,7 @@ export function BlockActionsMenu({
       <div
         ref={rootRef}
         className={cn(
-          'block-actions-menu node-popup z-[1000] overflow-visible bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[200px]',
+          'block-actions-menu node-popup z-[1000] overflow-visible tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[200px]',
           positionMode === 'fixed' ? 'fixed' : 'absolute',
           className
         )}
@@ -915,7 +897,7 @@ export function BlockActionsMenu({
     <div
       ref={rootRef}
       className={cn(
-        'block-actions-menu node-popup z-[1000] overflow-visible bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[240px]',
+        'block-actions-menu node-popup z-[1000] overflow-visible tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[240px]',
         positionMode === 'fixed' ? 'fixed' : 'absolute',
         className
       )}
@@ -982,8 +964,6 @@ export function BlockActionsMenu({
           const isShapeOpen = row.submenu === 'frameShape' && openSubmenu === 'frameShape'
           const isFrameColorOpen = row.submenu === 'frameColor' && openSubmenu === 'frameColor'
           const isConnectionsOpen = row.submenu === 'connections' && openSubmenu === 'connections'
-          const isNotionConnOpen =
-            row.submenu === 'notionConnection' && openSubmenu === 'notionConnection'
           const isConvertLayoutOpen =
             row.submenu === 'convertLayout' && openSubmenu === 'convertLayout'
           return (
@@ -992,11 +972,9 @@ export function BlockActionsMenu({
               ref={
                 row.submenu === 'connections'
                   ? connectionsRowRef
-                  : row.submenu === 'notionConnection'
-                    ? notionRowRef
-                    : row.submenu === 'frameColor'
-                      ? colorRowRef
-                      : undefined
+                  : row.submenu === 'frameColor'
+                    ? colorRowRef
+                    : undefined
               }
               variant="ghost"
               size="sm"
@@ -1005,7 +983,6 @@ export function BlockActionsMenu({
                 else if (row.submenu === 'frameShape') setOpenSubmenu('frameShape')
                 else if (row.submenu === 'frameColor') setOpenSubmenu('frameColor')
                 else if (row.submenu === 'convertLayout') setOpenSubmenu('convertLayout')
-                else if (row.submenu === 'notionConnection') setOpenSubmenu('notionConnection') // Hover → sync menu
                 else if (row.submenu === 'connections') return // Click-only picker
                 else setOpenSubmenu(null)
               }}
@@ -1032,10 +1009,6 @@ export function BlockActionsMenu({
                   setOpenSubmenu((s) => (s === 'connections' ? null : 'connections')) // Click → Notion
                   return
                 }
-                if (row.submenu === 'notionConnection') {
-                  setOpenSubmenu((s) => (s === 'notionConnection' ? null : 'notionConnection'))
-                  return
-                }
                 // Submenus without UI yet — fire stub action and close
                 if (row.submenu) {
                   onAction(row.id)
@@ -1051,7 +1024,6 @@ export function BlockActionsMenu({
                   isShapeOpen ||
                   isFrameColorOpen ||
                   isConnectionsOpen ||
-                  isNotionConnOpen ||
                   isConvertLayoutOpen) &&
                   'bg-gray-100 dark:bg-[#2a2a2a]'
               )}
@@ -1116,7 +1088,7 @@ export function BlockActionsMenu({
         <div
           data-tt-menu-flyout="main"
           className={cn(
-            'absolute z-[1001] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f]',
+            'absolute z-[1001] tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f]',
             turnIntoPane === 'property' ? 'w-[320px]' : 'w-max min-w-[180px]'
           )}
           onMouseEnter={() => {
@@ -1302,7 +1274,7 @@ export function BlockActionsMenu({
           {openSubmenu === 'boardIn' && turnIntoPane === 'format' && (
             <div
               data-tt-menu-flyout="nested"
-              className="absolute z-[1002] min-w-[200px] overflow-y-auto bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+              className="absolute z-[1002] min-w-[200px] overflow-y-auto tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
               onMouseEnter={() => setOpenSubmenu('boardIn')}
             >
               <div className="px-2 py-1.5 text-[11px] text-gray-400">Nest board under…</div>
@@ -1337,7 +1309,7 @@ export function BlockActionsMenu({
       {openSubmenu === 'frameShape' && (
         <div
           data-tt-menu-flyout="main"
-          className="absolute z-[1001] w-[220px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2"
+          className="absolute z-[1001] w-[220px] tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2"
           onMouseEnter={() => setOpenSubmenu('frameShape')}
         >
           <div className="px-1 pb-1.5 text-[11px] text-gray-400">Frame shape</div>
@@ -1402,7 +1374,7 @@ export function BlockActionsMenu({
       {openSubmenu === 'convertLayout' && convertLayoutMode && (
         <div
           data-tt-menu-flyout="main"
-          className="absolute z-[1001] min-w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+          className="absolute z-[1001] min-w-[180px] tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
           onMouseEnter={() => setOpenSubmenu('convertLayout')}
         >
           <div className="px-2 py-1.5 text-[11px] text-gray-400">Layout</div>
@@ -1457,7 +1429,7 @@ export function BlockActionsMenu({
       {openSubmenu === 'frameColor' && (
         <div
           data-tt-menu-flyout="main"
-          className="absolute z-[1001] w-[240px] overflow-y-auto bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] py-1.5"
+          className="absolute z-[1001] w-[240px] overflow-y-auto tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] py-1.5"
           onMouseEnter={() => setOpenSubmenu('frameColor')}
         >
           {/* Last used */}
@@ -1610,7 +1582,7 @@ export function BlockActionsMenu({
       {openSubmenu === 'connections' && (
         <div
           data-tt-menu-flyout="main"
-          className="absolute z-[1001] min-w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+          className="absolute z-[1001] min-w-[180px] tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
           onMouseEnter={() => setOpenSubmenu('connections')}
         >
           <Button
@@ -1626,67 +1598,6 @@ export function BlockActionsMenu({
           >
             <NotionMarkIcon className="h-4 w-4 mr-2" />
             <span className="flex-1 text-left">Notion</span>
-          </Button>
-        </div>
-      )}
-
-      {/* Notion — hover menu: Live Sync / Manual / Remove */}
-      {openSubmenu === 'notionConnection' && (
-        <div
-          data-tt-menu-flyout="main"
-          className="absolute z-[1001] min-w-[200px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
-          onMouseEnter={() => setOpenSubmenu('notionConnection')}
-        >
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn(
-              'justify-start text-sm h-8 px-2 font-normal w-full',
-              notionSync === 'live' && 'bg-blue-50 dark:bg-blue-950/40'
-            )}
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              onAction('setNotionSync', { notionSync: 'live' })
-              onClose()
-            }}
-          >
-            <RefreshCw className="h-4 w-4 mr-2 text-gray-500" />
-            <span className="flex-1 text-left">Live Sync</span>
-            {notionSync === 'live' && <Check className="h-3.5 w-3.5 text-gray-500" />}
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn(
-              'justify-start text-sm h-8 px-2 font-normal w-full',
-              notionSync === 'manual' && 'bg-blue-50 dark:bg-blue-950/40'
-            )}
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              onAction('setNotionSync', { notionSync: 'manual' })
-              onClose()
-            }}
-          >
-            <Hand className="h-4 w-4 mr-2 text-gray-500" />
-            <span className="flex-1 text-left">Manual</span>
-            {notionSync === 'manual' && <Check className="h-3.5 w-3.5 text-gray-500" />}
-          </Button>
-          <div className="my-1 h-px bg-gray-100 dark:bg-[#2f2f2f] mx-1" />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="justify-start text-sm h-8 px-2 font-normal w-full text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              onAction('removeNotionConnection')
-              onClose()
-            }}
-          >
-            <Unplug className="h-4 w-4 mr-2" />
-            <span className="flex-1 text-left">Remove Connection</span>
           </Button>
         </div>
       )}

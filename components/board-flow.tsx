@@ -7495,7 +7495,6 @@ function BoardFlowInner({
         case 'listFormat':
         case 'moveTo':
         case 'comment':
-        case 'suggestEdits':
         case 'presentFromHere':
         case 'askAI':
         case 'skills':

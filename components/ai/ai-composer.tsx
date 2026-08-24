@@ -22,10 +22,11 @@ import {
   Scan,
   Mic,
   Check,
+  PencilLine,
 } from 'lucide-react'
 import { useVoiceDictation } from '@/hooks/use-voice-dictation'
 import type { AiModeId } from '@/lib/ai/modes'
-import { AI_SKILLS, type AiSkill } from '@/lib/ai/skills'
+import { AI_SKILLS, getSkill, type AiSkill } from '@/lib/ai/skills'
 import { AI_CONNECTORS } from '@/lib/ai/connectors'
 import type {
   AiChatBlockDragPayload,
@@ -84,6 +85,12 @@ const MENU_SKILLS: Array<{
     description: 'Quiz yourself and explore answers',
     icon: MessageSquare,
   },
+  {
+    id: 'suggest-edits',
+    name: 'Suggest edits',
+    description: 'Propose inline improvements for selected content',
+    icon: PencilLine,
+  },
 ]
 
 interface AiComposerProps {
@@ -99,6 +106,8 @@ interface AiComposerProps {
   onStreamingId: (id: string | null) => void
   seedPrompt?: string
   onSeedConsumed?: () => void
+  seedSkillIds?: string[]
+  onSeedSkillsConsumed?: () => void
   /** When true, focus the textarea after mount (phone map-dock opens the soft keyboard). */
   autoFocus?: boolean
   onEdits?: (
@@ -248,6 +257,8 @@ export function AiComposer({
   onStreamingId,
   seedPrompt,
   onSeedConsumed,
+  seedSkillIds,
+  onSeedSkillsConsumed,
   autoFocus = false,
   onEdits,
 }: AiComposerProps) {
@@ -362,6 +373,21 @@ export function AiComposer({
       textareaRef.current?.focus()
     }
   }, [seedPrompt, onSeedConsumed])
+
+  useEffect(() => {
+    if (!seedSkillIds?.length) return
+    setAttachedSkills((prev) => {
+      const ids = new Set(prev.map((s) => s.id))
+      const merged = [...prev]
+      for (const id of seedSkillIds) {
+        const skill = getSkill(id)
+        if (skill?.enabled && !ids.has(skill.id)) merged.push(skill)
+      }
+      return merged
+    })
+    onSeedSkillsConsumed?.()
+    textareaRef.current?.focus()
+  }, [seedSkillIds, onSeedSkillsConsumed])
 
   // Phone map-dock: focus in the same open gesture so the soft keyboard appears
   useEffect(() => {

@@ -1,44 +1,31 @@
 'use client'
 
-// Snap preview: dashed stack line on the host edge while a dragged frame is magnetized.
-// Replaces the old Layers edge-band stack drop buttons.
+// Snap preview: dashed stack line between connection simulators while dragging.
 
 import { createPortal } from 'react-dom' // Screen-fixed overlay
-import type { CSSProperties } from 'react'
 import { cn } from '@/lib/utils'
 import type { FrameNestStackUi } from '@/components/use-frame-nest-stack-drag'
-import { STACK_LINE_GAP } from '@/components/use-frame-nest-stack-drag'
+import { frameScreenChromeScale } from '@/components/threads/constants'
+import { stackLinePreviewStyle } from '@/lib/frame-stack-line'
 
 const LINE = 2 // Stroke thickness (matches settled FrameStackRevealLine)
 const COLOR = '#3b82f6'
-const OUTSET = Math.max(4, STACK_LINE_GAP / 2) // Mid-gap preview, same as settled line
 
-/** Preview the stack reveal line on the snap edge (portal to document.body). */
+/** Preview stack line between host outside simulator and dragged inside anchor. */
 export function FrameNestStackOverlay({ ui }: { ui: FrameNestStackUi | null }) {
   if (!ui || ui.mode !== 'snap' || typeof document === 'undefined') return null
 
-  const { targetRect, stackSide } = ui
-  const isH = stackSide === 'top' || stackSide === 'bottom'
-  const inset = 0.08 // 8% inset like settled line
-  const style: CSSProperties = isH
-    ? {
-        left: targetRect.left + targetRect.width * inset,
-        width: targetRect.width * (1 - inset * 2),
-        height: LINE,
-        top:
-          stackSide === 'top'
-            ? targetRect.top - OUTSET - LINE / 2
-            : targetRect.top + targetRect.height + OUTSET - LINE / 2,
-      }
-    : {
-        top: targetRect.top + targetRect.height * inset,
-        height: targetRect.height * (1 - inset * 2),
-        width: LINE,
-        left:
-          stackSide === 'left'
-            ? targetRect.left - OUTSET - LINE / 2
-            : targetRect.left + targetRect.width + OUTSET - LINE / 2,
-      }
+  const { targetRect, sourceRect, stackSide, zoom } = ui
+  const frameUiScale = frameScreenChromeScale(zoom)
+  const style = stackLinePreviewStyle(
+    targetRect,
+    sourceRect,
+    stackSide,
+    zoom,
+    frameUiScale,
+    LINE
+  )
+  const segmentHorizontal = stackSide === 'left' || stackSide === 'right'
 
   return createPortal(
     <div
@@ -50,7 +37,7 @@ export function FrameNestStackOverlay({ ui }: { ui: FrameNestStackUi | null }) {
         className={cn('absolute rounded-full')}
         style={{
           ...style,
-          backgroundImage: isH
+          backgroundImage: segmentHorizontal
             ? `repeating-linear-gradient(90deg, ${COLOR} 0 6px, transparent 6px 10px)`
             : `repeating-linear-gradient(180deg, ${COLOR} 0 6px, transparent 6px 10px)`,
           backgroundColor: 'transparent',

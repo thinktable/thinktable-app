@@ -47,8 +47,11 @@ export type FrameNestStackUi = {
   targetId: string // Host frame RF id we’d snap against
   mode: 'snap' // Edge snap preview only (no auto-stack on release)
   stackSide: FrameStackSide // Which host edge is the snap target
-  /** Screen rect of the target frame (for preview line placement). */
+  /** Screen rect of the host adjust box. */
   targetRect: { top: number; left: number; width: number; height: number }
+  /** Screen rect of the dragged frame adjust box (outside frame in the pair). */
+  sourceRect: { top: number; left: number; width: number; height: number }
+  zoom: number // Viewport scale for indicator outset
 }
 
 const STACK_EXPAND_GAP = 12 // Gap between host and first stacked frame / between mates
@@ -1218,6 +1221,7 @@ export function useFrameNestStackDrag({
       snapRef.current = snap
       const hostNode = live.find((n) => n.id === snap.targetId)
       const adjustRect = frameAdjustScreenRect(snap.targetId, hostNode, zoom)
+      const sourceAdjust = frameAdjustScreenRect(dragNode.id, dragNode, zoom)
       const targetRect = adjustRect
         ? { top: adjustRect.top, left: adjustRect.left, width: adjustRect.width, height: adjustRect.height }
         : {
@@ -1226,12 +1230,22 @@ export function useFrameNestStackDrag({
             width: snap.hostAbs.width,
             height: snap.hostAbs.height,
           }
+      const sourceRect = sourceAdjust
+        ? {
+            top: sourceAdjust.top,
+            left: sourceAdjust.left,
+            width: sourceAdjust.width,
+            height: sourceAdjust.height,
+          }
+        : targetRect
 
       setDropUi({
         targetId: snap.targetId,
         mode: 'snap',
         stackSide: snap.side,
         targetRect,
+        sourceRect,
+        zoom,
       })
 
       if (snap.gap <= SNAP_MAGNET_PX) {

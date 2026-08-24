@@ -1729,6 +1729,38 @@ span[data-added="true"] {
     background-color: rgba(59, 130, 246, 0.22);
   }
 
+  /* Menu surface for the frame / block / text / board menus (and their flyouts): slightly
+     see-through so board content reads underneath, with a blur so text stays legible.
+     Replaces the `bg-white dark:bg-[#1f1f1f]` pair on those shells — keep it a class (not a
+     Tailwind utility) so nothing has to fight utility source order for the background.
+     The blur lives on a ::before pane, NOT on the shell: `backdrop-filter` on the shell would
+     make it a backdrop root for its own flyouts, and a flyout hanging outside the card then
+     samples an empty backdrop — submenus rendered thinner than the card at any alpha. One level
+     down, the shell is a plain box, so every flyout samples the real page backdrop (board + any
+     card under it) and card/submenu blur identically. The pane needs the shell positioned (all
+     shells are) with a stacking context (placement `transform`, else an explicit `z-0`) so
+     `z-index: -1` lands behind the rows rather than behind the page. */
+  .tt-menu-surface {
+    /* Alpha is the knob: lower = more board shows through. Blur stays light — a heavy blur
+       smears the backdrop into a flat wash, which reads as opaque even at low alpha.
+       The wash stays on the element (a background never scrolls, so `overflow-y-auto` menus
+       keep it), while the blur rides the pane below. */
+    background-color: rgba(255, 255, 255, 0.6);
+  }
+  .dark .tt-menu-surface {
+    background-color: rgba(31, 31, 31, 0.64); /* #1f1f1f, a touch denser so light text holds */
+  }
+  .tt-menu-surface::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1; /* Paints after the shell's own wash, before the rows */
+    border-radius: inherit;
+    pointer-events: none;
+    backdrop-filter: blur(6px) saturate(140%);
+    -webkit-backdrop-filter: blur(6px) saturate(140%);
+  }
+
   /* Preview chrome: semi-transparent, icon-only pill; left is set in JS so it stays inside the frame
      when an unlocked frame is narrower than the boardLink (title would otherwise clip the menu).
      Also used as a frame-level menu (outside ProseMirror) for linkedBoardId frames without a boardLink.

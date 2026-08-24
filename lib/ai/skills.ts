@@ -49,6 +49,14 @@ export const AI_SKILLS: AiSkill[] = [
       'The Learn skill is attached. Quiz the user on page content: ask one question at a time, wait for their answer, then explain and continue. Encourage exploring answers, not just scoring.',
     enabled: true,
   },
+  {
+    id: 'suggest-edits',
+    name: 'Suggest edits',
+    description: 'Propose inline improvements for selected content',
+    systemHint:
+      'The Suggest edits skill is attached. Review the selected frame, block, or text in context and propose concrete improvements. Prefer Edit-mode surgical replacements (oldText→newText) over duplicating content. Explain briefly what you changed and why.',
+    enabled: true,
+  },
 ]
 
 export function getSkill(id: string): AiSkill | undefined {

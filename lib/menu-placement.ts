@@ -170,12 +170,81 @@ function inflate(r: MenuRect, pad: number): MenuRect {
 }
 
 const HANDLE_COVER_PENALTY = 1_000_000_000 // Any grip overlap beats every soft preference
+// Cost per px travelled from the click. Soft scores are px², so ~500px of travel costs about as
+// much as covering a 10k px² sliver: the card sticks beside the frame it belongs to instead of
+// taking a clear-but-distant slot (e.g. clamped against the chat column) that also scored 0.
+const DIST_WEIGHT = 20
 
 /** Soft block/frame coverage (px², GAP-padded). */
 function softAvoidScore(placed: MenuRect, avoid: MenuRect[]): number {
   let s = 0 // Accumulator
   for (const a of avoid) s += overlapArea(placed, inflate(a, GAP)) // Prefer missing the wash
   return s
+}
+
+/** Distance from a point to a box (0 when the point is inside). */
+function distToBox(x: number, y: number, b: MenuRect): number {
+  const dx = Math.max(b.left - x, 0, x - b.right) // Horizontal gap
+  const dy = Math.max(b.top - y, 0, y - b.bottom) // Vertical gap
+  return Math.hypot(dx, dy) // Straight-line gap
+}
+
+/** The box the anchor sits in / closest to — the one the menu is actually about. */
+function nearestBox(list: MenuRect[], x: number, y: number): MenuRect | null {
+  let best: MenuRect | null = null // Winner
+  let bestD = Infinity // Its distance
+  for (const b of list) {
+    const d = distToBox(x, y, b) // Gap from the click
+    if (d < bestD) {
+      best = b
+      bestD = d
+    }
+  }
+  return best
+}
+
+// Selection chrome is absolutely positioned and spills OUTSIDE the node's own border box, which
+// `getBoundingClientRect` on the node does not include — measuring the node alone left the card
+// sitting on the blue ring / connection dots.
+const FRAME_CHROME_SEL =
+  '.react-flow__resize-control, [data-frame-chrome], [data-tt-connection-indicator], [data-tt-block-handle]'
+
+/** A frame's real on-screen box: its own rect grown to cover its selection chrome. */
+function visualNodeRect(el: Element): MenuRect {
+  let r = boxFromDom(el.getBoundingClientRect()) // Node border box
+  el.querySelectorAll(FRAME_CHROME_SEL).forEach((c) => {
+    const cr = boxFromDom(c.getBoundingClientRect()) // Ring / dot / ⋮⋮ box
+    if (cr.width < 1 || cr.height < 1) return // Hidden
+    r = unionBox(r, cr) // Grow
+  })
+  return r
+}
+
+/** Smallest frame box that fully contains `inner` — an armed block's host frame. */
+function hostFrameRect(inner: MenuRect): MenuRect | null {
+  let best: Element | null = null // Tightest container so far
+  let bestArea = Infinity // Its area
+  const nodes = document.querySelectorAll('.react-flow__node') // Frames (selected or not)
+  nodes.forEach((el) => {
+    const r = boxFromDom(el.getBoundingClientRect()) // Frame box (chrome measured only for the winner)
+    if (r.width < 1 || r.height < 1) return // Hidden
+    const contains =
+      r.left <= inner.left + 1 && r.right >= inner.right - 1 && r.top <= inner.top + 1 && r.bottom >= inner.bottom - 1
+    if (!contains) return // Not the host
+    const area = r.width * r.height // Prefer the tightest (frame, not a blockGroup wrapper)
+    if (area < bestArea) {
+      best = el
+      bestArea = area
+    }
+  })
+  return best ? visualNodeRect(best) : null
+}
+
+/** Smallest box covering both inputs. */
+function unionBox(a: MenuRect, b: MenuRect): MenuRect {
+  const left = Math.min(a.left, b.left) // Outer edges
+  const top = Math.min(a.top, b.top)
+  return box(left, top, Math.max(a.right, b.right) - left, Math.max(a.bottom, b.bottom) - top) // Cover both
 }
 
 /** Hard grip coverage — must stay 0 whenever a clear placement exists. */
@@ -231,8 +300,12 @@ export function getThreadCoverRects(edgeId?: string, sourceId?: string, targetId
  */
 export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOpts): void {
   const safe = getMenuSafeRect() // Chrome-free window
-  const avoid = getMenuAvoidRects(root) // Selected block / frame (soft)
-  const handles = [...getMenuHandleRects(root), ...(opts.extraHard ?? [])] // ⋮⋮ grips + thread curve (hard — never cover)
+  // Obstacles outside the lane can never be covered, so they only add noise — worse, each one
+  // offers a "beside me" origin, and a grip inside the open chat column pushed the card against
+  // the column edge instead of leaving it beside the frame.
+  const inLane = (b: MenuRect) => overlapArea(b, safe) > 0
+  const avoid = getMenuAvoidRects(root).filter(inLane) // Selected block / frame (soft)
+  const handles = [...getMenuHandleRects(root), ...(opts.extraHard ?? [])].filter(inLane) // ⋮⋮ grips + thread curve (hard — never cover)
   const body = root.querySelector('[data-tt-menu-body]') as HTMLElement | null // Inner scroller (search chrome stays put)
   const flyout = root.querySelector('[data-tt-menu-flyout="main"]') as HTMLElement | null // Turn into / Color / Shape / …
   const nested = root.querySelector('[data-tt-menu-flyout="nested"]') as HTMLElement | null // Board in (off Turn into)
@@ -258,7 +331,14 @@ export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOp
   const existing = opts.fromExisting ? root.getBoundingClientRect() : null // First-paint box (translate already applied)
 
   type Side = 'left' | 'right' // Flyout parks on this side of the menu
-  type Cand = { menuLeft: number; top: number; flyoutSide: Side; nestedSide: Side; score: number } // One layout
+  type Cand = {
+    menuLeft: number
+    top: number
+    flyoutSide: Side
+    nestedSide: Side
+    score: number
+    dist: number // Tiebreak: how far this box sits from the click / current card
+  } // One layout
 
   // Submenus always open to the RIGHT of the parent card (Turn into / Color / Shape / Board in / …).
   const flyoutSide: Side = 'right'
@@ -280,7 +360,15 @@ export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOp
     pushOrigin(opts.anchorX + GAP, opts.anchorY, !opts.openLeft)
   }
   // Soft: clear of the highlighted block / selected frame.
-  for (const a of avoid) {
+  // Only while the card is being placed. Re-offering these once it is up (`existing`) is what
+  // made the card hop to the far side of the frame the moment a flyout opened — the submenu is
+  // allowed to cover the frame instead.
+  // Only the obstacle under (or nearest) the anchor supplies origins: a selected thread pulls
+  // every frame it touches into `avoid`, and offering a slot beside each of those parked the card
+  // against the far window edge while a clear gap sat right beside the clicked frame. The rest of
+  // `avoid` is still scored, so the winner still prefers to miss them.
+  const primaryAvoid = existing ? null : nearestBox(avoid, opts.anchorX, opts.anchorY)
+  for (const a of primaryAvoid ? [primaryAvoid] : []) {
     pushOrigin(a.left - GAP - menuW, existing?.top ?? opts.anchorY, opts.openLeft) // Left of block
     pushOrigin(a.right + GAP, existing?.top ?? opts.anchorY, !opts.openLeft) // Right of block
     pushOrigin(a.left - GAP - menuW, a.top - GAP - menuMaxH, opts.openLeft) // Above-left
@@ -304,6 +392,8 @@ export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOp
   }
 
   const cands: Cand[] = [] // Scored placements
+  const refLeft = existing?.left ?? opts.anchorX // Tiebreak origin: current card, else the click
+  const refTop = existing?.top ?? opts.anchorY
   const seen = new Set<string>() // Skip duplicate left/top after clamp
   for (const pref of originPrefs) {
     let menuLeft = pref.left // Start from the preferred menu origin
@@ -322,18 +412,46 @@ export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOp
     const clusterBox = box(menuLeft, top, Math.min(clusterW, safe.width), clusterH) // Soft-score the strip vs block
     // Covering a grip is forbidden; covering the block is discouraged; soft prefer openLeft / existing.
     const sidePenalty = existing || pref.prefer ? 0 : 1_000
-    const score =
-      hardHandleScore(menuBox, handles) + softAvoidScore(clusterBox, avoid) + sidePenalty
-    cands.push({ menuLeft, top, flyoutSide, nestedSide, score }) // Keep
+    // Once placed, only the card is scored against the frame — scoring the whole strip made an
+    // opening flyout look like new frame overlap and moved the card out from under the pointer.
+    const softBox = existing ? menuBox : clusterBox
+    const score = hardHandleScore(menuBox, handles) + softAvoidScore(softBox, avoid) + sidePenalty
+    // Distance from the click (or the card's current spot) — several origins clear every obstacle
+    // and used to tie at 0, so insertion order decided and the card could land against the far
+    // window edge while a clear gap sat right beside the frame.
+    const dist = Math.abs(menuLeft - refLeft) + Math.abs(top - refTop)
+    cands.push({ menuLeft, top, flyoutSide, nestedSide, score: score + dist * DIST_WEIGHT, dist }) // Keep
   }
 
-  cands.sort((a, b) => a.score - b.score) // Best (clear grips → least block cover → preference) first
-  const best = cands[0] ?? {
+  // Explicit side rule for the card the user just opened: park flush LEFT of the frame / armed
+  // block when the lane has room for it, else flush RIGHT of it. Scoring only gets a say when
+  // neither side fits or both would cover a ⋮⋮ grip.
+  const sideSlot = ((): Cand | null => {
+    if (existing || !primaryAvoid) return null // Locked under the pointer / nothing to sit beside
+    // Sit beside the whole FRAME, not just the armed block: `avoid` reports the block wash when one
+    // is armed, and its right edge sits inside the frame — the card then landed on the frame's own
+    // right edge. Union covers the block-only case (no host found) too.
+    const host = hostFrameRect(primaryAvoid) // Frame that owns the block / the frame itself
+    const beside = host ? unionBox(primaryAvoid, host) : primaryAvoid // Box the card must clear
+    const top = clampStart(opts.anchorY, clusterH, safe.top, safe.bottom) // Same vertical lane as any candidate
+    const slots = [beside.left - GAP - menuW, beside.right + GAP] // Left first, then right
+    for (const menuLeft of slots) {
+      if (menuLeft < safe.left || menuLeft + menuW > safe.right) continue // No room on this side
+      if (hardHandleScore(box(menuLeft, top, menuW, menuMaxH), handles) > 0) continue // Would bury a ⋮⋮
+      return { menuLeft, top, flyoutSide, nestedSide, score: 0, dist: 0 }
+    }
+    return null // Neither side fits — fall back to the scored candidates
+  })()
+
+  // Best (clear grips → least block cover → preference), then the closest such box to the anchor.
+  cands.sort((a, b) => a.score - b.score || a.dist - b.dist)
+  const best = sideSlot ?? cands[0] ?? {
     menuLeft: clampStart(existing?.left ?? opts.anchorX, menuW, safe.left, safe.right),
     top: clampStart(existing?.top ?? opts.anchorY, menuMaxH, safe.top, safe.bottom),
     flyoutSide: 'right' as Side,
     nestedSide: 'right' as Side,
     score: 0,
+    dist: 0,
   } // Fallback
 
   setViewportPos(root, best.menuLeft, best.top) // Park the main card

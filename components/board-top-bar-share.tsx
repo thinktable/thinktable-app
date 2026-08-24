@@ -302,7 +302,6 @@ export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
       'Customize board',
       'Lock board',
       'Use with AI',
-      'Suggest edits',
       'Translate',
       'Import',
       'Export',
@@ -583,12 +582,6 @@ export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
 
               {!q && <DropdownMenuSeparator />}
 
-              {matchesQuery('Suggest edits', q) && (
-                <DropdownMenuItem>
-                  <MessageSquarePlus className="h-4 w-4 mr-2" />
-                  Suggest edits
-                </DropdownMenuItem>
-              )}
               {matchesQuery('Translate', q) && (
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger>

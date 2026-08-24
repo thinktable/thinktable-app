@@ -22,7 +22,7 @@ import {
   ChevronRight, // Submenu chevron on style header
   Type, // "Normal Text" style glyph
   SquareRadical, // Equation / math icon
-  StickyNote, // Suggest-edit / sticky action icon
+  PencilLine, // Suggest edits skill icon
   SlidersHorizontal, // Skills section settings icon
   Baseline, // Text-color / A glyph stand-in
   EyeOff, // Hide text action icon
@@ -33,17 +33,14 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils' // Conditional classes for active Hide text row
 import { getMenuSafeRect } from '@/lib/menu-placement' // Same chrome-free lane as action menus
+import { getSkill } from '@/lib/ai/skills'
+import { requestAiSkill } from '@/lib/ai/attach-skill'
 
 const EDGE_GAP = 8 // Gap between highlight edge and popup
 const VIEWPORT_PAD = 8 // Minimum inset from the visible viewport edges
 
-// Static Skills list shown in the Notion-style AI section (labels only for now)
-const SKILL_LABELS = [
-  'Improve writing', // Placeholder skill row
-  'Proofread', // Placeholder skill row
-  'Explain', // Placeholder skill row
-  'Reformat', // Placeholder skill row
-] as const
+// Skills surfaced in the selection popup (opens AI chat with the pill attached)
+const POPUP_SKILL_IDS = ['suggest-edits'] as const
 
 // Shared class for each icon cell in the 5-column format grids
 const ICON_CELL =
@@ -96,13 +93,22 @@ export function SelectionFormatPopup({ editor }: { editor: Editor | null }) {
     run(() => editor!.chain().focus().toggleHaze().run()) // Toggle frost on the current selection
   }
 
+  const attachPopupSkill = (skillId: string) => {
+    requestAiSkill({
+      skillId,
+      mode: skillId === 'suggest-edits' ? 'edit' : undefined,
+    })
+  }
+
   const currentAlign = ALIGN_OPTIONS.find((o) => editor?.isActive({ textAlign: o.value })) ?? ALIGN_OPTIONS[0] // Icon for current align
   const AlignIcon = currentAlign.Icon // Show the active alignment glyph
 
   return (
-    // Outer card: white surface, light border, soft shadow, ~Notion corner radius
+    // Outer card: translucent menu surface, light border, soft shadow, ~Notion corner radius.
+    // `z-0` is load-bearing: it gives the card a stacking context so the `.tt-menu-surface`
+    // wash pane (`z-index: -1`) sits behind the rows rather than behind the whole popup.
     <div
-      className="relative w-[220px] select-none overflow-visible rounded-lg border border-gray-200 bg-white text-[13px] text-gray-900 shadow-lg dark:border-[#2f2f2f] dark:bg-[#1f1f1f] dark:text-gray-100"
+      className="tt-menu-surface relative z-0 w-[220px] select-none overflow-visible rounded-lg border border-gray-200 text-[13px] text-gray-900 shadow-lg dark:border-[#2f2f2f] dark:text-gray-100"
       onMouseDown={(e) => {
         // Keep TipTap selection alive when interacting with the popup chrome
         e.preventDefault()
@@ -204,7 +210,7 @@ export function SelectionFormatPopup({ editor }: { editor: Editor | null }) {
 
       {/* Color flyout — sits beside the format card */}
       {openFlyout === 'color' && (
-        <div className="absolute left-full top-10 z-[1001] ml-1 w-[168px] rounded-lg border border-gray-200 bg-white p-2 shadow-lg dark:border-[#2f2f2f] dark:bg-[#1f1f1f]">
+        <div className="tt-menu-surface absolute left-full top-10 z-[1001] ml-1 w-[168px] rounded-lg border border-gray-200 p-2 shadow-lg dark:border-[#2f2f2f]">
           <div className="grid grid-cols-5 gap-1.5">
             {TEXT_COLORS.map((hex) => {
               const active = editor?.getAttributes('textStyle').color === hex || (!editor?.getAttributes('textStyle').color && hex === '#000000')
@@ -234,7 +240,7 @@ export function SelectionFormatPopup({ editor }: { editor: Editor | null }) {
 
       {/* Align flyout — left / center / right / justify */}
       {openFlyout === 'align' && (
-        <div className="absolute left-full top-20 z-[1001] ml-1 min-w-[140px] rounded-lg border border-gray-200 bg-white p-1 shadow-lg dark:border-[#2f2f2f] dark:bg-[#1f1f1f]">
+        <div className="tt-menu-surface absolute left-full top-20 z-[1001] ml-1 min-w-[140px] rounded-lg border border-gray-200 p-1 shadow-lg dark:border-[#2f2f2f]">
           {ALIGN_OPTIONS.map((opt) => (
             <button
               key={opt.value}
@@ -283,9 +289,10 @@ export function SelectionFormatPopup({ editor }: { editor: Editor | null }) {
           type="button"
           className={ICON_CELL}
           tabIndex={-1}
-          title="Suggest edit"
+          title="Suggest edits"
+          onClick={() => attachPopupSkill('suggest-edits')}
         >
-          <StickyNote className="h-4 w-4" />
+          <PencilLine className="h-4 w-4" />
         </button>
       </div>
 
@@ -316,18 +323,26 @@ export function SelectionFormatPopup({ editor }: { editor: Editor | null }) {
         </button>
       </div>
 
-      {/* Skills list — labels only */}
+      {/* Skills list */}
       <div className="px-1 pb-1">
-        {SKILL_LABELS.map((label) => (
-          <button
-            key={label}
-            type="button"
-            className="flex w-full rounded-md px-2 py-1.5 text-left hover:bg-gray-50 dark:hover:bg-gray-800"
-            tabIndex={-1}
-          >
-            {label}
-          </button>
-        ))}
+        {POPUP_SKILL_IDS.map((skillId) => {
+          const skill = getSkill(skillId)
+          if (!skill?.enabled) return null
+          return (
+            <button
+              key={skillId}
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-gray-50 dark:hover:bg-gray-800"
+              tabIndex={-1}
+              onClick={() => attachPopupSkill(skillId)}
+            >
+              {skillId === 'suggest-edits' && (
+                <PencilLine className="h-4 w-4 shrink-0 text-gray-600 dark:text-gray-300" />
+              )}
+              <span>{skill.name}</span>
+            </button>
+          )
+        })}
       </div>
 
       {/* Divider before Edit with AI */}

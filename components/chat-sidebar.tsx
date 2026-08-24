@@ -23,6 +23,10 @@ import { AiPromptBars } from './ai/ai-prompt-bars' // Compact prompt stack / pho
 import type { AiContextSnapshot, AiMessage, AiThread } from '@/lib/ai/types' // Types
 import { isSelectableAiMode } from '@/lib/ai/modes'
 import {
+  AI_ATTACH_SKILL_EVENT,
+  type AiAttachSkillDetail,
+} from '@/lib/ai/attach-skill'
+import {
   loadAgentDrafts,
   saveAgentDrafts,
   WORKSPACE_AGENT_ID,
@@ -75,6 +79,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   const [streamingId, setStreamingId] = useState<string | null>(null) // Live assistant
   const [mode, setMode] = useState<'ask' | 'edit'>('ask') // Composer mode
   const [seedPrompt, setSeedPrompt] = useState<string | undefined>(undefined) // Quick action
+  const [seedSkillIds, setSeedSkillIds] = useState<string[] | undefined>(undefined) // Skill pill from menus
   const [attachedSnapshots, setAttachedSnapshots] = useState<AiContextSnapshot[]>([]) // Chips
   const [refreshKey, setRefreshKey] = useState(0) // Thread list refresh
   const [savedSnapshots, setSavedSnapshots] = useState<AiContextSnapshot[]>([]) // Library
@@ -95,6 +100,21 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   const scrollAnchorRef = useRef<{ threadId: string; fromBottom: number } | null>(null)
   const activeThreadIdRef = useRef<string | null>(null) // Latest thread id for scroll capture in listeners
   activeThreadIdRef.current = thread?.id ?? null
+
+  // Frame / selection menus → attach a skill and open chat
+  useEffect(() => {
+    const onAttachSkill = (event: Event) => {
+      const detail = (event as CustomEvent<AiAttachSkillDetail>).detail
+      if (!detail?.skillId) return
+      setChatSidebarOpen(true)
+      if (detail.mode === 'edit' || detail.mode === 'ask') setMode(detail.mode)
+      else if (detail.skillId === 'suggest-edits') setMode('edit')
+      setSeedSkillIds([detail.skillId])
+      if (detail.prompt) setSeedPrompt(detail.prompt)
+    }
+    window.addEventListener(AI_ATTACH_SKILL_EVENT, onAttachSkill)
+    return () => window.removeEventListener(AI_ATTACH_SKILL_EVENT, onAttachSkill)
+  }, [setChatSidebarOpen])
 
   /** Read the live transcript scroller (desktop column or phone card). */
   const getTranscriptScroller = useCallback((): HTMLElement | null => {
@@ -617,6 +637,8 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
       onStreamingId={setStreamingId}
       seedPrompt={seedPrompt}
       onSeedConsumed={() => setSeedPrompt(undefined)}
+      seedSkillIds={seedSkillIds}
+      onSeedSkillsConsumed={() => setSeedSkillIds(undefined)}
       autoFocus={false} // Brand tap focuses via registerAiComposerFocus (same user gesture)
       onEdits={async (edits) => {
         const mapped = edits

@@ -231,7 +231,7 @@ export function ThreadActionsMenu({
       tabIndex={-1}
       className={cn(
         // Same shell as BlockActionsMenu — white card, soft shadow, constant screen size
-        'thread-actions-menu edge-popup node-popup z-[1000] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[240px] outline-none',
+        'thread-actions-menu edge-popup node-popup z-[1000] tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1 min-w-[240px] outline-none',
         'absolute',
         className
       )}
@@ -328,7 +328,7 @@ export function ThreadActionsMenu({
       {openSubmenu === 'arrange' && (
         <div
           data-tt-menu-flyout="main"
-          className="absolute z-[1001] min-w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+          className="absolute z-[1001] min-w-[180px] tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
           onMouseEnter={() => setOpenSubmenu('arrange')}
         >
           {(
@@ -367,7 +367,7 @@ export function ThreadActionsMenu({
       {openSubmenu === 'thickness' && (
         <div
           data-tt-menu-flyout="main"
-          className="absolute z-[1001] min-w-[140px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+          className="absolute z-[1001] min-w-[140px] tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
           onMouseEnter={() => setOpenSubmenu('thickness')}
         >
           {(
@@ -402,7 +402,7 @@ export function ThreadActionsMenu({
       {openSubmenu === 'info' && (
         <div
           data-tt-menu-flyout="main"
-          className="absolute z-[1001] min-w-[180px] bg-white dark:bg-[#1f1f1f] rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2 text-xs text-gray-500"
+          className="absolute z-[1001] min-w-[180px] tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-2 text-xs text-gray-500"
           onMouseEnter={() => setOpenSubmenu('info')}
         >
           Thread info coming soon

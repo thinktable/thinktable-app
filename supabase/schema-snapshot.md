@@ -1,13 +1,22 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-24T12:25:44Z`
+- Snapped at: `2026-08-24T15:16:43Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260824151643_menu_surface_ai_skills_frame_stack_line.sql`.
+- Menu surfaces: `.tt-menu-surface` translucent blur on frame/block/board/thread menus + flyouts (`globals.css`; menu components).
+- Menu placement: side-slot beside host frame; visual adjust-box measure; flyout lock scoring (`lib/menu-placement.ts`).
+- AI: suggest-edits skill; `lib/ai/attach-skill.ts`; seedSkillIds on composer; chat sidebar wiring.
+- Frame stack line: gap between simulated connection points (`lib/frame-stack-line.ts`).
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Property value wrap and frame adjust box
 
 - No DDL. Marker `20260824122544_property_value_wrap_and_frame_adjust_box.sql`.
 - Property cells are `<textarea>` (`components/property-block-view.tsx`): fit-to-text → one nowrap line at a measured glyph width; wrap mode → `pre-wrap` + fit height. Values never ellipsize; `nowrap` tracked via `MutationObserver` on `data-single-line`.

@@ -15,7 +15,6 @@ import { createClient } from '@/lib/supabase/client'
 import {
   stackExpandLayout,
   stackExpandRfAbs,
-  STACK_LINE_GAP,
   type FrameStackSide,
 } from '@/components/use-frame-nest-stack-drag'
 import {
@@ -24,6 +23,10 @@ import {
   frameAdjustScreenRect,
   rfAbsFromAdjustOrigin,
 } from '@/lib/frame-adjust-box'
+import {
+  stackLineMarksHorizontal,
+  stackLineScreenStyle,
+} from '@/lib/frame-stack-line'
 import {
   collectNestedSatelliteIds,
   findOwningMateId,
@@ -59,61 +62,6 @@ function oppositeSide(side: FrameStackSide): FrameStackSide {
   if (side === 'left') return 'right'
   if (side === 'top') return 'bottom'
   return 'top'
-}
-
-/** Screen-fixed box for a portaled stack line (so a selected mate cannot cover the host’s line). */
-function stackLineScreenBox(
-  stackSide: FrameStackSide,
-  rect: DOMRect,
-  zoom: number,
-  frameUiScale: number
-): CSSProperties {
-  const lineOutset = Math.max(4, STACK_LINE_GAP / 2) * zoom // Mid-gap in screen px
-  const hitPad = Math.max(STACK_LINE_GAP, 10 * frameUiScale) * zoom // Grab band
-  const inset = 0.08 // Same 8% inset as the in-node line
-  const span = 0.84
-  if (stackSide === 'top') {
-    return {
-      position: 'fixed',
-      left: rect.left + rect.width * inset,
-      width: rect.width * span,
-      top: rect.top - lineOutset - hitPad / 2,
-      height: hitPad,
-      paddingTop: hitPad / 2 - 1,
-      zIndex: 40,
-    }
-  }
-  if (stackSide === 'bottom') {
-    return {
-      position: 'fixed',
-      left: rect.left + rect.width * inset,
-      width: rect.width * span,
-      top: rect.bottom + lineOutset - hitPad / 2,
-      height: hitPad,
-      paddingTop: hitPad / 2 - 1,
-      zIndex: 40,
-    }
-  }
-  if (stackSide === 'left') {
-    return {
-      position: 'fixed',
-      top: rect.top + rect.height * inset,
-      height: rect.height * span,
-      left: rect.left - lineOutset - hitPad / 2,
-      width: hitPad,
-      paddingLeft: hitPad / 2 - 1,
-      zIndex: 40,
-    }
-  }
-  return {
-    position: 'fixed',
-    top: rect.top + rect.height * inset,
-    height: rect.height * span,
-    left: rect.right + lineOutset - hitPad / 2,
-    width: hitPad,
-    paddingLeft: hitPad / 2 - 1,
-    zIndex: 40,
-  }
 }
 
 function stackIndexOf(n: { data?: unknown }, groupId: string): number {
@@ -1109,7 +1057,6 @@ export function FrameStackRevealLine({
 
   if (mates.length === 0) return null
 
-  const isHorizontal = stackSide === 'top' || stackSide === 'bottom'
   // This gap's "outward" count = mates further out than this frame
   const myIndex = (() => {
     const self = getNodes().find((n) => n.id === nodeId)
@@ -1133,10 +1080,16 @@ export function FrameStackRevealLine({
   const mateStacked = outwardMates.some((n) => n.hidden === true || !entryExpanded(nodeStackMeta(n), stackGroupId))
   const showLine = anyHidden || mateStacked || !!hostNode?.selected || !!outwardMates[0]?.selected
   const zoom = Number(String(viewportKey).split(',')[2]) || 1
-  const hostRect = showLine ? frameAdjustScreenRect(nodeId, hostNode, zoom) : null
-  if (!showLine || !hostRect || typeof document === 'undefined') return null
-  const lineBox = stackLineScreenBox(stackSide, hostRect, zoom, frameUiScale)
+  const nextOutNode = nextOutId ? getNodes().find((n) => n.id === nextOutId) : undefined
+  const innerRect = showLine ? frameAdjustScreenRect(nodeId, hostNode, zoom) : null
+  const outerRect =
+    showLine && nextOutId
+      ? frameAdjustScreenRect(nextOutId, nextOutNode, zoom)
+      : null
+  if (!showLine || !innerRect || !outerRect || typeof document === 'undefined') return null
+  const lineBox = stackLineScreenStyle(innerRect, outerRect, stackSide, zoom, frameUiScale)
   const stroke = LINE_THICKNESS * zoom // Match former in-node thickness (viewport-scaled)
+  const marksHorizontal = stackLineMarksHorizontal(stackSide)
 
   // Arrow toward this frame (inward) vs toward the next mate (outward)
   const InwardIcon =
@@ -1183,13 +1136,13 @@ export function FrameStackRevealLine({
         <span
           className="pointer-events-none flex h-full w-full"
           style={{
-            flexDirection: isHorizontal ? 'row' : 'column',
+            flexDirection: marksHorizontal ? 'row' : 'column',
             alignItems: 'center',
             justifyContent: isDotted ? 'space-between' : 'stretch',
             gap: gapPct,
-            height: isHorizontal ? stroke : '100%',
-            width: isHorizontal ? '100%' : stroke,
-            margin: isHorizontal ? undefined : '0 auto',
+            height: marksHorizontal ? stroke : '100%',
+            width: marksHorizontal ? '100%' : stroke,
+            margin: marksHorizontal ? undefined : '0 auto',
           }}
         >
           {Array.from({ length: markCount }, (_, i) => (
@@ -1200,7 +1153,7 @@ export function FrameStackRevealLine({
                 flex: isDotted ? '0 0 auto' : '1 1 0',
                 ...(isDotted
                   ? { width: stroke, height: stroke }
-                  : isHorizontal
+                  : marksHorizontal
                     ? { height: stroke, minWidth: stroke }
                     : { width: stroke, minHeight: stroke }),
                 background: STACK_LINE_COLOR,

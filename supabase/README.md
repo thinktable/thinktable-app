@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260824151643_menu_surface_ai_skills_frame_stack_line` — Translucent menu surfaces; menu placement beside host frame; suggest-edits AI skill; frame stack line at connection points
 - `20260824122544_property_value_wrap_and_frame_adjust_box` — Property values wrap/nowrap with the frame (no ellipsis); connections strip inside the fill; upright adjust-box snap/stack geometry
 - `20260824041824_phone_unselected_frame_drag_minimap_pan` — Phone hold-then-drag unselected frames; minimap touch pan
 - `20260824040420_ai_hide_text_and_frame_text_select` — AI hide-text (haze) for flashcards; frame text drag-select fix
