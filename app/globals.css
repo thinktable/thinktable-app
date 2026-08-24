@@ -906,6 +906,7 @@ span[data-added="true"] {
     border: none !important;
     border-radius: 8px !important; /* Same radius top + bottom */
     background-color: white !important;
+    touch-action: none; /* Phone: finger drag pans viewport, not page scroll */
   }
 
   /* Dark mode minimap */

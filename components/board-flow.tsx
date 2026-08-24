@@ -62,6 +62,8 @@ import {
   type BoardActionId,
 } from './board-actions-menu' // Empty-board right-click menu
 import { createLongPressController } from '@/lib/long-press' // Phone long-press → context menus
+import { createPhoneUnselectedFrameDragController } from '@/lib/phone-unselected-frame-drag' // Phone hold → drag unselected frames
+import { PhoneFrameDragProvider } from './phone-frame-drag-context' // Blue move border during phone hold-drag
 import { attachPhoneSelectMarquee } from '@/lib/phone-select-marquee' // Touch select-tool marquee (RF Pane is mouse-only)
 import { attachFreehandLassoSelect } from '@/lib/freehand-lasso-select' // Draw bar Lasso — freehand trail, auto-closed
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -137,6 +139,7 @@ import { NavZoomControl } from './nav-zoom-control' // Zoom % lives in bottom na
 import { NavRotateControl } from './nav-rotate-control' // Board rotate icon — right of zoom %
 import { BoardRotationProvider, useBoardRotation } from './board-rotation-context' // Two-finger twist + nav camera heading
 import { applyBoardRotationToPositionChanges, flowToPane, paneToFlow, viewportKeepingPanePoint } from '@/lib/board-rotation' // Camera-aware pane ↔ flow
+import { computeMinimapViewScale, panViewportFromMinimapDrag } from '@/lib/minimap-viewport-pan' // Phone minimap drag (RF only pans on mousemove)
 import { useInsertSpaceDrag, type InsertSpaceAxis } from './use-insert-space-drag' // Draw bar insert-space drag
 import { InsertSpaceOverlay } from './insert-space-overlay' // Guide line + inserted band preview
 import { notionDbConsumeWheelScroll } from '@/lib/notion/db-table-scroll'
@@ -1725,6 +1728,13 @@ function BoardFlowInner({
   const edgesRef = useRef(edges) // Phone thread tap: was-selected without stale closure
   edgesRef.current = edges
   const longPressRef = useRef<ReturnType<typeof createLongPressController> | null>(null) // Phone long-press controller
+  const phoneUnselectedDragRef = useRef<ReturnType<
+    typeof createPhoneUnselectedFrameDragController
+  > | null>(null) // Phone hold-then-drag for unselected frames
+  const [phoneManualDragNodeId, setPhoneManualDragNodeId] = useState<string | null>(null) // Move border while hold-dragging
+  const phoneDragLastPosRef = useRef<{ id: string; x: number; y: number } | null>(null) // Final pos — nodesRef can lag one frame
+  const isMobileModeRef = useRef(isMobileMode) // Phone drag gate without stale closures
+  isMobileModeRef.current = isMobileMode
   const rightClickedNodeRef = useRef(rightClickedNode) // Phone drag-area tap toggle without stale closure
   rightClickedNodeRef.current = rightClickedNode
   const clickedEdgeRef = useRef(clickedEdge) // Phone thread menu toggle without stale closure
@@ -1856,7 +1866,7 @@ function BoardFlowInner({
   const preferencesLoadedRef = useRef(false) // Track if preferences have been loaded from Supabase
   const nodeHeightsRef = useRef<Map<string, number>>(new Map()) // Store measured node heights
   const savePositionsTimeoutRef = useRef<NodeJS.Timeout | null>(null) // Debounce position saves
-  const minimapDragStartRef = useRef<{ x: number; y: number; isDragging?: boolean } | null>(null) // Track minimap drag start position and drag state
+  const minimapDragStartRef = useRef<{ x: number; y: number; isDragging?: boolean; pointerId?: number } | null>(null) // Track minimap drag start position and drag state
   const edgePopupZoomRef = useRef<number | null>(null) // Track zoom when popup was opened
   const edgeClickPositionRef = useRef<{ x: number; y: number } | null>(null) // Store click position in flow coordinates
   const threadStyleClipboardRef = useRef<{
@@ -2568,35 +2578,39 @@ function BoardFlowInner({
 
       let clickTimeoutId: NodeJS.Timeout | null = null
 
-      const handleMouseDown = (e: MouseEvent) => {
-        // Only process if the click is on the minimap element or its children
+      const handlePointerDown = (e: PointerEvent) => {
         const target = e.target as HTMLElement
         if (!minimapElement || !minimapElement.contains(target)) return
 
         // Don't process right-clicks (button 2) - allow context menu to work
-        if (e.button === 2) {
-          return
-        }
+        if (e.button === 2) return
 
-        // Clear any existing timeout
         if (clickTimeoutId) {
           clearTimeout(clickTimeoutId)
           clickTimeoutId = null
         }
 
-        // Record the starting position for click vs drag detection
         minimapDragStartRef.current = {
           x: e.clientX,
           y: e.clientY,
-          isDragging: false // Initialize as not dragging
+          isDragging: false,
+          pointerId: e.pointerId,
         }
 
-        // Fallback: If mouseup doesn't fire within 200ms, trigger centering anyway
-        // This handles cases where React Flow prevents mouseup from reaching our handler
+        // RF MiniMap panHandler ignores touchmove — capture so pointermove reliably pans on phone
+        if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+          try {
+            minimapElement.setPointerCapture(e.pointerId)
+          } catch {
+            // ignore if capture fails
+          }
+        }
+
+        // Desktop-only fallback: synthesized mouseup sometimes never arrives after RF drag
+        if (e.pointerType !== 'mouse') return
+
         clickTimeoutId = setTimeout(() => {
           if (minimapDragStartRef.current && !minimapDragStartRef.current.isDragging) {
-            // Use the same centering logic as handleMouseUp
-            // For fallback, we'll just do fitView since we don't have the exact click position
             if (reactFlowInstance) {
               fitViewInProgressRef.current = true
 
@@ -2639,50 +2653,56 @@ function BoardFlowInner({
           }
           clickTimeoutId = null
         }, 200)
-
-        // Don't prevent default - allow React Flow's drag to work
       }
 
-      const handleMouseMove = (e: MouseEvent) => {
-        // Track if user is dragging (mouse moved significantly)
-        // Only check if we have a valid drag start (from minimap mousedown)
-        if (!minimapDragStartRef.current) return
+      const handlePointerMove = (e: PointerEvent) => {
+        const drag = minimapDragStartRef.current
+        if (!drag || e.pointerId !== drag.pointerId) return
 
-        const deltaX = Math.abs(e.clientX - minimapDragStartRef.current.x)
-        const deltaY = Math.abs(e.clientY - minimapDragStartRef.current.y)
+        const deltaX = Math.abs(e.clientX - drag.x)
+        const deltaY = Math.abs(e.clientY - drag.y)
 
-        // Mark as drag if movement is significant (more than 15px)
-        // This threshold distinguishes intentional drags from accidental movement during clicks
         if (deltaX > 15 || deltaY > 15) {
-          minimapDragStartRef.current.isDragging = true
+          drag.isDragging = true
+          longPressRef.current?.cancel()
+          if (clickTimeoutId) {
+            clearTimeout(clickTimeoutId)
+            clickTimeoutId = null
+          }
+        }
+
+        if (
+          drag.isDragging &&
+          (e.pointerType === 'touch' || e.pointerType === 'pen') &&
+          (e.movementX !== 0 || e.movementY !== 0)
+        ) {
+          const viewScale = computeMinimapViewScale(rfStore.getState(), MINIMAP_WIDTH, MINIMAP_HEIGHT)
+          panViewportFromMinimapDrag(rfStore.getState(), e.movementX, e.movementY, viewScale)
+          e.preventDefault()
         }
       }
 
-      const handleMouseUp = (e: MouseEvent) => {
-        // Don't process right-clicks (button 2) - allow context menu to work
+      const handlePointerUp = (e: PointerEvent) => {
         if (e.button === 2) {
           minimapDragStartRef.current = null
           return
         }
 
-        // Clear the fallback timeout since mouseup fired
+        const drag = minimapDragStartRef.current
+        if (!drag || e.pointerId !== drag.pointerId) return
+
         if (clickTimeoutId) {
           clearTimeout(clickTimeoutId)
           clickTimeoutId = null
         }
 
-        if (!minimapDragStartRef.current) return
+        const wasDragging = drag.isDragging
 
-        // Check if it was actually a drag
-        const wasDragging = minimapDragStartRef.current.isDragging
-
-        // If it was a drag, don't trigger centering (allow React Flow's minimap drag to work)
         if (wasDragging) {
           minimapDragStartRef.current = null
           return
         }
 
-        // It was a click (no significant drag) - center clicked node on prompt box
         requestAnimationFrame(() => {
           if (!reactFlowInstance || !nodes || !Array.isArray(nodes)) return
 
@@ -2822,20 +2842,31 @@ function BoardFlowInner({
         minimapDragStartRef.current = null
       }
 
-      // Attach mousedown listener to minimap element (capture phase to catch before React Flow)
-      // Attach mousemove and mouseup listeners to document to catch them even if React Flow prevents them on minimap
-      minimapElement.addEventListener('mousedown', handleMouseDown, true)
-      document.addEventListener('mousemove', handleMouseMove, true)
-      document.addEventListener('mouseup', handleMouseUp, true)
+      const handlePointerCancel = (e: PointerEvent) => {
+        if (minimapDragStartRef.current?.pointerId === e.pointerId) {
+          minimapDragStartRef.current = null
+        }
+        if (clickTimeoutId) {
+          clearTimeout(clickTimeoutId)
+          clickTimeoutId = null
+        }
+      }
+
+      const pointerMoveOpts: AddEventListenerOptions = { capture: true, passive: false }
+      minimapElement.addEventListener('pointerdown', handlePointerDown, true)
+      document.addEventListener('pointermove', handlePointerMove, pointerMoveOpts)
+      document.addEventListener('pointerup', handlePointerUp, true)
+      document.addEventListener('pointercancel', handlePointerCancel, true)
 
       cleanup = () => {
         if (clickTimeoutId) {
           clearTimeout(clickTimeoutId)
           clickTimeoutId = null
         }
-        minimapElement?.removeEventListener('mousedown', handleMouseDown, true)
-        document.removeEventListener('mousemove', handleMouseMove, true)
-        document.removeEventListener('mouseup', handleMouseUp, true)
+        minimapElement?.removeEventListener('pointerdown', handlePointerDown, true)
+        document.removeEventListener('pointermove', handlePointerMove, pointerMoveOpts)
+        document.removeEventListener('pointerup', handlePointerUp, true)
+        document.removeEventListener('pointercancel', handlePointerCancel, true)
       }
 
       return true
@@ -2857,7 +2888,7 @@ function BoardFlowInner({
     return () => {
       if (cleanup) cleanup()
     }
-  }, [messages.length, reactFlowInstance, minimapExpanded, viewMode]) // Re-attach when minimap visibility or view mode changes
+  }, [messages.length, reactFlowInstance, minimapExpanded, viewMode, rfStore]) // Re-attach when minimap visibility or view mode changes
 
   // Set up Supabase Realtime subscription for live message updates
   useEffect(() => {
@@ -4063,6 +4094,9 @@ function BoardFlowInner({
       return
     }
   }, [onNodesChange, nodes, viewMode, setNodes, deleteNodesByIds, recalculateEdgeHandles, takeSnapshot, getChronologicalPanels, linearNavMode, centerPanelAbovePrompt, snapEnabled, updateHelperLines, rfStore, constrainOnThreadPositionChanges])
+
+  const handleNodesChangeRef = useRef(handleNodesChange)
+  handleNodesChangeRef.current = handleNodesChange
 
   // Track selected node from nodes array
   // Don't trigger viewport changes on selection in linear mode
@@ -5950,6 +5984,185 @@ function BoardFlowInner({
       root.removeEventListener('click', onClickCapture, { capture: true })
     }
   }, [embedded, openBoardMenuAt, openFrameMenuAt, rfStore])
+
+  const phoneDragHandlersRef = useRef({
+    onFrameNestStackDragStart,
+    onFrameNestStackDrag,
+    onFrameNestStackDragStop,
+    onOnThreadDragStart,
+    onOnThreadDrag,
+    onOnThreadDragStop,
+    onBlockGroupNodeDrag,
+    onBlockGroupNodeDragStop,
+    isOnThreadNode,
+  })
+  phoneDragHandlersRef.current = {
+    onFrameNestStackDragStart,
+    onFrameNestStackDrag,
+    onFrameNestStackDragStop,
+    onOnThreadDragStart,
+    onOnThreadDrag,
+    onOnThreadDragStop,
+    onBlockGroupNodeDrag,
+    onBlockGroupNodeDragStop,
+    isOnThreadNode,
+  }
+
+  // Phone: unselected frames drag only after ~450ms hold (panel nodrag blocks RF d3-drag on touchstart)
+  useEffect(() => {
+    if (embedded) return
+    const root = boardRootRef.current
+    if (!root) return
+
+    const reactFlowInstanceRef = { current: reactFlowInstance }
+    reactFlowInstanceRef.current = reactFlowInstance
+
+    const dismissFrameMenu = () => {
+      setRightClickedNode(null)
+      setNodePopupPosition({ x: 0, y: 0 })
+      nodeClickPositionRef.current = null
+      nodePopupZoomRef.current = null
+    }
+
+    const resolveFrameNodeId = (event: PointerEvent): string | null => {
+      const el = eventElement(event.target)
+      if (!el) return null
+      if (el.closest('input, textarea')) return null
+      if (
+        el.closest('.node-popup') ||
+        el.closest('[data-map-menu]') ||
+        el.closest('.block-actions-menu')
+      ) {
+        return null
+      }
+      if (el.closest('.react-flow__resize-control')) return null
+      const nodeEl = el.closest('.react-flow__node') as HTMLElement | null
+      if (!nodeEl) return null
+      const id = nodeEl.getAttribute('data-id')
+      if (!id) return null
+      const node = nodesRef.current.find((n) => n.id === id)
+      if (!node || (node.type !== 'chatPanel' && node.type !== 'blockGroup')) return null
+      if (node.selected) return null
+      return id
+    }
+
+    const controller = createPhoneUnselectedFrameDragController({
+      isMobileMode: () => isMobileModeRef.current,
+      getNode: (id) => {
+        const n = nodesRef.current.find((node) => node.id === id)
+        if (!n) return undefined
+        return {
+          id: n.id,
+          type: n.type,
+          selected: n.selected,
+          position: n.position,
+        }
+      },
+      screenToFlow: (clientX, clientY) => {
+        const inst = reactFlowInstanceRef.current
+        if (!inst) return { x: clientX, y: clientY }
+        return inst.screenToFlowPosition({ x: clientX, y: clientY })
+      },
+      resolveFrameNodeId,
+      onDragStart: (nodeId, event) => {
+        longPressRef.current?.cancel()
+        const node = nodesRef.current.find((n) => n.id === nodeId)
+        if (!node) return
+        setPhoneManualDragNodeId(nodeId)
+        frameDragOriginRef.current = { id: nodeId, x: node.position.x, y: node.position.y }
+        if (rightClickedNodeRef.current?.id === nodeId) dismissFrameMenu()
+        const h = phoneDragHandlersRef.current
+        h.onFrameNestStackDragStart(event as unknown as React.MouseEvent, node)
+        h.onOnThreadDragStart(event as unknown as React.MouseEvent, node)
+      },
+      onDrag: (nodeId, position, event) => {
+        const node = nodesRef.current.find((n) => n.id === nodeId)
+        if (!node) return
+        phoneDragLastPosRef.current = { id: nodeId, x: position.x, y: position.y }
+        handleNodesChangeRef.current([
+          {
+            type: 'position',
+            id: nodeId,
+            position,
+            dragging: true,
+          },
+        ])
+        const updated = { ...node, position, dragging: true }
+        const h = phoneDragHandlersRef.current
+        h.onBlockGroupNodeDrag(event as unknown as React.MouseEvent, updated)
+        if (h.isOnThreadNode(updated)) {
+          h.onOnThreadDrag(event as unknown as React.MouseEvent, updated)
+        } else {
+          h.onFrameNestStackDrag(event as unknown as React.MouseEvent, updated)
+        }
+      },
+      onDragStop: (nodeId, event) => {
+        const node = nodesRef.current.find((n) => n.id === nodeId)
+        const lastPos = phoneDragLastPosRef.current
+        phoneDragLastPosRef.current = null
+        if (!node) {
+          setPhoneManualDragNodeId(null)
+          frameDragOriginRef.current = null
+          return
+        }
+        const finalPosition =
+          lastPos?.id === nodeId ? { x: lastPos.x, y: lastPos.y } : node.position
+        const origin = frameDragOriginRef.current
+        handleNodesChangeRef.current([
+          {
+            type: 'position',
+            id: nodeId,
+            position: finalPosition,
+            dragging: false,
+          },
+        ])
+        setPhoneManualDragNodeId(null)
+        frameDragOriginRef.current = null
+        const h = phoneDragHandlersRef.current
+        if (origin && origin.id === nodeId) {
+          const dx = finalPosition.x - origin.x
+          const dy = finalPosition.y - origin.y
+          if (dx * dx + dy * dy > 0.25) {
+            justDraggedFrameRef.current.add(nodeId)
+            window.setTimeout(() => justDraggedFrameRef.current.delete(nodeId), 100)
+          }
+        }
+        void h.onBlockGroupNodeDragStop(event as unknown as React.MouseEvent, {
+          ...node,
+          position: finalPosition,
+        })
+        const stoppedNode = { ...node, position: finalPosition }
+        if (h.isOnThreadNode(stoppedNode)) {
+          void h.onOnThreadDragStop(event as unknown as React.MouseEvent, stoppedNode)
+        } else {
+          void h.onFrameNestStackDragStop(event as unknown as React.MouseEvent, stoppedNode)
+        }
+      },
+    })
+    phoneUnselectedDragRef.current = controller
+
+    const touchOpts: AddEventListenerOptions = { capture: true, passive: true }
+    root.addEventListener('pointerdown', controller.pointerDown, { capture: true })
+    root.addEventListener('pointermove', controller.pointerMove, { capture: true })
+    root.addEventListener('pointerup', controller.pointerUp, { capture: true })
+    root.addEventListener('pointercancel', controller.pointerCancel, { capture: true })
+    root.addEventListener('touchstart', controller.touchStart, touchOpts)
+    root.addEventListener('touchend', controller.touchEnd, touchOpts)
+    root.addEventListener('touchcancel', controller.touchEnd, touchOpts)
+
+    return () => {
+      controller.cancel()
+      phoneUnselectedDragRef.current = null
+      setPhoneManualDragNodeId(null)
+      root.removeEventListener('pointerdown', controller.pointerDown, { capture: true })
+      root.removeEventListener('pointermove', controller.pointerMove, { capture: true })
+      root.removeEventListener('pointerup', controller.pointerUp, { capture: true })
+      root.removeEventListener('pointercancel', controller.pointerCancel, { capture: true })
+      root.removeEventListener('touchstart', controller.touchStart, touchOpts)
+      root.removeEventListener('touchend', controller.touchEnd, touchOpts)
+      root.removeEventListener('touchcancel', controller.touchEnd, touchOpts)
+    }
+  }, [embedded, reactFlowInstance])
 
   // Desktop right-click on a frame — document capture so RF panOnDrag:[1,2] cannot swallow it
   useEffect(() => {
@@ -8692,6 +8905,7 @@ function BoardFlowInner({
   }, [reactFlowInstance, embedded, boardRotation, isScrollMode, isDrawing])
 
   return (
+    <PhoneFrameDragProvider manualDragNodeId={phoneManualDragNodeId}>
     <div
       ref={boardRootRef}
       data-board-root // Phone AI dock portals here (escapes main overflow-hidden)
@@ -10162,6 +10376,7 @@ function BoardFlowInner({
         <LeftVerticalMenu conversationId={conversationId} />
       )}
     </div>
+    </PhoneFrameDragProvider>
   )
 }
 

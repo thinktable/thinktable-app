@@ -485,6 +485,8 @@ import { useRouter } from 'next/navigation'
 import { useEditorContext } from './editor-context'
 import { useBoardAccess } from '@/lib/share/board-access-context' // Gate TipTap editable for shared viewers
 import { useReactFlowContext } from './react-flow-context'
+import { useSidebarContext } from './sidebar-context' // Phone layout — hold before unselected frame drag
+import { usePhoneFrameDrag } from './phone-frame-drag-context' // Blue move border during phone hold-drag
 import { useTheme } from './theme-provider'
 import { SelectionFormatPopupAnchor } from './selection-format-popup' // Notion-style selection menu (stable edge anchor)
 import { BoardLinkProvider, type BoardLinkActions } from '@/lib/board-link-context' // Bridge boardLink NodeViews → frame preview/open/rename
@@ -2283,6 +2285,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const [aiForceSyncKey, setAiForceSyncKey] = useState(0) // Bump to setContent even while focused
   const { reactFlowInstance, panelWidth, getSetNodes, flashcardMode, setFlashcardMode, selectedTag } = useReactFlowContext() // Get zoom, panel width, setNodes function, flashcard study mode, and selected tag
   const { setNodes, getNodes } = useReactFlow() // Get setNodes and getNodes for NodeToolbar actions
+  const { isMobileMode } = useSidebarContext() // Unselected frames need a hold before drag on phone
+  const { manualDragNodeId } = usePhoneFrameDrag() // Manual hold-drag (RF nodrag on unselected phone panels)
   const handleNotionConnection = useCallback(async (next: { connected: boolean; sync?: NotionSyncMode }) => {
     if (!promptMessage?.id) return // No row to patch
     const existing = { ...((promptMessage.metadata as Record<string, unknown>) || {}) } // Keep other frame meta
@@ -3085,7 +3089,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // Full adjust chrome when selected + idle (not mid-drag / thread connect)
   const showAdjustFrame = Boolean(selected && isBlock && !isThreadConnecting && !dragging)
   // Transient blue outline while moving; selected frames keep `selected` and regain adjust chrome on release
-  const showDragBorderOnly = Boolean(dragging && isBlock)
+  const showDragBorderOnly = Boolean((dragging || manualDragNodeId === id) && isBlock)
   // Blue-box L/R gutters when selected. Property / connections bands sit OUTSIDE the fill
   // — only while selected (hide entirely when the frame is idle).
   const showFrameChrome = Boolean(isBlock && (selected || dragging) && !isThreadConnecting)
@@ -6353,6 +6357,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         }
         className={cn(
           'group nopan border relative cursor-grab active:cursor-grabbing overflow-visible transition-[opacity,box-shadow,background-color,border-color] duration-300', // overflow-visible: ⋮⋮ in left chrome; nopan: right-click opens frame menu
+          isMobileMode && isBlock && !selected && 'nodrag', // Phone: RF drag only after hold (manual controller)
           // When rotated, fill lives on the inner shell only (avoids upright+rotated double shape)
           !frameShape && !isContentRotated && !isBlock && 'rounded-2xl',
           !isFillTransparent && !frameShape && !isContentRotated && !isBlock && 'backdrop-blur-sm',

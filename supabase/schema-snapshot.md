@@ -1,13 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-24T04:04:20Z`
+- Snapped at: `2026-08-24T04:18:24Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260824041824_phone_unselected_frame_drag_minimap_pan.sql`.
+- Phone unselected frames: panel `nodrag` + hold ~450ms then drag (`lib/phone-unselected-frame-drag.ts`); blue move border (`PhoneFrameDragProvider`); nest-stack / on-thread drag hooks wired.
+- Phone minimap: pointer pan (`lib/minimap-viewport-pan.ts`); `touch-action: none` on minimap; desktop keeps RF d3 pan + mouse-only fitView fallback.
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: AI hide text and frame text select
 
 - No DDL. Marker `20260824040420_ai_hide_text_and_frame_text_select.sql`.
 - AI Edit can create/style hidden text (`[[hide]]…[[/hide]]` → TipTap haze; flashcards skill; context pack annotates hidden spans).

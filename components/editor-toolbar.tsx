@@ -1255,7 +1255,6 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       const widestLeftmost = Math.max( // Hungriest left cluster across modes so the pill doesn’t flip on mode change
         LEFTMOST_ICON_WIDTH.home,
         LEFTMOST_ICON_WIDTH.insert,
-        LEFTMOST_ICON_WIDTH.style,
         LEFTMOST_ICON_WIDTH.draw,
         LEFTMOST_ICON_WIDTH.view
       )
