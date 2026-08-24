@@ -1,13 +1,22 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-24T02:49:21Z`
+- Snapped at: `2026-08-24T03:16:11Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260824031611_on_thread_perp_drag_toolbar_guard.sql`.
+- On-thread frames: perpendicular drag (>12px) snaps beside the thread (`metadata.onThread.offset` + normal); thread shows a **dot** on the path instead of a stroke gap; drag back collapses to inline gap mode.
+- Live gap/dot during drag (`EditableThread` derives `t` from frame center via `closestT`); path sync keyed on endpoint geometry (`onThreadPathSyncKey`) to stop render storms.
+- Drag constrain runs after helper lines (`constrainOnThreadPositionChanges` in `board-flow.tsx`); single commit on drag end.
+- Editor toolbar undo/redo: `canEditorUndo` / `canEditorRedo` guard destroyed TipTap editors (`editor.isDestroyed`).
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: draw lasso, insert space, on-thread frames
 
 - No DDL. Marker `20260824024921_draw_lasso_insert_space_thread_frames.sql`.
 - Draw bar **Lasso** is freehand (`lib/freehand-lasso-select.ts`): own SVG trail, implicitly closed loop, partial-overlap frame/thread hits.

@@ -2274,6 +2274,7 @@ function BoardFlowInner({
     onNodeDragStart: onOnThreadDragStart,
     onNodeDrag: onOnThreadDrag,
     onNodeDragStop: onOnThreadDragStop,
+    constrainOnThreadPositionChanges,
     detachFramesOnDeletedEdge,
     isOnThreadNode,
   } = useOnThreadFrames({
@@ -4042,8 +4043,11 @@ function BoardFlowInner({
     changesToProcess = applyBoardRotationToPositionChanges(changesToProcess, nodes)
 
     // Apply helper lines snapping if enabled (before calling onNodesChange)
-    const updatedChanges = snapEnabled ? updateHelperLines(changesToProcess, nodes) : changesToProcess
-    
+    let updatedChanges = snapEnabled ? updateHelperLines(changesToProcess, nodes) : changesToProcess
+
+    // On-thread frames: project onto the path last so helper lines cannot pull them off
+    updatedChanges = constrainOnThreadPositionChanges(updatedChanges, nodes)
+
     // Call the original handler - this is necessary for React Flow to work
     // (Only if we haven't already called it above for placeholder interaction)
     onNodesChange(updatedChanges)
@@ -4058,7 +4062,7 @@ function BoardFlowInner({
       }, 500) // Clear flag after 500ms
       return
     }
-  }, [onNodesChange, nodes, viewMode, setNodes, deleteNodesByIds, recalculateEdgeHandles, takeSnapshot, getChronologicalPanels, linearNavMode, centerPanelAbovePrompt, snapEnabled, updateHelperLines, rfStore])
+  }, [onNodesChange, nodes, viewMode, setNodes, deleteNodesByIds, recalculateEdgeHandles, takeSnapshot, getChronologicalPanels, linearNavMode, centerPanelAbovePrompt, snapEnabled, updateHelperLines, rfStore, constrainOnThreadPositionChanges])
 
   // Track selected node from nodes array
   // Don't trigger viewport changes on selection in linear mode

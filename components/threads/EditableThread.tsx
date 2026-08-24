@@ -26,8 +26,7 @@ import {
   connectionPointOnNode,
   sideFromHandleId,
 } from './connection-point-on-node' // Frame-edge attach from node box
-import { readOnThread } from '@/lib/threads/on-thread-frame'
-import { nodeFlowSize } from '@/components/use-block-group-drag'
+import { onThreadFrameSize, readOnThread, isOnThreadInline, ON_THREAD_DOT_R, ON_THREAD_PERP_THRESHOLD } from '@/lib/threads/on-thread-frame'
 import {
   buildThreadPathGeometry,
   threadGapsForFrames,
@@ -198,20 +197,6 @@ export function EditableThread({
     ? smoothBezier.path
     : getPath({ points: routePoints, algorithm, sides })
 
-  // Frames on this thread — break the stroke where they sit (FigJam-style insert on thread).
-  const attachedFrames = useStore((s) => {
-    const out: Array<{ t: number; width: number; height: number }> = []
-    for (const n of s.nodeInternals.values()) {
-      if (n.type !== 'chatPanel') continue
-      const anchor = readOnThread(n.data?.promptMessage?.metadata as Record<string, unknown>)
-      if (!anchor) continue
-      if (anchor.sourceMessageId !== (sourceNode?.data?.promptMessage?.id as string)) continue
-      if (anchor.targetMessageId !== (targetNode?.data?.promptMessage?.id as string)) continue
-      const size = nodeFlowSize(n)
-      out.push({ t: anchor.t, width: size.width, height: size.height })
-    }
-    return out
-  })
   const pathGeom =
     typeof document !== 'undefined'
       ? buildThreadPathGeometry({
@@ -228,9 +213,37 @@ export function EditableThread({
           targetHandleId,
         })
       : null
+
+  // Inline frames break the stroke; offset frames show a dot on the path instead.
+  const { inlineGaps, threadDots } = useStore((s) => {
+    const gaps: Array<{ t: number; width: number; height: number }> = []
+    const dots: XYPosition[] = []
+    const srcMsg = sourceNode?.data?.promptMessage?.id as string | undefined
+    const tgtMsg = targetNode?.data?.promptMessage?.id as string | undefined
+    if (!srcMsg || !tgtMsg || !pathGeom) return { inlineGaps: gaps, threadDots: dots }
+    for (const n of s.nodeInternals.values()) {
+      if (n.type !== 'chatPanel') continue
+      const anchor = readOnThread(n.data?.promptMessage?.metadata as Record<string, unknown>)
+      if (!anchor) continue
+      if (anchor.sourceMessageId !== srcMsg || anchor.targetMessageId !== tgtMsg) continue
+      const size = onThreadFrameSize(n)
+      const cx = n.position.x + size.width / 2
+      const cy = n.position.y + size.height / 2
+      const closest = pathGeom.closestT(cx, cy)
+      const tan = pathGeom.tangentAt(closest.t)
+      const perpAbs = Math.abs((cx - closest.point.x) * -tan.y + (cy - closest.point.y) * tan.x)
+      const liveOffset = !isOnThreadInline(anchor) || perpAbs > ON_THREAD_PERP_THRESHOLD
+      if (liveOffset) {
+        dots.push(closest.point)
+      } else {
+        gaps.push({ t: closest.t, width: size.width, height: size.height })
+      }
+    }
+    return { inlineGaps: gaps, threadDots: dots }
+  })
   const strokePaths =
-    pathGeom && attachedFrames.length > 0
-      ? threadStrokePaths(pathGeom, threadGapsForFrames(pathGeom, attachedFrames))
+    pathGeom && inlineGaps.length > 0
+      ? threadStrokePaths(pathGeom, threadGapsForFrames(pathGeom, inlineGaps))
       : [path]
 
   const stroke =
@@ -258,6 +271,17 @@ export function EditableThread({
           markerEnd={i === strokePaths.length - 1 ? markerEnd : undefined}
           interactionWidth={20 * invZoom} // Hit band stays ~20px on screen at any zoom
           style={edgeStyle}
+        />
+      ))}
+
+      {threadDots.map((pt, i) => (
+        <circle
+          key={`${id}-on-thread-dot-${i}`}
+          cx={pt.x}
+          cy={pt.y}
+          r={ON_THREAD_DOT_R * comfort}
+          fill={stroke}
+          pointerEvents="none"
         />
       ))}
 

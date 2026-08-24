@@ -19,6 +19,8 @@ export type ThreadPathGeometry = {
   pathD: string // Full SVG path
   length: number // Total arc length (flow px)
   pointAt: (t: number) => XYPosition // t in 0..1
+  tangentAt: (t: number) => XYPosition // Unit tangent (source → target)
+  normalAt: (t: number, side?: 1 | -1) => XYPosition // Unit normal (left = 1)
   closestT: (x: number, y: number) => { t: number; point: XYPosition; distance: number }
   slicePath: (startT: number, endT: number) => string // Subpath for stroke gaps
 }
@@ -121,6 +123,25 @@ function geometryFromPathD(
     return pathEl.getPointAtLength(clamped * length)
   }
 
+  const tangentAt = (t: number): XYPosition => {
+    const eps = 0.004
+    const t0 = Math.max(0, t - eps)
+    const t1 = Math.min(1, t + eps)
+    const p0 = pointAt(t0)
+    const p1 = pointAt(t1)
+    const dx = p1.x - p0.x
+    const dy = p1.y - p0.y
+    const len = Math.hypot(dx, dy) || 1
+    return { x: dx / len, y: dy / len }
+  }
+
+  const normalAt = (t: number, side: 1 | -1 = 1): XYPosition => {
+    const tan = tangentAt(t)
+    const nx = -tan.y * side
+    const ny = tan.x * side
+    return { x: nx, y: ny }
+  }
+
   const closestT = (x: number, y: number) => {
     const steps = 64
     let bestT = 0.5
@@ -171,7 +192,7 @@ function geometryFromPathD(
     return parts.join(' ')
   }
 
-  return { pathD, length, pointAt, closestT, slicePath }
+  return { pathD, length, pointAt, tangentAt, normalAt, closestT, slicePath }
 }
 
 function linearFallback(a: XYPosition, b: XYPosition): ThreadPathGeometry {
@@ -183,6 +204,11 @@ function linearFallback(a: XYPosition, b: XYPosition): ThreadPathGeometry {
     x: a.x + dx * Math.min(1, Math.max(0, t)),
     y: a.y + dy * Math.min(1, Math.max(0, t)),
   })
+  const tangentAt = (): XYPosition => ({ x: dx / len, y: dy / len })
+  const normalAt = (_t: number, side: 1 | -1 = 1): XYPosition => {
+    const tan = tangentAt(0)
+    return { x: -tan.y * side, y: tan.x * side }
+  }
   const closestT = (x: number, y: number) => {
     const t = Math.min(1, Math.max(0, ((x - a.x) * dx + (y - a.y) * dy) / (len * len)))
     const point = pointAt(t)
@@ -193,7 +219,7 @@ function linearFallback(a: XYPosition, b: XYPosition): ThreadPathGeometry {
     const p1 = pointAt(endT)
     return `M ${p0.x} ${p0.y} L ${p1.x} ${p1.y}`
   }
-  return { pathD, length: len, pointAt, closestT, slicePath }
+  return { pathD, length: len, pointAt, tangentAt, normalAt, closestT, slicePath }
 }
 
 /** Gap sizes along the path for frames sitting on the thread (flow px). */
@@ -244,15 +270,22 @@ export function threadStrokePaths(
   return segments.length > 0 ? segments : [geom.pathD]
 }
 
-/** Resolve placement for an on-thread frame from its anchor. */
+/** Resolve placement for an on-thread frame from its anchor (inline or offset beside the path). */
 export function positionForOnThreadFrame(
   geom: ThreadPathGeometry,
   anchor: OnThreadMeta,
   size: { width: number; height: number }
 ): XYPosition {
-  const center = geom.pointAt(anchor.t)
+  const pathPt = geom.pointAt(anchor.t)
+  const offset = anchor.offset ?? 0
+  if (offset > 0 && anchor.normalX != null && anchor.normalY != null) {
+    return {
+      x: pathPt.x + anchor.normalX * offset - size.width / 2,
+      y: pathPt.y + anchor.normalY * offset - size.height / 2,
+    }
+  }
   return {
-    x: center.x - size.width / 2,
-    y: center.y - size.height / 2,
+    x: pathPt.x - size.width / 2,
+    y: pathPt.y - size.height / 2,
   }
 }

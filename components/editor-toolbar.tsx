@@ -136,6 +136,16 @@ function paintSpaceIcon(icon: HTMLImageElement | null, on: boolean) {
   icon.style.opacity = on ? '1' : '0.8' // Idle icons sit slightly back like the text tools
 }
 
+function canEditorUndo(editor: Editor | null): boolean {
+  if (!editor || editor.isDestroyed) return false
+  return editor.can().undo()
+}
+
+function canEditorRedo(editor: Editor | null): boolean {
+  if (!editor || editor.isDestroyed) return false
+  return editor.can().redo()
+}
+
 /** Approx icon+title button width (text-sm) so overflow can hide titles before hiding tools. */
 function titledToolWidth(label: string) {
   return 16 + 6 + Math.ceil(label.length * 7.5) + 16 // icon + gap-1.5 + glyph estimate + px-2
@@ -1395,15 +1405,15 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     activeElement?.closest('[contenteditable="true"]') !== null ||
                     activeElement?.tagName === 'INPUT' ||
                     activeElement?.tagName === 'TEXTAREA'
-                  if (isInEditor && editor?.can().undo()) {
+                  if (isInEditor && canEditorUndo(editor)) {
                     editor.chain().focus().undo().run()
                   } else if (canMapUndo) {
                     mapUndo()
-                  } else if (editor?.can().undo()) {
+                  } else if (canEditorUndo(editor)) {
                     editor.chain().focus().undo().run()
                   }
                 }}
-                disabled={!canMapUndo && (!editor || !editor.can().undo())}
+                disabled={!canMapUndo && !canEditorUndo(editor)}
                 className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                 title="Undo (Ctrl+Z)"
               >
@@ -1418,15 +1428,15 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     activeElement?.closest('[contenteditable="true"]') !== null ||
                     activeElement?.tagName === 'INPUT' ||
                     activeElement?.tagName === 'TEXTAREA'
-                  if (isInEditor && editor?.can().redo()) {
+                  if (isInEditor && canEditorRedo(editor)) {
                     editor.chain().focus().redo().run()
                   } else if (canMapRedo) {
                     mapRedo()
-                  } else if (editor?.can().redo()) {
+                  } else if (canEditorRedo(editor)) {
                     editor.chain().focus().redo().run()
                   }
                 }}
-                disabled={!canMapRedo && (!editor || !editor.can().redo())}
+                disabled={!canMapRedo && !canEditorRedo(editor)}
                 className="h-7 w-7 p-0 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                 title="Redo (Ctrl+Shift+Z)"
               >

@@ -2,18 +2,22 @@
 
 // Insert frames onto threads + drag them along the path.
 
-import { useCallback, useEffect, useRef } from 'react'
-import type { Edge, Node } from 'reactflow'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+import type { Edge, Node, NodeChange } from 'reactflow'
 import { createClient } from '@/lib/supabase/client'
 import { generateUUID } from '@/lib/utils'
 import { newBlockMetadata } from '@/lib/blocks'
-import { absFlowPosition, nodeFlowSize } from '@/components/use-block-group-drag'
+import { absFlowPosition } from '@/components/use-block-group-drag'
 import {
   readOnThread,
   findEdgeForOnThread,
   ON_THREAD_DEFAULT_SIZE,
+  onThreadFrameSize,
+  onThreadPathSyncKey,
   persistOnThreadPlacement,
   detachOnThreadFrame,
+  projectFrameOntoThreadPath,
+  patchNodeOnThreadMeta,
   type OnThreadMeta,
 } from '@/lib/threads/on-thread-frame'
 import {
@@ -44,40 +48,107 @@ export function useOnThreadFrames({
   queryClient,
   takeSnapshot,
 }: UseOnThreadFramesOpts) {
-  const dragRef = useRef<{ nodeId: string; t: number; anchor: OnThreadMeta } | null>(null)
+  const dragRef = useRef<{ nodeId: string; anchor: OnThreadMeta } | null>(null)
+  const pathSyncKey = useMemo(() => onThreadPathSyncKey(edges, nodes), [edges, nodes])
 
-  /** Keep on-thread frames glued to the path when endpoints or bends change. */
-  useEffect(() => {
-    if (typeof document === 'undefined') return
-    const draggingId = dragRef.current?.nodeId
-    const live = nodes
-    const updates: Array<{ id: string; position: { x: number; y: number } }> = []
-
-    for (const node of live) {
-      if (node.type !== 'chatPanel') continue
-      if (draggingId && node.id === draggingId) continue
-      const anchor = readOnThread(node.data?.promptMessage?.metadata as Record<string, unknown>)
-      if (!anchor) continue
-      const edge = findEdgeForOnThread(edges, live, anchor)
-      if (!edge) continue
-      const geom = geometryForEdge(edge, live)
-      if (!geom) continue
-      const size = nodeFlowSize(node)
-      const next = positionForOnThreadFrame(geom, anchor, size)
-      const cur = node.position
-      if (Math.abs(cur.x - next.x) > 0.5 || Math.abs(cur.y - next.y) > 0.5) {
-        updates.push({ id: node.id, position: next })
+  const patchMessageCaches = useCallback(
+    (messageId: string, abs: { x: number; y: number }, anchor: OnThreadMeta) => {
+      if (!conversationId) return
+      const patch = (key: unknown[]) => {
+        queryClient.setQueryData(key, (old: unknown) => {
+          const list = Array.isArray(old) ? [...old] : []
+          return list.map((m: { id?: string; metadata?: Record<string, unknown> }) =>
+            m.id === messageId
+              ? { ...m, metadata: { ...(m.metadata || {}), position: abs, onThread: anchor } }
+              : m
+          )
+        })
       }
-    }
+      patch(['messages-for-panels', conversationId])
+      patch(['messages-for-panels', conversationId, 'full'])
+      patch(['messages-for-panels', conversationId, 'embed'])
+    },
+    [conversationId, queryClient]
+  )
 
-    if (updates.length === 0) return
-    setNodes((nds) =>
-      nds.map((n) => {
-        const hit = updates.find((u) => u.id === n.id)
-        return hit ? { ...n, position: hit.position } : n
+  const commitOnThreadPlacement = useCallback(
+    (nodeId: string, position: { x: number; y: number }, anchor: OnThreadMeta) => {
+      const live = getNodes()
+      const node = live.find((n) => n.id === nodeId)
+      const msgId = node?.data?.promptMessage?.id as string | undefined
+      if (!node || !msgId) return
+
+      const existing = readOnThread(node.data?.promptMessage?.metadata as Record<string, unknown>)
+      const abs = absFlowPosition({ ...node, position }, live)
+      const posSame =
+        Math.abs(node.position.x - position.x) < 0.5 &&
+        Math.abs(node.position.y - position.y) < 0.5
+      const metaSame =
+        existing?.t === anchor.t &&
+        (existing?.offset ?? 0) === (anchor.offset ?? 0) &&
+        (existing?.normalX ?? 0) === (anchor.normalX ?? 0) &&
+        (existing?.normalY ?? 0) === (anchor.normalY ?? 0)
+      if (posSame && metaSame) return
+
+      setNodes((nds) => {
+        let changed = false
+        const next = nds.map((n) => {
+          if (n.id !== nodeId) return n
+          changed = true
+          return patchNodeOnThreadMeta({ ...n, position }, anchor, abs)
+        })
+        return changed ? next : nds
       })
-    )
-  }, [edges, nodes, setNodes])
+      patchMessageCaches(msgId, abs, anchor)
+
+      if (!conversationId) return
+      void (async () => {
+        try {
+          const supabase = createClient()
+          await persistOnThreadPlacement(supabase, {
+            messageId: msgId,
+            position: abs,
+            onThread: anchor,
+          })
+        } catch (err) {
+          console.error('Failed to persist on-thread frame placement:', err)
+        }
+      })()
+    },
+    [conversationId, getNodes, patchMessageCaches, setNodes]
+  )
+
+  /** Re-seat on-thread frames when endpoint frames move or the path bends — not on every nodes tick. */
+  useEffect(() => {
+    if (typeof document === 'undefined' || !pathSyncKey) return
+    if (dragRef.current?.nodeId) return
+
+    const live = getNodes()
+    setNodes((nds) => {
+      let changed = false
+      const next = nds.map((n) => {
+        if (n.type !== 'chatPanel') return n
+        const anchor = readOnThread(n.data?.promptMessage?.metadata as Record<string, unknown>)
+        if (!anchor) return n
+        const edge = findEdgeForOnThread(edges, nds, anchor)
+        if (!edge) return n
+        const geom = geometryForEdge(edge, nds)
+        if (!geom) return n
+        const size = onThreadFrameSize(n)
+        const target = positionForOnThreadFrame(geom, anchor, size)
+        if (
+          Math.abs(n.position.x - target.x) < 0.5 &&
+          Math.abs(n.position.y - target.y) < 0.5
+        ) {
+          return n
+        }
+        changed = true
+        const abs = absFlowPosition({ ...n, position: target }, nds)
+        return patchNodeOnThreadMeta({ ...n, position: target }, anchor, abs)
+      })
+      return changed ? next : nds
+    })
+  }, [pathSyncKey, edges, getNodes, setNodes])
 
   const insertFrameOnThread = useCallback(
     async (edgeId: string) => {
@@ -97,8 +168,7 @@ export function useOnThreadFrames({
 
       const t = 0.5
       const anchor: OnThreadMeta = { sourceMessageId: sourceMsgId, targetMessageId: targetMsgId, t }
-      const size = ON_THREAD_DEFAULT_SIZE
-      const itemPosition = positionForOnThreadFrame(geom, anchor, size)
+      const itemPosition = positionForOnThreadFrame(geom, anchor, ON_THREAD_DEFAULT_SIZE)
       const messageId = generateUUID()
       const html = '<p></p>'
 
@@ -168,72 +238,49 @@ export function useOnThreadFrames({
     if (node.type !== 'chatPanel') return
     const anchor = readOnThread(node.data?.promptMessage?.metadata as Record<string, unknown>)
     if (!anchor) return
-    dragRef.current = { nodeId: node.id, t: anchor.t, anchor: { ...anchor } }
+    dragRef.current = { nodeId: node.id, anchor: { ...anchor } }
   }, [])
 
-  const onNodeDrag = useCallback(
+  /** Project position changes onto the thread — no setNodes here (RF applies the change). */
+  const constrainOnThreadPositionChanges = useCallback(
+    (changes: NodeChange[], currentNodes: Node[]): NodeChange[] => {
+      return changes.map((change) => {
+        if (change.type !== 'position' || !change.position) return change
+        const node = currentNodes.find((n) => n.id === change.id)
+        if (!node || node.type !== 'chatPanel') return change
+        const projected = projectFrameOntoThreadPath(edges, currentNodes, node, change.position)
+        if (!projected) return change
+        if (change.dragging === true && dragRef.current?.nodeId === change.id) {
+          dragRef.current.anchor = projected.anchor
+        }
+        return { ...change, position: projected.position }
+      })
+    },
+    [edges]
+  )
+
+  const onNodeDrag = useCallback((_event: unknown, node: Node) => {
+    if (node.type !== 'chatPanel') return
+    const session = dragRef.current
+    if (!session || session.nodeId !== node.id) return
+    const projected = projectFrameOntoThreadPath(edges, getNodes(), node, node.position)
+    if (projected) dragRef.current.anchor = projected.anchor
+  }, [edges, getNodes])
+
+  const onNodeDragStop = useCallback(
     (_event: unknown, node: Node) => {
-      if (node.type !== 'chatPanel') return
       const session = dragRef.current
+      dragRef.current = null
       if (!session || session.nodeId !== node.id) return
 
       const live = getNodes()
-      const edge = findEdgeForOnThread(edges, live, session.anchor)
-      if (!edge) return
-      const geom = geometryForEdge(edge, live)
-      if (!geom) return
-
-      const size = nodeFlowSize(node)
-      const centerX = node.position.x + size.width / 2
-      const centerY = node.position.y + size.height / 2
-      const projected = geom.closestT(centerX, centerY)
-      session.t = projected.t
-      session.anchor = { ...session.anchor, t: projected.t }
-
-      const nextPos = positionForOnThreadFrame(geom, session.anchor, size)
-      const cur = node.position
-      if (Math.abs(cur.x - nextPos.x) > 0.25 || Math.abs(cur.y - nextPos.y) > 0.25) {
-        setNodes((nds) =>
-          nds.map((n) => (n.id === node.id ? { ...n, position: nextPos } : n))
-        )
+      const current = live.find((n) => n.id === node.id) || node
+      const projected = projectFrameOntoThreadPath(edges, live, current, current.position)
+      if (projected) {
+        commitOnThreadPlacement(node.id, projected.position, projected.anchor)
       }
     },
-    [edges, getNodes, setNodes]
-  )
-
-  const onNodeDragStop = useCallback(
-    async (_event: unknown, node: Node) => {
-      const session = dragRef.current
-      dragRef.current = null
-      if (!session || session.nodeId !== node.id || !conversationId) return
-
-      const live = getNodes()
-      const msgId = node.data?.promptMessage?.id as string | undefined
-      if (!msgId) return
-
-      const anchor: OnThreadMeta = { ...session.anchor, t: session.t }
-      const abs = absFlowPosition(live.find((n) => n.id === node.id) || node, live)
-
-      try {
-        const supabase = createClient()
-        await persistOnThreadPlacement(supabase, {
-          messageId: msgId,
-          position: abs,
-          onThread: anchor,
-        })
-        queryClient.setQueryData(['messages-for-panels', conversationId], (old: unknown) => {
-          const list = Array.isArray(old) ? [...old] : []
-          return list.map((m: { id?: string; metadata?: Record<string, unknown> }) =>
-            m.id === msgId
-              ? { ...m, metadata: { ...(m.metadata || {}), position: abs, onThread: anchor } }
-              : m
-          )
-        })
-      } catch (err) {
-        console.error('Failed to persist on-thread frame drag:', err)
-      }
-    },
-    [conversationId, getNodes, queryClient]
+    [commitOnThreadPlacement, edges, getNodes]
   )
 
   const detachFramesOnDeletedEdge = useCallback(
@@ -286,6 +333,7 @@ export function useOnThreadFrames({
     onNodeDragStart,
     onNodeDrag,
     onNodeDragStop,
+    constrainOnThreadPositionChanges,
     detachFramesOnDeletedEdge,
     isOnThreadNode,
   }
