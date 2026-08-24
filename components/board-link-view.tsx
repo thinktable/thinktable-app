@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { BoardOpenMenu } from '@/components/board-open-menu' // Shared preview/open chrome
 import { useBoardLinkActions } from '@/lib/board-link-context'
+import { usePropertyHeaderSlot } from '@/lib/property-header-context'
 import { elementUniformScale, localToScreen, screenToLocal } from '@/lib/dom-transform' // Rotation-safe zoom×frameScale + local↔screen
 import { cn } from '@/lib/utils'
 
@@ -45,11 +46,26 @@ function topmostClientRect(el: HTMLElement): DOMRect | null {
   }
 }
 
-export function BoardLinkView({ node, updateAttributes }: NodeViewProps) {
+export function BoardLinkView({ node, updateAttributes, editor, getPos }: NodeViewProps) {
   const boardId = (node.attrs.boardId as string | null) || null // Linked child page
   const icon = (node.attrs.icon as string | null) || null // Emoji, else default icon
   const variant = (node.attrs.variant as string) === 'title' ? 'title' : 'inline' // Layout mode
   const actions = useBoardLinkActions() // Host frame preview / open / rename / setIcon bridge
+  const propertyHeaderSlot = usePropertyHeaderSlot() // Empty property icons — first title link only
+  const linkPos = typeof getPos === 'function' ? getPos() : -1
+  const isFirstTitleBoardLink = (() => {
+    if (variant !== 'title' || !editor || editor.isDestroyed || linkPos < 0) return false
+    let firstLinkPos = -1
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'boardLink') {
+        firstLinkPos = pos
+        return false
+      }
+      return true
+    })
+    return firstLinkPos === linkPos
+  })()
+  const showPropertyUnderTitle = Boolean(propertyHeaderSlot && isFirstTitleBoardLink)
   const { resolvedTheme } = useTheme() // Emoji picker theme
   const zoom = useStore((s) =>
     navigationZoom(Math.round((s.transform[2] || 1) * 8) / 8)
@@ -207,13 +223,14 @@ export function BoardLinkView({ node, updateAttributes }: NodeViewProps) {
       as="div"
       ref={wrapRef as React.Ref<HTMLDivElement>} // Measure icon/menu from the boardLink root (not the open-menu)
       className={cn(
-        'tt-board-link group relative nokey', // nokey: RF must not steal Backspace while editing the title
+        'tt-board-link group relative nokey flex flex-col items-stretch', // nokey: RF must not steal Backspace while editing the title
         variant === 'title' ? 'tt-board-link-title' : 'tt-board-link-inline',
         editing && 'tt-board-link-editing' // While editing the title, CSS hides the preview chrome
       )}
       contentEditable={false} // Atom node — PM ignores inner DOM; we manage the title span
       data-board-id={boardId || undefined}
     >
+      <div className="relative flex w-full min-w-0 items-start">
       {/* Clickable icon — opens the emoji picker (same as page icons elsewhere) */}
       <span
         ref={iconRef}
@@ -343,6 +360,12 @@ export function BoardLinkView({ node, updateAttributes }: NodeViewProps) {
           }}
         />
       )}
+      </div>
+      {showPropertyUnderTitle ? (
+        <div className="w-full min-w-0 max-w-full" data-tt-property-band>
+          {propertyHeaderSlot}
+        </div>
+      ) : null}
     </NodeViewWrapper>
   )
 }

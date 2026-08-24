@@ -8,7 +8,6 @@ import {
   ChevronRight,
   ChevronUp,
   Copy,
-  Image as ImageIcon,
   Info,
   Link2,
   Lock,
@@ -28,7 +27,6 @@ import { applyMenuPlacement, getThreadCoverRects, watchMenuSafeRect } from '@/li
 export type ThreadActionId =
   | 'copy'
   | 'copyLink'
-  | 'copyAsImage'
   | 'duplicate'
   | 'delete'
   | 'copyStyle'
@@ -130,13 +128,6 @@ export function ThreadActionsMenu({
       label: 'Copy link',
       shortcut: '⌘⌥⇧C',
       icon: <Link2 className="h-4 w-4" />,
-    },
-    {
-      kind: 'action',
-      id: 'copyAsImage',
-      label: 'Copy as image',
-      shortcut: '⌘⇧C',
-      icon: <ImageIcon className="h-4 w-4" />,
     },
     {
       kind: 'action',

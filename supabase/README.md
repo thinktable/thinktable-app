@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260824024921_draw_lasso_insert_space_thread_frames` — Freehand lasso select; Insert space drag-to-gap; Insert frame on thread + thickness; property icons inside fill
 - `20260823234830_frame_fit_free_restore` — Fit→free restores saved free-resize box; lock snapshots before hug; metadata sync guard
 - `20260823233405_property_strip_scroll_db_clip_preview` — Property strip horizontal scroll + …; free-resize DB hover full-table preview; TipTap destroyed-editor guard
 - `20260823223134_notion_db_table_perf_scroll` — Notion DB virtualization + pagination; wheel scroll/zoom over selected DB; property block drag

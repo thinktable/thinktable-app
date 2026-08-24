@@ -125,6 +125,17 @@ const DRAW_INK: { id: DrawInk; label: string; swatch: string }[] = [ // Swatch c
   { id: 'red', label: 'Red', swatch: 'fill-red-600 text-red-600' },
 ]
 
+// Insert-space icons are <img> SVGs, so their "ink" is a CSS filter instead of currentColor
+const SPACE_ICON_FILTER_ON = 'brightness(0) saturate(100%) invert(0%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(0%) contrast(100%)' // Armed / hovered
+const SPACE_ICON_FILTER_OFF = 'brightness(0) saturate(100%) invert(38%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(98%) contrast(100%)' // Idle grey
+
+/** Paint an insert-space icon dark (armed or hovered) or grey (idle). */
+function paintSpaceIcon(icon: HTMLImageElement | null, on: boolean) {
+  if (!icon) return // Cluster is in the More menu / not mounted
+  icon.style.filter = on ? SPACE_ICON_FILTER_ON : SPACE_ICON_FILTER_OFF // Match the lucide tools' hover/active ink
+  icon.style.opacity = on ? '1' : '0.8' // Idle icons sit slightly back like the text tools
+}
+
 /** Approx icon+title button width (text-sm) so overflow can hide titles before hiding tools. */
 function titledToolWidth(label: string) {
   return 16 + 6 + Math.ceil(label.length * 7.5) + 16 // icon + gap-1.5 + glyph estimate + px-2
@@ -370,37 +381,21 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
     }
   }, [])
 
-  // Handlers for insert space icon color changes
+  // Handlers for insert space icon color changes (armed tool stays dark, so hover-out must not grey it)
   const handleInsertVerticalSpaceMouseEnter = () => {
-    const icon = insertVerticalSpaceIconRef.current
-    if (icon) {
-      icon.style.filter = 'brightness(0) saturate(100%) invert(0%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(0%) contrast(100%)'
-      icon.style.opacity = '1'
-    }
+    paintSpaceIcon(insertVerticalSpaceIconRef.current, true) // Hover → full-black glyph
   }
 
   const handleInsertVerticalSpaceMouseLeave = () => {
-    const icon = insertVerticalSpaceIconRef.current
-    if (icon) {
-      icon.style.filter = 'brightness(0) saturate(100%) invert(38%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(98%) contrast(100%)'
-      icon.style.opacity = '0.8'
-    }
+    paintSpaceIcon(insertVerticalSpaceIconRef.current, drawTool === 'insert-v') // Keep dark while armed
   }
 
   const handleInsertHorizontalSpaceMouseEnter = () => {
-    const icon = insertHorizontalSpaceIconRef.current
-    if (icon) {
-      icon.style.filter = 'brightness(0) saturate(100%) invert(0%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(0%) contrast(100%)'
-      icon.style.opacity = '1'
-    }
+    paintSpaceIcon(insertHorizontalSpaceIconRef.current, true) // Hover → full-black glyph
   }
 
   const handleInsertHorizontalSpaceMouseLeave = () => {
-    const icon = insertHorizontalSpaceIconRef.current
-    if (icon) {
-      icon.style.filter = 'brightness(0) saturate(100%) invert(38%) sepia(0%) saturate(0%) hue-rotate(0deg) brightness(98%) contrast(100%)'
-      icon.style.opacity = '0.8'
-    }
+    paintSpaceIcon(insertHorizontalSpaceIconRef.current, drawTool === 'insert-h') // Keep dark while armed
   }
 
   // Hide formatting options (clear formatting to line options) when insert/draw/view mode is selected
@@ -412,6 +407,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   // Use context values for drawTool, with local state as fallback
   const drawTool = contextDrawTool ?? null
   const setDrawTool = setContextDrawTool
+  // Insert-space icons are <img>s, so repaint them whenever the armed tool changes without a hover (More menu, reload restore, other tool taking over)
+  useEffect(() => {
+    paintSpaceIcon(insertVerticalSpaceIconRef.current, drawTool === 'insert-v') // Vertical space ink follows its armed state
+    paintSpaceIcon(insertHorizontalSpaceIconRef.current, drawTool === 'insert-h') // Horizontal space ink follows its armed state
+  }, [drawTool])
   const [pencilColor, setPencilColor] = useState<DrawInk>('black') // Freehand ink — remembered per tool, not shared with highlighter
   const [highlighterColor, setHighlighterColor] = useState<DrawInk>('black') // Highlighter ink — independent of freehand so each dropdown keeps its last pick
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set())
@@ -1930,16 +1930,22 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       ref={insertVerticalSpaceButtonRef}
                       variant="ghost"
                       size="sm"
-                      onClick={() => {
-                        // TODO: Implement insert vertical space
+                      onClick={(e) => {
+                        // Same toggle contract as the other Draw tools: click arms, click again disarms
+                        setDrawTool(drawTool === 'insert-v' ? null : 'insert-v')
+                        setIsDrawing(false) // Insert space is a pointer tool, not an ink stroke
+                        e.currentTarget.blur() // Drop the focus ring so only the armed wash shows
                       }}
                       onMouseEnter={handleInsertVerticalSpaceMouseEnter}
                       onMouseLeave={handleInsertVerticalSpaceMouseLeave}
                       className={cn(
-                        'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center',
-                        'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
+                        'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center',
+                        'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5', // Title condenses to icon on shrink
+                        drawTool === 'insert-v'
+                          ? 'bg-gray-100 dark:bg-gray-800' // Armed wash matches lasso / eraser / ink tools
+                          : 'hover:bg-gray-100 dark:hover:bg-gray-800'
                       )}
-                      title="Insert Vertical Space"
+                      title={drawTool === 'insert-v' ? 'Vertical space active (click to deselect)' : 'Insert vertical space'}
                     >
                       <img 
                         ref={insertVerticalSpaceIconRef}
@@ -1957,16 +1963,22 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                       ref={insertHorizontalSpaceButtonRef}
                       variant="ghost"
                       size="sm"
-                      onClick={() => {
-                        // TODO: Implement insert horizontal space
+                      onClick={(e) => {
+                        // Same toggle contract as the other Draw tools: click arms, click again disarms
+                        setDrawTool(drawTool === 'insert-h' ? null : 'insert-h')
+                        setIsDrawing(false) // Insert space is a pointer tool, not an ink stroke
+                        e.currentTarget.blur() // Drop the focus ring so only the armed wash shows
                       }}
                       onMouseEnter={handleInsertHorizontalSpaceMouseEnter}
                       onMouseLeave={handleInsertHorizontalSpaceMouseLeave}
                       className={cn(
-                        'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0 flex items-center',
-                        'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Title condenses to icon on shrink
+                        'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex-shrink-0 flex items-center',
+                        'transition-[padding,gap] duration-200 ease-out', compactLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5', // Title condenses to icon on shrink
+                        drawTool === 'insert-h'
+                          ? 'bg-gray-100 dark:bg-gray-800' // Armed wash matches lasso / eraser / ink tools
+                          : 'hover:bg-gray-100 dark:hover:bg-gray-800'
                       )}
-                      title="Insert Horizontal Space"
+                      title={drawTool === 'insert-h' ? 'Horizontal space active (click to deselect)' : 'Insert horizontal space'}
                     >
                       <img 
                         ref={insertHorizontalSpaceIconRef}
@@ -3077,8 +3089,10 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => {
-                        // TODO: Implement insert vertical space
+                        setDrawTool(drawTool === 'insert-v' ? null : 'insert-v') // Overflow row toggles the same armed tool
+                        setIsDrawing(false) // Pointer tool, no ink capture
                       }}
+                      className={drawTool === 'insert-v' ? 'bg-gray-100 dark:bg-gray-800' : ''} // Armed row reads like the bar button
                     >
                       <img 
                         src="/insert%20space%20v%20icon%202.svg" 
@@ -3089,8 +3103,10 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => {
-                        // TODO: Implement insert horizontal space
+                        setDrawTool(drawTool === 'insert-h' ? null : 'insert-h') // Overflow row toggles the same armed tool
+                        setIsDrawing(false) // Pointer tool, no ink capture
                       }}
+                      className={drawTool === 'insert-h' ? 'bg-gray-100 dark:bg-gray-800' : ''} // Armed row reads like the bar button
                     >
                       <img 
                         src="/insert%20space%20h%20icon%201.svg" 

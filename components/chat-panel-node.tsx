@@ -185,11 +185,103 @@ function contentSizeFromAabb(
   }
 }
 
+// Row-card hug caps — mirror `defaultColumnWidthPx` so a card reads like its table row.
+// A single long value (a note, a Notion relation id) must not stretch the whole card; the
+// cell ellipsizes past this instead.
+const PROPERTY_VALUE_HUG_MAX_W = 160 // Non-title column default
+const ROW_CARD_TITLE_HUG_MAX_W = 280 // Title column default
+
 /**
  * Natural content width = longest rendered line of real text, not the stretched w-full box.
  * Pure measurement via Range (actual glyph extents) — children are width:100%, so offsetWidth /
  * scrollWidth report the frame width, not the text. Never mutates live styles (RO-safe).
  */
+function measureTextWidthLocal(
+  text: string,
+  fontEl: Element,
+  toLocal: (screenW: number) => number
+): number {
+  const trimmed = text.trim()
+  if (!trimmed) return 0
+  const span = document.createElement('span')
+  const cs = getComputedStyle(fontEl)
+  span.style.position = 'absolute'
+  span.style.visibility = 'hidden'
+  span.style.whiteSpace = 'nowrap'
+  span.style.font = cs.font
+  span.textContent = trimmed
+  document.body.appendChild(span)
+  const w = toLocal(span.getBoundingClientRect().width)
+  span.remove()
+  return w
+}
+
+/** Filled property cell — icon + value text (ignores width:100% stretch). */
+function measurePropertyBlockWidth(
+  block: HTMLElement,
+  toLocal: (screenW: number) => number
+): number {
+  if (block.getAttribute('data-header-only') === 'true') return 0
+  if (getComputedStyle(block).display === 'none') return 0
+  const icon = block.querySelector('.tt-property-block-icon') as HTMLElement | null
+  const input = block.querySelector('.tt-property-block-input') as HTMLInputElement | null
+  const cell = block.querySelector('.tt-property-block-cell') as HTMLElement | null
+  const iconW = icon?.offsetWidth ?? 20
+  const gap = cell ? parseFloat(getComputedStyle(cell).gap) || 6 : 6
+  const cellPadL = cell ? parseFloat(getComputedStyle(cell).paddingLeft) || 4 : 4
+  const cellPadR = cell ? parseFloat(getComputedStyle(cell).paddingRight) || 8 : 8
+  // Inputs are width:100% — measure glyphs, never the stretched box. Cap so one long
+  // value can't widen the card; the input ellipsizes past the cap.
+  let textW = 48 // "Empty" placeholder
+  if (input) {
+    const text = input.value || input.placeholder || 'Empty'
+    const glyphs = measureTextWidthLocal(text, input, toLocal)
+    textW = Math.max(textW, Math.min(PROPERTY_VALUE_HUG_MAX_W, glyphs))
+  }
+  // Honor the cell's CSS floor, or a measure below it would clip the rendered cell.
+  const cssMinW = parseFloat(getComputedStyle(block).minWidth) || 0
+  return Math.max(cssMinW, iconW + gap + cellPadL + cellPadR + textW)
+}
+
+/** Row→card frames: title + filled property cells only (icons wrap inside — never sum the strip). */
+function measureRowCardContentWidth(contentFit: HTMLElement): number {
+  const cs = getComputedStyle(contentFit)
+  const padL = parseFloat(cs.paddingLeft) || 0
+  const pm = contentFit.querySelector('.ProseMirror') as HTMLElement | null
+  if (!pm) return Math.max(1, contentFit.scrollWidth)
+  const row = pm.closest('.relative') as HTMLElement | null
+  const gutter = row && row !== contentFit ? parseFloat(getComputedStyle(row).paddingLeft) || 0 : 0
+  const fitRect = contentFit.getBoundingClientRect()
+  const scale = contentFit.offsetWidth > 0 ? fitRect.width / contentFit.offsetWidth : 1
+  const toLocal = (screenW: number) => (scale > 0 ? screenW / scale : screenW)
+
+  let maxLine = 0
+  const label = pm.querySelector(
+    '.tt-board-link-label, .tt-page-link-label'
+  ) as HTMLElement | null
+  if (label) {
+    const link = label.closest('.tt-board-link, .tt-page-link') as HTMLElement | null
+    const icon = link?.querySelector(
+      '.tt-board-link-icon-wrap, .tt-board-link-icon, .tt-page-link-icon'
+    ) as HTMLElement | null
+    const gap = link ? parseFloat(getComputedStyle(link).gap) || 6 : 6
+    const iconW = icon?.offsetWidth ?? 0
+    const labelText = label.textContent || ''
+    const labelW = labelText.trim()
+      ? Math.min(ROW_CARD_TITLE_HUG_MAX_W, measureTextWidthLocal(labelText, label, toLocal))
+      : 0
+    maxLine = Math.max(maxLine, iconW + gap + labelW)
+  }
+
+  pm.querySelectorAll('.tt-property-block').forEach((el) => {
+    maxLine = Math.max(maxLine, measurePropertyBlockWidth(el as HTMLElement, toLocal))
+  })
+
+  const padR = parseFloat(cs.paddingRight) || 0
+  const rightInset = gutter > 0 ? Math.max(padR, padL + GRIP_ICON_INSET) : Math.max(padR, padL)
+  return Math.ceil(Math.max(1, padL + gutter + maxLine + rightInset))
+}
+
 function measureNaturalContentWidth(contentFit: HTMLElement): number {
   const cs = getComputedStyle(contentFit)
   const padL = parseFloat(cs.paddingLeft) || 0 // Content-box left pad (BLOCK_FRAME_PAD on blocks)
@@ -214,6 +306,10 @@ function measureNaturalContentWidth(contentFit: HTMLElement): number {
       return 0
     }
   }
+
+  /** Filled property cell — icon + value text (ignores width:100% stretch). */
+  const measurePropertyBlockWidthLocal = (block: HTMLElement): number =>
+    measurePropertyBlockWidth(block, toLocal)
 
   let maxLine = 0
   for (const child of Array.from(pm.children) as HTMLElement[]) {
@@ -241,6 +337,13 @@ function measureNaturalContentWidth(contentFit: HTMLElement): number {
       maxLine = Math.max(maxLine, iconW + gap + labelW)
       continue
     }
+    const propBlock =
+      (child.classList.contains('tt-property-block') && child) ||
+      (child.querySelector('.tt-property-block:not([data-header-only="true"])') as HTMLElement | null)
+    if (propBlock) {
+      maxLine = Math.max(maxLine, measurePropertyBlockWidthLocal(propBlock))
+      continue
+    }
     // databaseBlock: Range over the live Notion table is transform-fragile during RF frame
     // drag (gBCR can collapse → hug shrinks the frame and the table appears to vanish).
     const dbBlock =
@@ -266,6 +369,7 @@ function measureNaturalContentWidth(contentFit: HTMLElement): number {
       maxLine = Math.max(maxLine, w)
       continue
     }
+    if (child.classList.contains('react-renderer')) continue // NodeView shell — measured via inner atoms
     maxLine = Math.max(maxLine, rangeWidth(child)) // Longest real text line
   }
   // Right margin: equal to padL when there is no ⋮⋮ gutter (gutter lives in select chrome).
@@ -375,6 +479,7 @@ import { useReactFlowContext } from './react-flow-context'
 import { useTheme } from './theme-provider'
 import { SelectionFormatPopupAnchor } from './selection-format-popup' // Notion-style selection menu (stable edge anchor)
 import { BoardLinkProvider, type BoardLinkActions } from '@/lib/board-link-context' // Bridge boardLink NodeViews → frame preview/open/rename
+import { PropertyHeaderSlotProvider } from '@/lib/property-header-context' // Empty property icons under the card title
 import { BoardOpenMenu } from '@/components/board-open-menu' // Preview/open chrome for page frames without a boardLink
 import { NestedBoardPreview, prefetchBoardEmbed } from './nested-board-preview' // Page-within-page board preview
 import { unwrapNestedFramesHtml } from '@/lib/tiptap/unwrap-nested-frames' // Flatten legacy nest wrappers
@@ -496,24 +601,19 @@ function formatResponseContent(content: string): string {
   return htmlParagraphs
 }
 
-const PROPERTY_SCROLL_EDGE = 2 // px slack for at-edge scroll detection
-
-/** Top strip: **empty** type icons in document order — one **block** (⋮⋮ comes from TipTapBlockHandles). */
+/** In-frame strip: **empty** type icons in doc order — one block (⋮⋮ from TipTapBlockHandles); wraps to frame width. */
 function FramePropertyGroup({
   items,
   className,
   editor = null,
   editorRef,
-  scrollElRef,
   iconScale = 1,
 }: {
   items: PropertyHeaderItem[]
   className?: string
   editor?: Editor | null
   editorRef?: React.MutableRefObject<Editor | null>
-  /** Band element that clips + scrolls (must be `position: relative` for the … overlay). */
-  scrollElRef?: React.RefObject<HTMLElement | null>
-  iconScale?: number // screenChromeScale — icon px, not CSS transform (transform breaks overflow scroll)
+  iconScale?: number
 }) {
   const liveEditor = () => {
     const fromRef = editorRef?.current
@@ -522,23 +622,13 @@ function FramePropertyGroup({
     return null
   }
   const containerRef = useRef<HTMLDivElement>(null) // Icon row — drag target
-  const localBandRef = useRef<HTMLDivElement>(null) // In-fill scroll host when no external band ref
-  const getScrollEl = useCallback(
-    () => scrollElRef?.current ?? localBandRef.current,
-    [scrollElRef]
-  )
   const scale = iconScale > 0 ? iconScale : 1
   const iconPx = Math.max(16, Math.round(20 * scale))
   const gapPx = Math.max(4, Math.round(6 * scale))
-  const bandH = Math.max(24, Math.round(28 * scale))
+  const rowPadY = Math.max(2, Math.round(4 * scale))
   const [editorOpen, setEditorOpen] = useState<PropertyEditorAnchor & { from: number; type: PropertyTypeId; name: string; value: string } | null>(null)
   const [dropLine, setDropLine] = useState<PropertyDropLine | null>(null)
   const [ghost, setGhost] = useState<{ x: number; y: number; type: PropertyTypeId } | null>(null)
-
-  const itemsKey = useMemo(
-    () => items.map((it) => `${it.type}\0${it.name}`).join('\x1e'),
-    [items]
-  )
 
   const openEditorAt = useCallback(
     (item: PropertyHeaderItem, el: HTMLElement) => {
@@ -579,68 +669,21 @@ function FramePropertyGroup({
     [editor, editorRef, openEditorAt]
   )
 
-  const syncScrollHint = useCallback(() => {
-    const el = getScrollEl()
-    if (!el) return
-    const hasOverflow = el.scrollWidth > el.clientWidth + PROPERTY_SCROLL_EDGE
-    const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - PROPERTY_SCROLL_EDGE
-    el.classList.toggle('tt-property-strip-overflow', hasOverflow)
-    el.classList.toggle('tt-property-strip-at-end', atEnd)
-  }, [getScrollEl])
-
-  const scheduleScrollHint = useCallback(() => {
-    syncScrollHint()
-    requestAnimationFrame(syncScrollHint)
-  }, [syncScrollHint])
-
-  useLayoutEffect(() => {
-    let ro: ResizeObserver | null = null
-    let scrollEl: HTMLElement | null = null
-    let raf = 0
-
-    const detach = () => {
-      if (scrollEl) scrollEl.removeEventListener('scroll', scheduleScrollHint)
-      ro?.disconnect()
-      ro = null
-      scrollEl = null
-    }
-
-    const attach = () => {
-      scrollEl = getScrollEl()
-      if (!scrollEl) {
-        raf = requestAnimationFrame(attach)
-        return
-      }
-      scheduleScrollHint()
-      ro = new ResizeObserver(scheduleScrollHint)
-      ro.observe(scrollEl)
-      const row = containerRef.current
-      if (row) ro.observe(row)
-      scrollEl.addEventListener('scroll', scheduleScrollHint, { passive: true })
-    }
-
-    attach()
-    return () => {
-      cancelAnimationFrame(raf)
-      detach()
-    }
-  }, [itemsKey, scheduleScrollHint, getScrollEl])
-
-  useEffect(() => {
-    getScrollEl()?.scrollTo({ left: 0 })
-    scheduleScrollHint()
-  }, [itemsKey, scheduleScrollHint, getScrollEl])
-
   if (items.length === 0) return null
 
   const markClass =
     'nodrag nopan flex shrink-0 items-center justify-center rounded text-gray-500 hover:bg-gray-100 dark:hover:bg-[#2a2a2a]'
-  const iconRow = (
+
+  return (
+    <>
     <div
       ref={containerRef}
       data-tt-property-header
-      className={cn('flex w-max max-w-none items-center', className)}
-      style={{ height: bandH, gap: gapPx }}
+      className={cn(
+        'flex w-full min-w-0 max-w-full flex-wrap items-center',
+        className
+      )}
+      style={{ gap: gapPx, paddingTop: rowPadY, paddingBottom: rowPadY }}
     >
       {items.map((item, i) => (
         <PropertyIconWithTooltip
@@ -654,21 +697,6 @@ function FramePropertyGroup({
         />
       ))}
     </div>
-  )
-
-  return (
-    <>
-    {scrollElRef ? (
-      iconRow
-    ) : (
-      <div
-        ref={localBandRef}
-        data-tt-property-scroll
-        className="relative block w-full min-w-0 max-w-full overflow-x-auto overflow-y-hidden [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
-      >
-        {iconRow}
-      </div>
-    )}
     {ghost &&
       typeof document !== 'undefined' &&
       createPortal(
@@ -814,8 +842,7 @@ function TipTapContent({
   onPropertyTurnInto,
   pinConnectionsToFrame = false, // Free-frame clip: hug spacer only; real group is pinned to the frame
   loadCrossfade = false, // Board load: keep the shell overlay and fade it out; new frames skip this
-  chromeBandsOutside = false, // Host paints property / connections in adjust chrome (selected only)
-  onPropertyHeadersChange,
+  chromeBandsOutside = false, // Host paints connections in adjust chrome (selected only)
   contentPadLeft = 0, // contentFit paddingLeft — ⋮⋮ centers in the blue gutter past this pad
   frameScale = 1, // Locked-resize CSS scale — grips remeasure when it changes
   handleGutterFlow = 0, // Blue L/R gutter width (flow px) — ⋮⋮ local left compensates contentFit scale
@@ -861,8 +888,7 @@ function TipTapContent({
   onPropertyTurnInto?: (propertyType: PropertyTypeId) => void // ⋮⋮ Turn into → Property
   pinConnectionsToFrame?: boolean
   loadCrossfade?: boolean // Fade the load shell out as TipTap fades in (skip for fadeIn creates)
-  chromeBandsOutside?: boolean // Host paints property / connections in adjust chrome
-  onPropertyHeadersChange?: (items: PropertyHeaderItem[]) => void // Live headers for host chrome bands
+  chromeBandsOutside?: boolean // Host paints connections in adjust chrome (selected only)
   contentPadLeft?: number // contentFit padL — grip centering past the fill edge
   frameScale?: number // Locked-resize scale — ⋮⋮ remeasure (CSS transform skips RO)
   handleGutterFlow?: number // Adjust-box L gutter (flow px); grips inverse-scale into it
@@ -1169,9 +1195,30 @@ function TipTapContent({
       editor.off('update', sync)
     }
   }, [editor, propertyType])
+
+  // Card-view frames lead with a title boardLink — paint empty property icons under that name.
+  const [propertyUnderBoardLink, setPropertyUnderBoardLink] = useState(() => {
+    const trimmed = (content || '').trimStart()
+    if (!trimmed.startsWith('<div')) return false
+    return (
+      /^<div\b[^>]*data-type=["']boardLink["'][^>]*data-variant=["']title["']/i.test(trimmed) ||
+      /^<div\b[^>]*data-variant=["']title["'][^>]*data-type=["']boardLink["']/i.test(trimmed)
+    )
+  })
   useEffect(() => {
-    onPropertyHeadersChange?.(propertyHeaders)
-  }, [propertyHeaders, onPropertyHeadersChange])
+    if (!editor || editor.isDestroyed) return
+    const sync = () => {
+      const first = editor.state.doc.firstChild
+      setPropertyUnderBoardLink(
+        !!first && first.type.name === 'boardLink' && first.attrs.variant === 'title'
+      )
+    }
+    sync()
+    editor.on('update', sync)
+    return () => {
+      editor.off('update', sync)
+    }
+  }, [editor])
 
   // Editable only when this frame is selected (and share role allows). Unselected = no iOS text loupe.
   useEffect(() => {
@@ -1591,6 +1638,12 @@ function TipTapContent({
   const [shimmerExiting, setShimmerExiting] = useState(false) // Opacity 1→0 once the editor exists
   const showFrameShimmer = !!enableBlockHandles && !isFlashcard && (!editor || keepShimmer) // Mount shell, then load overlay
   const shimmerHasText = frameHasVisibleText(content) // Text lines vs solid box (empty / spaces)
+  const showPropertyStrip = Boolean(
+    propertyHeaders.length > 0 && enableBlockHandles && !isFlashcard && !showFrameShimmer
+  )
+  const propertyStrip = showPropertyStrip ? (
+    <FramePropertyGroup items={propertyHeaders} editor={editor} />
+  ) : null
 
   useEffect(() => {
     if (!editor || !keepShimmer) return // Nothing to fade, or already gone
@@ -1635,17 +1688,14 @@ function TipTapContent({
         )}
       >
         {editor ? (
+          <PropertyHeaderSlotProvider value={propertyUnderBoardLink ? propertyStrip : null}>
           <div>
-            {/* Unselected: icons stay in the fill. Selected: host paints them in the top chrome band. */}
-            {!chromeBandsOutside &&
-              propertyHeaders.length > 0 &&
-              enableBlockHandles &&
-              !isFlashcard &&
-              !showFrameShimmer && (
-                <div className="w-full min-w-0 max-w-full" data-tt-property-band>
-                  <FramePropertyGroup items={propertyHeaders} editor={editor} />
-                </div>
-              )}
+            {/* Default: top of the fill. Card frames mount the same strip under the title boardLink. */}
+            {!propertyUnderBoardLink && showPropertyStrip && (
+              <div className="w-full min-w-0 max-w-full" data-tt-property-band>
+                {propertyStrip}
+              </div>
+            )}
             {/* ⋮⋮ paints outside the fill (negative left into panel chrome); no pl-6 inside the frame.
                 Keep mounted during RF drag (invisible) — unmounting mid-drag remounted atom NodeViews. */}
             <div
@@ -1675,6 +1725,7 @@ function TipTapContent({
               className={cn('block w-full', isPanelSelected && 'nodrag nopan')}
             />
           </div>
+          </PropertyHeaderSlotProvider>
         ) : null}
         {showFrameShimmer ? (
           <div
@@ -2393,8 +2444,6 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const [clipPreviewReady, setClipPreviewReady] = useState(false) // True after hover dwell — delayed full-content peek
   const [rotation, setRotation] = useState(0) // Degrees of item rotation (persisted in message metadata)
   const [frameShape, setFrameShape] = useState<FrameShapeType | null>(null) // Silhouette (null = default frame)
-  const [chromePropertyHeaders, setChromePropertyHeaders] = useState<PropertyHeaderItem[]>([])
-  const propBandRef = useRef<HTMLDivElement>(null) // Top property band — horizontal scroll host
   const isResizingRef = useRef(false) // Track if currently resizing
   const contentFitRef = useRef<HTMLDivElement>(null) // Inner unscaled content wrapper for intrinsic measure
   const frameScaleRef = useRef(1) // Latest scale — resize-end must not close over a stale render
@@ -2695,6 +2744,45 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                 .eq('id', promptMessage.id)
             })()
           } else if (dims.width && dims.height && dims.width > 0 && dims.height > 0) {
+            const lockedRowCard =
+              isRowCardAtomHtml(contentHtml) && metadata.frameUnlocked !== true
+            if (lockedRowCard) {
+              // Locked row cards live-hug — stale resize boxes must not load (RF node + panel).
+              setResizeDimensions(null)
+              setIsUserResized(false)
+              const setNodesFunc = getSetNodes()
+              if (setNodesFunc) {
+                setNodesFunc((nodes: any[]) =>
+                  nodes.map((node: any) => {
+                    if (node.id !== id) return node
+                    const style = { ...(node.style || {}) }
+                    delete style.width
+                    delete style.height
+                    return { ...node, style, width: undefined, height: undefined }
+                  })
+                )
+              }
+              void (async () => {
+                if (isProjectBoard || !promptMessage) return
+                const { data: message } = await supabase
+                  .from('messages')
+                  .select('metadata')
+                  .eq('id', promptMessage.id)
+                  .single()
+                const existingMetadata = (message?.metadata as Record<string, any>) || {}
+                if (existingMetadata.resizeDimensions == null) return
+                await supabase
+                  .from('messages')
+                  .update({
+                    metadata: {
+                      ...existingMetadata,
+                      resizeDimensions: null,
+                      frameUnlocked: false,
+                    },
+                  })
+                  .eq('id', promptMessage.id)
+              })()
+            } else {
             setResizeDimensions({ width: dims.width, height: dims.height })
             setIsUserResized(true) // Persisted resize → wrap in fixed box; skip line-grow
 
@@ -2724,6 +2812,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                     : node
                 )
               )
+            }
             }
           }
         }
@@ -3015,7 +3104,6 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // Blue-box L/R gutters when selected. Property / connections bands sit OUTSIDE the fill
   // — only while selected (hide entirely when the frame is idle).
   const showFrameChrome = Boolean(isBlock && (selected || dragging) && !isThreadConnecting)
-  const hasPropBand = Boolean(showFrameChrome && chromePropertyHeaders.length > 0)
   const hasConnBand = Boolean(showFrameChrome && notionConnected && isBlock && !isFlashcard)
   // Screen-relative L/R gutter fits the ⋮⋮ (zoom comfort) — not × frameScale (that left empty
   // blue pad when grips counter-scaled). Grips use localGutter = adjustChromeX/chromeScale so
@@ -3037,8 +3125,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     (CONNECTIONS_GROUP_H + ADJUST_CONTENT_GAP_Y) * screenChromeScale
   ) // Property / connections strip + T/B blue→content air
   const chromePadX = Math.round(BLOCK_FRAME_PAD_X * chromeScale) // Band inset matches scaled fill pad
-  // T/B bands only while selected — even empty strips keep the blue box balanced
-  const adjustChromeYTop = showFrameChrome ? chromeBandH : 0
+  // T/B bands only while selected — bottom keeps the blue box balanced when connections show
+  const adjustChromeYTop = 0 // Empty property icons live inside the fill (under the card title when present)
   const adjustChromeYBottom = showFrameChrome ? chromeBandH : 0
   // Keep the filled frame glued when selection chrome appears/disappears (grow left/up).
   // Do NOT shift RF position when chrome scale changes with zoom — that deferred setNodes
@@ -3559,7 +3647,13 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         if (hasFrameAtomHtml(promptContent) && !el.querySelector('.tt-board-link, .tt-database-block, .tt-property-block')) {
           return
         }
-        const width = Math.max(1, Math.round(measureNaturalContentWidth(el)))
+        const rowCard = isRowCardAtomHtml(promptContent)
+        const width = Math.max(
+          1,
+          Math.round(
+            rowCard ? measureRowCardContentWidth(el) : measureNaturalContentWidth(el)
+          )
+        )
         const height = Math.max(1, Math.round(measureNaturalContentHeight(el)))
         const dbBox = measureDatabaseBlockExtents(el)
         setDatabaseExtents(dbBox)
@@ -3576,11 +3670,11 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         ) {
           return
         }
-        // Never shrink a row card to ≤ half its last good size (Empty-stub race).
-        // Do NOT apply this to databaseBlock tables — offsetWidth feedback used to lock a huge box.
+        // Post-drag only: block stub measures that would halve a good box (not shrink from a bad wide measure).
         const prev = intrinsicSizeRef.current
         if (
           isRowCardAtomHtml(promptContent) &&
+          Date.now() < hugFreezeUntilRef.current &&
           prev.width > 80 &&
           prev.height > 40 &&
           (width < prev.width * 0.5 || height < prev.height * 0.5)
@@ -4276,7 +4370,11 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           unlockedFrameScale: freeSnapshot.scale,
         }
       } else {
-        const naturalW = fitEl ? measureNaturalContentWidth(fitEl) : intrinsicSize.width
+        const naturalW = fitEl
+          ? isRowCardAtomHtml(promptContent)
+            ? measureRowCardContentWidth(fitEl)
+            : measureNaturalContentWidth(fitEl)
+          : intrinsicSize.width
         const minW = blockMinFrameWidth(promptContent)
         const hugged = scaledFrameSize(
           { width: naturalW, height: naturalH },
@@ -4385,7 +4483,14 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           const base = prev ?? box
           const width = next // Wrap-on: restore stored columns × scale; Wrap-off: hug to nowrap content
             ? (col != null ? Math.round(col * s) : base.width)
-            : Math.max(blockMinFrameWidth(promptContent), Math.ceil(measureNaturalContentWidth(cf) * s))
+            : Math.max(
+                blockMinFrameWidth(promptContent),
+                Math.ceil(
+                  (isRowCardAtomHtml(promptContent)
+                    ? measureRowCardContentWidth(cf)
+                    : measureNaturalContentWidth(cf)) * s
+                )
+              )
           return { width, height }
         })
       }))
@@ -4397,8 +4502,10 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // Locked + resized: hug WIDTH and HEIGHT to natural text (locked = hug to content) —
   // shrink/grow both dimensions on lock/type instead of keeping the taller resize box.
   useEffect(() => {
-    if (!isBlock || frameUnlocked || !isUserResized || pagePreviewOpen || dragging) return
+    const rowCard = isRowCardAtomHtml(promptContent)
+    if (!isBlock || frameUnlocked || pagePreviewOpen || dragging) return
     if (!intrinsicMeasured || isResizingRef.current) return
+    if (!isUserResized && !rowCard) return // Row cards hug as soon as content is measured
     const minW = blockMinFrameWidth(promptContent, false) // Fill hug — no ⋮⋮ column inside the frame
     const natural = scaledFrameSize(intrinsicSize, frameScale, minW)
     // Never hug a databaseBlock frame down to the remount stub — that persists as a permanent clip.
@@ -4450,6 +4557,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       return next
     })
     if (!changed) return
+    if (rowCard && !isUserResized) setIsUserResized(true) // RF node sync uses resizeDimensions
     if (persistFrameMetaTimerRef.current) clearTimeout(persistFrameMetaTimerRef.current)
     persistFrameMetaTimerRef.current = setTimeout(() => {
       void persistFrameMeta({
@@ -4474,6 +4582,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     wrapColWidth,
     persistFrameMeta,
     promptContent,
+    isUserResized,
   ])
 
   // Unlocked WRAP no longer auto-hugs height: like non-wrap clip, the frame keeps the user's box
@@ -5101,7 +5210,11 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // Frames hug the longest TipTap line until corner-resized (match `isBlock`, not isBlockMeta alone)
   const usesFitContent = isBlock // Empty user-only bodies without isBlock still hug
   const frameMinW = blockMinFrameWidth(promptContent, false) // Frame fill only — ⋮⋮ lives in select chrome, not inside the fill
-  const growsWithLine = usesFitContent && !isUserResized && !pagePreviewOpen // Line runs until Enter / corner resize
+  const growsWithLine =
+    usesFitContent &&
+    !isUserResized &&
+    !pagePreviewOpen &&
+    !isRowCardAtomHtml(promptContent) // Row cards live-hug — max-content blows out to icon-row width
   // Empty unresized: explicit px (not max-content) — CSS % children used to inflate ~120×160 boxes
   const emptyLineHug = growsWithLine && isBlockContentEmpty(promptContent)
   const hasBlockContent = isBlock && !isBlockContentEmpty(promptContent) // Lock only when a content block exists
@@ -5336,6 +5449,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
       return
     }
     if (isUserResized && resizeDimensions) return // Explicit box owns width
+    // Row cards: layoutBox / rowCardLiveBox owns width — never stomp with panelWidthRef.
+    if (isBlock && isRowCardAtomHtml(promptContent)) return
     if (panelRef.current && panelWidthRef.current) {
       const next = `${panelWidthRef.current}px`
       if (panelRef.current.style.width !== next) panelRef.current.style.width = next
@@ -5401,6 +5516,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // Expand/shrink panel width from longest line — sync DOM before React paint to avoid wrap
   const expandPanelWidth = useCallback((newContent?: string) => {
     if (pagePreviewOpen) return
+    // Row cards live-hug from measureRowCardContentWidth — concatenated textContent here is bogus wide.
+    if (isRowCardAtomHtml(newContent !== undefined ? newContent : promptContent)) return
     // Unresized blocks: empty → one-line hug px; typed → max-content (don’t force chat widths)
     if (growsWithLine) {
       if (panelRef.current) {
@@ -5456,6 +5573,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // Shrink block/flashcard to longest line on blur
   const handleEditorBlur = useCallback(() => {
     if (isRegularChatPanel) return // Chat stays wide
+    if (isRowCardAtomHtml(promptContent)) return // Row cards hug via intrinsic measure
     if ((isUserResized && resizeDimensions) || pagePreviewOpen) return
 
     setTimeout(() => {
@@ -5639,6 +5757,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   // Debounced width adjust when content changes (blocks grow/shrink with longest line)
   useEffect(() => {
     if ((isUserResized && resizeDimensions) || pagePreviewOpen) return
+    if (isRowCardAtomHtml(promptContent)) return // Intrinsic hug owns width
     if (!promptContent && !responseContent) return
     if (isRegularChatPanel && !promptContent && !responseContent) return
 
@@ -6170,14 +6289,20 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
 
   // Map-card frame is a container (like a Notion page) — ⋮⋮ lives on TipTap content blocks inside
   // Logical (unrotated) content box — never use outer AABB measure when rotated
+  const rowCardLockedHug =
+    isBlock && isRowCardAtomHtml(promptContent) && intrinsicMeasured && !frameUnlocked
   const contentBoxW =
-    (isUserResized && resizeDimensions?.width) ||
+    (rowCardLockedHug
+      ? huggedSize.width
+      : isUserResized && resizeDimensions?.width) ||
     (Math.abs(rotation) > 0.5
       ? Math.max(intrinsicSize.width + 8, BLOCK_MIN_FRAME_W) // +pad; outer RO is AABB — don't use it
       : itemBoxSize.width) ||
     FRAME_SHAPE_DEFAULT_SIZE.width
   const contentBoxH =
-    (isUserResized && resizeDimensions?.height) ||
+    (rowCardLockedHug
+      ? huggedSize.height
+      : isUserResized && resizeDimensions?.height) ||
     (Math.abs(rotation) > 0.5
       ? Math.max(intrinsicSize.height + 8, BLOCK_MIN_FRAME_H)
       : itemBoxSize.height) ||
@@ -6188,7 +6313,19 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     ? rotatedFrameAabbSize(contentBoxW, contentBoxH, rotation, frameShape)
     : { width: contentBoxW, height: contentBoxH }
   // Row cards only: never rely on fit-content — NodeView remount on first select+drag collapses
-  // the box. Sole databaseBlock tables must NOT use this (width:100% + offsetWidth → runaway size).
+  // the box. Locked cards always live-hug from intrinsic measure (not stale resizeDimensions).
+  const rowCardLiveBox =
+    isBlock &&
+    isRowCardAtomHtml(promptContent) &&
+    intrinsicMeasured &&
+    !pagePreviewOpen &&
+    !layoutBoxFreeze &&
+    !frameUnlocked
+      ? {
+          width: huggedSize.width + adjustChromeX * 2,
+          height: huggedSize.height + adjustChromeYTop + adjustChromeYBottom,
+        }
+      : null
   const atomExplicitBox =
     isBlock &&
     isRowCardAtomHtml(promptContent) &&
@@ -6200,7 +6337,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           height: huggedSize.height + adjustChromeYTop + adjustChromeYBottom,
         }
       : null
-  const layoutBox = layoutBoxFreeze || atomExplicitBox
+  const layoutBox = layoutBoxFreeze || rowCardLiveBox || atomExplicitBox
   const shapeBoxW = contentBoxW
   const shapeBoxH = contentBoxH
   const shapeClip = frameShape ? frameShapeClipCss(frameShape) : undefined
@@ -6265,6 +6402,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               ? `${resizeDimensions.width + adjustChromeX * 2}px`
               : emptyLineHug
                 ? `${frameMinW + adjustChromeX * 2}px`
+                : isRowCardAtomHtml(promptContent) && !intrinsicMeasured
+                  ? `${frameMinW + adjustChromeX * 2}px`
                 : growsWithLine
                   ? 'max-content'
                   : `${panelWidthToUse + adjustChromeX * 2}px`,
@@ -6802,29 +6941,6 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         </>
       )}
 
-      {/* Property icons — above the fill, inset to match fill content (not flush to fill’s left edge) */}
-      {hasPropBand && (
-        <div
-          ref={propBandRef}
-          data-tt-frame-chrome-top
-          data-tt-property-band
-          data-tt-property-scroll
-          className="absolute z-[2] block min-w-0 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
-          style={{
-            top: 0,
-            left: adjustChromeX + chromePadX,
-            right: adjustChromeX + chromePadX,
-            height: adjustChromeYTop,
-          }}
-        >
-          <FramePropertyGroup
-            items={chromePropertyHeaders}
-            scrollElRef={propBandRef}
-            iconScale={screenChromeScale}
-            editorRef={promptEditorRef}
-          />
-        </div>
-      )}
       {/* Connections — below the fill, same horizontal inset as properties / cell */}
       {hasConnBand && (
         <div
@@ -6982,9 +7098,11 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
                 ? undefined
                 : !frameUnlocked && isUserResized
                   ? 'w-max'
-                  : isUserResized || !growsWithLine || emptyLineHug
-                    ? 'w-full' // Fill explicit empty hug / resized box for full-row clicks
-                    : 'w-max',
+                  : isRowCardAtomHtml(promptContent)
+                    ? 'w-max' // Never stretch the measure box to a stale wide panel
+                    : isUserResized || !growsWithLine || emptyLineHug
+                      ? 'w-full' // Fill explicit empty hug / resized box for full-row clicks
+                      : 'w-max',
               // Blocks: padX > padY slightly so L/R of the property cell breathe vs the fill edge
               isBlock ? undefined : 'px-3 py-3'
             )}
@@ -7080,11 +7198,10 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               onPropertyTurnInto={handlePropertyTurnInto}
               pinConnectionsToFrame={pinConnectionsToFrame}
               loadCrossfade={promptMessage?.metadata?.fadeIn !== true} // Load: dissolve the shell; new frames use note-fade-in
-              chromeBandsOutside // Suppress in-fill strips — host paints only while selected
+              chromeBandsOutside // Suppress in-fill connections — host paints only while selected
               contentPadLeft={isBlock ? BLOCK_FRAME_PAD_X : 0}
               frameScale={frameScale}
               handleGutterFlow={handleGutterFlow}
-              onPropertyHeadersChange={setChromePropertyHeaders}
               boardInTargets={(() => {
                 const convs =
                   (queryClient.getQueryData(['conversations']) as

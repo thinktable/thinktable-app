@@ -1,13 +1,22 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-23T23:48:30Z`
+- Snapped at: `2026-08-24T02:49:21Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260824024921_draw_lasso_insert_space_thread_frames.sql`.
+- Draw bar **Lasso** is freehand (`lib/freehand-lasso-select.ts`): own SVG trail, implicitly closed loop, partial-overlap frame/thread hits.
+- Draw bar **Insert space** (`drawTool` `insert-v` / `insert-h`, `use-insert-space-drag.ts` + `insert-space-overlay.tsx`): drag opens a gap, top-level nodes past the guide shift by the delta, positions persist on release.
+- Thread menu **Insert frame** (`use-on-thread-frames.ts`, `lib/threads/on-thread-frame.ts`, `lib/threads/thread-path-geometry.ts`): frame sits at `t` on the thread path with stroke gaps, drag slides it along the curve; thread **Thickness** in `ThreadEdgeData.strokeWidth`.
+- Property icons / connections paint inside the frame fill (`lib/property-header-context.tsx`), with hug caps on cell value / row-card title.
+- All of it rides existing `messages.metadata` (`onThread`) and `panel_edges.metadata` JSON — schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: frame fit↔free restore
 
 - No DDL. Marker `20260823234830_frame_fit_free_restore.sql`.
 - Frame fit↔free toggle: unlock restores `unlockedFrameSize` / scale after fit-to-text; lock snapshots live free box before hugging.

@@ -48,8 +48,8 @@ interface ReactFlowContextType {
   setSelectedTag: (tagId: string | null) => void // Function to set selected tag (toggles if same tag clicked)
   isDrawing: boolean // Drawing mode state (true = drawing enabled, false = selection mode)
   setIsDrawing: (drawing: boolean) => void // Function to set drawing mode
-  drawTool: 'lasso' | 'pencil' | 'highlighter' | 'eraser' | null // Current drawing tool
-  setDrawTool: (tool: 'lasso' | 'pencil' | 'highlighter' | 'eraser' | null) => void // Function to set drawing tool
+  drawTool: DrawTool | null // Current Draw-bar tool (null = none armed)
+  setDrawTool: (tool: DrawTool | null) => void // Arm / disarm a Draw-bar tool
   drawShape: 'rectangle' | 'circle' | 'line' | 'arrow' | 'round-rectangle' | 'hexagon' | 'diamond' | 'arrow-rectangle' | 'cylinder' | 'triangle' | 'parallelogram' | 'plus' // Current shape
   setDrawShape: (shape: 'rectangle' | 'circle' | 'line' | 'arrow' | 'round-rectangle' | 'hexagon' | 'diamond' | 'arrow-rectangle' | 'cylinder' | 'triangle' | 'parallelogram' | 'plus') => void // Function to set shape
   // Undo/Redo functions for React Flow map actions (registered from BoardFlow where useUndoRedo hook is used)
@@ -74,8 +74,9 @@ const TT_DRAW_TOOL_KEY = 'thinktable-draw-tool'
 
 const PILL_MODES = ['home', 'insert', 'draw', 'view'] as const // Valid pill values (Actions = home, Layout = insert)
 type EditMenuPillMode = (typeof PILL_MODES)[number] // Matches context editMenuPillMode
-const DRAW_TOOLS = ['lasso', 'pencil', 'highlighter', 'eraser'] as const // Valid Draw tools (null = none)
-type StoredDrawTool = (typeof DRAW_TOOLS)[number] // Armed Draw tool persisted across reload
+const DRAW_TOOLS = ['lasso', 'pencil', 'highlighter', 'eraser', 'insert-v', 'insert-h'] as const // Valid Draw tools (null = none); insert-v/h = insert space
+export type DrawTool = (typeof DRAW_TOOLS)[number] // Armed Draw tool (also the persisted value)
+type StoredDrawTool = DrawTool // Same set is what reload restores
 
 /** Read last pill; SSR-safe → Actions. */
 function getStoredPillMode(): EditMenuPillMode {
@@ -130,7 +131,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
   const [flashcardMode, setFlashcardMode] = useState<'flashcard' | 'quiz' | null>(null) // Flashcard study mode (null = off)
   const [selectedTag, setSelectedTag] = useState<string | null>(null) // Selected flashcard tag for filtering navigation
   const [isDrawing, setIsDrawing] = useState<boolean>(false) // Drawing mode state (default: selection mode)
-  const [drawTool, setDrawToolState] = useState<'lasso' | 'pencil' | 'highlighter' | 'eraser' | null>(null) // SSR: none; restore armed tool before paint
+  const [drawTool, setDrawToolState] = useState<DrawTool | null>(null) // SSR: none; restore armed tool before paint
   const [drawShape, setDrawShape] = useState<'rectangle' | 'circle' | 'line' | 'arrow' | 'round-rectangle' | 'hexagon' | 'diamond' | 'arrow-rectangle' | 'cylinder' | 'triangle' | 'parallelogram' | 'plus'>('rectangle') // Current shape (default: rectangle)
   const [snapEnabled, setSnapEnabled] = useState<boolean>(false) // Snap to grid/helper lines enabled state (default: disabled)
   

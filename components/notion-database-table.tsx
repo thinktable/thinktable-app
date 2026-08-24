@@ -169,9 +169,9 @@ export function NotionDatabaseTableView({
   /** Nested/parent Card convert — pending row until bring-options dialog confirms. */
   const [bringDialogRowId, setBringDialogRowId] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
-  const [showBottomFade, setShowBottomFade] = useState(false)
   const [freeResizeScrollCap, setFreeResizeScrollCap] = useState<number | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollWrapRef = useRef<HTMLDivElement>(null)
 
   /** Patch cached table rows (optimistic edits survive NodeView remount). */
   const setCachedTable = useCallback(
@@ -683,30 +683,39 @@ export function NotionDatabaseTableView({
     return undefined
   }, [frameFreeResize, freeResizeScrollCap, frameClipHeight, useScrollCap, frameClipPreview])
 
-  /** Bottom fade when capped content continues below (or more rows on server). */
-  const syncScrollFade = useCallback(() => {
+  /** Top/bottom … when capped table is not fully scrolled (or more rows on server). */
+  const syncScrollHints = useCallback(() => {
     const el = scrollRef.current
+    const wrap = scrollWrapRef.current
+    if (!wrap) return
     if (!el || !useBoundedScroll) {
-      setShowBottomFade(false)
+      wrap.classList.remove('tt-notion-db-v-overflow', 'tt-notion-db-at-top', 'tt-notion-db-at-bottom')
       return
     }
+    const edge = 4
     const hasOverflow = el.scrollHeight > el.clientHeight + 2
-    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 4
-    setShowBottomFade(hasOverflow && (!atBottom || !!data?.rowsHasMore))
+    const atTop = el.scrollTop <= edge
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - edge
+    wrap.classList.toggle('tt-notion-db-v-overflow', hasOverflow)
+    wrap.classList.toggle('tt-notion-db-at-top', !hasOverflow || atTop)
+    wrap.classList.toggle(
+      'tt-notion-db-at-bottom',
+      !hasOverflow || (atBottom && !data?.rowsHasMore)
+    )
   }, [useBoundedScroll, data?.rowsHasMore])
 
   useEffect(() => {
-    syncScrollFade()
+    syncScrollHints()
     const el = scrollRef.current
     if (!el) return
-    el.addEventListener('scroll', syncScrollFade, { passive: true })
-    const ro = new ResizeObserver(syncScrollFade)
+    el.addEventListener('scroll', syncScrollHints, { passive: true })
+    const ro = new ResizeObserver(syncScrollHints)
     ro.observe(el)
     return () => {
-      el.removeEventListener('scroll', syncScrollFade)
+      el.removeEventListener('scroll', syncScrollHints)
       ro.disconnect()
     }
-  }, [syncScrollFade, rowItemCount, filteredRows.length, settings.layout, frameSelected, scrollBodyStyle])
+  }, [syncScrollHints, rowItemCount, filteredRows.length, settings.layout, frameSelected, scrollBodyStyle])
 
   const rowBgFn = useCallback(
     (row: NotionDbRow) => rowBackground(row, settings.conditionalColors),
@@ -1056,7 +1065,7 @@ export function NotionDatabaseTableView({
           {saveError}
         </div>
       ) : null}
-      <div className="relative min-w-0">
+      <div ref={scrollWrapRef} className="relative min-w-0 tt-notion-db-scroll-wrap">
         <div
           ref={scrollRef}
           className={cn(
@@ -1084,9 +1093,6 @@ export function NotionDatabaseTableView({
             </div>
           ) : null}
         </div>
-        {showBottomFade ? (
-          <div className="tt-notion-db-bottom-fade pointer-events-none" aria-hidden />
-        ) : null}
       </div>
       <CardConvertBringDialog
         open={!!bringDialogRowId}

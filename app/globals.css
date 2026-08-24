@@ -1005,6 +1005,23 @@ span[data-added="true"] {
     cursor: grabbing;
   }
 
+  /* Draw bar Lasso: crosshair on empty page — left-drag traces a freehand selection */
+  .react-flow.tt-map-lasso-tool .react-flow__pane {
+    cursor: crosshair;
+  }
+
+  /* Draw bar insert space: drag opens a gap, so the whole board reads as a resize handle (frames included) */
+  .react-flow.tt-map-insert-space-v,
+  .react-flow.tt-map-insert-space-v .react-flow__pane,
+  .react-flow.tt-map-insert-space-v .react-flow__node {
+    cursor: row-resize;
+  }
+  .react-flow.tt-map-insert-space-h,
+  .react-flow.tt-map-insert-space-h .react-flow__pane,
+  .react-flow.tt-map-insert-space-h .react-flow__node {
+    cursor: col-resize;
+  }
+
   /* Board chrome: never select pane / overlay text on long-press (iOS callout) */
   .react-flow__pane,
   .react-flow__renderer,
@@ -1694,33 +1711,13 @@ span[data-added="true"] {
   .dark [data-tt-property-header].tt-block-highlight {
     background-color: rgba(59, 130, 246, 0.22);
   }
-  /* Top property strip — horizontal scroll when icons overflow the frame */
-  [data-tt-property-scroll] {
-    position: relative;
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior-x: contain;
-    touch-action: pan-x;
+  /* Top property strip — wraps inside the frame (no horizontal scroll / …) */
+  [data-tt-property-band] {
+    min-width: 0;
+    max-width: 100%;
   }
-  [data-tt-property-scroll].tt-property-strip-overflow:not(.tt-property-strip-at-end)::after {
-    content: '…';
-    position: absolute;
-    right: 0;
-    top: 0;
-    bottom: 0;
-    z-index: 1;
-    display: flex;
-    align-items: center;
-    padding-left: 1.25rem;
-    padding-right: 2px;
-    font-size: 0.75rem;
-    line-height: 1;
-    color: rgb(156 163 175);
-    pointer-events: none;
-    background: linear-gradient(to left, rgb(255 255 255) 55%, rgb(255 255 255 / 0.95) 75%, transparent);
-  }
-  .dark [data-tt-property-scroll].tt-property-strip-overflow:not(.tt-property-strip-at-end)::after {
-    color: rgb(156 163 175);
-    background: linear-gradient(to left, rgb(31 31 31) 55%, rgb(31 31 31 / 0.95) 75%, transparent);
+  [data-tt-property-header] {
+    width: 100%;
   }
   /* Connections bottom strip — strip wash only when ⋮⋮-armed (hover = mark only) */
   [data-tt-connections-header].tt-block-highlight {
@@ -1944,19 +1941,36 @@ span[data-added="true"] {
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
   }
-  /* Soft bottom edge when capped table has more rows below */
-  .ProseMirror .tt-notion-db-bottom-fade {
+  /* Capped DB table — … at top/bottom when not fully scrolled (matches property strip) */
+  .ProseMirror .tt-notion-db-scroll-wrap.tt-notion-db-v-overflow:not(.tt-notion-db-at-top)::before,
+  .ProseMirror .tt-notion-db-scroll-wrap.tt-notion-db-v-overflow:not(.tt-notion-db-at-bottom)::after {
+    content: '…';
     position: absolute;
     left: 0;
     right: 0;
-    bottom: 0;
-    height: 28px;
     z-index: 3;
-    background: linear-gradient(to bottom, transparent, rgba(249, 250, 251, 0.98));
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    line-height: 1;
+    color: rgb(156 163 175);
     pointer-events: none;
   }
-  .dark .ProseMirror .tt-notion-db-bottom-fade {
-    background: linear-gradient(to bottom, transparent, rgba(15, 15, 15, 0.98));
+  .ProseMirror .tt-notion-db-scroll-wrap.tt-notion-db-v-overflow:not(.tt-notion-db-at-top)::before {
+    top: 0;
+    background: linear-gradient(to bottom, rgba(249, 250, 251, 0.98) 55%, transparent);
+  }
+  .ProseMirror .tt-notion-db-scroll-wrap.tt-notion-db-v-overflow:not(.tt-notion-db-at-bottom)::after {
+    bottom: 0;
+    background: linear-gradient(to top, rgba(249, 250, 251, 0.98) 55%, transparent);
+  }
+  .dark .ProseMirror .tt-notion-db-scroll-wrap.tt-notion-db-v-overflow:not(.tt-notion-db-at-top)::before {
+    background: linear-gradient(to bottom, rgba(15, 15, 15, 0.98) 55%, transparent);
+  }
+  .dark .ProseMirror .tt-notion-db-scroll-wrap.tt-notion-db-v-overflow:not(.tt-notion-db-at-bottom)::after {
+    background: linear-gradient(to top, rgba(15, 15, 15, 0.98) 55%, transparent);
   }
   /* During pinch: don’t let the table steal touches for scroll (viewport still transforms live) */
   .react-flow.tt-board-navigating .ProseMirror .tt-notion-db {
@@ -2226,6 +2240,8 @@ span[data-added="true"] {
   }
   .ProseMirror .tt-property-block-input {
     width: 100%;
+    min-width: 0; /* Flex child must be allowed to shrink to the hug cap */
+    text-overflow: ellipsis; /* Long values read as truncated, not hard-clipped */
     border: none;
     background: transparent;
     outline: none;

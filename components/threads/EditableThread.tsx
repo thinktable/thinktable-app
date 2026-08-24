@@ -26,6 +26,13 @@ import {
   connectionPointOnNode,
   sideFromHandleId,
 } from './connection-point-on-node' // Frame-edge attach from node box
+import { readOnThread } from '@/lib/threads/on-thread-frame'
+import { nodeFlowSize } from '@/components/use-block-group-drag'
+import {
+  buildThreadPathGeometry,
+  threadGapsForFrames,
+  threadStrokePaths,
+} from '@/lib/threads/thread-path-geometry'
 
 /** Persistable thread payload stored in panel_edges.metadata + edge.data. */
 export type ThreadEdgeData = {
@@ -191,6 +198,41 @@ export function EditableThread({
     ? smoothBezier.path
     : getPath({ points: routePoints, algorithm, sides })
 
+  // Frames on this thread — break the stroke where they sit (FigJam-style insert on thread).
+  const attachedFrames = useStore((s) => {
+    const out: Array<{ t: number; width: number; height: number }> = []
+    for (const n of s.nodeInternals.values()) {
+      if (n.type !== 'chatPanel') continue
+      const anchor = readOnThread(n.data?.promptMessage?.metadata as Record<string, unknown>)
+      if (!anchor) continue
+      if (anchor.sourceMessageId !== (sourceNode?.data?.promptMessage?.id as string)) continue
+      if (anchor.targetMessageId !== (targetNode?.data?.promptMessage?.id as string)) continue
+      const size = nodeFlowSize(n)
+      out.push({ t: anchor.t, width: size.width, height: size.height })
+    }
+    return out
+  })
+  const pathGeom =
+    typeof document !== 'undefined'
+      ? buildThreadPathGeometry({
+          edge: { id, source, target, data, sourceHandle: sourceHandleId, targetHandle: targetHandleId },
+          sourceNode,
+          targetNode,
+          sourceX,
+          sourceY,
+          targetX,
+          targetY,
+          sourcePosition,
+          targetPosition,
+          sourceHandleId,
+          targetHandleId,
+        })
+      : null
+  const strokePaths =
+    pathGeom && attachedFrames.length > 0
+      ? threadStrokePaths(pathGeom, threadGapsForFrames(pathGeom, attachedFrames))
+      : [path]
+
   const stroke =
     selected
       ? THREAD_SELECTED_COLOR // Selection always reads Miro blue
@@ -198,21 +240,26 @@ export function EditableThread({
   const baseWidth = selected ? Math.max(strokeWidth, strokeWidth + 0.5) : strokeWidth // Selected reads slightly heavier
   const dash = 5 * comfort // Dash/gap tracks stroke comfort (thins when zoomed out)
 
+  const edgeStyle = {
+    ...style,
+    strokeWidth: baseWidth * comfort, // Comfort curve — not full 1/zoom (that looked fat zoomed out)
+    stroke,
+    strokeDasharray: dotted ? `${dash},${dash}` : undefined,
+  }
+
   return (
     <>
-      <BaseEdge
-        id={id}
-        path={path}
-        markerStart={markerStart}
-        markerEnd={markerEnd}
-        interactionWidth={20 * invZoom} // Hit band stays ~20px on screen at any zoom
-        style={{
-          ...style,
-          strokeWidth: baseWidth * comfort, // Comfort curve — not full 1/zoom (that looked fat zoomed out)
-          stroke,
-          strokeDasharray: dotted ? `${dash},${dash}` : undefined,
-        }}
-      />
+      {strokePaths.map((strokePath, i) => (
+        <BaseEdge
+          key={i === 0 ? id : `${id}-seg-${i}`}
+          id={i === 0 ? id : `${id}-seg-${i}`}
+          path={strokePath}
+          markerStart={i === 0 ? markerStart : undefined}
+          markerEnd={i === strokePaths.length - 1 ? markerEnd : undefined}
+          interactionWidth={20 * invZoom} // Hit band stays ~20px on screen at any zoom
+          style={edgeStyle}
+        />
+      ))}
 
       {shouldShowPoints &&
         !isConnecting &&

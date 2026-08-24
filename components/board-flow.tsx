@@ -63,6 +63,7 @@ import {
 } from './board-actions-menu' // Empty-board right-click menu
 import { createLongPressController } from '@/lib/long-press' // Phone long-press → context menus
 import { attachPhoneSelectMarquee } from '@/lib/phone-select-marquee' // Touch select-tool marquee (RF Pane is mouse-only)
+import { attachFreehandLassoSelect } from '@/lib/freehand-lasso-select' // Draw bar Lasso — freehand trail, auto-closed
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useRef, useMemo, useState, useCallback } from 'react'
@@ -136,6 +137,8 @@ import { NavZoomControl } from './nav-zoom-control' // Zoom % lives in bottom na
 import { NavRotateControl } from './nav-rotate-control' // Board rotate icon — right of zoom %
 import { BoardRotationProvider, useBoardRotation } from './board-rotation-context' // Two-finger twist + nav camera heading
 import { applyBoardRotationToPositionChanges, flowToPane, paneToFlow, viewportKeepingPanePoint } from '@/lib/board-rotation' // Camera-aware pane ↔ flow
+import { useInsertSpaceDrag, type InsertSpaceAxis } from './use-insert-space-drag' // Draw bar insert-space drag
+import { InsertSpaceOverlay } from './insert-space-overlay' // Guide line + inserted band preview
 import { notionDbConsumeWheelScroll } from '@/lib/notion/db-table-scroll'
 import { propertyStripConsumeWheelScroll } from '@/lib/blocks/property-strip-scroll'
 import { LeftVerticalMenu } from './left-vertical-menu'
@@ -147,7 +150,7 @@ import { useHelperLines } from './helper-lines/useHelperLines' // Helper lines h
 import { useUserPreference } from '@/lib/hooks/use-user-preferences'
 // Dynamic layouting hooks for adding child nodes and inserting nodes
 import { useAddChildNode } from './dynamic-layouting/hooks/useAddChildNode'
-import { useInsertNodeBetween } from './dynamic-layouting/hooks/useInsertNodeBetween'
+import { useOnThreadFrames } from './use-on-thread-frames' // Insert frame on thread + slide along path
 import { usePlaceholderManager } from './dynamic-layouting/hooks/usePlaceholderManager'
 // Placeholder node and edge components
 import PlaceholderNode from './dynamic-layouting/PlaceholderNode'
@@ -554,7 +557,6 @@ function BoardFlowInner({
 
   // Dynamic layouting hooks
   const addChildNode = useAddChildNode() // Hook for adding child nodes via context menu
-  const insertNodeBetween = useInsertNodeBetween() // Hook for inserting nodes between edges
   
   // Track when a selected node is being dragged to hide placeholders
   const [isSelectedNodeDragging, setIsSelectedNodeDragging] = useState(false)
@@ -1441,6 +1443,37 @@ function BoardFlowInner({
     isMobileMode && isChatSidebarOpen && !aiChatHasTranscript
       ? 'bg-white dark:bg-[#0f0f0f]'
       : 'bg-gray-50 dark:bg-[#0f0f0f]'
+  // Draw bar Lasso: freehand trail owns left-drag (`lib/freehand-lasso-select`), not RF's rect marquee
+  const lassoArmed = drawTool === 'lasso' && !isDrawing
+  // Draw bar insert-space: armed tool turns plain left-drag into "open a gap" (embed keeps plain pan)
+  const insertSpaceAxis: InsertSpaceAxis | null = embedded
+    ? null
+    : drawTool === 'insert-v'
+      ? 'vertical'
+      : drawTool === 'insert-h'
+        ? 'horizontal'
+        : null
+  const insertSpaceArmed = insertSpaceAxis !== null // Suppresses pan / marquee / node drag / I-bar for the gesture
+  // RF rect marquee — sticky Select tool only; Lasso replaces it while armed
+  const marqueeArmed = !isDrawing && !lassoArmed && !insertSpaceArmed && mapPointerTool === 'select'
+  // Who owns plain left-drag; Shift flips to pan for one gesture in both select flavors
+  const panOnDragSetting: boolean | number[] = embedded
+    ? true
+    : insertSpaceArmed || isDrawing
+      ? false // Insert-space gap drag / freehand-ink strokes own left-drag
+      : lassoArmed
+        ? isMobileMode
+          ? false // Phone: RF [1,2] only filters mousedown — touchstart still pans
+          : shiftHeld
+            ? true // Lasso + Shift: left-drag pans
+            : [1, 2] // Left drag draws the lasso; middle/right still pan
+        : !marqueeArmed
+          ? true // Pan tool: plain drag pans; Shift+drag marquees via selectionKeyCode
+          : isMobileMode
+            ? false // Phone: pointer marquee instead of RF's mouse-only rect
+            : shiftHeld
+              ? true // Select tool + Shift: left-drag pans (inverse of pan+Shift)
+              : [1, 2] // Desktop select: middle/right still pan; left drag = selection box
   const originalPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map()) // Store original positions for Linear mode
   const isLinearModeRef = useRef(false) // Track if we're currently in Linear mode
 
@@ -2234,6 +2267,32 @@ function BoardFlowInner({
     refetchMessages: () => {
       void refetchMessages()
     },
+  })
+
+  const {
+    insertFrameOnThread,
+    onNodeDragStart: onOnThreadDragStart,
+    onNodeDrag: onOnThreadDrag,
+    onNodeDragStop: onOnThreadDragStop,
+    detachFramesOnDeletedEdge,
+    isOnThreadNode,
+  } = useOnThreadFrames({
+    conversationId,
+    edges,
+    nodes,
+    setNodes,
+    getEdge: (id) => reactFlowInstance.getEdge(id),
+    getNodes: () => reactFlowInstance.getNodes(),
+    queryClient,
+    takeSnapshot,
+  })
+
+  const { ui: insertSpaceUi } = useInsertSpaceDrag({
+    axis: insertSpaceAxis,
+    conversationId,
+    canEdit,
+    setNodes,
+    onBeforeShift: takeSnapshot, // One undo step per gap
   })
 
   // Signal host as soon as RF can pan/zoom — don’t wait on messages (that delayed the veil)
@@ -5916,11 +5975,19 @@ function BoardFlowInner({
 
   // Phone select tool: RF Pane marquee is mouse-only; drive the same store rect from touch/pen
   useEffect(() => {
-    if (embedded || !isMobileMode || isDrawing || mapPointerTool !== 'select') return // Pan tool / desktop / draw keep RF defaults
+    if (embedded || !isMobileMode || !marqueeArmed) return // Pan tool / desktop / ink tools keep RF defaults
     const root = boardRootRef.current
     if (!root) return
     return attachPhoneSelectMarquee(root, rfStore) // Pointer marquee → userSelectionRect + frame select
-  }, [embedded, isMobileMode, isDrawing, mapPointerTool, rfStore])
+  }, [embedded, isMobileMode, marqueeArmed, rfStore])
+
+  // Draw bar Lasso: freehand trail (mouse + touch), auto-closed start→cursor with a straight line
+  useEffect(() => {
+    if (embedded || !lassoArmed) return
+    const root = boardRootRef.current
+    if (!root) return
+    return attachFreehandLassoSelect(root, rfStore) // Owns left-drag while armed (RF marquee is off)
+  }, [embedded, lassoArmed, rfStore])
 
   // Spawn a frame at a flow position (board Add frame / I-bar menu Turn into). Optimistic RF node first.
   const createBlockAtFlowPosition = useCallback(async (
@@ -7611,6 +7678,7 @@ function BoardFlowInner({
         setClickedEdge(edgeToDelete) // Re-open popup
       } else {
         console.log('✅ Deleted edge from database', data)
+        void detachFramesOnDeletedEdge(sourceMessageId, targetMessageId)
         // Refetch edges to update savedEdges and prevent edge loading useEffect from re-adding it
         refetchEdges()
       }
@@ -7620,7 +7688,7 @@ function BoardFlowInner({
       setEdges((eds) => [...eds, edgeToDelete])
       setClickedEdge(edgeToDelete) // Re-open popup
     }
-  }, [clickedEdge, conversationId, nodes, setEdges, refetchEdges])
+  }, [clickedEdge, conversationId, nodes, setEdges, refetchEdges, detachFramesOnDeletedEdge])
 
   // Handle toggle edge style (dotted/solid) for selected edge
   const handleToggleEdgeStyle = useCallback(() => {
@@ -7694,7 +7762,8 @@ function BoardFlowInner({
           handleDeleteEdge()
           return
         case 'insertBetween':
-          insertNodeBetween(clickedEdge.id)
+          if (isLocked) return
+          void insertFrameOnThread(clickedEdge.id)
           setClickedEdge(null)
           return
         case 'collapse':
@@ -7756,10 +7825,11 @@ function BoardFlowInner({
     [
       clickedEdge,
       handleDeleteEdge,
-      insertNodeBetween,
+      insertFrameOnThread,
       handleCollapseTarget,
       handleToggleEdgeStyle,
       patchClickedThreadData,
+      isLocked,
     ]
   )
 
@@ -8672,6 +8742,7 @@ function BoardFlowInner({
           }
 
           onFrameNestStackDragStart(event, node) // Snapshot lock-group origins / reset unstack
+          onOnThreadDragStart(event, node)
         }}
         onNodeDrag={(event, node) => {
           // First real move — abandon long-press so drag owns the gesture
@@ -8706,7 +8777,11 @@ function BoardFlowInner({
           }
 
           onBlockGroupNodeDrag(event, node) // Highlight group drop target while dragging a block
-          onFrameNestStackDrag(event, node) // Edge-snap preview / magnet
+          if (!isOnThreadNode(node)) {
+            onFrameNestStackDrag(event, node) // Edge-snap preview / magnet
+          } else {
+            onOnThreadDrag(event, node) // Slide along the thread path
+          }
         }}
         onNodeDragStop={(event, node) => {
           // Clear drag state when drag stops
@@ -8717,6 +8792,7 @@ function BoardFlowInner({
           }
           void onBlockGroupNodeDragStop(event, node) // Attach to group / detach onto the page + persist
           void onFrameNestStackDragStop(event, node) // Link snap pair → stack line (no hide)
+          void onOnThreadDragStop(event, node)
 
           // Only skip click-select when the frame actually moved (threshold-0 still fires drag start/stop on tap)
           const origin = frameDragOriginRef.current
@@ -9055,6 +9131,7 @@ function BoardFlowInner({
         onPaneClick={(event) => {
           // Long-press already opened the board menu — don't place I-bar
           if (longPressRef.current?.consumeFired()) return
+          if (insertSpaceArmed) return // Insert-space owns board presses; no caret / frame create
           // Empty host pane click drops nested preview style-focus
           if (!embedded && previewFocus?.focusedBoardId) {
             previewFocus.clearPreviewFocus()
@@ -9119,10 +9196,9 @@ function BoardFlowInner({
         className={cn(
           'h-full w-full bg-gray-50 dark:bg-[#0f0f0f]',
           isThreadConnecting && 'tt-thread-connecting', // Invisible edge points stay snappable while dragging a thread
-          !embedded &&
-            !isDrawing &&
-            (mapPointerTool === 'pan' || (mapPointerTool === 'select' && shiftHeld)) &&
-            'tt-map-pan-tool', // Grab cursor while pan tool is active or Shift-pan in select
+          !embedded && panOnDragSetting === true && 'tt-map-pan-tool', // Grab cursor whenever plain left-drag pans
+          !embedded && lassoArmed && panOnDragSetting !== true && 'tt-map-lasso-tool', // Crosshair while the lasso owns left-drag
+          insertSpaceArmed && (insertSpaceAxis === 'vertical' ? 'tt-map-insert-space-v' : 'tt-map-insert-space-h'), // Row/col-resize cursor while a gap can be dragged
           boardLoadPhase === 'reveal' && 'tt-board-load-reveal' // Crossfade placeholder shells with real contents
         )}
         onInit={(instance) => {
@@ -9135,22 +9211,10 @@ function BoardFlowInner({
           setReactFlowInstance(instance)
           if (embedded) setEmbedFlowReady(true) // Host can drop loading veil once messages also resolve
         }}
-        // Sticky tool owns plain left-drag; Shift flips for one gesture (select↔pan). Embed always pans.
-        panOnDrag={
-          embedded
-            ? true
-            : isDrawing
-              ? false
-              : mapPointerTool === 'pan'
-                ? true // Pan tool: plain drag pans; Shift+drag marquees via selectionKeyCode
-                : isMobileMode
-                  ? false // Phone: RF [1,2] only filters mousedown — touchstart still pans
-                  : shiftHeld
-                    ? true // Select tool + Shift: left-drag pans (inverse of pan+Shift)
-                    : [1, 2] // Desktop select: middle/right still pan; left drag = selection box
-        }
+        // Sticky tool / Draw Lasso owns plain left-drag; Shift flips for one gesture (marquee↔pan). Embed always pans.
+        panOnDrag={panOnDragSetting}
         selectionOnDrag={
-          !embedded && !isDrawing && mapPointerTool === 'select' && !shiftHeld // Shift held → pan, not marquee
+          !embedded && marqueeArmed && !shiftHeld // Shift held → pan, not marquee
         }
         zoomOnScroll={embedded ? true : !isScrollMode && !isDrawing}
         zoomOnPinch={embedded ? true : !isDrawing} // Pinch always zooms; Scroll nav only changes wheel pan vs wheel zoom
@@ -9162,14 +9226,14 @@ function BoardFlowInner({
         selectNodesOnDrag={embedded ? false : !isDrawing} // Preview: drag starts pan, not selection box
         multiSelectionKeyCode={MULTI_SELECT_KEYS}
         selectionKeyCode={
-          embedded || isDrawing || mapPointerTool === 'select'
-            ? null // Select tool: plain drag marquees; Shift flips to pan above
+          embedded || isDrawing || lassoArmed || marqueeArmed
+            ? null // Select tool / Lasso: plain drag selects; Shift flips to pan above
             : SELECTION_BOX_KEYS // Pan tool: Shift+drag draws a selection box
         }
         // Backspace/Delete remove selected frames/threads. TipTap editors use class `nokey` so RF
         // skips delete while typing (isInputDOMNode misses <p>/<br> without contenteditable).
         deleteKeyCode={canEdit ? DELETE_KEYS : null}
-        nodesDraggable={canEdit}
+        nodesDraggable={canEdit && !insertSpaceArmed} // Armed insert-space: pressing a frame opens a gap, not a move
         nodesConnectable={canEdit}
         onMoveStart={(_event, viewport) => {
           // One-finger pan wasn’t covered by pinch-only freeze — fast pan over DB OOMed Safari
@@ -9371,6 +9435,9 @@ function BoardFlowInner({
         
         {/* Helper lines for snap-to-grid functionality */}
         <HelperLines />
+
+        {/* Draw bar insert-space: guide line + the gap being opened */}
+        <InsertSpaceOverlay ui={insertSpaceUi} />
 
       </ReactFlow>
     {/* Minimap + Free nav + brand — outside RF, absolute on BoardFlow root */}

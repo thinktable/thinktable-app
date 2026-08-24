@@ -112,15 +112,18 @@ function layoutForPropertyHeader(
   if (!header) return null // Strip not mounted
   const fr = header.getBoundingClientRect()
   if (fr.height <= 0) return null
-  const mid = screenToLocal(container, (fr.left + fr.right) / 2, (fr.top + fr.bottom) / 2)
-  const firstLineH = Math.min(Math.max(14, fr.height), 28) // Same band as a one-line block
+  const topLocal = screenToLocal(container, (fr.left + fr.right) / 2, fr.top)
+  const bottomLocal = screenToLocal(container, (fr.left + fr.right) / 2, fr.bottom)
+  const bandH = Math.max(14, bottomLocal.y - topLocal.y)
+  const lineCenter = (topLocal.y + bottomLocal.y) / 2
+  const firstLineH = Math.min(bandH, 28)
   return {
-    top: mid.y - firstLineH / 2,
-    height: firstLineH,
+    top: topLocal.y,
+    height: bandH,
     firstLineH,
-    lineCenter: mid.y,
-    blockTop: mid.y - firstLineH / 2, // Icon strip is a single band — no wrapped-line box
-    blockBottom: mid.y + firstLineH / 2,
+    lineCenter,
+    blockTop: topLocal.y,
+    blockBottom: bottomLocal.y,
     block, // Range covering all property cells so drag/menu act on the list
     propertyHeader: true,
     insertFrom, // Hairline above the first property cell
