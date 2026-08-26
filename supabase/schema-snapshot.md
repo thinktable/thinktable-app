@@ -1,13 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-26T16:43:07Z`
+- Snapped at: `2026-08-26T17:07:15Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260826170715_brand_mark_board_fill_theme_strokes.sql`.
+- Brand mark: board-fill disc + grey border; default T/dot **black (light) / white (dark)** (`components/personalize-ai-modal.tsx` `ThinktableBrandMark`).
+- Map chat toggle + chat sidebar share the same mark styling (`discVariant` board default).
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Infinite board zoom/perf and viewport mount
 
 - No DDL. Marker `20260826164307_board_infinite_zoom_perf_viewport_mount.sql`.
 - Infinite board: soft bounds + dynamic zoom range (`lib/board-extent.ts`); spatial viewport mount (`lib/board-spatial-index.ts`, `components/frame-viewport-mount-context.tsx`).

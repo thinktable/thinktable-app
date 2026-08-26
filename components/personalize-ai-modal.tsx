@@ -78,19 +78,28 @@ function strokeDefaultDrawnMark(ctx: CanvasRenderingContext2D) {
 }
 
 /** Default AI mark — same marker strokes the canvas seeds with */
-function DefaultDrawnLogoSvg({ size, className }: { size: number; className?: string }) {
+function DefaultDrawnLogoSvg({
+  size,
+  className,
+  onBoard = false,
+}: {
+  size: number
+  className?: string
+  onBoard?: boolean // Map chat toggle: black/white strokes on board fill
+}) {
+  const stroke = onBoard ? 'currentColor' : DRAW_WHITE
   return (
     <svg
       viewBox={`0 0 ${CANVAS_SIZE} ${CANVAS_SIZE}`}
       width={size}
       height={size}
-      className={className}
+      className={cn(onBoard && 'text-gray-900 dark:text-white', className)}
       role="img"
       aria-label="Thinktable"
     >
       <g
         fill="none"
-        stroke={DRAW_WHITE}
+        stroke={stroke}
         strokeLinecap="round"
         strokeLinejoin="round"
         strokeWidth={DRAWN_T_WIDTH}
@@ -99,7 +108,7 @@ function DefaultDrawnLogoSvg({ size, className }: { size: number; className?: st
         <path d={DRAWN_T_STEM} />
         <path d={DRAWN_T_FOOT} />
       </g>
-      <path d={DRAWN_DOT} fill={DRAW_WHITE} />
+      <path d={DRAWN_DOT} fill={stroke} />
     </svg>
   )
 }
@@ -119,6 +128,8 @@ type ThinktableBrandMarkProps = {
   drawingUrl?: string | null // Saved composite PNG (solid circle + white strokes)
   size?: number
   className?: string
+  /** Board fill + theme strokes (default); brand = legacy grey disc for personalize canvas */
+  discVariant?: 'brand' | 'board'
 }
 
 /**
@@ -130,18 +141,25 @@ export function ThinktableBrandMark({
   drawingUrl = null,
   size = 56,
   className,
+  discVariant = 'board',
 }: ThinktableBrandMarkProps) {
   const badgeSize = Math.max(14, Math.round(size * 0.34)) // Scales with logo
+  const onBoard = discVariant === 'board'
 
   return (
     <div
       className={cn('relative flex-shrink-0', className)}
       style={{ width: size, height: size }}
     >
-      {/* Logo disc — clipped circle + border matching grey button icons */}
+      {/* Logo disc — board fill + border by default; legacy grey on personalize canvas */}
       <div
-        className="h-full w-full overflow-hidden rounded-full border-[1.5px] border-gray-500 dark:border-gray-400"
-        style={{ backgroundColor: LOGO_CIRCLE_COLOR }}
+        className={cn(
+          'h-full w-full overflow-hidden rounded-full border-[1.5px]',
+          onBoard
+            ? 'bg-gray-50 dark:bg-[#0f0f0f] border-gray-500 dark:border-gray-400'
+            : 'border-gray-500 dark:border-gray-400'
+        )}
+        style={onBoard ? undefined : { backgroundColor: LOGO_CIRCLE_COLOR }}
       >
         {drawingUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -157,6 +175,7 @@ export function ThinktableBrandMark({
           <DefaultDrawnLogoSvg
             size={size}
             className="h-full w-full"
+            onBoard={onBoard}
           />
         )}
       </div>
