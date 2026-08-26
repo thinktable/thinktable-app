@@ -1,13 +1,22 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-24T15:16:43Z`
+- Snapped at: `2026-08-26T16:43:07Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260826164307_board_infinite_zoom_perf_viewport_mount.sql`.
+- Infinite board: soft bounds + dynamic zoom range (`lib/board-extent.ts`); spatial viewport mount (`lib/board-spatial-index.ts`, `components/frame-viewport-mount-context.tsx`).
+- Zoom band **5%–200%** via `clampBoardZoom`; custom pinch/wheel/Safari paths honor limits (not hardcoded 0.1/2).
+- Frame drag perf: `lib/frame-dragging.ts`, `lib/board-navigating.ts`; skip O(n) effects mid-drag; thread/helper-line store equality; semantic zoom below 40%.
+- Image blocks: crop menu/view (`components/image-block-menu.tsx`, `lib/tiptap/image-block-crop.ts`).
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Menu surface, AI skills, frame stack line
 
 - No DDL. Marker `20260824151643_menu_surface_ai_skills_frame_stack_line.sql`.
 - Menu surfaces: `.tt-menu-surface` translucent blur on frame/block/board/thread menus + flyouts (`globals.css`; menu components).

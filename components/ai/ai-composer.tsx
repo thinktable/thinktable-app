@@ -320,7 +320,23 @@ export function AiComposer({
 
   // Subscribe to BoardFlow / TipTap selection → refresh live context pills
   useEffect(() => {
-    const sync = () => setLivePills(getAiLiveContextPills())
+    // Bail on identical pills — the bridge fires for any board selection/viewport publish, and a
+    // fresh array every notify re-runs the pill effects below (update-depth loop).
+    const sync = () =>
+      setLivePills((prev) => {
+        const next = getAiLiveContextPills()
+        const same =
+          next.length === prev.length &&
+          next.every(
+            (p, i) =>
+              p.id === prev[i].id &&
+              p.kind === prev[i].kind &&
+              p.label === prev[i].label &&
+              p.frameId === prev[i].frameId &&
+              p.preview === prev[i].preview
+          )
+        return same ? prev : next
+      })
     sync()
     return subscribeAiSelection(sync)
   }, [])

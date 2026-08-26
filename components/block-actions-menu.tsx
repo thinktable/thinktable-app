@@ -945,7 +945,7 @@ export function BlockActionsMenu({
         {menuHeader || (showFrameShape ? 'Frame' : blockTypeLabel(currentBlockType))}
       </div>
 
-      <div data-tt-menu-body className="flex flex-col gap-0.5 overflow-y-auto px-0.5 pb-0.5">
+      <div data-tt-menu-body className="flex min-h-0 flex-col gap-0.5 overflow-y-auto px-0.5 pb-0.5">
         {rows.length === 0 && turnIntoMatches.length === 0 && propertyMatches.length === 0 && (
           <div className="px-2 py-2 text-xs text-gray-400">No matching actions</div>
         )}
@@ -1018,7 +1018,7 @@ export function BlockActionsMenu({
                 onAction(row.id)
               }}
               className={cn(
-                'justify-start text-sm h-8 px-2 font-normal',
+                'h-8 shrink-0 justify-start px-2 text-sm font-normal',
                 row.danger && 'text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950',
                 (isTurnIntoOpen ||
                   isShapeOpen ||

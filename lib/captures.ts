@@ -207,18 +207,31 @@ export function nextPresentationName(existing: BoardPresentation[]): string {
 
 type QueryDataGetter = (key: unknown[]) => unknown // react-query getQueryData
 
+/** Board messages cache row used when scoping capture text. */
+type CaptureMessageRow = { id?: string; content?: string }
+
+/** Read the board's frame messages from react-query. */
+function boardMessagesForCapture(getQueryData: QueryDataGetter, boardId: string): CaptureMessageRow[] {
+  return (
+    (getQueryData(['messages-for-panels', boardId, 'full']) as CaptureMessageRow[] | undefined) ||
+    (getQueryData(['messages-for-panels', boardId]) as CaptureMessageRow[] | undefined) ||
+    []
+  )
+}
+
 /** Gather path + frame words + viewport for a new capture of the current view. */
 export function buildCaptureInput(
   getQueryData: QueryDataGetter,
   boardId: string,
-  viewport: { x: number; y: number; zoom: number }
+  viewport: { x: number; y: number; zoom: number },
+  messageIds?: string[]
 ): Omit<BoardCapture, 'id' | 'createdAt'> {
   const boards = (getQueryData(['path-board-menu']) as CapturePathBoard[] | undefined) || []
   const boardPath = pathLabelForBoard(boardId, boards)
-  const msgs =
-    (getQueryData(['messages-for-panels', boardId, 'full']) as Array<{ content?: string }> | undefined) ||
-    (getQueryData(['messages-for-panels', boardId]) as Array<{ content?: string }> | undefined) ||
-    []
+  const idSet = messageIds?.length ? new Set(messageIds) : null
+  const msgs = boardMessagesForCapture(getQueryData, boardId).filter((m) =>
+    idSet ? Boolean(m.id && idSet.has(m.id)) : true
+  )
   const text = msgs
     .map((m) => htmlToPlain(m.content))
     .filter((t) => t.length > 0)
@@ -228,15 +241,18 @@ export function buildCaptureInput(
 
 const VIEW_JPEG_MAX_W = 480 // Expanded-preview width; mini uses the same file via CSS
 
-/** JPEG of the visible board (current camera), scaled for storage. */
-export async function captureBoardViewImage(): Promise<string | undefined> {
+type FlowClip = { x: number; y: number; width: number; height: number }
+
+/** Shared RF pane snapshot — optional clip crops to selected-frame screen bounds. */
+async function captureFlowPaneImage(clip?: FlowClip): Promise<string | undefined> {
   if (typeof document === 'undefined') return undefined
   const el = document.querySelector('.react-flow') as HTMLElement | null // Main board pane (chrome sits outside RF)
   if (!el || el.clientWidth < 8 || el.clientHeight < 8) return undefined
+  const w = clip?.width ?? el.clientWidth
+  const h = clip?.height ?? el.clientHeight
+  if (w < 8 || h < 8) return undefined
   try {
     const { toJpeg } = await import('html-to-image') // RF-recommended DOM snapshot
-    const w = el.clientWidth
-    const h = el.clientHeight
     const scale = Math.min(1, VIEW_JPEG_MAX_W / w)
     const dataUrl = await toJpeg(el, {
       quality: 0.62,
@@ -245,10 +261,12 @@ export async function captureBoardViewImage(): Promise<string | undefined> {
       width: Math.round(w * scale),
       height: Math.round(h * scale),
       style: {
-        transform: `scale(${scale})`,
+        transform: clip
+          ? `translate(${-clip.x}px, ${-clip.y}px) scale(${scale})`
+          : `scale(${scale})`,
         transformOrigin: 'top left',
-        width: `${w}px`,
-        height: `${h}px`,
+        width: `${el.clientWidth}px`,
+        height: `${el.clientHeight}px`,
       },
       filter: (node) => {
         if (!(node instanceof HTMLElement)) return true
@@ -267,6 +285,45 @@ export async function captureBoardViewImage(): Promise<string | undefined> {
   }
 }
 
+/** JPEG of the visible board (current camera), scaled for storage. */
+export async function captureBoardViewImage(): Promise<string | undefined> {
+  return captureFlowPaneImage()
+}
+
+/** Union screen rect of `.react-flow__node.selected` inside the RF pane (flow coords). */
+function selectedFrameClipRect(pad = 16): FlowClip | undefined {
+  const el = document.querySelector('.react-flow') as HTMLElement | null
+  const nodes = document.querySelectorAll('.react-flow__node.selected')
+  if (!el || nodes.length === 0) return undefined
+  const elRect = el.getBoundingClientRect()
+  let left = Infinity
+  let top = Infinity
+  let right = -Infinity
+  let bottom = -Infinity
+  nodes.forEach((node) => {
+    const r = (node as HTMLElement).getBoundingClientRect()
+    if (r.width < 1 || r.height < 1) return
+    left = Math.min(left, r.left)
+    top = Math.min(top, r.top)
+    right = Math.max(right, r.right)
+    bottom = Math.max(bottom, r.bottom)
+  })
+  if (!Number.isFinite(left)) return undefined
+  const x = Math.max(0, Math.floor(left - elRect.left - pad))
+  const y = Math.max(0, Math.floor(top - elRect.top - pad))
+  const width = Math.min(el.clientWidth - x, Math.ceil(right - left + pad * 2))
+  const height = Math.min(el.clientHeight - y, Math.ceil(bottom - top + pad * 2))
+  if (width < 8 || height < 8) return undefined
+  return { x, y, width, height }
+}
+
+/** JPEG cropped to the current RF frame selection. */
+export async function captureBoardSelectionImage(): Promise<string | undefined> {
+  const clip = selectedFrameClipRect()
+  if (!clip) return undefined
+  return captureFlowPaneImage(clip)
+}
+
 /** Build + JPEG-snapshot the current view and append it to the list. */
 export async function takeBoardCapture(
   getQueryData: QueryDataGetter,
@@ -275,6 +332,18 @@ export async function takeBoardCapture(
 ): Promise<BoardCapture> {
   const input = buildCaptureInput(getQueryData, boardId, viewport)
   const imageDataUrl = await captureBoardViewImage()
+  return addCapture({ ...input, imageDataUrl })
+}
+
+/** Build + JPEG-snapshot selected frames and append it to the list. */
+export async function takeBoardCaptureSelected(
+  getQueryData: QueryDataGetter,
+  boardId: string,
+  viewport: { x: number; y: number; zoom: number },
+  messageIds: string[]
+): Promise<BoardCapture> {
+  const input = buildCaptureInput(getQueryData, boardId, viewport, messageIds)
+  const imageDataUrl = await captureBoardSelectionImage()
   return addCapture({ ...input, imageDataUrl })
 }
 

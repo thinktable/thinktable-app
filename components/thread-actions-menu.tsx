@@ -259,7 +259,7 @@ export function ThreadActionsMenu({
     >
       <div className="px-2.5 pt-1.5 pb-1 text-xs text-gray-500 dark:text-gray-400">Thread</div>
 
-      <div data-tt-menu-body className="flex flex-col gap-0.5 overflow-y-auto px-0.5 pb-0.5">
+      <div data-tt-menu-body className="flex min-h-0 flex-col gap-0.5 overflow-y-auto px-0.5 pb-0.5">
         {rows.map((row, index) => {
           if (row.kind === 'separator') {
             return (
@@ -304,7 +304,7 @@ export function ThreadActionsMenu({
                 onAction(row.id)
               }}
               className={cn(
-                'justify-start text-sm h-8 px-2 font-normal',
+                'h-8 shrink-0 justify-start px-2 text-sm font-normal',
                 row.danger && 'text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950',
                 row.disabled && 'opacity-40 pointer-events-none',
                 (isArrangeOpen || isInfoOpen || isThicknessOpen) && 'bg-gray-100 dark:bg-[#2a2a2a]'

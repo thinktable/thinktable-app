@@ -46,7 +46,10 @@ export function useHelperLines(enabled: boolean = true) {
     if (lookup && typeof lookup.get === 'function') {
       nodeLookupRef.current = lookup;
     }
-    return lookup;
+    // Return a constant: the ref stays fresh (selector runs on every store tick) while the
+    // host component never re-renders from this subscription. Returning the Map itself
+    // re-rendered BoardFlow on every node position change.
+    return null;
   });
   
   const getInternalNodeFromStore = useCallback(

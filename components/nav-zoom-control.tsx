@@ -2,7 +2,7 @@
 
 // Zoom % control for the bottom nav menu (moved from the top-bar editor toolbar)
 import { useEffect, useRef, useState } from 'react'
-import { useReactFlow } from 'reactflow'
+import { useReactFlow, useStore } from 'reactflow'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -16,6 +16,8 @@ import { cn } from '@/lib/utils'
 
 export function NavZoomControl({ className }: { className?: string }) {
   const reactFlowInstance = useReactFlow() // RF instance for get/set viewport
+  const minZoom = useStore((s) => s.minZoom) // Grows when content needs more zoom-out
+  const maxZoom = useStore((s) => s.maxZoom) // Grows when content needs more zoom-in
   const [zoom, setZoom] = useState(1) // Current zoom (1 = 100%)
   const [isEditingZoom, setIsEditingZoom] = useState(false) // Inline % edit active
   const [zoomEditValue, setZoomEditValue] = useState('100') // Draft string while editing
@@ -53,7 +55,7 @@ export function NavZoomControl({ className }: { className?: string }) {
 
   // Apply zoom centered on the map (same feel as wheel zoom)
   const applyScrubZoom = (rawZoom: number) => {
-    let next = Math.max(0.1, Math.min(2, rawZoom)) // Clamp 10%–200%
+    let next = Math.max(minZoom, Math.min(maxZoom, rawZoom)) // Honor live board zoom range
     if (next >= 0.98 && next <= 1.02) next = 1 // Soft snap to 100%
     reactFlowInstance.zoomTo(next)
     setZoom(next)
@@ -110,7 +112,7 @@ export function NavZoomControl({ className }: { className?: string }) {
     setIsEditingZoom(false)
     const numericValue = parseFloat(zoomEditValue)
     if (!isNaN(numericValue)) {
-      const newZoom = Math.max(0.1, Math.min(2, numericValue / 100)) // Clamp 10%–200%
+      const newZoom = Math.max(minZoom, Math.min(maxZoom, numericValue / 100)) // Honor live board zoom range
       const viewport = reactFlowInstance.getViewport()
       reactFlowInstance.setViewport({ ...viewport, zoom: newZoom })
       setZoom(newZoom)
@@ -297,11 +299,13 @@ export function NavZoomControl({ className }: { className?: string }) {
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => handleZoomChange('fit')}>Fit</DropdownMenuItem>
         <DropdownMenuSeparator />
-        {[0.5, 0.75, 0.9, 1, 1.25, 1.5, 2].map((z) => (
+        {[0.05, 0.25, 0.5, 0.75, 1, 1.5, 2]
+          .filter((z) => z >= minZoom - 1e-6 && z <= maxZoom + 1e-6)
+          .map((z) => (
           <DropdownMenuItem
             key={z}
             onClick={() => handleZoomChange(z)}
-            className={cn(zoom === z && 'bg-gray-100 dark:bg-gray-800')}
+            className={cn(Math.abs(zoom - z) < 0.01 && 'bg-gray-100 dark:bg-gray-800')}
           >
             {Math.round(z * 100)}%
           </DropdownMenuItem>

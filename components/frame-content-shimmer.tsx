@@ -158,3 +158,102 @@ export function patchFrameLayoutEntry(
   }
   writeFrameLayoutCache(conversationId, layout)
 }
+
+/** Outer RF/panel box used while TipTap is deferred (layout cache → metadata → HTML guess). */
+export type DeferredFrameBox = {
+  width: number
+  height: number
+  hasText: boolean
+  barCount: number
+  kind: 'database' | 'rowCard' | 'boardLink' | 'text' | 'empty'
+}
+
+const DEFER_LINE_H = 14 * 1.75 // Match `.prose` line box used by shimmer stubs
+const DEFER_PAD_Y = 8 // contentFit T+B (4+4)
+const DEFER_PAD_X = 12 // contentFit L+R (6+6)
+const DEFER_EMPTY_W = 52 // ⋮⋮ + ~3ch floor
+const DEFER_EMPTY_H = 32
+const DEFER_BOARD_LINK_W = 98 // icon + open pill (unselected — no ⋮⋮ gutter in outer box)
+const DEFER_DB_W = 420
+const DEFER_DB_H = 280
+const DEFER_ROW_CARD_W = 340
+const DEFER_ROW_CARD_H = 200
+
+function deferredContentKind(html: string | undefined | null): DeferredFrameBox['kind'] {
+  const h = html || ''
+  if (/data-type=["']databaseBlock["']/i.test(h)) return 'database'
+  if (/data-type=["']propertyBlock["']/i.test(h)) return 'rowCard'
+  if (/data-type=["']boardLink["']/i.test(h)) return 'boardLink'
+  if (frameHasVisibleText(h)) return 'text'
+  return 'empty'
+}
+
+function estimateDeferredBoxFromHtml(html: string | undefined | null): DeferredFrameBox {
+  const kind = deferredContentKind(html)
+  const hasText = kind === 'text' || kind === 'rowCard'
+  const barCount = hasText ? shimmerBarCountFromHtml(html) : 0
+  if (kind === 'database') {
+    return { width: DEFER_DB_W, height: DEFER_DB_H, hasText: false, barCount: 0, kind }
+  }
+  if (kind === 'rowCard') {
+    const props = (html || '').match(/data-type=["']propertyBlock["']/gi)?.length ?? 2
+    return {
+      width: DEFER_ROW_CARD_W,
+      height: Math.max(DEFER_ROW_CARD_H, DEFER_PAD_Y + props * 28 + 40),
+      hasText: true,
+      barCount: Math.min(Math.max(props, 2), 6),
+      kind,
+    }
+  }
+  if (kind === 'boardLink') {
+    return { width: DEFER_BOARD_LINK_W, height: DEFER_EMPTY_H, hasText: false, barCount: 0, kind }
+  }
+  if (kind === 'text') {
+    const lines = Math.max(barCount, 1)
+    return {
+      width: 280,
+      height: Math.max(DEFER_EMPTY_H, DEFER_PAD_Y + lines * DEFER_LINE_H),
+      hasText: true,
+      barCount: lines,
+      kind,
+    }
+  }
+  return {
+    width: DEFER_EMPTY_W,
+    height: DEFER_EMPTY_H,
+    hasText: false,
+    barCount: 0,
+    kind: 'empty',
+  }
+}
+
+/** Resolve a stable outer box for a deferred frame (cache wins, then saved resize, then HTML). */
+export function resolveDeferredFrameBox(
+  frameId: string,
+  conversationId: string | undefined,
+  html: string | undefined | null,
+  metadata?: Record<string, unknown> | null
+): DeferredFrameBox {
+  const cached = conversationId ? readFrameLayoutCache(conversationId)[frameId] : undefined
+  if (cached?.width && cached?.height && cached.width > 0 && cached.height > 0) {
+    return {
+      width: cached.width,
+      height: cached.height,
+      hasText: cached.hasText ?? frameHasVisibleText(html),
+      barCount: cached.barCount ?? shimmerBarCountFromHtml(html),
+      kind: deferredContentKind(html),
+    }
+  }
+  const dims = metadata?.resizeDimensions as { width?: number; height?: number } | undefined
+  if (dims?.width && dims?.height && dims.width > 0 && dims.height > 0) {
+    const est = estimateDeferredBoxFromHtml(html)
+    return {
+      width: dims.width,
+      height: dims.height,
+      hasText: est.hasText,
+      barCount: est.barCount,
+      kind: est.kind,
+    }
+  }
+  return estimateDeferredBoxFromHtml(html)
+}

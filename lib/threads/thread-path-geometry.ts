@@ -98,6 +98,12 @@ export function geometryForEdge(edge: Edge, nodes: Node[]): ThreadPathGeometry |
   })
 }
 
+// Geometry is a pure function of the path string, but building it costs an SVG element plus
+// getTotalLength(). Threads re-render on every drag/pan tick, so cache by `d`: only the moving
+// thread misses, every other thread on the board is free.
+const GEOM_CACHE_MAX = 512
+const geomCache = new Map<string, ThreadPathGeometry>()
+
 function geometryFromPathD(
   pathD: string,
   fallbackA: XYPosition,
@@ -106,6 +112,24 @@ function geometryFromPathD(
   if (typeof document === 'undefined') {
     return linearFallback(fallbackA, fallbackB)
   }
+  const cached = geomCache.get(pathD)
+  if (cached) return cached
+  const geom = measurePathD(pathD, fallbackA, fallbackB)
+  if (geom.pathD === pathD) {
+    if (geomCache.size >= GEOM_CACHE_MAX) {
+      const oldest = geomCache.keys().next().value // Insertion-ordered — drop the stalest route
+      if (oldest !== undefined) geomCache.delete(oldest)
+    }
+    geomCache.set(pathD, geom)
+  }
+  return geom
+}
+
+function measurePathD(
+  pathD: string,
+  fallbackA: XYPosition,
+  fallbackB: XYPosition
+): ThreadPathGeometry {
   const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path')
   pathEl.setAttribute('d', pathD)
   let length = 0

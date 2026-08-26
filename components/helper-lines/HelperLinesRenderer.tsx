@@ -1,12 +1,9 @@
 import { useStore } from 'reactflow';
+import { shallow } from 'zustand/shallow'; // Fresh selector object per store tick would re-draw on every drag frame
 import { useEffect, useRef } from 'react';
 import { HelperLine } from './types';
 
-const storeSelector = (state: any) => ({
-  width: state.width,
-  height: state.height,
-  transform: state.transform,
-});
+const IDENTITY_TRANSFORM = [0, 0, 1] as const;
 
 export type HelperLinesProps = {
   horizontal?: HelperLine;
@@ -18,7 +15,17 @@ const DEFAULT_COLOR = '#0041d0';
 // a simple component to display the helper lines
 // it puts a canvas on top of the React Flow pane and draws the lines using the canvas API
 function HelperLinesRenderer({ horizontal, vertical }: HelperLinesProps) {
-  const { width, height, transform } = useStore(storeSelector);
+  const hasLines = Boolean(horizontal || vertical);
+  const { width, height, transform } = useStore(
+    (state: any) => ({
+      width: state.width,
+      height: state.height,
+      // No helper line means viewport changes cannot affect this canvas. Returning one stable
+      // tuple prevents a full-DPR canvas resize and redraw on every pan/zoom frame.
+      transform: hasLines ? state.transform : IDENTITY_TRANSFORM,
+    }),
+    shallow
+  );
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
 

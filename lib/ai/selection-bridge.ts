@@ -91,10 +91,20 @@ export function getAiBoardContext(): AiBoardContext {
  * Also keeps `selectedFrameIds` in sync for the chat request body.
  */
 export function setAiSelectedFrames(frames: AiFrameSelectionItem[]): void {
-  selectedFrames = frames.map((f) => ({
+  const next = frames.map((f) => ({
     id: f.id,
     preview: f.preview ? clipAiPreview(f.preview) : undefined,
   }))
+  // BoardFlow re-publishes on every `nodes` change (incl. position ticks). Notifying
+  // unconditionally re-rendered the composer with a fresh pill array each time, which React
+  // reported as "Maximum update depth exceeded" from the pill effects.
+  const same =
+    next.length === selectedFrames.length &&
+    next.every(
+      (f, i) => f.id === selectedFrames[i].id && f.preview === selectedFrames[i].preview
+    )
+  if (same) return
+  selectedFrames = next
   selectedFrameIds = frames.map((f) => f.id)
   notify()
 }

@@ -10,6 +10,8 @@ import {
 } from 'reactflow' // Custom edge primitives + selection store
 
 import { ControlPoint, type ControlPointData } from './ControlPoint' // Miro-style path knobs
+import { isBoardNavigating } from '@/lib/board-navigating' // Skip O(n) on-thread scans mid pan/zoom
+import { isFrameDragging } from '@/lib/frame-dragging' // Skip O(n) on-thread scans mid frame drag
 import { getPath, getControlPoints } from './path' // Path math when user has bent the thread
 import { getSmoothThreadBezier } from './path/bezier' // Same-side bow for unbent Smooth (snapped frames)
 import {
@@ -218,6 +220,7 @@ export function EditableThread({
   const { inlineGaps, threadDots } = useStore((s) => {
     const gaps: Array<{ t: number; width: number; height: number }> = []
     const dots: XYPosition[] = []
+    if (isBoardNavigating() || isFrameDragging()) return { inlineGaps: gaps, threadDots: dots }
     const srcMsg = sourceNode?.data?.promptMessage?.id as string | undefined
     const tgtMsg = targetNode?.data?.promptMessage?.id as string | undefined
     if (!srcMsg || !tgtMsg || !pathGeom) return { inlineGaps: gaps, threadDots: dots }
@@ -240,7 +243,19 @@ export function EditableThread({
       }
     }
     return { inlineGaps: gaps, threadDots: dots }
-  })
+  },
+  // Equality fn is required — a fresh object every store tick re-rendered every thread on
+  // frame drag / pan, which is O(threads) per pointer move on content-heavy boards.
+  (a, b) =>
+    a.inlineGaps.length === b.inlineGaps.length &&
+    a.threadDots.length === b.threadDots.length &&
+    a.inlineGaps.every(
+      (g, i) =>
+        g.t === b.inlineGaps[i].t &&
+        g.width === b.inlineGaps[i].width &&
+        g.height === b.inlineGaps[i].height
+    ) &&
+    a.threadDots.every((p, i) => p.x === b.threadDots[i].x && p.y === b.threadDots[i].y))
   const strokePaths =
     pathGeom && inlineGaps.length > 0
       ? threadStrokePaths(pathGeom, threadGapsForFrames(pathGeom, inlineGaps))

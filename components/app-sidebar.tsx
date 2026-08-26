@@ -268,6 +268,7 @@ function SortableBoardItem({
     staleTime: 30000, // Cache for 30 seconds
   })
 
+  const router = useRouter()
   const { closeSidebar } = useSidebarContext() // Dismiss nav when a board is opened
   const {
     attributes,
@@ -277,6 +278,12 @@ function SortableBoardItem({
     transition,
     isDragging,
   } = useSortable({ id: conversation.id })
+
+  const openBoard = () => {
+    if (isDragging) return // Drag in progress — ignore stray click
+    router.push(`/board/${conversation.id}`) // Explicit nav survives popup unmount on phone
+    closeSidebar() // Board select dismisses the nav (same as outside click)
+  }
 
   // Don't apply transform during drag - keep all items in place
   // Only show opacity change and cursor for the dragged item
@@ -356,13 +363,10 @@ function SortableBoardItem({
         <Link
           href={`/board/${conversation.id}`}
           className="flex items-center gap-2 flex-1 min-w-0 text-gray-700 dark:text-gray-300"
+          onPointerDown={(e) => e.stopPropagation()} // Don't let dnd-kit swallow the tap before navigation
           onClick={(e) => {
-            // Prevent navigation when dragging
-            if (isDragging) {
-              e.preventDefault()
-              return
-            }
-            closeSidebar() // Board select dismisses the nav (same as outside click)
+            e.preventDefault() // router.push owns navigation (Link unmount from closeSidebar can cancel default)
+            openBoard()
           }}
         >
           <span className="flex items-center gap-1.5 flex-1 min-w-0">

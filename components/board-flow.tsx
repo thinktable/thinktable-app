@@ -89,6 +89,7 @@ import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
 import { setAiSelectedFrames, setAiViewportCenter } from '@/lib/ai/selection-bridge' // Bridge RF selection + viewport → AI context
 import { beginBoardNavigating, endBoardNavigating } from '@/lib/board-navigating' // Freeze React zoom during pan/pinch
+import { beginFrameDragging, endFrameDragging, isFrameDragging } from '@/lib/frame-dragging' // Skip O(n) work mid-drag on large boards
 import { takeBoardCapture } from '@/lib/captures' // Board-menu Capture view
 import { htmlToPlain } from '@/lib/ai/context-pack' // Frame hover previews from content
 import { AI_CHAT_BLOCK_MIME, type AiChatBlockDragPayload } from '@/lib/ai/types' // Drag chat turn onto page
@@ -121,6 +122,7 @@ import { absFlowPosition, nodeFlowSize, useBlockGroupDrag } from './use-block-gr
 import { useFrameNestStackDrag, isStackCollapsedMeta } from './use-frame-nest-stack-drag' // Edge-snap → stack reveal
 import { minStackIndex } from '@/lib/frame-side-stacks' // Per-side stack z-order
 import { FrameNestStackOverlay } from './frame-nest-stack-overlay' // Snap preview line on host edge
+import { IBarFlowAnchor } from './ibar-flow-anchor' // I-bar placement without BoardFlow pan/zoom re-renders
 import {
   armMarqueeFrameSelect,
   clearMarqueeFrameSelect,
@@ -169,6 +171,21 @@ import {
   frameShimmerNodeId,
   BOARD_LOAD_FADE_MS,
 } from '@/components/frame-content-shimmer' // Shared shimmer + layout cache helpers
+import {
+  FrameViewportMountProvider,
+  FRAME_VIEWPORT_DEFER_MIN,
+} from '@/components/frame-viewport-mount-context' // Defer TipTap until frames are near the pane
+import {
+  BOARD_ZOOM_DEFAULT,
+  expandSoftBounds,
+  expandZoomRange,
+  softBoundsFromNodes,
+  softBoundsEqual,
+  zoomRangesEqual,
+  type BoardZoomRange,
+  type SoftBoardBounds,
+  clampBoardZoom,
+} from '@/lib/board-extent' // Infinite pan; grow zoom + soft world with content
 
 interface Message {
   id: string
@@ -551,6 +568,8 @@ function BoardFlowInner({
   const { canEdit } = useBoardAccess() // RLS is authority; UI mirrors for viewers
   const { resolvedTheme } = useTheme()
   const [nodes, setNodes, onNodesChange] = useNodesState([])
+  const nodesRef = useRef(nodes) // Long-press / drag handlers without stale closures
+  nodesRef.current = nodes
   const [edges, setEdges, onEdgesState] = useEdgesState([])
   
   // Memoize nodeTypes and edgeTypes to prevent React Flow warnings
@@ -584,11 +603,45 @@ function BoardFlowInner({
   // Linear mode navigation state
   const [linearNavMode, setLinearNavMode] = useState<'chat' | 'all'>('chat') // Filter mode for linear navigation
   const [focusedPanelIndex, setFocusedPanelIndex] = useState<number | null>(null) // Currently focused panel index in linear mode
-  const [viewportKey, setViewportKey] = useState(0) // Force re-render when viewport changes to update button visibility
+  const [frameMountRecomputeKey, setFrameMountRecomputeKey] = useState(0) // Viewport defer: refresh near-frame set after pan
+  const [paneSize, setPaneSize] = useState({ width: 1200, height: 800 }) // RF pane — flow bounds for mount prefetch
+  const [simplifyLowZoom, setSimplifyLowZoom] = useState(false) // <40%: cached previews, not hundreds of live editors
+  const simplifyLowZoomRef = useRef(false) // Only cross-threshold updates may re-render BoardFlow
+  // Pan is already infinite (RF default translateExtent). Grow zoom limits + soft fit world with content.
+  const [zoomRange, setZoomRange] = useState<BoardZoomRange>(BOARD_ZOOM_DEFAULT)
+  const zoomRangeRef = useRef(zoomRange)
+  zoomRangeRef.current = zoomRange
+  const [softBounds, setSoftBounds] = useState<SoftBoardBounds>(() => softBoundsFromNodes([]))
+  const softBoundsRef = useRef(softBounds)
+  softBoundsRef.current = softBounds
+  void softBounds // Soft world AABB — expanded with content; fit/minimap consumers next
+
+  /** Expand soft world + zoom range when a frame is placed, moved, or resized. */
+  const absorbContentBox = useCallback(
+    (box: { x: number; y: number; width: number; height: number }, liveZoom?: number) => {
+      const nextBounds = expandSoftBounds(softBoundsRef.current, box)
+      if (!softBoundsEqual(softBoundsRef.current, nextBounds)) {
+        softBoundsRef.current = nextBounds
+        setSoftBounds(nextBounds)
+      }
+      const nextZoom = expandZoomRange(zoomRangeRef.current, {
+        liveZoom,
+        paneW: paneSize.width,
+        paneH: paneSize.height,
+        contentW: box.width,
+        contentH: box.height,
+      })
+      if (!zoomRangesEqual(zoomRangeRef.current, nextZoom)) {
+        zoomRangeRef.current = nextZoom
+        setZoomRange(nextZoom)
+      }
+    },
+    [paneSize.width, paneSize.height]
+  )
 
   // [TEMP DIAG] Render-storm detector: names which RF value flips each render when a loop occurs. REMOVE AFTER.
   const __renderTimesRef = useRef<number[]>([]) // Sliding window of recent render timestamps (ms)
-  const __lastTrackedRef = useRef<{ n: unknown; nl: number; e: unknown; el: number; vk: number; vm: string } | null>(null) // Previous render's tracked values
+  const __lastTrackedRef = useRef<{ n: unknown; nl: number; e: unknown; el: number; vm: string } | null>(null) // Previous render's tracked values
   const __lastWarnRef = useRef(0) // Throttle warnings so we log once per storm, not 1000x
   useEffect(() => {
     const now = Date.now() // Timestamp this render
@@ -596,7 +649,7 @@ function BoardFlowInner({
     w.push(now) // Record this render
     while (w.length && now - w[0] > 1000) w.shift() // Keep only the last 1s of renders
     // Snapshot the RF-related values React points at (<ReactFlow>): array identities, lengths, viewport/view keys
-    const cur = { n: nodes, nl: nodes.length, e: edges, el: edges.length, vk: viewportKey, vm: viewMode }
+    const cur = { n: nodes, nl: nodes.length, e: edges, el: edges.length, vm: viewMode }
     const prev = __lastTrackedRef.current // What they were last render
     __lastTrackedRef.current = cur // Advance for next comparison
     // A storm = >40 renders within 1s (well past normal); warn at most every 2s with the changed keys
@@ -605,10 +658,9 @@ function BoardFlowInner({
       const changed: string[] = [] // Which tracked values differ from last render
       if (prev.n !== cur.n) changed.push(`nodes(ref) len ${prev.nl}->${cur.nl}`) // New nodes array each render = setNodes loop
       if (prev.e !== cur.e) changed.push(`edges(ref) len ${prev.el}->${cur.el}`) // New edges array each render = setEdges loop
-      if (prev.vk !== cur.vk) changed.push(`viewportKey ${prev.vk}->${cur.vk}`) // Viewport bump loop (onMove)
       if (prev.vm !== cur.vm) changed.push(`viewMode ${prev.vm}->${cur.vm}`) // View mode thrash
       // Emit a single high-signal line naming the culprit (or telling us it's an untracked state)
-      console.error('[LOOP-DIAG] render storm', w.length, '/1s; changed since last render:', changed.length ? changed.join(', ') : 'NONE of {nodes,edges,viewportKey,viewMode} — culprit is another state')
+      console.error('[LOOP-DIAG] render storm', w.length, '/1s; changed since last render:', changed.length ? changed.join(', ') : 'NONE of {nodes,edges,viewMode} — culprit is another state')
     }
   }) // No dep array on purpose: runs after every render to measure render frequency
 
@@ -642,8 +694,6 @@ function BoardFlowInner({
   // null = no I-bar shown, {x, y} = I-bar position for inline note creation
   const [iBarPosition, setIBarPosition] = useState<{ x: number; y: number } | null>(null)
   
-  // Viewport state for I-bar rendering - triggers re-render when viewport changes
-  const [iBarViewport, setIBarViewport] = useState<{ x: number; y: number; zoom: number }>({ x: 0, y: 0, zoom: 1 })
   // Screen/flow anchor for the hidden capture field — kept through first-keystroke spawn so iOS doesn’t drop the keyboard when the visual I-bar clears
   const [iBarInputAnchor, setIBarInputAnchor] = useState<{
     x: number
@@ -960,6 +1010,47 @@ function BoardFlowInner({
   const updateNodeInternals = useUpdateNodeInternals() // Remeasure Handles after connect so paths attach
   const { setReactFlowInstance, registerSetNodes, isLocked, layoutMode, setLayoutMode, setIsDeterministicMapping, panelWidth: contextPanelWidth, isPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection, boardRule: contextBoardRule, boardStyle: contextBoardStyle, clickedEdge: contextClickedEdge, setClickedEdge: setContextClickedEdge, fillColor, borderColor, borderWeight, borderStyle, flashcardMode, setFlashcardMode, selectedTag, setSelectedTag, isDrawing, drawTool, drawShape, registerMapUndoRedo, registerMapTakeSnapshot, snapEnabled } = useReactFlowContext()
   const { rotation: boardRotation, setScrollMode } = useBoardRotation() // Subscribe so I-bar / overlays re-place when the camera twists
+
+  const chatPanelCountRef = useRef(0) // Frame count is stable mid-drag — skip the O(n) scan per tick
+  const chatPanelCount = useMemo(() => {
+    if (isFrameDragging()) return chatPanelCountRef.current
+    chatPanelCountRef.current = nodes.filter((n) => n.type === 'chatPanel').length
+    return chatPanelCountRef.current
+  }, [nodes])
+  const deferFrameContent = !embedded && chatPanelCount >= FRAME_VIEWPORT_DEFER_MIN
+
+  const getFlowViewport = useCallback(
+    () => reactFlowInstance?.getViewport() ?? { x: 0, y: 0, zoom: 1 },
+    [reactFlowInstance]
+  )
+
+  const frameMountSelectionKeyRef = useRef('') // Selection/fadeIn cannot change mid-drag — reuse the key
+  const frameMountSelectionKey = useMemo(() => {
+    if (isFrameDragging()) return frameMountSelectionKeyRef.current
+    frameMountSelectionKeyRef.current = nodes
+      .filter((n) => n.type === 'chatPanel')
+      .map((n) => {
+        const meta = (n.data as ChatPanelNodeData | undefined)?.promptMessage?.metadata as
+          | Record<string, unknown>
+          | undefined
+        return `${n.id}:${n.selected ? 1 : 0}:${meta?.fadeIn === true ? 1 : 0}`
+      })
+      .join('|')
+    return frameMountSelectionKeyRef.current
+  }, [nodes])
+  const alwaysMountFrameIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const n of nodes) {
+      if (n.type !== 'chatPanel') continue
+      if (n.selected) ids.add(n.id)
+      const meta = (n.data as ChatPanelNodeData | undefined)?.promptMessage?.metadata as
+        | Record<string, unknown>
+        | undefined
+      if (meta?.fadeIn === true) ids.add(n.id)
+    }
+    return ids
+  }, [frameMountSelectionKey])
+
   const { onNodeDrag: onBlockGroupNodeDrag, onNodeDragStop: onBlockGroupNodeDragStop } = useBlockGroupDrag({
     conversationId, // Persist attach/detach to this map
     getNodes: () => reactFlowInstance.getNodes(), // Live RF nodes during drag (not a stale closure)
@@ -1689,6 +1780,16 @@ function BoardFlowInner({
   const [minimapLeft, setMinimapLeft] = useState<number>(MINIMAP_LEFT)
   const [navBottomTransition, setNavBottomTransition] = useState(false) // Gate bottom animation until after load settle
   const boardRootRef = useRef<HTMLDivElement>(null) // Map column box — chrome is absolute on this (outside RF)
+
+  useEffect(() => {
+    const el = boardRootRef.current?.querySelector('.react-flow') as HTMLElement | null
+    if (!el) return
+    const sync = () => setPaneSize({ width: el.clientWidth, height: el.clientHeight })
+    sync()
+    const ro = new ResizeObserver(sync)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [conversationId, reactFlowInstance])
   // Sync from localStorage on first client render so nav bottom isn't wrong before effects run
   const [isMinimapHidden, setIsMinimapHidden] = useState(() => {
     if (typeof window === 'undefined') return false
@@ -1707,6 +1808,19 @@ function BoardFlowInner({
   const boardLoadPhaseRef = useRef(boardLoadPhase) // Panel merge reads phase without adding it to effect deps
   boardLoadPhaseRef.current = boardLoadPhase
   const minimapExpanded = minimapLoadReady && !minimapCollapsed && !isScrollingToBottom // One flag for +/- and the height tween
+  // RF's MiniMap selector runs `getNodes()` + `getNodesBounds()` on **every** store tick (zoom,
+  // pan, every drag position change) even while clipped to 0 height — O(nodes) per frame for a
+  // panel nobody can see. Mount it with the reveal; unmount trails the collapse tween so the
+  // closing animation still has content in it.
+  const [minimapMounted, setMinimapMounted] = useState(false)
+  useEffect(() => {
+    if (minimapExpanded) {
+      setMinimapMounted(true)
+      return
+    }
+    const t = window.setTimeout(() => setMinimapMounted(false), MINIMAP_EXPAND_MS)
+    return () => window.clearTimeout(t)
+  }, [minimapExpanded])
   const [clickedEdge, setClickedEdge] = useState<Edge | null>(null) // Track clicked edge for popup (local state for popup logic)
 
   // Sync clickedEdge to context so toolbar can access it
@@ -1723,8 +1837,6 @@ function BoardFlowInner({
   const [nodePopupPosition, setNodePopupPosition] = useState({ x: 0, y: 0 }) // Position for node popup
   const [boardMenuPosition, setBoardMenuPosition] = useState<{ x: number; y: number } | null>(null) // Empty-board right-click menu
   const boardClickFlowRef = useRef<{ x: number; y: number } | null>(null) // Flow coords for Add frame / zoom-to-100%
-  const nodesRef = useRef(nodes) // Long-press lookups without stale closures
-  nodesRef.current = nodes
   const edgesRef = useRef(edges) // Phone thread tap: was-selected without stale closure
   edgesRef.current = edges
   const longPressRef = useRef<ReturnType<typeof createLongPressController> | null>(null) // Phone long-press controller
@@ -1737,6 +1849,7 @@ function BoardFlowInner({
   isMobileModeRef.current = isMobileMode
   const rightClickedNodeRef = useRef(rightClickedNode) // Phone drag-area tap toggle without stale closure
   rightClickedNodeRef.current = rightClickedNode
+  const frameMenuRightPressNodeIdRef = useRef<string | null>(null) // Dedupe pointerdown + contextmenu on one right-click
   const clickedEdgeRef = useRef(clickedEdge) // Phone thread menu toggle without stale closure
   clickedEdgeRef.current = clickedEdge
 
@@ -1765,7 +1878,6 @@ function BoardFlowInner({
   const savedZoomRef = useRef<{ linear: number | null; canvas: number | null }>({ linear: null, canvas: null }) // Store zoom for each mode
   const selectionJustChangedRef = useRef(false) // Track if selection just changed to prevent viewport jumps
   const previousViewportYRef = useRef<number | null>(null) // Track previous viewport Y to detect jumps
-  const viewportUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null) // Throttle viewport updates for button visibility
 
   // Listen for bottom gap hover events (dispatched by prompt input hover zone)
   useEffect(() => {
@@ -3777,6 +3889,11 @@ function BoardFlowInner({
 
   // Track node position changes in Canvas mode to update stored positions
   const handleNodesChange = useCallback((changes: any[]) => {
+    const midDragPositionOnly =
+      changes.length > 0 &&
+      changes.every((c) => c.type === 'position' && c.dragging === true) &&
+      changes.every((c) => dragSnapshotTakenRef.current.has(c.id))
+
     // Frames: block RF mousedown select — selection happens on click (mouseup) unless marquee
     const marquee = isMarqueeFrameSelectArmed() || !!rfStore.getState().userSelectionActive
     let changesToProcess = changes.filter((change) => {
@@ -3788,6 +3905,13 @@ function BoardFlowInner({
     })
     if (marquee && !rfStore.getState().userSelectionActive) {
       clearMarqueeFrameSelect() // Marquee batch consumed
+    }
+
+    if (midDragPositionOnly) {
+      let updatedChanges = snapEnabled ? updateHelperLines(changesToProcess, nodes) : changesToProcess
+      updatedChanges = constrainOnThreadPositionChanges(updatedChanges, nodes)
+      onNodesChange(updatedChanges)
+      return
     }
 
     // Check if a placeholder is being interacted with (dragged or clicked)
@@ -3961,6 +4085,20 @@ function BoardFlowInner({
               height: change.dimensions.height,
             })
           }
+          // Any frame/shape resize: grow soft world + zoom range if content is huge/tiny or near edge
+          const anyNode = nodes.find((n) => n.id === change.id)
+          if (anyNode && change.dimensions) {
+            const pos = anyNode.position
+            absorbContentBox(
+              {
+                x: pos.x,
+                y: pos.y,
+                width: change.dimensions.width,
+                height: change.dimensions.height,
+              },
+              reactFlowInstance?.getViewport().zoom
+            )
+          }
         }
       })
 
@@ -4093,7 +4231,7 @@ function BoardFlowInner({
       }, 500) // Clear flag after 500ms
       return
     }
-  }, [onNodesChange, nodes, viewMode, setNodes, deleteNodesByIds, recalculateEdgeHandles, takeSnapshot, getChronologicalPanels, linearNavMode, centerPanelAbovePrompt, snapEnabled, updateHelperLines, rfStore, constrainOnThreadPositionChanges])
+  }, [onNodesChange, nodes, viewMode, setNodes, deleteNodesByIds, recalculateEdgeHandles, takeSnapshot, getChronologicalPanels, linearNavMode, centerPanelAbovePrompt, snapEnabled, updateHelperLines, rfStore, constrainOnThreadPositionChanges, absorbContentBox, reactFlowInstance])
 
   const handleNodesChangeRef = useRef(handleNodesChange)
   handleNodesChangeRef.current = handleNodesChange
@@ -4102,6 +4240,7 @@ function BoardFlowInner({
   // Don't trigger viewport changes on selection in linear mode
   useEffect(() => {
     if (!nodes || !Array.isArray(nodes)) return
+    if (isFrameDragging()) return // Selection/preview can’t change mid-drag; skip scan + layout read
     const selectedNode = nodes.find((n) => n.selected)
     if (selectedNode) {
       selectedNodeIdRef.current = selectedNode.id
@@ -4142,7 +4281,7 @@ function BoardFlowInner({
       }
     }
     // Don't trigger any viewport changes here - selection should not move the viewport in linear mode
-  }, [nodes, reactFlowInstance])
+  }, [nodes, reactFlowInstance, frameMountRecomputeKey])
 
   // Restore nav mode and selected tag from URL param when board loads and focus first flashcard
   useEffect(() => {
@@ -4275,6 +4414,7 @@ function BoardFlowInner({
   // Sync stored positions with current node positions in both Canvas and Linear modes
   // This ensures any moves are remembered and panels don't respace on reload
   useEffect(() => {
+    if (isFrameDragging()) return // Position cache + persist run once on release, not per pointer move
     if (nodes && Array.isArray(nodes) && nodes.length > 0) {
       // Update stored positions with current positions in both modes
       nodes.forEach((node) => {
@@ -4285,7 +4425,7 @@ function BoardFlowInner({
       saveCanvasPositions()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, viewMode, saveCanvasPositions]) // Update when nodes change (including position changes) in both modes
+  }, [nodes, viewMode, saveCanvasPositions, frameMountRecomputeKey]) // Update when nodes change (including position changes) in both modes
 
   // Create panels from messages (group into prompt+response pairs)
   useEffect(() => {
@@ -4339,6 +4479,17 @@ function BoardFlowInner({
 
     const newNodes: Node<ChatPanelNodeData>[] = []
     const blockGroupNodes: Node[] = [] // Visual group frames (not chat panels)
+    const layoutCache = conversationId ? readFrameLayoutCache(conversationId) : {} // Seed RF size while TipTap is deferred
+    const withCachedPanelSize = (node: Node<ChatPanelNodeData>, nodeId: string): Node<ChatPanelNodeData> => {
+      const entry = layoutCache[nodeId]
+      if (!entry?.width || !entry?.height) return node
+      return {
+        ...node,
+        width: entry.width,
+        height: entry.height,
+        style: { ...(node.style || {}), width: entry.width, height: entry.height },
+      }
+    }
     const gapBetweenPanels = 50 // Fixed gap between panels (size-aware spacing)
     let panelIndex = 0 // Track panel index for consistent spacing
 
@@ -4618,7 +4769,7 @@ function BoardFlowInner({
             // Store position
             originalPositionsRef.current.set(nodeId, panelPosition)
 
-            newNodes.push(panelNode)
+            newNodes.push(withCachedPanelSize(panelNode, nodeId))
             // Don't increment panelIndex here - all response panels from one user message should be at the same base Y
           })
 
@@ -4663,7 +4814,7 @@ function BoardFlowInner({
           // Store position
           originalPositionsRef.current.set(baseNodeId, currentPos)
 
-          newNodes.push(panelNode)
+          newNodes.push(withCachedPanelSize(panelNode, baseNodeId))
           panelIndex++ // Increment for next panel
         }
       } else {
@@ -4815,8 +4966,29 @@ function BoardFlowInner({
       if (trulyNewNodesCanvas.length === 1) takeSnapshot()
       
       setNodes(updatedCanvasNodes)
+      {
+        const rebuilt = softBoundsFromNodes(updatedCanvasNodes)
+        if (!softBoundsEqual(softBoundsRef.current, rebuilt)) {
+          softBoundsRef.current = rebuilt
+          setSoftBounds(rebuilt)
+        }
+        // Huge import / large frames → unlock enough zoom-out to frame the soft world
+        const worldW = rebuilt.maxX - rebuilt.minX
+        const worldH = rebuilt.maxY - rebuilt.minY
+        const nextZoom = expandZoomRange(zoomRangeRef.current, {
+          paneW: paneSize.width,
+          paneH: paneSize.height,
+          contentW: worldW,
+          contentH: worldH,
+        })
+        if (!zoomRangesEqual(zoomRangeRef.current, nextZoom)) {
+          zoomRangeRef.current = nextZoom
+          setZoomRange(nextZoom)
+        }
+      }
       if (boardLoadPhaseRef.current === 'cold') {
         setBoardLoadPhase('reveal') // Same paint: shells fade out, real nodes/edges fade in
+        setFrameMountRecomputeKey((k) => k + 1) // Seed viewport mount set for the first visible band
       }
 
       // Persist new frame positions only — never recenter or force 100% zoom on create
@@ -4827,7 +4999,19 @@ function BoardFlowInner({
             x: node.position.x, // Cache flow coords for reload / mode switches
             y: node.position.y,
           })
-
+          const w =
+            typeof node.width === 'number'
+              ? node.width
+              : typeof (node.style as { width?: number } | undefined)?.width === 'number'
+                ? (node.style as { width: number }).width
+                : 220
+          const h =
+            typeof node.height === 'number'
+              ? node.height
+              : typeof (node.style as { height?: number } | undefined)?.height === 'number'
+                ? (node.style as { height: number }).height
+                : 72
+          absorbContentBox({ x: node.position.x, y: node.position.y, width: w, height: h })
           if (conversationId && typeof window !== 'undefined') {
             try {
               patchFrameLayoutEntry(conversationId, node.id, {
@@ -4842,7 +5026,7 @@ function BoardFlowInner({
       }
     // Update prevArrowDirectionRef after panel creation
     prevArrowDirectionRef.current = arrowDirection
-  }, [messagesKey, conversationId, messages.length, viewMode, setNodes, arrowDirection, nodes, takeSnapshot])
+  }, [messagesKey, conversationId, messages.length, viewMode, setNodes, arrowDirection, nodes, takeSnapshot, absorbContentBox, paneSize.width, paneSize.height])
 
   // Handle arrow direction change when panels are selected
   // Format selected panels relative to each other based on arrow direction
@@ -4968,6 +5152,7 @@ function BoardFlowInner({
   // Panels should maintain their positions - only measure heights for centering calculations
   useEffect(() => {
     if (!nodes || !Array.isArray(nodes) || nodes.length === 0 || !reactFlowInstance) return
+    if (isFrameDragging()) return // Heights don’t change while moving a frame; skip per-node layout reads
 
     // Use setTimeout to ensure DOM is fully rendered
     const timeoutId = setTimeout(() => {
@@ -4990,11 +5175,12 @@ function BoardFlowInner({
     }, 150) // Delay to ensure DOM is ready
 
     return () => clearTimeout(timeoutId)
-  }, [nodes, reactFlowInstance])
+  }, [nodes, reactFlowInstance, frameMountRecomputeKey])
 
   // Handle smooth slide-up animation when panels collapse
   useEffect(() => {
     if (!nodes || !Array.isArray(nodes) || nodes.length === 0 || !reactFlowInstance) return
+    if (isFrameDragging()) return // Collapse state can’t flip mid-drag; skip the per-tick scan
 
     const reactFlowElement = document.querySelector('.react-flow')
     if (!reactFlowElement) return
@@ -5149,7 +5335,7 @@ function BoardFlowInner({
         nodeHeightsRef.current.set(node.id, newHeight)
       }, 250) // Wait for 200ms CSS transition + 50ms buffer
     })
-  }, [nodes, reactFlowInstance, setNodes])
+  }, [nodes, reactFlowInstance, setNodes, frameMountRecomputeKey])
 
   // Wheel: sticky Scroll pans / Zoom zooms; Cmd/Ctrl flips for one gesture; Mac pinch always zooms
   useEffect(() => {
@@ -5284,7 +5470,7 @@ function BoardFlowInner({
         const factor = e.ctrlKey && isMac ? 10 : 1
         const pinchDelta =
           -e.deltaY * (e.deltaMode === 1 ? 0.05 : e.deltaMode ? 1 : 0.002) * factor
-        const nextZoom = Math.min(2, Math.max(0.1, viewport.zoom * Math.pow(2, pinchDelta)))
+        const nextZoom = clampBoardZoom(viewport.zoom * Math.pow(2, pinchDelta))
         if (nextZoom === viewport.zoom) return
         reactFlowInstance.setViewport(
           viewportKeepingPanePoint(
@@ -5572,11 +5758,26 @@ function BoardFlowInner({
     })
   }, [setEdges])
 
+  const markFrameMenuRightPress = useCallback((nodeId: string) => {
+    frameMenuRightPressNodeIdRef.current = nodeId
+    window.setTimeout(() => {
+      if (frameMenuRightPressNodeIdRef.current === nodeId) frameMenuRightPressNodeIdRef.current = null
+    }, 0)
+  }, [])
+
   // Open frame menu at a screen point (right-click or long-press); same frame again toggles closed
   const openFrameMenuAt = useCallback(
-    (clientX: number, clientY: number, node: Node<ChatPanelNodeData>) => {
+    (
+      clientX: number,
+      clientY: number,
+      node: Node<ChatPanelNodeData>,
+      opts?: { fromContextMenu?: boolean }
+    ) => {
+      // pointerdown already toggled — contextmenu must not reopen in the same gesture
+      if (opts?.fromContextMenu && frameMenuRightPressNodeIdRef.current === node.id) return
       // Second open on the same frame closes (right-click / long-press / phone drag-strip)
       if (rightClickedNodeRef.current?.id === node.id) {
+        rightClickedNodeRef.current = null
         setRightClickedNode(null)
         setNodePopupPosition({ x: 0, y: 0 })
         nodeClickPositionRef.current = null
@@ -5623,6 +5824,7 @@ function BoardFlowInner({
         nodeClickPositionRef.current = { x: flowX, y: flowY }
         nodePopupZoomRef.current = viewport.zoom
       }
+      rightClickedNodeRef.current = node
       setRightClickedNode(node)
     },
     [reactFlowInstance, setNodes, rfStore]
@@ -5697,7 +5899,7 @@ function BoardFlowInner({
       if (event.button !== 2) return // Phone pinch/hold uses long-press; iOS contextmenu is button 0
       event.preventDefault()
       event.stopPropagation()
-      openFrameMenuAt(event.clientX, event.clientY, node)
+      openFrameMenuAt(event.clientX, event.clientY, node, { fromContextMenu: true })
     },
     [openFrameMenuAt]
   )
@@ -5848,6 +6050,7 @@ function BoardFlowInner({
         if (node) {
           e.preventDefault()
           e.stopPropagation()
+          markFrameMenuRightPress(node.id)
           openFrameMenuAt(e.clientX, e.clientY, node)
         }
         return
@@ -5938,7 +6141,7 @@ function BoardFlowInner({
       if (node) {
         e.preventDefault()
         e.stopPropagation()
-        openFrameMenuAt(mouseEvent.clientX, mouseEvent.clientY, node)
+        openFrameMenuAt(mouseEvent.clientX, mouseEvent.clientY, node, { fromContextMenu: true })
       }
     }
     const onClickCapture = (e: MouseEvent) => {
@@ -5983,7 +6186,7 @@ function BoardFlowInner({
       root.removeEventListener('contextmenu', onContextMenu, { capture: true })
       root.removeEventListener('click', onClickCapture, { capture: true })
     }
-  }, [embedded, openBoardMenuAt, openFrameMenuAt, rfStore])
+  }, [embedded, markFrameMenuRightPress, openBoardMenuAt, openFrameMenuAt, rfStore])
 
   const phoneDragHandlersRef = useRef({
     onFrameNestStackDragStart,
@@ -6018,6 +6221,7 @@ function BoardFlowInner({
     reactFlowInstanceRef.current = reactFlowInstance
 
     const dismissFrameMenu = () => {
+      rightClickedNodeRef.current = null
       setRightClickedNode(null)
       setNodePopupPosition({ x: 0, y: 0 })
       nodeClickPositionRef.current = null
@@ -6068,6 +6272,7 @@ function BoardFlowInner({
         longPressRef.current?.cancel()
         const node = nodesRef.current.find((n) => n.id === nodeId)
         if (!node) return
+        if (node.type === 'chatPanel') beginFrameDragging()
         setPhoneManualDragNodeId(nodeId)
         frameDragOriginRef.current = { id: nodeId, x: node.position.x, y: node.position.y }
         if (rightClickedNodeRef.current?.id === nodeId) dismissFrameMenu()
@@ -6101,9 +6306,17 @@ function BoardFlowInner({
         const lastPos = phoneDragLastPosRef.current
         phoneDragLastPosRef.current = null
         if (!node) {
+          if (nodeId) {
+            endFrameDragging()
+            setFrameMountRecomputeKey((k) => k + 1)
+          }
           setPhoneManualDragNodeId(null)
           frameDragOriginRef.current = null
           return
+        }
+        if (node.type === 'chatPanel') {
+          endFrameDragging()
+          setFrameMountRecomputeKey((k) => k + 1)
         }
         const finalPosition =
           lastPos?.id === nodeId ? { x: lastPos.x, y: lastPos.y } : node.position
@@ -6184,11 +6397,12 @@ function BoardFlowInner({
       if (!node || (node.type !== 'chatPanel' && node.type !== 'blockGroup')) return
       e.preventDefault()
       e.stopPropagation()
+      markFrameMenuRightPress(node.id)
       openFrameMenuAt(e.clientX, e.clientY, node)
     }
     document.addEventListener('pointerdown', onRightPress, { capture: true })
     return () => document.removeEventListener('pointerdown', onRightPress, { capture: true })
-  }, [embedded, openFrameMenuAt])
+  }, [embedded, markFrameMenuRightPress, openFrameMenuAt])
 
   // Phone select tool: RF Pane marquee is mouse-only; drive the same store rect from touch/pen
   useEffect(() => {
@@ -8624,7 +8838,6 @@ function BoardFlowInner({
     // Store flow coordinates and current viewport for rendering
     setIBarPosition({ x: flowX, y: flowY })
     iBarPositionRef.current = { x: flowX, y: flowY } // Sync before paint so first soft-key can spawn
-    setIBarViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom })
     setIBarBlockMenu(null) // New I-bar — close any pre-frame block menu
     setIBarInputAnchor({
       x: flowX,
@@ -8876,15 +9089,13 @@ function BoardFlowInner({
         : e.deltaY > 0
           ? -0.1
           : 0.1 // Zoom-nav: one notch ≈ RF wheel step
-      const minZ = embedded ? 0.15 : 0.1
-      const maxZ = embedded ? 2.5 : 2
-      const nextZoom = Math.min(
-        maxZ,
-        Math.max(
-          minZ,
-          pinch ? viewport.zoom * Math.pow(2, pinchDelta) : viewport.zoom * (1 + pinchDelta)
-        )
-      )
+      const zoomLimits: BoardZoomRange = embedded
+        ? { minZoom: Math.max(0.05, zoomRange.minZoom), maxZoom: Math.min(2.5, zoomRange.maxZoom) }
+        : zoomRange
+      const rawNext = pinch
+        ? viewport.zoom * Math.pow(2, pinchDelta)
+        : viewport.zoom * (1 + pinchDelta)
+      const nextZoom = clampBoardZoom(rawNext, zoomLimits)
       if (nextZoom === viewport.zoom) return
 
       // Keep the flow point under the cursor fixed while zooming (rotation-aware)
@@ -8901,10 +9112,29 @@ function BoardFlowInner({
 
     root.addEventListener('wheel', onWheel, { passive: false, capture: true })
     return () => root.removeEventListener('wheel', onWheel, { capture: true })
-  }, [reactFlowInstance, embedded, boardRotation, isScrollMode, isDrawing])
+  }, [reactFlowInstance, embedded, boardRotation, isScrollMode, isDrawing, zoomRange])
 
   return (
     <PhoneFrameDragProvider manualDragNodeId={phoneManualDragNodeId}>
+    <FrameViewportMountProvider
+      deferEnabled={deferFrameContent}
+      nodes={nodes as Array<{
+        id: string
+        type?: string
+        position: { x: number; y: number }
+        positionAbsolute?: { x: number; y: number }
+        width?: number
+        height?: number
+        style?: { width?: number | string; height?: number | string }
+      }>}
+      getViewport={getFlowViewport}
+      paneSize={paneSize}
+      boardRotation={boardRotation}
+      conversationId={conversationId}
+      alwaysMountIds={alwaysMountFrameIds}
+      simplifyContent={simplifyLowZoom}
+      recomputeKey={frameMountRecomputeKey}
+    >
     <div
       ref={boardRootRef}
       data-board-root // Phone AI dock portals here (escapes main overflow-hidden)
@@ -8927,6 +9157,7 @@ function BoardFlowInner({
         // (nodes/chrome still painted lower). inset:0 gives a definite full-height box.
         style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
         onNodeDragStart={(event, node) => {
+          if (node?.type === 'chatPanel') beginFrameDragging()
           // Do NOT cancel long-press here — RF threshold 0 fires drag-start on touchstart
           // (canceling here blocked hold→menu). Cancel on first real move in onNodeDrag instead.
           if (node) {
@@ -9001,6 +9232,26 @@ function BoardFlowInner({
           }
         }}
         onNodeDragStop={(event, node) => {
+          if (node?.type === 'chatPanel') {
+            endFrameDragging()
+            setFrameMountRecomputeKey((k) => k + 1) // Refresh deferred TipTap mount set after drag
+            const w =
+              typeof node.width === 'number'
+                ? node.width
+                : typeof (node.style as { width?: number } | undefined)?.width === 'number'
+                  ? (node.style as { width: number }).width
+                  : 220
+            const h =
+              typeof node.height === 'number'
+                ? node.height
+                : typeof (node.style as { height?: number } | undefined)?.height === 'number'
+                  ? (node.style as { height: number }).height
+                  : 72
+            absorbContentBox(
+              { x: node.position.x, y: node.position.y, width: w, height: h },
+              reactFlowInstance?.getViewport().zoom
+            )
+          }
           // Clear drag state when drag stops
           setIsSelectedNodeDragging(false)
           // Rebuild helper lines index when drag stops
@@ -9331,6 +9582,7 @@ function BoardFlowInner({
           }
           // Phone first-tap / desktop multi-select / text on selected: select, dismiss menu if open
           if (rightClickedNodeRef.current?.id === node.id) {
+            rightClickedNodeRef.current = null
             setRightClickedNode(null)
             setNodePopupPosition({ x: 0, y: 0 })
             nodeClickPositionRef.current = null
@@ -9398,7 +9650,6 @@ function BoardFlowInner({
           // Place blinking cursor + grip (type or click grip to open the block menu) — not Item/Flashcard menu
           setIBarPosition({ x: flowX, y: flowY })
           iBarPositionRef.current = { x: flowX, y: flowY } // Available immediately for first soft-key spawn
-          setIBarViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom })
           setIBarInputAnchor({
             x: flowX,
             y: flowY,
@@ -9411,7 +9662,11 @@ function BoardFlowInner({
         defaultViewport={{ x: 0, y: 0, zoom: embedded ? 0.8 : 0.6 }}
         // Embedded previews: no continuous fitView (fights pan/zoom); host keeps canvas fitView
         fitView={!embedded && viewMode === 'canvas'}
-        fitViewOptions={{ padding: 0.2, minZoom: 0.3, maxZoom: 2 }}
+        fitViewOptions={{
+          padding: 0.2,
+          minZoom: zoomRange.minZoom,
+          maxZoom: zoomRange.maxZoom,
+        }}
         className={cn(
           'h-full w-full bg-gray-50 dark:bg-[#0f0f0f]',
           isThreadConnecting && 'tt-thread-connecting', // Invisible edge points stay snappable while dragging a thread
@@ -9427,6 +9682,9 @@ function BoardFlowInner({
           } else if (embedded) {
             instance.fitView({ padding: 0.15, minZoom: 0.2, maxZoom: 1.5 }) // One-shot frame in preview
           }
+          const shouldSimplify = !embedded && currentViewport.zoom < 0.4
+          simplifyLowZoomRef.current = shouldSimplify
+          setSimplifyLowZoom(shouldSimplify)
           setReactFlowInstance(instance)
           if (embedded) setEmbedFlowReady(true) // Host can drop loading veil once messages also resolve
         }}
@@ -9438,10 +9696,11 @@ function BoardFlowInner({
         zoomOnScroll={embedded ? true : !isScrollMode && !isDrawing}
         zoomOnPinch={embedded ? true : !isDrawing} // Pinch always zooms; Scroll nav only changes wheel pan vs wheel zoom
         zoomOnDoubleClick={false}
-        minZoom={embedded ? 0.15 : 0.1}
-        maxZoom={embedded ? 2.5 : 2}
+        minZoom={embedded ? Math.max(0.05, zoomRange.minZoom) : zoomRange.minZoom}
+        maxZoom={embedded ? Math.min(2.5, zoomRange.maxZoom) : zoomRange.maxZoom}
         preventScrolling // RF consumes wheel so the host page/map doesn’t scroll
         autoPanOnNodeDrag={false}
+        onlyRenderVisibleElements // Bound DOM + composited layers to frames currently in/near the pane
         selectNodesOnDrag={embedded ? false : !isDrawing} // Preview: drag starts pan, not selection box
         multiSelectionKeyCode={MULTI_SELECT_KEYS}
         selectionKeyCode={
@@ -9458,29 +9717,32 @@ function BoardFlowInner({
           // One-finger pan wasn’t covered by pinch-only freeze — fast pan over DB OOMed Safari
           beginBoardNavigating(viewport.zoom)
         }}
-        onMoveEnd={() => {
+        onMoveEnd={(_event, viewport) => {
           endBoardNavigating()
+          const shouldSimplify = !embedded && viewport.zoom < 0.4
+          simplifyLowZoomRef.current = shouldSimplify
+          setSimplifyLowZoom(shouldSimplify) // Crossing back in restores live editors in batches
+          setFrameMountRecomputeKey((k) => k + 1) // Mount/unmount deferred TipTap after pan settles
         }}
         onMove={(event, viewport) => {
-          // Publish flow-space center of the visible pane for AI Edit frame placement
-          const pane = document.querySelector('.react-flow')
-          if (pane && reactFlowInstance) {
-            const r = pane.getBoundingClientRect()
-            const c = reactFlowInstance.screenToFlowPosition({
-              x: r.left + r.width / 2,
-              y: r.top + r.height / 2,
-            })
-            setAiViewportCenter(c)
+          if (!embedded && viewport.zoom < 0.4 && !simplifyLowZoomRef.current) {
+            simplifyLowZoomRef.current = true
+            setSimplifyLowZoom(true) // One threshold transition; stay simplified through the gesture
           }
-          // Update viewport key to trigger re-render for button visibility check (throttled)
-          // Only update every 100ms to prevent excessive re-renders
-          if (viewportUpdateTimeoutRef.current) {
-            clearTimeout(viewportUpdateTimeoutRef.current)
+          // At a zoom extreme while gesturing → unlock further zoom so the board stays infinite in scale
+          if (!embedded) {
+            const nextZoom = expandZoomRange(zoomRangeRef.current, { liveZoom: viewport.zoom })
+            if (!zoomRangesEqual(zoomRangeRef.current, nextZoom)) {
+              zoomRangeRef.current = nextZoom
+              setZoomRange(nextZoom)
+            }
           }
-          viewportUpdateTimeoutRef.current = setTimeout(() => {
-            setViewportKey(prev => prev + 1)
-            viewportUpdateTimeoutRef.current = null
-          }, 100)
+          // Derive the flow-space center directly. The previous DOM query + bounding rect +
+          // screenToFlowPosition forced layout on every wheel/pinch frame.
+          setAiViewportCenter({
+            x: (paneSize.width / 2 - viewport.x) / viewport.zoom,
+            y: (paneSize.height / 2 - viewport.y) / viewport.zoom,
+          })
           
           // Skip centering adjustments if we're currently switching to Linear mode
           if (isSwitchingToLinearRef.current) {
@@ -9632,11 +9894,6 @@ function BoardFlowInner({
             // Not in linear mode, just update zoom ref and save for canvas mode
             prevZoomRef.current = viewport.zoom
             savedZoomRef.current.canvas = viewport.zoom
-          }
-          
-          // Update I-bar viewport for re-rendering (keeps I-bar in correct visual position)
-          if (iBarPosition) {
-            setIBarViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom })
           }
         }}
       >
@@ -9862,6 +10119,7 @@ function BoardFlowInner({
               height: MINIMAP_HEIGHT, // Keep RF MiniMap at real size while the clip is 0
             }}
           >
+            {minimapMounted && (
             <MiniMap
               position="bottom-left"
               nodeColor={(node) => {
@@ -9887,6 +10145,7 @@ function BoardFlowInner({
                 margin: 0,
               }}
             />
+            )}
           </div>
         </div>
        </div>
@@ -9920,16 +10179,19 @@ function BoardFlowInner({
 
 
       {/* I-bar + grip — empty board click (or double-click); type to create a frame, or click ⋮⋮ for the block menu (no frame required) */}
-      {iBarPosition && (() => {
-        const z = iBarViewport.zoom
-        const paneScale = z * threadComfortScale(z) // Match TipTap grip screen size (RF zoom × comfort)
-        return (
+      {iBarPosition && (
+        <IBarFlowAnchor
+          flowX={iBarPosition.x}
+          flowY={iBarPosition.y}
+          boardRotation={boardRotation}
+        >
+          {({ left, top, paneScale }) => (
         <div
           className="absolute flex items-center"
           style={{
             // Convert flow coordinates back to pane coordinates (rotation-aware); grip sits left of caret
-            left: `${flowToPane(iBarPosition.x, iBarPosition.y, iBarViewport, boardRotation).x}px`,
-            top: `${flowToPane(iBarPosition.x, iBarPosition.y, iBarViewport, boardRotation).y}px`,
+            left: `${left}px`,
+            top: `${top}px`,
             zIndex: 1000,
             transform: `translateX(-${24 * paneScale}px)`, // Grip (20) + gap (4) → caret sits on the flow click
             gap: `${4 * paneScale}px`,
@@ -9987,8 +10249,9 @@ function BoardFlowInner({
             }}
           />
         </div>
-        )
-      })()}
+          )}
+        </IBarFlowAnchor>
+      )}
 
       {/* Pre-frame block menu — I-bar ⋮⋮ click; no frame required */}
       {iBarBlockMenu &&
@@ -10375,6 +10638,7 @@ function BoardFlowInner({
         <LeftVerticalMenu conversationId={conversationId} />
       )}
     </div>
+    </FrameViewportMountProvider>
     </PhoneFrameDragProvider>
   )
 }

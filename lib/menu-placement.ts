@@ -312,7 +312,20 @@ export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOp
 
   root.style.maxHeight = '' // Measure natural height
   root.style.overflow = 'visible' // Flyouts must not clip during measure
-  if (body) body.style.maxHeight = '' // Natural body
+  root.style.display = '' // Flex column applied after measure
+  root.style.flexDirection = ''
+  root.style.overflowY = ''
+  if (body) {
+    body.style.maxHeight = '' // Natural body
+    body.style.minHeight = ''
+    body.style.flex = ''
+    body.style.overflowY = ''
+  }
+  for (const child of root.children) {
+    const el = child as HTMLElement
+    if (el === body || el.dataset.ttMenuFlyout) continue
+    el.style.flexShrink = '' // Clear chrome clamp from the last pass
+  }
   if (flyout) flyout.style.maxHeight = '' // Natural flyout
   if (nested) nested.style.maxHeight = '' // Natural nested
 
@@ -456,9 +469,22 @@ export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOp
 
   setViewportPos(root, best.menuLeft, best.top) // Park the main card
   const top = best.top // Flyouts share this cluster top when not row-aligned
-  const chrome = body ? Math.max(0, root.getBoundingClientRect().height - body.getBoundingClientRect().height) : 0 // Search + label above the scroller
-  if (body) body.style.maxHeight = `${Math.max(0, menuMaxH - chrome)}px` // Shrink rows; keep search visible
-  else {
+  const chrome = body ? Math.max(0, menuH - Math.ceil(body.getBoundingClientRect().height)) : 0 // Search + label above the scroller
+  const bodyMaxH = Math.max(32, menuMaxH - chrome) // At least one row; clip from the bottom, never squash rows
+  if (body) {
+    root.style.display = 'flex' // Column: fixed chrome on top, scroller eats the rest
+    root.style.flexDirection = 'column'
+    root.style.maxHeight = `${menuMaxH}px` // Card height matches the safe lane
+    for (const child of root.children) {
+      const el = child as HTMLElement
+      if (el === body || el.dataset.ttMenuFlyout) continue // Flyouts stay absolute outside the column
+      el.style.flexShrink = '0' // Search / label never compress
+    }
+    body.style.flex = '1 1 auto' // Take leftover height under chrome
+    body.style.minHeight = '0' // Let overflow-y scroll instead of flex-squashing rows
+    body.style.maxHeight = `${bodyMaxH}px` // Clip from the bottom of the list
+    body.style.overflowY = 'auto' // Scroll hidden rows
+  } else {
     root.style.maxHeight = `${menuMaxH}px` // Slim menus (Notion connection) scroll as a whole
     root.style.overflowY = 'auto' // Enable the shrink
   }

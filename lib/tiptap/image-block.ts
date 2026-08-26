@@ -23,6 +23,13 @@ export function looksLikeImageSrc(text: string): boolean {
   }
 }
 
+function numAttr(el: HTMLElement, name: string, fallback: number): number {
+  const raw = el.getAttribute(name)
+  if (!raw) return fallback
+  const n = parseFloat(raw)
+  return Number.isFinite(n) ? n : fallback
+}
+
 /** A block whose payload is an image URL (or empty until the user adds one). */
 export const ImageBlock = Node.create<ImageBlockOptions>({
   name: 'imageBlock', // Node type id used by Turn into + ⋮⋮ grip
@@ -46,6 +53,29 @@ export const ImageBlock = Node.create<ImageBlockOptions>({
         default: '', // Accessible label (optional)
         parseHTML: (el) => (el as HTMLElement).getAttribute('data-alt') || '',
         renderHTML: (attrs) => (attrs.alt ? { 'data-alt': attrs.alt } : {}),
+      },
+      widthPct: {
+        default: 100, // Display width as % of the frame column
+        parseHTML: (el) => numAttr(el as HTMLElement, 'data-width-pct', 100),
+        renderHTML: (attrs) =>
+          attrs.widthPct != null && attrs.widthPct !== 100
+            ? { 'data-width-pct': String(attrs.widthPct) }
+            : {},
+      },
+      hazed: {
+        default: false, // Blur until click-reveal (same frost as Hide text)
+        parseHTML: (el) => (el as HTMLElement).getAttribute('data-hazed') === 'true',
+        renderHTML: (attrs) => (attrs.hazed ? { 'data-hazed': 'true' } : {}),
+      },
+      crop: {
+        default: null, // "cx,cy,cw,ch" center + size percentages
+        parseHTML: (el) => (el as HTMLElement).getAttribute('data-crop') || null,
+        renderHTML: (attrs) => (attrs.crop ? { 'data-crop': attrs.crop } : {}),
+      },
+      originalSrc: {
+        default: null, // Pre–remove-background src for undo
+        parseHTML: (el) => (el as HTMLElement).getAttribute('data-original-src') || null,
+        renderHTML: (attrs) => (attrs.originalSrc ? { 'data-original-src': attrs.originalSrc } : {}),
       },
     }
   },

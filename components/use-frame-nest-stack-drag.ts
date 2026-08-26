@@ -59,10 +59,10 @@ const STACK_EXPAND_GAP = 12 // Gap between host and first stacked frame / betwee
 export const STACK_LINE_GAP = STACK_EXPAND_GAP
 /** Flow-px gap (edge-to-edge) that arms snap preview. */
 const SNAP_ARM_PX = 28
-/** Flow-px gap that magnets the dragged frame to the parked snap distance. */
-const SNAP_MAGNET_PX = 18
 /** Min fraction of the shorter parallel edge that must overlap to count as a side snap. */
 const SNAP_OVERLAP_MIN = 0.25
+/** Score discount for the edge already armed this drag — one lane per side, no mid-drag hopping. */
+const SNAP_STICKY_BONUS = 14
 
 function nodeMeta(n: Node): Record<string, unknown> {
   return (n.data?.promptMessage?.metadata || {}) as Record<string, unknown>
@@ -593,7 +593,8 @@ function groupExtentOnSide(
 
 /**
  * Best edge-snap of `dragged` onto another chatPanel (host).
- * Prefers small edge gap + strong overlap along the shared edge.
+ * Prefers small edge gap + strong overlap along the shared edge; `prefer` (the edge already armed
+ * this drag) wins near-ties so the frame keeps one lane instead of hopping between hosts.
  * Parks past the outermost mate on that **side’s** tree only (other sides untouched).
  */
 export function findFrameEdgeSnap(
@@ -601,7 +602,8 @@ export function findFrameEdgeSnap(
   live: Node[],
   armPx = SNAP_ARM_PX,
   excludeHostSides?: Set<string>, // `${hostId}:${side}` — e.g. just-left edge after unstack
-  zoom = 1
+  zoom = 1,
+  prefer?: { targetId: string; side: FrameStackSide } | null // Sticky edge from the previous tick
 ): SnapCandidate | null {
   if (dragged.type !== 'chatPanel') return null
   const dragMeta = nodeMeta(dragged)
@@ -639,39 +641,28 @@ export function findFrameEdgeSnap(
         ? groupExtentOnSide(sideGroup, side, live, hBox, zoom)
         : hBox
 
+      // One lane per side: magnet the perpendicular axis only, keep the user’s slide along the edge
       let snappedAdjust = { x: dBox.x, y: dBox.y }
       if (side === 'right') {
         gap = dBox.x - (hBox.x + hBox.width)
         overlap = overlapLen(dBox.y, dBox.y + dBox.height, hBox.y, hBox.y + hBox.height)
         parallel = Math.min(dBox.height, hBox.height)
-        snappedAdjust = {
-          x: parkBox.x + parkBox.width + STACK_LINE_GAP,
-          y: parkBox.y + (parkBox.height - dAdjustSize.height) / 2,
-        }
+        snappedAdjust = { x: parkBox.x + parkBox.width + STACK_LINE_GAP, y: dBox.y }
       } else if (side === 'left') {
         gap = hBox.x - (dBox.x + dBox.width)
         overlap = overlapLen(dBox.y, dBox.y + dBox.height, hBox.y, hBox.y + hBox.height)
         parallel = Math.min(dBox.height, hBox.height)
-        snappedAdjust = {
-          x: parkBox.x - dAdjustSize.width - STACK_LINE_GAP,
-          y: parkBox.y + (parkBox.height - dAdjustSize.height) / 2,
-        }
+        snappedAdjust = { x: parkBox.x - dAdjustSize.width - STACK_LINE_GAP, y: dBox.y }
       } else if (side === 'bottom') {
         gap = dBox.y - (hBox.y + hBox.height)
         overlap = overlapLen(dBox.x, dBox.x + dBox.width, hBox.x, hBox.x + hBox.width)
         parallel = Math.min(dBox.width, hBox.width)
-        snappedAdjust = {
-          x: parkBox.x + (parkBox.width - dAdjustSize.width) / 2,
-          y: parkBox.y + parkBox.height + STACK_LINE_GAP,
-        }
+        snappedAdjust = { x: dBox.x, y: parkBox.y + parkBox.height + STACK_LINE_GAP }
       } else {
         gap = hBox.y - (dBox.y + dBox.height)
         overlap = overlapLen(dBox.x, dBox.x + dBox.width, hBox.x, hBox.x + hBox.width)
         parallel = Math.min(dBox.width, hBox.width)
-        snappedAdjust = {
-          x: parkBox.x + (parkBox.width - dAdjustSize.width) / 2,
-          y: parkBox.y - dAdjustSize.height - STACK_LINE_GAP,
-        }
+        snappedAdjust = { x: dBox.x, y: parkBox.y - dAdjustSize.height - STACK_LINE_GAP }
       }
 
       // Gap is measured to the hovered frame (arm), but park uses stack extent
@@ -685,7 +676,11 @@ export function findFrameEdgeSnap(
       if (gap < -2 || gap > armPx) continue
       if (parallel <= 0 || overlap / parallel < SNAP_OVERLAP_MIN) continue
 
-      const score = Math.abs(gap - STACK_LINE_GAP) + (1 - overlap / parallel) * 8
+      const sticky = prefer && prefer.targetId === host.id && prefer.side === side
+      const score =
+        Math.abs(gap - STACK_LINE_GAP) +
+        (1 - overlap / parallel) * 8 -
+        (sticky ? SNAP_STICKY_BONUS : 0)
       if (score >= bestScore) continue
       bestScore = score
       best = {
@@ -1127,6 +1122,108 @@ export function useFrameNestStackDrag({
     [clearUi, getNodes, setNodes, takeSnapshot]
   )
 
+  const dragSnapRafRef = useRef<number | null>(null) // Coalesce edge-snap scans to one per frame
+  const pendingSnapDragRef = useRef<{
+    event: { clientX: number; clientY: number } | undefined
+    node: Node
+  } | null>(null)
+
+  const runSnapDragTick = useCallback(
+    (_event: { clientX: number; clientY: number } | undefined, node: Node) => {
+      const live = getNodes()
+      const liveNode = live.find((n) => n.id === node.id) || node
+      const dragNode = { ...liveNode, position: node.position }
+      const meta = nodeMeta(liveNode)
+
+      const snapDrag =
+        unstackedThisDragRef.current
+          ? (() => {
+              const m = { ...nodeMeta(dragNode) }
+              delete m.sideStacks
+              delete m.stackGroupId
+              delete m.stackSide
+              delete m.stackIndex
+              delete m.stackAnchor
+              delete m.stackExpanded
+              delete m.parentStackHidden
+              return {
+                ...dragNode,
+                data: {
+                  ...dragNode.data,
+                  promptMessage: dragNode.data?.promptMessage
+                    ? { ...dragNode.data.promptMessage, metadata: m }
+                    : dragNode.data?.promptMessage,
+                },
+              }
+            })()
+          : dragNode
+      const armed = snapRef.current
+      const snap = findFrameEdgeSnap(
+        snapDrag,
+        live,
+        SNAP_ARM_PX,
+        unstackedThisDragRef.current ? excludeSnapSidesRef.current : undefined,
+        zoom,
+        armed ? { targetId: armed.targetId, side: armed.side } : null
+      )
+      if (!snap) {
+        if (dropUiRef.current) clearUi()
+        return
+      }
+
+      snapRef.current = snap
+      const hostNode = live.find((n) => n.id === snap.targetId)
+      const adjustRect = frameAdjustScreenRect(snap.targetId, hostNode, zoom)
+      const targetRect = adjustRect
+        ? { top: adjustRect.top, left: adjustRect.left, width: adjustRect.width, height: adjustRect.height }
+        : {
+            top: 0,
+            left: 0,
+            width: snap.hostAbs.width,
+            height: snap.hostAbs.height,
+          }
+      const parkedAdjust = frameAdjustFlowBoxAt(dragNode, snap.snappedAbs, zoom)
+      const sourceRect = {
+        top: targetRect.top + (parkedAdjust.y - snap.hostAbs.y) * zoom,
+        left: targetRect.left + (parkedAdjust.x - snap.hostAbs.x) * zoom,
+        width: parkedAdjust.width * zoom,
+        height: parkedAdjust.height * zoom,
+      }
+
+      setDropUi({
+        targetId: snap.targetId,
+        mode: 'snap',
+        stackSide: snap.side,
+        targetRect,
+        sourceRect,
+        zoom,
+      })
+
+      const nextPos = absToNodePosition(dragNode, snap.snappedAbs, live)
+      const cur = dragNode.position
+      if (Math.abs(cur.x - nextPos.x) > 0.5 || Math.abs(cur.y - nextPos.y) > 0.5) {
+        setNodes((nds) =>
+          nds.map((n) => (n.id === dragNode.id ? { ...n, position: nextPos } : n))
+        )
+      }
+    },
+    [clearUi, getNodes, setNodes, zoom]
+  )
+
+  const scheduleSnapDragTick = useCallback(
+    (event: { clientX: number; clientY: number } | undefined, node: Node) => {
+      pendingSnapDragRef.current = { event, node }
+      if (dragSnapRafRef.current != null) return
+      dragSnapRafRef.current = requestAnimationFrame(() => {
+        dragSnapRafRef.current = null
+        const pending = pendingSnapDragRef.current
+        if (!pending) return
+        runSnapDragTick(pending.event, pending.node)
+      })
+    },
+    [runSnapDragTick]
+  )
+
   const onNodeDrag = useCallback(
     (_event: { clientX: number; clientY: number } | undefined, node: Node) => {
       if (isLocked || node.type !== 'chatPanel') {
@@ -1180,89 +1277,18 @@ export function useFrameNestStackDrag({
         }
       }
 
-      // After unstack: arm any edge except the ones we just left (other side / other frame OK).
-      // Strip stale stack membership on the drag candidate until RF setNodes from unstack flushes —
-      // otherwise dragGroups.has(sideGroup) can still skip the host edge we are free to rejoin
-      // under a fresh group / other side.
-      const snapDrag =
-        unstackedThisDragRef.current
-          ? (() => {
-              const m = { ...nodeMeta(dragNode) }
-              delete m.sideStacks
-              delete m.stackGroupId
-              delete m.stackSide
-              delete m.stackIndex
-              delete m.stackAnchor
-              delete m.stackExpanded
-              delete m.parentStackHidden
-              return {
-                ...dragNode,
-                data: {
-                  ...dragNode.data,
-                  promptMessage: dragNode.data?.promptMessage
-                    ? { ...dragNode.data.promptMessage, metadata: m }
-                    : dragNode.data?.promptMessage,
-                },
-              }
-            })()
-          : dragNode
-      const snap = findFrameEdgeSnap(
-        snapDrag,
-        live,
-        SNAP_ARM_PX,
-        unstackedThisDragRef.current ? excludeSnapSidesRef.current : undefined,
-        zoom
-      )
-      if (!snap) {
-        if (dropUiRef.current) clearUi()
-        return
-      }
-
-      snapRef.current = snap
-      const hostNode = live.find((n) => n.id === snap.targetId)
-      const adjustRect = frameAdjustScreenRect(snap.targetId, hostNode, zoom)
-      const sourceAdjust = frameAdjustScreenRect(dragNode.id, dragNode, zoom)
-      const targetRect = adjustRect
-        ? { top: adjustRect.top, left: adjustRect.left, width: adjustRect.width, height: adjustRect.height }
-        : {
-            top: 0,
-            left: 0,
-            width: snap.hostAbs.width,
-            height: snap.hostAbs.height,
-          }
-      const sourceRect = sourceAdjust
-        ? {
-            top: sourceAdjust.top,
-            left: sourceAdjust.left,
-            width: sourceAdjust.width,
-            height: sourceAdjust.height,
-          }
-        : targetRect
-
-      setDropUi({
-        targetId: snap.targetId,
-        mode: 'snap',
-        stackSide: snap.side,
-        targetRect,
-        sourceRect,
-        zoom,
-      })
-
-      if (snap.gap <= SNAP_MAGNET_PX) {
-        const nextPos = absToNodePosition(dragNode, snap.snappedAbs, live)
-        const cur = dragNode.position
-        if (Math.abs(cur.x - nextPos.x) > 0.5 || Math.abs(cur.y - nextPos.y) > 0.5) {
-          setNodes((nds) =>
-            nds.map((n) => (n.id === dragNode.id ? { ...n, position: nextPos } : n))
-          )
-        }
-      }
+      scheduleSnapDragTick(_event, node)
     },
-    [clearUi, getNodes, isLocked, setNodes, unstackNode, zoom]
+    [clearUi, getNodes, isLocked, scheduleSnapDragTick, setNodes, unstackNode]
   )
 
   const onNodeDragStop = useCallback(
     async (_event: unknown, node: Node) => {
+      if (dragSnapRafRef.current != null) {
+        cancelAnimationFrame(dragSnapRafRef.current)
+        dragSnapRafRef.current = null
+      }
+      pendingSnapDragRef.current = null
       const snap = snapRef.current
       const lockSession = lockDragRef.current
       const didUnstack = unstackedThisDragRef.current

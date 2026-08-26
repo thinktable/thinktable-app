@@ -388,7 +388,7 @@ export function turnEditorBlockInto(
     }
     case 'image': {
       clearLists()
-      // If this block is already an image, keep it (Replace lives on the NodeView)
+      // If this block is already an image, keep it (image menu lives on the NodeView)
       if (typeName === 'imageBlock') return true
       const text = editor.state.doc.textBetween(from, to, '\n').trim()
       const src = looksLikeImageSrc(text) ? text : null // URL-only blocks become the image src

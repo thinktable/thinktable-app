@@ -42,6 +42,7 @@ import {
   isBoardNavigating,
   navigationZoom,
 } from '@/lib/board-navigating' // Freeze zoom selectors + skip hug while pinching
+import { isFrameDragging } from '@/lib/frame-dragging' // Skip O(n) stack scans mid frame drag
 import { readOnThread } from '@/lib/threads/on-thread-frame' // Compact chip layout for frames on threads
 import {
   deleteLinkedBoardForBlock,
@@ -82,11 +83,17 @@ import {
   frameHasVisibleText,
   shimmerBarCountFromHtml,
   BOARD_LOAD_FADE_MS,
+  resolveDeferredFrameBox,
+  type DeferredFrameBox,
 } from '@/components/frame-content-shimmer' // Frame vs text-line load shell while TipTap mounts
+import {
+  useFrameContentMount,
+  useWarmFrameContentMount,
+} from '@/components/frame-viewport-mount-context' // Defer TipTap until near the viewport
 import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Strip blank lines on frame deselect
 import { setAiTextSelection } from '@/lib/ai/selection-bridge' // Live highlighted-text pills in AI composer
 import { BlockActionsMenu, type BoardInTarget } from '@/components/block-actions-menu'
-import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, Fragment, memo } from 'react'
 import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, ScanText, WrapText } from 'lucide-react' // Rotate + fit-to-text / wrap
 import { useAiEditSession } from '@/lib/ai/edit-session' // Pending rainbow / review focus
 
@@ -815,7 +822,66 @@ function FrameConnectionsGroup({
   )
 }
 
-function TipTapContent({
+/** Lightweight shell while the frame is off-screen — no TipTap / NodeViews. */
+function TipTapContentDeferred({
+  content,
+  className,
+  enableBlockHandles = false,
+  isFlashcard,
+  isPanelSelected,
+  deferredBox,
+}: {
+  content: string
+  className?: string
+  enableBlockHandles?: boolean
+  isFlashcard?: boolean
+  isPanelSelected?: boolean
+  deferredBox?: DeferredFrameBox | null // Cached/estimated inner fill — parent owns outer chrome
+}) {
+  if (!enableBlockHandles || isFlashcard) return null
+  const kind = deferredBox?.kind ?? (frameHasVisibleText(content) ? 'text' : 'empty')
+  const shimmerHasText = deferredBox?.hasText ?? frameHasVisibleText(content)
+  const barCount = deferredBox?.barCount ?? shimmerBarCountFromHtml(content)
+  const innerW = deferredBox
+    ? Math.max(1, deferredBox.width - BLOCK_FRAME_PAD_X * 2)
+    : BLOCK_LOCKED_MIN_W
+  const innerH = deferredBox
+    ? Math.max(BLOCK_MIN_FRAME_H, deferredBox.height - BLOCK_FRAME_PAD_Y * 2)
+    : BLOCK_MIN_FRAME_H
+  const isInline = className?.includes('inline')
+  const otherClasses = className?.replace(/\binline\b/g, '').trim()
+  return (
+    <div
+      className={cn(
+        'relative overflow-visible w-full h-full min-h-0',
+        isFlashcard ? 'cursor-pointer' : isPanelSelected ? 'cursor-text' : 'cursor-grab',
+        !isPanelSelected && 'tt-frame-unselected',
+        isInline && 'inline-block',
+        otherClasses
+      )}
+    >
+      <div className="relative w-full h-full min-h-0 overflow-hidden">
+        {kind === 'database' ? (
+          <div className="flex h-full w-full flex-col gap-1 p-0">
+            <div className="tt-frame-shimmer h-7 w-2/5 shrink-0 rounded-sm" />
+            <div className="tt-frame-shimmer min-h-0 flex-1 rounded-sm" />
+          </div>
+        ) : (
+          <FrameContentShimmer
+            hasText={shimmerHasText}
+            barCount={barCount}
+            withGutter={false}
+            matchFramePad
+            className="h-full w-full"
+            style={{ width: innerW, height: innerH, minWidth: innerW, minHeight: innerH }}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function TipTapContentLive({
   content,
   className,
   originalContent,
@@ -857,6 +923,7 @@ function TipTapContent({
   onPropertyTurnInto,
   pinConnectionsToFrame = false, // Free-frame clip: hug spacer only; real group is pinned to the frame
   loadCrossfade = false, // Board load: keep the shell overlay and fade it out; new frames skip this
+  viewportCrossfade = false, // Viewport mount: dissolve shell when TipTap first mounts off cold load
   contentPadLeft = 0, // contentFit paddingLeft — ⋮⋮ centers in the blue gutter past this pad
   frameScale = 1, // Locked-resize CSS scale — grips remeasure when it changes
   handleGutterFlow = 0, // Blue L/R gutter width (flow px) — ⋮⋮ local left compensates contentFit scale
@@ -902,6 +969,7 @@ function TipTapContent({
   onPropertyTurnInto?: (propertyType: PropertyTypeId) => void // ⋮⋮ Turn into → Property
   pinConnectionsToFrame?: boolean
   loadCrossfade?: boolean // Fade the load shell out as TipTap fades in (skip for fadeIn creates)
+  viewportCrossfade?: boolean // Pan-in mount: same dissolve as load crossfade
   contentPadLeft?: number // contentFit padL — grip centering past the fill edge
   frameScale?: number // Locked-resize scale — ⋮⋮ remeasure (CSS transform skips RO)
   handleGutterFlow?: number // Adjust-box L gutter (flow px); grips inverse-scale into it
@@ -1562,31 +1630,6 @@ function TipTapContent({
       }
   }, [editor, content, comments, suspendContentSync, forceContentSyncKey])
 
-  // Reposition extension UI elements (like Grammarly) when panel moves
-  useEffect(() => {
-    if (!containerRef.current) return
-
-    const observer = new MutationObserver(() => {
-      // Find and reposition extension UI elements
-      const extensionElements = containerRef.current?.querySelectorAll('[data-grammarly-shadow-root], [id^="grammarly-"], [class*="grammarly"]')
-      extensionElements?.forEach((el) => {
-        const htmlEl = el as HTMLElement
-        // Extension elements are typically positioned absolutely or fixed
-        // We can't directly control them, but we can ensure the container is positioned correctly
-      })
-    })
-
-    if (containerRef.current) {
-      observer.observe(containerRef.current, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-      })
-    }
-
-    return () => observer.disconnect()
-  }, [containerRef])
-
   // Focus editor + place I-bar — only when the frame is already selected (not the select click)
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
     if (!editor) return
@@ -1619,7 +1662,11 @@ function TipTapContent({
   const otherClasses = className?.replace(/\binline\b/g, '').trim()
   // Keep the load shell until it finishes fading — TipTap mounts under it (immediatelyRender: false)
   const [keepShimmer, setKeepShimmer] = useState(
-    () => !!loadCrossfade && !!enableBlockHandles && !isFlashcard && !editor // Load shells only — not new fadeIn frames
+    () =>
+      !!enableBlockHandles &&
+      !isFlashcard &&
+      (!!loadCrossfade || !!viewportCrossfade) &&
+      !editor // Load / viewport shells — not new fadeIn frames
   )
   const [shimmerExiting, setShimmerExiting] = useState(false) // Opacity 1→0 once the editor exists
   const showFrameShimmer = !!enableBlockHandles && !isFlashcard && (!editor || keepShimmer) // Mount shell, then load overlay
@@ -1633,14 +1680,14 @@ function TipTapContent({
 
   useEffect(() => {
     if (!editor || !keepShimmer) return // Nothing to fade, or already gone
-    if (!enableBlockHandles || isFlashcard || !loadCrossfade) {
+    if (!enableBlockHandles || isFlashcard || (!loadCrossfade && !viewportCrossfade)) {
       setKeepShimmer(false) // Chat/flashcard/new frames never overlay a load shell
       return
     }
     setShimmerExiting(true) // Fade the shell out as real blocks are on screen
     const t = window.setTimeout(() => setKeepShimmer(false), BOARD_LOAD_FADE_MS) // Unmount after the CSS fade
     return () => window.clearTimeout(t)
-  }, [editor, enableBlockHandles, isFlashcard, keepShimmer, loadCrossfade])
+  }, [editor, enableBlockHandles, isFlashcard, keepShimmer, loadCrossfade, viewportCrossfade])
 
   if (!editor && (!enableBlockHandles || isFlashcard)) return null // Chat/flashcard keep prior null mount
 
@@ -1683,11 +1730,8 @@ function TipTapContent({
               </div>
             )}
             {/* ⋮⋮ paints outside the fill (negative left into panel chrome); no pl-6 inside the frame.
-                Keep mounted during RF drag (invisible) — unmounting mid-drag remounted atom NodeViews. */}
-            <div
-              className={cn(suspendContentSync && 'invisible pointer-events-none')}
-              aria-hidden={suspendContentSync || undefined}
-            >
+                Keep mounted during RF drag — unmounting mid-drag remounted atom NodeViews. */}
+            <div>
               <TipTapBlockHandles
                 editor={editor}
                 enabled={enableBlockHandles && showBlockHandles && !isFlashcard}
@@ -1748,6 +1792,36 @@ function TipTapContent({
           ))}
       </div>
     </div>
+  )
+}
+
+function TipTapContent(
+  props: Parameters<typeof TipTapContentLive>[0] & {
+    mountImmediately?: boolean
+    deferredBox?: DeferredFrameBox | null
+  }
+) {
+  const { mountImmediately, ...liveProps } = props
+  const mountContent = useFrameContentMount(liveProps.hostNodeId)
+  const shouldMountLive =
+    mountImmediately ||
+    liveProps.isPanelSelected ||
+    liveProps.isFlashcard ||
+    !liveProps.enableBlockHandles ||
+    mountContent
+  if (!shouldMountLive) {
+    return <TipTapContentDeferred {...liveProps} deferredBox={liveProps.deferredBox} />
+  }
+  return (
+    <TipTapContentLive
+      {...liveProps}
+      viewportCrossfade={
+        !mountImmediately &&
+        !liveProps.loadCrossfade &&
+        !!liveProps.enableBlockHandles &&
+        !liveProps.isFlashcard
+      }
+    />
   )
 }
 
@@ -2256,7 +2330,7 @@ function TagButton({ responseMessageId }: { responseMessageId: string }) {
   )
 }
 
-export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelNodeData>) {
+function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNodeData>) {
   // Handle both ChatPanelNodeData and ProjectBoardPanelNodeData
   const isProjectBoard = isProjectBoardData(data)
 
@@ -2282,6 +2356,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     justRestoredByMessage,
     consumeRestoredContent,
   } = useAiEditSession() // AI edit review session
+  const warmFrameContentMount = useWarmFrameContentMount() // Prefetch TipTap before pan-in
   const wasAiPendingRef = useRef(false) // Detect pending → cleared (Remove / Save)
   const [aiForceSyncKey, setAiForceSyncKey] = useState(0) // Bump to setContent even while focused
   const { reactFlowInstance, panelWidth, getSetNodes, flashcardMode, setFlashcardMode, selectedTag } = useReactFlowContext() // Get zoom, panel width, setNodes function, flashcard study mode, and selected tag
@@ -3018,6 +3093,26 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     (promptMessage?.role === 'user' && 
      !responseMessage && 
      (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
+  const mountContent = useFrameContentMount(id) // Viewport defer — TipTap only when near / selected / warm
+  const contentDeferred =
+    isBlock &&
+    !isFlashcard &&
+    !selected &&
+    promptMessage?.metadata?.fadeIn !== true &&
+    !mountContent
+  const deferredBox = useMemo(() => {
+    if (!contentDeferred) return null
+    return resolveDeferredFrameBox(
+      id,
+      conversationId,
+      promptContent,
+      (promptMessage?.metadata as Record<string, unknown>) || null
+    )
+  }, [contentDeferred, id, conversationId, promptContent, promptMessage?.metadata])
+  const deferredLayoutBox = useMemo(() => {
+    if (!deferredBox) return null
+    return { width: deferredBox.width, height: deferredBox.height }
+  }, [deferredBox])
   const isOnThreadFrame = Boolean(
     readOnThread(promptMessage?.metadata as Record<string, unknown> | undefined)
   )
@@ -3177,6 +3272,7 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
   const stackMeta = (promptMessage?.metadata || {}) as Record<string, unknown>
   const stackGapSides = useStore(
     (s) => {
+      if (isBoardNavigating() || isFrameDragging()) return [] as Array<{ side: FrameStackSide; groupId: string }>
       const mine = readSideStacks(stackMeta)
       const sides: Array<{ side: FrameStackSide; groupId: string }> = []
       for (const side of FRAME_STACK_SIDES) {
@@ -3817,6 +3913,47 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
     }, 0)
     return () => window.clearTimeout(t)
   }, [dragging, promptContent, promptMessage?.content])
+
+  // Push cached outer box to RF while TipTap is deferred (threads/minimap need real geometry).
+  useEffect(() => {
+    if (!contentDeferred || !deferredLayoutBox || !isBlock) return
+    const setNodesFunc = getSetNodes()
+    if (!setNodesFunc) return
+    setNodesFunc((nodes: any[]) => {
+      const node = nodes.find((n: any) => n.id === id)
+      if (!node) return nodes
+      const styleW =
+        typeof node.style?.width === 'number' ? node.style.width : parseFloat(node.style?.width)
+      const styleH =
+        typeof node.style?.height === 'number' ? node.style.height : parseFloat(node.style?.height)
+      if (
+        Number.isFinite(styleW) &&
+        Number.isFinite(styleH) &&
+        Math.abs(styleW - deferredLayoutBox.width) <= 1 &&
+        Math.abs(styleH - deferredLayoutBox.height) <= 1
+      ) {
+        return nodes
+      }
+      return nodes.map((n: any) =>
+        n.id === id
+          ? {
+              ...n,
+              width: deferredLayoutBox.width,
+              height: deferredLayoutBox.height,
+              style: { ...n.style, width: deferredLayoutBox.width, height: deferredLayoutBox.height },
+            }
+          : n
+      )
+    })
+  }, [contentDeferred, deferredLayoutBox, isBlock, id, getSetNodes])
+
+  useEffect(() => {
+    if (!contentDeferred || !deferredBox || intrinsicMeasured) return
+    setIntrinsicSize({
+      width: Math.max(BLOCK_LOCKED_MIN_W, deferredBox.width - BLOCK_FRAME_PAD_X * 2),
+      height: Math.max(BLOCK_MIN_FRAME_H, deferredBox.height - BLOCK_FRAME_PAD_Y * 2),
+    })
+  }, [contentDeferred, deferredBox, intrinsicMeasured])
 
   // Regular chat panels are those that are not flashcards and not notes
   const isRegularChatPanel = !isFlashcard && !isBlock
@@ -6325,7 +6462,11 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
           height: huggedSize.height + adjustChromeYTop + adjustChromeYBottom,
         }
       : null
-  const layoutBox = layoutBoxFreeze || rowCardLiveBox || atomExplicitBox
+  const layoutBox =
+    layoutBoxFreeze ||
+    rowCardLiveBox ||
+    atomExplicitBox ||
+    (contentDeferred && !intrinsicMeasured && deferredLayoutBox ? deferredLayoutBox : null)
   const shapeBoxW = contentBoxW
   const shapeBoxH = contentBoxH
   const shapeClip = frameShape ? frameShapeClipCss(frameShape) : undefined
@@ -6478,6 +6619,9 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
         ['--tt-frame-handle' as string]: `${frameHandleSize}px`,
         ['--tt-frame-handle-border' as string]: `${Math.max(1, 1.5 * frameUiScale)}px`,
         ['--tt-frame-radius' as string]: `${frameCornerRadius}px`, // Fill radius only — adjust ring is square
+      }}
+      onPointerEnter={() => {
+        if (isBlock && !isFlashcard) warmFrameContentMount(id) // Mount TipTap before the frame fully enters view
       }}
       onPointerDownCapture={(e) => {
         const t = e.target as HTMLElement | null
@@ -7162,6 +7306,8 @@ export function ChatPanelNode({ data, selected, id, dragging }: NodeProps<PanelN
               onPropertyTurnInto={handlePropertyTurnInto}
               pinConnectionsToFrame={pinConnectionsToFrame}
               loadCrossfade={promptMessage?.metadata?.fadeIn !== true} // Load: dissolve the shell; new frames use note-fade-in
+              mountImmediately={promptMessage?.metadata?.fadeIn === true} // I-bar / grip creates mount TipTap immediately
+              deferredBox={deferredBox}
               contentPadLeft={isBlock ? BLOCK_FRAME_PAD_X : 0}
               frameScale={frameScale}
               handleGutterFlow={handleGutterFlow}
@@ -7652,4 +7798,14 @@ function CommentPanel({
     </div>
   )
 }
+
+export const ChatPanelNode = memo(
+  ChatPanelNodeInner,
+  (prev, next) =>
+    prev.id === next.id &&
+    prev.selected === next.selected &&
+    prev.dragging === next.dragging &&
+    prev.data === next.data &&
+    prev.type === next.type
+)
 

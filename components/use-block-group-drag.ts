@@ -3,7 +3,7 @@
 // Drag **frames** into / out of the legacy dashed wrapper (RF `blockGroup`, not a product type).
 // Wrapper is an RF sibling (no parentId); membership is metadata.blockGroupId. ⋮⋮ is block-only.
 
-import { useCallback } from 'react' // Stable drag handlers
+import { useCallback, useRef } from 'react' // Stable drag handlers
 import type { Node } from 'reactflow' // RF node shape (v11)
 import { createClient } from '@/lib/supabase/client' // Persist placement to messages.metadata
 import {
@@ -81,9 +81,11 @@ type UseBlockGroupDragOpts = {
 
 /** Attach / detach chatPanel blocks. Group frame move is custom (ring) — not RF node drag. */
 export function useBlockGroupDrag({ conversationId, getNodes, setNodes, isLocked }: UseBlockGroupDragOpts) {
-  const onNodeDrag = useCallback(
-    (_event: unknown, node: Node) => {
-      if (isLocked || node.type !== 'chatPanel') return // Groups aren’t RF-draggable
+  const dragRafRef = useRef<number | null>(null)
+  const pendingNodeRef = useRef<Node | null>(null)
+
+  const runDropHighlight = useCallback(
+    (node: Node) => {
       const live = getNodes().map((n) => (n.id === node.id ? { ...n, position: node.position } : n))
       const targetId = findDropTargetGroup({ ...node, parentId: undefined }, live)?.id ?? null
       const current = getNodes()
@@ -102,7 +104,21 @@ export function useBlockGroupDrag({ conversationId, getNodes, setNodes, isLocked
         })
       )
     },
-    [getNodes, isLocked, setNodes]
+    [getNodes, setNodes]
+  )
+
+  const onNodeDrag = useCallback(
+    (_event: unknown, node: Node) => {
+      if (isLocked || node.type !== 'chatPanel') return // Groups aren’t RF-draggable
+      pendingNodeRef.current = node
+      if (dragRafRef.current != null) return
+      dragRafRef.current = requestAnimationFrame(() => {
+        dragRafRef.current = null
+        const pending = pendingNodeRef.current
+        if (pending) runDropHighlight(pending)
+      })
+    },
+    [isLocked, runDropHighlight]
   )
 
   const onNodeDragStop = useCallback(

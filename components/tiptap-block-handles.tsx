@@ -808,7 +808,7 @@ export function TipTapBlockHandles({
       // Keep wash when clicking grips, menus, or the property / connections chrome strips
       if (
         t.closest?.(
-          '.block-actions-menu, [data-tt-block-handle], [data-tt-property-header], [data-tt-connections-header]'
+          '.block-actions-menu, [data-tt-block-handle], [data-tt-property-header], [data-tt-connections-header], [data-tt-image-menu], .tt-image-block-media'
         )
       ) {
         return

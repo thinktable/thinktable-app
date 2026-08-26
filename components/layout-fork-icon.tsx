@@ -115,8 +115,8 @@ export function LayoutForkMenuItems({
   onDirectionChange: (dir: LayoutArrowDir) => void // Pick down / right / left / up
   onAlignChange: (align: LayoutForkAlign) => void // Pick single arrow, or left / center / right fork
   canSnap?: boolean // Need ≥2 selected frames
-  snapActive?: boolean // Selection already shares a sideStacks link
-  onSnapFrames?: () => void // Toggle pack/unlink — does not change align
+  snapActive?: boolean // Selection's shared side-stack group is locked
+  onSnapFrames?: () => void // Create + lock a snap, or toggle its stack-line lock
   canStack?: boolean // Need ≥2 selected (or an already-stacked group)
   stackActive?: boolean // Selection’s group has hidden mates
   onStackFrames?: () => void // Toggle stack/unstack — does not change direction
@@ -127,8 +127,8 @@ export function LayoutForkMenuItems({
     <div className="flex w-fit items-stretch"> {/* Two columns: align | direction */}
       <div className="flex flex-col"> {/* Magnet toggle on top, then alignment arrows */}
         <DropdownMenuItem
-          title={!canSnap ? 'Select 2+ frames to snap together' : snapActive ? 'Unsnap frames' : 'Snap frames together'}
-          aria-label={!canSnap ? 'Select 2+ frames to snap together' : snapActive ? 'Unsnap frames' : 'Snap frames together'}
+          title={!canSnap ? 'Select 2+ frames to snap together' : snapActive ? 'Unlock snapped frames' : 'Snap and lock frames'}
+          aria-label={!canSnap ? 'Select 2+ frames to snap together' : snapActive ? 'Unlock snapped frames' : 'Snap and lock frames'}
           disabled={!canSnap}
           onSelect={(e) => {
             e.preventDefault() // Keep the menu open; do not steal the alignment pick
