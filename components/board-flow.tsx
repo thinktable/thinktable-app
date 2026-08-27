@@ -140,7 +140,7 @@ import { ThinktableBrandMark } from './personalize-ai-modal'
 import { NavZoomControl } from './nav-zoom-control' // Zoom % lives in bottom nav (not top bar)
 import { NavRotateControl } from './nav-rotate-control' // Board rotate icon — right of zoom %
 import { BoardRotationProvider, useBoardRotation } from './board-rotation-context' // Two-finger twist + nav camera heading
-import { applyBoardRotationToPositionChanges, flowToPane, paneToFlow, viewportKeepingPanePoint } from '@/lib/board-rotation' // Camera-aware pane ↔ flow
+import { applyBoardRotationToPositionChanges, viewportKeepingPanePoint } from '@/lib/board-rotation' // Camera-aware pane ↔ flow
 import { computeMinimapViewScale, panViewportFromMinimapDrag } from '@/lib/minimap-viewport-pan' // Phone minimap drag (RF only pans on mousemove)
 import { useInsertSpaceDrag, type InsertSpaceAxis } from './use-insert-space-drag' // Draw bar insert-space drag
 import { InsertSpaceOverlay } from './insert-space-overlay' // Guide line + inserted band preview
@@ -1008,7 +1008,7 @@ function BoardFlowInner({
   const reactFlowInstance = useReactFlow()
   const rfStore = useStoreApi() // Embed: force pane width/height when CSS % height collapses
   const updateNodeInternals = useUpdateNodeInternals() // Remeasure Handles after connect so paths attach
-  const { setReactFlowInstance, registerSetNodes, isLocked, layoutMode, setLayoutMode, setIsDeterministicMapping, panelWidth: contextPanelWidth, isPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection, boardRule: contextBoardRule, boardStyle: contextBoardStyle, clickedEdge: contextClickedEdge, setClickedEdge: setContextClickedEdge, fillColor, borderColor, borderWeight, borderStyle, flashcardMode, setFlashcardMode, selectedTag, setSelectedTag, isDrawing, drawTool, drawShape, registerMapUndoRedo, registerMapTakeSnapshot, snapEnabled } = useReactFlowContext()
+  const { setReactFlowInstance, registerSetNodes, isLocked, layoutMode, setLayoutMode, setIsDeterministicMapping, panelWidth: contextPanelWidth, isPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection, boardRule: contextBoardRule, boardStyle: contextBoardStyle, boardFont, clickedEdge: contextClickedEdge, setClickedEdge: setContextClickedEdge, fillColor, borderColor, borderWeight, borderStyle, flashcardMode, setFlashcardMode, selectedTag, setSelectedTag, isDrawing, drawTool, drawShape, registerMapUndoRedo, registerMapTakeSnapshot, snapEnabled } = useReactFlowContext()
   const { rotation: boardRotation, setScrollMode } = useBoardRotation() // Subscribe so I-bar / overlays re-place when the camera twists
 
   const chatPanelCountRef = useRef(0) // Frame count is stable mid-drag — skip the O(n) scan per tick
@@ -8494,11 +8494,12 @@ function BoardFlowInner({
       }
 
       if (nextText === iBarTypeBufferRef.current) return // No change (composition tick / duplicate input)
-      iBarTypeBufferRef.current = nextText
 
       // First non-empty buffer: spawn the frame immediately (no await) so text never blanks
       if (!iBarCreatingRef.current) {
         if (!nextText) return // Still idle at the empty I-bar
+        const isSlashSpawn = nextText === '/' // Empty frame — TipTap inserts / and opens the menu
+        iBarTypeBufferRef.current = isSlashSpawn ? '' : nextText
         const pos = iBarPositionRef.current ?? iBarCreatePosRef.current
         if (!pos) return
 
@@ -8518,7 +8519,7 @@ function BoardFlowInner({
 
         const messageId = generateUUID()
         iBarPendingMessageIdRef.current = messageId
-        const html = bufferToHtml(iBarTypeBufferRef.current)
+        const html = isSlashSpawn ? '<p></p>' : bufferToHtml(iBarTypeBufferRef.current)
         const optimisticMessage = {
           id: messageId,
           role: 'user' as const,
@@ -8527,6 +8528,7 @@ function BoardFlowInner({
           metadata: newBlockMetadata({
             position: notePosition,
             fadeIn: true,
+            ...(isSlashSpawn ? { slashMenuPending: true } : {}),
           }),
         }
 
@@ -8629,6 +8631,8 @@ function BoardFlowInner({
         })()
         return
       }
+
+      iBarTypeBufferRef.current = nextText
 
       // Already spawning — keep buffer + live seed in sync until TipTap focuses
       pushSeed()
@@ -8823,17 +8827,13 @@ function BoardFlowInner({
     
     if (!isPane) return // Don't place I-bar if clicking on edges/controls
     
-    // Get click position relative to React Flow container
-    const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
-    if (!reactFlowElement || !reactFlowInstance) return
-    
-    const reactFlowRect = reactFlowElement.getBoundingClientRect()
-    const screenX = event.clientX - reactFlowRect.left
-    const screenY = event.clientY - reactFlowRect.top
-    
-    // Convert screen coordinates to flow coordinates (world space — rotation-aware)
+    if (!reactFlowInstance) return
+
+    const { x: flowX, y: flowY } = reactFlowInstance.screenToFlowPosition({
+      x: event.clientX,
+      y: event.clientY,
+    })
     const viewport = reactFlowInstance.getViewport()
-    const { x: flowX, y: flowY } = paneToFlow(screenX, screenY, viewport)
     
     // Store flow coordinates and current viewport for rendering
     setIBarPosition({ x: flowX, y: flowY })
@@ -9138,6 +9138,7 @@ function BoardFlowInner({
     <div
       ref={boardRootRef}
       data-board-root // Phone AI dock portals here (escapes main overflow-hidden)
+      data-board-font={boardFont}
       // absolute inset-0 fills the map column (chrome uses getBoundingClientRect of this box)
       className="absolute inset-0"
       style={{ WebkitTouchCallout: 'none' }} // Prefer our long-press menus over iOS callout
@@ -9634,14 +9635,11 @@ function BoardFlowInner({
             return
           }
 
-          const reactFlowElement = document.querySelector('.react-flow') as HTMLElement
-          if (!reactFlowElement) return
-
-          const reactFlowRect = reactFlowElement.getBoundingClientRect()
-          const screenX = event.clientX - reactFlowRect.left
-          const screenY = event.clientY - reactFlowRect.top
+          const { x: flowX, y: flowY } = reactFlowInstance.screenToFlowPosition({
+            x: event.clientX,
+            y: event.clientY,
+          }) // Same path as patched rotation + live zoom (IBarFlowAnchor must match)
           const viewport = reactFlowInstance.getViewport()
-          const { x: flowX, y: flowY } = paneToFlow(screenX, screenY, viewport) // Caret point in world space (rotation-aware)
 
           setRightClickedNode(null) // Don't stack with node action popup
           setBoardMenuPosition(null) // Don't stack with board menu
@@ -10187,7 +10185,7 @@ function BoardFlowInner({
         >
           {({ left, top, paneScale }) => (
         <div
-          className="absolute flex items-center"
+          className="absolute flex items-start"
           style={{
             // Convert flow coordinates back to pane coordinates (rotation-aware); grip sits left of caret
             left: `${left}px`,

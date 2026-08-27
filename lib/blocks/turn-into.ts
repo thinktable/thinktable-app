@@ -84,7 +84,7 @@ function unwrapKnownShells(html: string): string {
   const trimmed = (html || '').trim() || '<p></p>'
   // Pull content out of our custom wrappers / headings / lists / quote / code
   const wrappers = [
-    /^<div[^>]*data-type="(?:callout|toggleList|toggleHeading|blockEquation|syncedBlock|columns|imageBlock|propertyBlock)"[^>]*>([\s\S]*)<\/div>$/i,
+    /^<div[^>]*data-type="(?:callout|toggleList|toggleHeading|blockEquation|syncedBlock|columns|imageBlock|videoBlock|audioBlock|fileBlock|bookmarkBlock|propertyBlock)"[^>]*>([\s\S]*)<\/div>$/i,
     /^<h[1-4][^>]*>([\s\S]*)<\/h[1-4]>$/i,
     /^<blockquote[^>]*>([\s\S]*)<\/blockquote>$/i,
     /^<pre[^>]*><code[^>]*>([\s\S]*)<\/code><\/pre>$/i,

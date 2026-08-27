@@ -121,7 +121,7 @@ const FRAME_CORNER_RADIUS = 6
 const CONNECTIONS_GROUP_H = 28 // h-7 footer strip — hug spacer + pinned group when the free frame clips
 const DATABASE_BLOCK_HTML_RE = /data-type=["']databaseBlock["']/i // TipTap Notion DB atom in frame HTML
 const FRAME_ATOM_HTML_RE =
-  /data-type=["'](?:boardLink|pageLink|databaseBlock|imageBlock|propertyBlock)["']/i // Attr-only TipTap atoms
+  /data-type=["'](?:boardLink|pageLink|databaseBlock|imageBlock|videoBlock|audioBlock|fileBlock|bookmarkBlock|propertyBlock)["']/i // Attr-only TipTap atoms
 const MIN_DATABASE_FRAME_W = 240 // Below this a DB frame is a collapsed stub (grip + title only)
 const MIN_DATABASE_FRAME_H = 120 // Title row alone is ~40; table needs more height than that
 
@@ -2599,9 +2599,12 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
     !data.borderColor || data.borderColor === '' || data.borderColor === null
   const isBorderNone =
     isBorderColorTransparent || data.borderStyle === 'none' // Color alone is enough to show a border
+  const slashMenuPending =
+    (promptMessage?.metadata as Record<string, unknown> | undefined)?.slashMenuPending === true
   // Empty frames (no text / atoms) get a soft grey outline so the box is findable on the board
   const showEmptyFrameBorder =
     isBlockContentEmpty(promptContent) && // Live TipTap HTML — flips off as soon as content lands
+    !slashMenuPending && // I-bar `/` spawn — no grey flash before the slash menu opens
     isBorderColorTransparent && // User-set borderColor wins over empty chrome
     data.borderStyle !== 'none' && // Explicit "no border" stays invisible
     !frameShape // Silhouette stroke is the outline when shaped
@@ -5305,10 +5308,13 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
     if (ed && !ed.isDestroyed) {
       const doc = ed.state.doc
       const only = doc.childCount === 1 ? doc.firstChild : null
+      const blockText = only?.textContent ?? ''
       soleEmpty = !!(
         only &&
         only.isTextblock &&
-        (only.content.size === 0 || only.textContent.length === 0)
+        (only.content.size === 0 ||
+          blockText.length === 0 ||
+          blockText === '/') // I-bar / menu dismissed without choosing an item
       )
     } else {
       soleEmpty = isBlockContentEmpty(promptContent)
@@ -6142,8 +6148,10 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
 
   // Auto-focus note editor when first created (empty component panel or inline note with fadeIn flag)
   // Map I-bar typing seeds arrive via tt-ibar-typed-seed so keystrokes aren't dropped while the frame spawns
+  const slashMenuOpenedRef = useRef(false)
   useEffect(() => {
     if (!isComponentPanel || isFlashcard) return
+    slashMenuOpenedRef.current = false
 
     // TipTap iOS focus() omits preventScroll; pin page + overflow ancestors so edge creates don’t jump
     const focusFrameEditor = (ed: NonNullable<typeof promptEditorRef.current>) => {
@@ -6208,6 +6216,26 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
     const applySeed = (html: string, text: string) => {
       const ed = promptEditorRef.current
       if (!ed || ed.isDestroyed) return false
+
+      const meta = (promptMessage?.metadata || {}) as Record<string, unknown>
+      const slashPending = meta.slashMenuPending === true
+
+      // I-bar `/` spawn: empty frame first, then insert `/` once so the slash menu opens without deselecting
+      if (slashPending && !slashMenuOpenedRef.current) {
+        slashMenuOpenedRef.current = true
+        ed.commands.setContent('<p></p>')
+        ed.chain().focus('end').insertContent('/').run()
+        setPromptContent('<p>/</p>')
+        setPromptHasChanges(true)
+        hasAutoFocusedRef.current = true
+        if (!keepCaptureForPhone() && ed.isFocused && promptMessage?.id) {
+          window.dispatchEvent(
+            new CustomEvent('tt-ibar-seed-applied', { detail: { messageId: promptMessage.id } })
+          )
+        }
+        return true
+      }
+
       const current = ed.getText()
       const captureOwns = captureOwnsKeyboard() // Capture field still has the I-bar keyboard
       // Capture is source of truth until TipTap focuses — apply Backspace (shorter) as well as new chars.
@@ -6256,13 +6284,26 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
       if (isEmpty || isNewInlineNote) {
         const t = window.setTimeout(() => {
           if (!promptEditorRef.current || promptEditorRef.current.isDestroyed) return
-          // Phone: I-bar capture already focused — sync only; TipTap focus would Safari-zoom near edges
-          if (!keepCaptureForPhone()) {
-            focusFrameEditor(promptEditorRef.current)
+          const ed = promptEditorRef.current
+          const meta = (promptMessage?.metadata || {}) as Record<string, unknown>
+          if (meta.slashMenuPending === true && !slashMenuOpenedRef.current) {
+            slashMenuOpenedRef.current = true
+            ed.commands.setContent('<p></p>')
+            ed.chain().focus('end').insertContent('/').run()
+            setPromptContent('<p>/</p>')
+            setPromptHasChanges(true)
+            if (!keepCaptureForPhone() && ed.isFocused && promptMessage?.id) {
+              window.dispatchEvent(
+                new CustomEvent('tt-ibar-seed-applied', { detail: { messageId: promptMessage.id } })
+              )
+            }
+          } else if (!keepCaptureForPhone()) {
+            focusFrameEditor(ed)
           }
           hasAutoFocusedRef.current = true
-          // If a seed is still in flight, ask board-flow to re-push it
-          if (promptMessage?.id) {
+          // If a seed is still in flight, ask board-flow to re-push it (not for `/` slash spawn — empty seed would wipe `/`)
+          const metaAfter = (promptMessage?.metadata || {}) as Record<string, unknown>
+          if (promptMessage?.id && metaAfter.slashMenuPending !== true) {
             window.dispatchEvent(
               new CustomEvent('tt-ibar-request-seed', { detail: { messageId: promptMessage.id } })
             )
@@ -6282,6 +6323,7 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
     promptContent,
     promptMessage?.id,
     promptMessage?.metadata?.fadeIn,
+    promptMessage?.metadata,
   ])
 
   // Debug logging for flashcard conversion

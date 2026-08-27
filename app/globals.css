@@ -529,6 +529,25 @@ span[data-added="true"] {
     font-size: 0.875rem; /* 14px - ChatGPT chat text size */
   }
 
+  /* Board More menu → Default / Serif / Mono (frame TipTap + board links) */
+  [data-board-root][data-board-font='serif'] .react-flow .prose,
+  [data-board-root][data-board-font='serif'] .react-flow .ProseMirror,
+  [data-board-root][data-board-font='serif'] .react-flow .tt-board-link-label {
+    font-family: ui-serif, Georgia, Cambria, 'Times New Roman', Times, serif;
+  }
+
+  [data-board-root][data-board-font='mono'] .react-flow .prose,
+  [data-board-root][data-board-font='mono'] .react-flow .ProseMirror,
+  [data-board-root][data-board-font='mono'] .react-flow .tt-board-link-label {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  }
+
+  [data-board-root][data-board-font='default'] .react-flow .prose,
+  [data-board-root][data-board-font='default'] .react-flow .ProseMirror,
+  [data-board-root][data-board-font='default'] .react-flow .tt-board-link-label {
+    font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  }
+
   /* Phone Safari auto-zooms focused editors under 16px — keep board TipTap at 16px on touch */
   @media (hover: none), (pointer: coarse) {
     .react-flow .prose,
@@ -1752,6 +1771,8 @@ span[data-added="true"] {
   [data-tt-menu-flyout] {
     min-height: 0; /* Flex child can scroll instead of compressing rows */
     overscroll-behavior: contain;
+    touch-action: pan-y; /* Phone: finger drag scrolls the list, not the board */
+    -webkit-overflow-scrolling: touch; /* iOS momentum scroll inside clamped menus */
   }
   [data-tt-menu-body] > *,
   [data-tt-menu-flyout] > * {

@@ -30,6 +30,7 @@
     "@tiptap/extension-text-style": "^3.11.0",
     "@tiptap/react": "^3.11.0",
     "@tiptap/starter-kit": "^3.11.0",
+    "@tiptap/suggestion": "^3.29.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "d3-hierarchy": "^3.1.2",

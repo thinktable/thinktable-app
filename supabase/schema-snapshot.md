@@ -1,13 +1,22 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-26T17:07:15Z`
+- Snapped at: `2026-08-27T17:49:30Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260827174930_slash_commands_media_board_font_phone_menu.sql`.
+- Slash commands: TipTap `/` menu (`lib/tiptap/slash-command.ts`, `components/slash-command-menu.tsx`); I-bar `/` spawn with pending menu; space dismisses and keeps literal `/`.
+- Media blocks: image/video/audio/file TipTap nodes + views (`lib/tiptap/media-blocks.ts`, `components/media-block-view.tsx`).
+- Board font: default/serif/mono via More menu + `data-board-font` (`lib/board-font.ts`, `react-flow-context.tsx`).
+- Phone slash menu: fixed viewport placement, flip above caret, keyboard-aware safe rect + scrollable list (`lib/menu-placement.ts` `applySlashMenuPlacement`).
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Brand mark board fill and theme strokes
 
 - No DDL. Marker `20260826170715_brand_mark_board_fill_theme_strokes.sql`.
 - Brand mark: board-fill disc + grey border; default T/dot **black (light) / white (dark)** (`components/personalize-ai-modal.tsx` `ThinktableBrandMark`).

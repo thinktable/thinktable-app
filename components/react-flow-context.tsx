@@ -5,6 +5,7 @@ import { createContext, useContext, useState, useRef, useCallback, useEffect, us
 import { ReactFlowInstance } from 'reactflow'
 import { createClient } from '@/lib/supabase/client'
 import { usePathname } from 'next/navigation'
+import { parseBoardFontId, type BoardFontId } from '@/lib/board-font'
 
 interface ReactFlowContextType {
   reactFlowInstance: ReactFlowInstance | null
@@ -32,6 +33,8 @@ interface ReactFlowContextType {
   setBoardRule: (rule: 'wide' | 'college' | 'narrow') => void // Function to set board rule
   boardStyle: 'none' | 'dotted' | 'lined' | 'grid' // Board style state (background style)
   setBoardStyle: (style: 'none' | 'dotted' | 'lined' | 'grid') => void // Function to set board style
+  boardFont: BoardFontId // Frame text font (Default / Serif / Mono)
+  setBoardFont: (font: BoardFontId) => void // Function to set board font
   fillColor: string // Fill color state (for shapes/components)
   setFillColor: (color: string) => void // Function to set fill color
   borderColor: string // Border color state (for shapes/components)
@@ -123,6 +126,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
   const [viewMode, setViewMode] = useState<'linear' | 'canvas'>('canvas') // View mode state
   const [boardRule, setBoardRule] = useState<'wide' | 'college' | 'narrow'>('college') // Board rule state (default: college)
   const [boardStyle, setBoardStyle] = useState<'none' | 'dotted' | 'lined' | 'grid'>('dotted') // Board style state (default: college dotted)
+  const [boardFont, setBoardFont] = useState<BoardFontId>('default') // Frame text font (More menu)
   const [fillColor, setFillColor] = useState<string>('') // Fill color state (default: transparent)
   const [borderColor, setBorderColor] = useState<string>('') // Border color state (default: transparent)
   const [borderWeight, setBorderWeight] = useState<number>(1) // Border weight state (default: 1px)
@@ -210,6 +214,8 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
         if (prefs.boardStyle && ['none', 'dotted', 'lined', 'grid'].includes(prefs.boardStyle)) {
           setBoardStyle(prefs.boardStyle)
         }
+        const loadedFont = parseBoardFontId(prefs.boardFont)
+        if (loadedFont) setBoardFont(loadedFont)
       } catch (e) {
         // Fallback to old localStorage keys for backward compatibility
         const savedLayoutMode = localStorage.getItem('thinktable-layout-mode') as 'auto' | 'tree' | 'cluster' | 'none' | null
@@ -259,6 +265,13 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
           const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
           const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
           localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardStyle: homepageBoardPrefs.boardStyle }))
+        }
+        const homepageFont = parseBoardFontId(homepageBoardPrefs.boardFont)
+        if (homepageFont) {
+          setBoardFont(homepageFont)
+          const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
+          const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
+          localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardFont: homepageFont }))
         }
         // Also load other preferences from homepage board if they exist
         if (homepageBoardPrefs.layoutMode && ['auto', 'tree', 'cluster', 'none'].includes(homepageBoardPrefs.layoutMode)) {
@@ -350,6 +363,14 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
             const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
             const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
             localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardStyle: prefs.boardStyle }))
+          }
+
+          const syncedFont = parseBoardFontId((prefs as { boardFont?: unknown }).boardFont)
+          if (syncedFont) {
+            setBoardFont(syncedFont)
+            const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
+            const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
+            localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardFont: syncedFont }))
           }
         }
       }
@@ -768,6 +789,57 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
     saveToSupabase()
   }, [boardStyle]) // Only run when boardStyle changes, NOT when conversationId changes
 
+  // Save board font to localStorage and Supabase when it changes
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (isLoadingRef.current) return
+
+    const currentConversationId = conversationIdRef.current
+    const storageKey = currentConversationId ? `thinktable-prefs-${currentConversationId}` : 'thinktable-prefs-default'
+    const existingPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}')
+    localStorage.setItem(storageKey, JSON.stringify({ ...existingPrefs, boardFont }))
+
+    const saveToSupabase = async () => {
+      try {
+        const supabase = createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return
+
+        if (currentConversationId) {
+          const { data: conversation, error: fetchError } = await supabase
+            .from('conversations')
+            .select('metadata')
+            .eq('id', currentConversationId)
+            .eq('user_id', user.id)
+            .single()
+          if (fetchError) return
+          const existingMetadata = (conversation?.metadata as Record<string, unknown>) || {}
+          await supabase
+            .from('conversations')
+            .update({ metadata: { ...existingMetadata, boardFont } })
+            .eq('id', currentConversationId)
+            .eq('user_id', user.id)
+        } else {
+          const { data: profile, error: fetchError } = await supabase
+            .from('profiles')
+            .select('metadata')
+            .eq('id', user.id)
+            .single()
+          if (fetchError) return
+          const existingMetadata = (profile?.metadata as Record<string, unknown>) || {}
+          await supabase
+            .from('profiles')
+            .update({ metadata: { ...existingMetadata, boardFont } })
+            .eq('id', user.id)
+        }
+      } catch (error) {
+        console.error('Error saving board font to Supabase:', error)
+      }
+    }
+
+    void saveToSupabase()
+  }, [boardFont])
+
   // Save arrow direction to localStorage and Supabase when it changes
   // If conversationId is undefined, saves to profiles.metadata (default board)
   // If conversationId exists, saves to conversations.metadata (specific board)
@@ -1071,7 +1143,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
   }, [])
 
   return (
-    <ReactFlowContext.Provider value={{ reactFlowInstance, setReactFlowInstance, getSetNodes, registerSetNodes, isLocked, setIsLocked, layoutMode, setLayoutMode, isDeterministicMapping, setIsDeterministicMapping, panelWidth, setPanelWidth, isPromptBoxCentered, setIsPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, setEditMenuPillMode, viewMode, boardRule, setBoardRule, boardStyle, setBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, setClickedEdge, flashcardMode, setFlashcardMode, selectedTag, setSelectedTag: toggleSelectedTag, isDrawing, setIsDrawing, drawTool, setDrawTool, drawShape, setDrawShape, mapUndo, mapRedo, canMapUndo: mapUndoRedoState.canUndo, canMapRedo: mapUndoRedoState.canRedo, registerMapUndoRedo, getMapTakeSnapshot, registerMapTakeSnapshot, snapEnabled, setSnapEnabled }}>
+    <ReactFlowContext.Provider value={{ reactFlowInstance, setReactFlowInstance, getSetNodes, registerSetNodes, isLocked, setIsLocked, layoutMode, setLayoutMode, isDeterministicMapping, setIsDeterministicMapping, panelWidth, setPanelWidth, isPromptBoxCentered, setIsPromptBoxCentered, lineStyle, setLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, setEditMenuPillMode, viewMode, boardRule, setBoardRule, boardStyle, setBoardStyle, boardFont, setBoardFont, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, setClickedEdge, flashcardMode, setFlashcardMode, selectedTag, setSelectedTag: toggleSelectedTag, isDrawing, setIsDrawing, drawTool, setDrawTool, drawShape, setDrawShape, mapUndo, mapRedo, canMapUndo: mapUndoRedoState.canUndo, canMapRedo: mapUndoRedoState.canRedo, registerMapUndoRedo, getMapTakeSnapshot, registerMapTakeSnapshot, snapEnabled, setSnapEnabled }}>
       {children}
     </ReactFlowContext.Provider>
   )
@@ -1081,7 +1153,7 @@ export function useReactFlowContext() {
   const context = useContext(ReactFlowContext)
   if (context === undefined) {
     // Return null values if context is not available (graceful degradation)
-    return { reactFlowInstance: null, setReactFlowInstance: () => { }, getSetNodes: () => undefined, registerSetNodes: () => { }, isLocked: false, setIsLocked: () => { }, layoutMode: 'auto' as const, setLayoutMode: () => { }, isDeterministicMapping: false, setIsDeterministicMapping: () => { }, panelWidth: 768, setPanelWidth: () => { }, isPromptBoxCentered: false, setIsPromptBoxCentered: () => { }, lineStyle: 'solid' as const, setLineStyle: () => { }, arrowDirection: 'down' as const, setArrowDirection: () => { }, editMenuPillMode: 'home' as const, setEditMenuPillMode: () => { }, viewMode: 'canvas' as const, boardRule: 'college' as const, setBoardRule: () => { }, boardStyle: 'dotted' as const, setBoardStyle: () => { }, fillColor: '', setFillColor: () => { }, borderColor: '', setBorderColor: () => { }, borderWeight: 1, setBorderWeight: () => { }, borderStyle: 'solid' as const, setBorderStyle: () => { }, clickedEdge: null, setClickedEdge: () => { }, flashcardMode: null, setFlashcardMode: () => { }, selectedTag: null, setSelectedTag: () => { }, isDrawing: false, setIsDrawing: () => { }, drawTool: null, setDrawTool: () => { }, drawShape: 'rectangle' as const, setDrawShape: () => { }, mapUndo: () => { }, mapRedo: () => { }, canMapUndo: false, canMapRedo: false, registerMapUndoRedo: () => { }, getMapTakeSnapshot: () => undefined, registerMapTakeSnapshot: () => { }, snapEnabled: false, setSnapEnabled: () => { } }
+    return { reactFlowInstance: null, setReactFlowInstance: () => { }, getSetNodes: () => undefined, registerSetNodes: () => { }, isLocked: false, setIsLocked: () => { }, layoutMode: 'auto' as const, setLayoutMode: () => { }, isDeterministicMapping: false, setIsDeterministicMapping: () => { }, panelWidth: 768, setPanelWidth: () => { }, isPromptBoxCentered: false, setIsPromptBoxCentered: () => { }, lineStyle: 'solid' as const, setLineStyle: () => { }, arrowDirection: 'down' as const, setArrowDirection: () => { }, editMenuPillMode: 'home' as const, setEditMenuPillMode: () => { }, viewMode: 'canvas' as const, boardRule: 'college' as const, setBoardRule: () => { }, boardStyle: 'dotted' as const, setBoardStyle: () => { }, boardFont: 'default' as const, setBoardFont: () => { }, fillColor: '', setFillColor: () => { }, borderColor: '', setBorderColor: () => { }, borderWeight: 1, setBorderWeight: () => { }, borderStyle: 'solid' as const, setBorderStyle: () => { }, clickedEdge: null, setClickedEdge: () => { }, flashcardMode: null, setFlashcardMode: () => { }, selectedTag: null, setSelectedTag: () => { }, isDrawing: false, setIsDrawing: () => { }, drawTool: null, setDrawTool: () => { }, drawShape: 'rectangle' as const, setDrawShape: () => { }, mapUndo: () => { }, mapRedo: () => { }, canMapUndo: false, canMapRedo: false, registerMapUndoRedo: () => { }, getMapTakeSnapshot: () => undefined, registerMapTakeSnapshot: () => { }, snapEnabled: false, setSnapEnabled: () => { } }
   }
   return context
 }

@@ -19,15 +19,17 @@ export function IBarFlowAnchor({
   boardRotation: number
   children: (layout: { left: number; top: number; paneScale: number }) => ReactNode
 }) {
+  // Position uses live zoom (matches screenToFlowPosition / onPaneClick). Comfort scale only sizes the grip.
   const viewport = useStore(
     (s) => ({
       x: s.transform[0] ?? 0,
       y: s.transform[1] ?? 0,
-      zoom: navigationZoom(Math.round((s.transform[2] || 1) * 8) / 8),
+      liveZoom: s.transform[2] || 1,
     }),
-    (a, b) => a.x === b.x && a.y === b.y && a.zoom === b.zoom
+    (a, b) => a.x === b.x && a.y === b.y && a.liveZoom === b.liveZoom
   )
-  const pane = flowToPane(flowX, flowY, viewport, boardRotation)
-  const paneScale = viewport.zoom * threadComfortScale(viewport.zoom)
+  const pane = flowToPane(flowX, flowY, { x: viewport.x, y: viewport.y, zoom: viewport.liveZoom }, boardRotation)
+  const scaleZoom = navigationZoom(Math.round(viewport.liveZoom * 8) / 8) // Freeze grip scale mid-pinch only
+  const paneScale = scaleZoom * threadComfortScale(scaleZoom)
   return <>{children({ left: pane.x, top: pane.y, paneScale })}</>
 }

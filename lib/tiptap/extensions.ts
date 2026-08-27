@@ -20,9 +20,11 @@ import {
 } from '@/lib/tiptap/block-nodes'
 import { BoardLink } from '@/lib/tiptap/board-link' // Linked-page block (inline + title + preview)
 import { DatabaseBlock } from '@/lib/tiptap/database-block' // Notion database as a compact TipTap block
-import { ImageBlock } from '@/lib/tiptap/image-block' // Turn into → Image atom
+import { ImageBlock } from '@/lib/tiptap/image-block' // Slash / → Image atom
 import { PropertyBlock } from '@/lib/tiptap/property-block' // Turn into → Property atom (icon + Empty cell)
 import { EmptyBlockBackspace } from '@/lib/tiptap/empty-block-backspace' // Backspace empty block → previous line
+import { SlashCommand } from '@/lib/tiptap/slash-command' // Notion-style / menu (Media)
+import { VideoBlock, AudioBlock, FileBlock, BookmarkBlock } from '@/lib/tiptap/media-blocks'
 import { Extension } from '@tiptap/core'
 import { createBlockHighlightPlugin } from '@/lib/tiptap/block-selection'
 
@@ -73,9 +75,14 @@ export function createPanelExtensions(placeholder?: string): any[] {
     Columns,
     BoardLink, // Block that links to a child page (Notion child-page block)
     DatabaseBlock, // Notion database stays one block (no map-frame sprawl of rows)
-    ImageBlock, // Image block (placeholder until src is set)
+    ImageBlock, // Image block (slash / → Image; placeholder until src is set)
+    VideoBlock, // Slash → Video
+    AudioBlock, // Slash → Audio
+    FileBlock, // Slash → File
+    BookmarkBlock, // Slash → Web bookmark
     PropertyBlock, // Property cell (type icon + Empty box; frame still has top icon)
     EmptyBlockBackspace, // Empty block: Backspace → previous; Enter → no new blank line
+    SlashCommand, // / popup — Media picks
     BlockHighlight, // Per-content-block menu highlight (not the map card)
     FrameHost, // conversationId + hostMessageId for databaseBlock / boardLink NodeViews
   ]

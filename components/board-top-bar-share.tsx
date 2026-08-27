@@ -50,12 +50,11 @@ import { useReactFlowContext } from './react-flow-context' // Present switches t
 import { useSidebarContext } from './sidebar-context' // Phone hides copy/star into More
 import { NotionConnectMenuItems } from './notion-connect-button' // Connections → Notion (provider wraps share cluster)
 import { useAiEditSession } from '@/lib/ai/edit-session' // AI highlight toggle in More when unpinned
+import { type BoardFontId } from '@/lib/board-font'
 
 type BoardTopBarShareProps = {
   conversationId?: string // Board id; copy/favorite wait until the board is saved
 }
-
-type BoardFontId = 'default' | 'serif' | 'mono' // Font row in More (UI until applied to the board)
 
 type CachedMessage = { content?: string } // Frame HTML from the messages-for-panels cache
 
@@ -113,7 +112,7 @@ function MenuToggle({ on, className }: { on: boolean; className?: string }) {
 
 export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
   const queryClient = useQueryClient() // Patch conversations cache after favorite
-  const { setEditMenuPillMode } = useReactFlowContext() // Present → View bar
+  const { setEditMenuPillMode, boardFont, setBoardFont } = useReactFlowContext() // Present → View bar; board font
   const { isMobileMode } = useSidebarContext() // Phone: copy + star collapse into More
   const {
     hasAiContent,
@@ -127,7 +126,6 @@ export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
   const [menuOpen, setMenuOpen] = useState(false) // Load footer stats when More opens
   const [query, setQuery] = useState('') // Search actions…
   const searchRef = useRef<HTMLInputElement>(null) // Focus search on open
-  const [boardFont, setBoardFont] = useState<BoardFontId>('default') // Font picker (UI only)
   const [smallText, setSmallText] = useState(false) // Layout toggle (UI only)
   const [fullWidth, setFullWidth] = useState(false) // Layout toggle (UI only)
   const [lockBoard, setLockBoard] = useState(false) // Lock board toggle (UI only)

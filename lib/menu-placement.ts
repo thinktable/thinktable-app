@@ -58,6 +58,14 @@ export function getMenuSafeRect(): MenuRect {
     if (r.height > 1 && r.top > window.innerHeight * 0.5) bottom = Math.min(bottom, r.top - PAD) // Stay above the brand when the dock is closed
   }
 
+  const vv = window.visualViewport // Phone keyboard shrinks the visible strip, not layout innerHeight
+  if (vv) {
+    bottom = Math.min(bottom, vv.offsetTop + vv.height - PAD) // Stay above the keyboard
+    top = Math.max(top, vv.offsetTop + PAD) // Don't sit under the URL bar / offset
+    left = Math.max(left, vv.offsetLeft + PAD) // Horizontal inset when zoomed / shifted
+    right = Math.min(right, vv.offsetLeft + vv.width - PAD) // Keep inside the visible width
+  }
+
   if (right < left) right = left // Degenerate: empty width
   if (bottom < top) bottom = top // Degenerate: empty height
   return { left, top, right, bottom, width: right - left, height: bottom - top } // Usable area
@@ -508,6 +516,88 @@ export function applyMenuPlacement(root: HTMLElement, opts: ApplyMenuPlacementOp
     nested.style.maxHeight = `${nestedMaxH}px` // Shrink if needed
     nested.style.overflowY = 'auto' // Scroll leftover boards
   }
+}
+
+const SLASH_GAP = 4 // Air between caret and menu
+const SLASH_MIN_H = 96 // At least a few rows + footer when the lane is tiny
+const SLASH_HARD_CAP = 280 // Never fill the phone strip even when there is room
+
+type SlashAnchor = { left: number; top: number; right: number; bottom: number }
+
+const slashAnchorByShell = new WeakMap<HTMLElement, SlashAnchor>() // Survive React re-renders / viewport watches
+
+/**
+ * Slash command menu — fixed to the viewport, flipped above the caret when needed, height
+ * clamped into the keyboard-aware safe rect so the list scrolls instead of clipping.
+ */
+export function applySlashMenuPlacement(
+  shell: HTMLElement,
+  opts?: { anchor?: SlashAnchor | null }
+): void {
+  const safe = getMenuSafeRect() // Chrome-free + visualViewport-aware lane
+  const body = shell.querySelector('[data-tt-menu-body]') as HTMLElement | null // Scrollable list
+  const footer = shell.querySelector('[data-tt-slash-footer]') as HTMLElement | null // "Close menu" row
+
+  if (opts?.anchor) slashAnchorByShell.set(shell, opts.anchor) // Remember caret for keyboard resize
+  const stored = slashAnchorByShell.get(shell) // Last caret from TipTap mount
+  const shellBox = shell.getBoundingClientRect() // Fallback when caret is gone mid-frame
+  const anchor: SlashAnchor = stored ?? {
+    left: shellBox.left,
+    top: shellBox.top,
+    right: shellBox.left + 1,
+    bottom: shellBox.top + 1,
+  }
+
+  shell.style.maxHeight = '' // Measure natural height
+  shell.style.height = ''
+  shell.style.display = ''
+  shell.style.flexDirection = ''
+  shell.style.overflowY = ''
+  if (body) {
+    body.style.maxHeight = ''
+    body.style.minHeight = ''
+    body.style.flex = ''
+    body.style.overflowY = ''
+  }
+
+  // Escape React Flow transforms — absolute placement inside the frame was sliding off-screen.
+  shell.style.position = 'fixed'
+  shell.style.visibility = 'visible'
+  shell.style.zIndex = shell.style.zIndex || '1001'
+  shell.style.width = 'max-content'
+
+  const naturalH = Math.max(SLASH_MIN_H, Math.ceil(shell.scrollHeight)) // Full card before clamp
+  const menuW = Math.max(200, Math.ceil(shell.getBoundingClientRect().width) || 300) // Card width
+
+  const spaceBelow = safe.bottom - (anchor.bottom + SLASH_GAP) // Room under the caret
+  const spaceAbove = anchor.top - SLASH_GAP - safe.top // Room above the caret
+  const placeBelow = spaceBelow >= SLASH_MIN_H || spaceBelow >= spaceAbove // Prefer below; flip when cramped
+  const available = Math.max(SLASH_MIN_H, placeBelow ? spaceBelow : spaceAbove) // Directional lane
+  const hardCap = Math.min(SLASH_HARD_CAP, Math.floor(safe.height * 0.55)) // Phone: leave board visible
+  const menuMaxH = clampSize(naturalH, Math.min(available, hardCap)) // Fit lane + hard cap
+
+  const footerH = footer ? Math.ceil(footer.getBoundingClientRect().height) : 0 // Fixed chrome
+  const bodyMaxH = Math.max(48, menuMaxH - footerH) // List eats the rest
+
+  shell.style.display = 'flex' // Column: inner wrapper + flyouts
+  shell.style.flexDirection = 'column'
+  shell.style.maxHeight = `${menuMaxH}px`
+  shell.style.minHeight = '0'
+  shell.style.overflow = 'visible' // Code-language flyout stays absolute outside
+
+  if (body) {
+    body.style.flex = '1 1 auto' // Fill under the footer
+    body.style.minHeight = '0' // Let overflow-y scroll instead of squashing rows
+    body.style.maxHeight = `${bodyMaxH}px`
+    body.style.overflowY = 'auto'
+  }
+
+  const top = placeBelow
+    ? clampStart(anchor.bottom + SLASH_GAP, menuMaxH, safe.top, safe.bottom) // Under caret
+    : clampStart(anchor.top - SLASH_GAP - menuMaxH, menuMaxH, safe.top, safe.bottom) // Above caret
+  const left = clampStart(anchor.left, menuW, safe.left, safe.right) // Stay in the safe strip
+
+  setViewportPos(shell, left, top) // Fixed left/top in viewport space
 }
 
 /** Write viewport left/top onto a fixed or absolute element. */

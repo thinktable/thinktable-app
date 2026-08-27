@@ -73,6 +73,10 @@ export function isHandleBlockType(name: string): boolean {
     name === 'boardLink' || // Linked-page block (inline/title) gets the ⋮⋮ grip too
     name === 'databaseBlock' || // Notion database block gets the ⋮⋮ grip too
     name === 'imageBlock' || // Image (placeholder or <img>) gets the ⋮⋮ grip too
+    name === 'videoBlock' ||
+    name === 'audioBlock' ||
+    name === 'fileBlock' ||
+    name === 'bookmarkBlock' ||
     name === 'propertyBlock' // Property cell (icon + Empty) gets the ⋮⋮ grip too
   )
 }
