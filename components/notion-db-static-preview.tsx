@@ -13,7 +13,7 @@ import {
   type NotionDatabaseTable,
 } from '@/lib/notion/database'
 import { columnWidthPx, normalizeViewSettings, parseViewSettings, visibleProperties } from '@/lib/notion/database-view'
-import { CellDisplay } from '@/components/notion-db-virtual-body'
+import { CellDisplay, ChunkedRowGroups } from '@/components/notion-db-virtual-body'
 import { cn } from '@/lib/utils'
 
 const ROW_GUTTER = 20
@@ -114,6 +114,30 @@ export function NotionDbStaticPreview({
   const vLines = settings.layoutOptions.showVerticalLines
   const extra = Math.max(0, data.rows.length - rows.length) + (data.rowsHasMore ? 1 : 0)
 
+  const renderRow = (row: (typeof rows)[number]) => (
+    <tr key={row.id} className="border-b border-gray-100">
+      {visibleCols.map((prop, colIndex) => {
+        const colW = columnWidthPx(prop, settings)
+        return (
+          <td
+            key={prop.id}
+            style={{ width: colW, maxWidth: colW, minWidth: 0 }}
+            className={cn(
+              'overflow-hidden whitespace-nowrap px-2 py-1 text-[13px] align-middle',
+              vLines && colIndex < visibleCols.length - 1 && 'border-r border-gray-200'
+            )}
+          >
+            <CellDisplay
+              prop={prop}
+              cell={row.cells[prop.name]}
+              rowIcon={colIndex === 0 ? row.icon : null}
+            />
+          </td>
+        )
+      })}
+    </tr>
+  )
+
   return (
     <div
       className={cn(
@@ -152,31 +176,17 @@ export function NotionDbStaticPreview({
               })}
             </tr>
           </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id} className="border-b border-gray-100">
-                {visibleCols.map((prop, colIndex) => {
-                  const colW = columnWidthPx(prop, settings)
-                  return (
-                    <td
-                      key={prop.id}
-                      style={{ width: colW, maxWidth: colW, minWidth: 0 }}
-                      className={cn(
-                        'overflow-hidden whitespace-nowrap px-2 py-1 text-[13px] align-middle',
-                        vLines && colIndex < visibleCols.length - 1 && 'border-r border-gray-200'
-                      )}
-                    >
-                      <CellDisplay
-                        prop={prop}
-                        cell={row.cells[prop.name]}
-                        rowIcon={colIndex === 0 ? row.icon : null}
-                      />
-                    </td>
-                  )
-                })}
-              </tr>
-            ))}
-          </tbody>
+          {compact ? (
+            <tbody>{rows.map(renderRow)}</tbody>
+          ) : (
+            // Always-expanded frames can be hundreds of rows; window them the same way the live
+            // table does so showing the whole table stays as cheap as the 12-row slice.
+            <ChunkedRowGroups
+              count={rows.length}
+              colSpan={visibleCols.length}
+              renderRange={(start, end) => rows.slice(start, end).map(renderRow)}
+            />
+          )}
         </table>
       </div>
       {extra > 0 ? (

@@ -122,7 +122,9 @@ function blockScreenYBand(
  */
 export function findEditorBlockAtClientY(editor: Editor, clientY: number): EditorBlockRef | null {
   const { doc } = editor.state
-  let best: { ref: EditorBlockRef; height: number } | null = null
+  // Holder object, not a `let`: TS narrows a captured `let` to its initializer and can't see the
+  // assignment inside `descendants`, which typed the winner as `never` at the return below.
+  const best: { top: { ref: EditorBlockRef; height: number } | null } = { top: null }
 
   doc.descendants((node, pos) => {
     const name = node.type.name
@@ -138,19 +140,19 @@ export function findEditorBlockAtClientY(editor: Editor, clientY: number): Edito
     const height = Math.max(1, bottom - top)
     const ref: EditorBlockRef = { from: pos, to: pos + node.nodeSize, node, typeName: name }
     const prefer =
-      !best ||
+      !best.top ||
       name === 'listItem' ||
       name === 'taskItem' ||
-      (best.ref.typeName !== 'listItem' &&
-        best.ref.typeName !== 'taskItem' &&
-        height < best.height) // Strictly tighter — equal height keeps earlier (doc order)
-    if (prefer) best = { ref, height }
+      (best.top.ref.typeName !== 'listItem' &&
+        best.top.ref.typeName !== 'taskItem' &&
+        height < best.top.height) // Strictly tighter — equal height keeps earlier (doc order)
+    if (prefer) best.top = { ref, height }
 
     if (name === 'listItem' || name === 'taskItem') return false
     return true
   })
 
-  return best?.ref ?? null
+  return best.top?.ref ?? null
 }
 
 /** Resolve the content block for a document position (prefer list/task item over the list). */

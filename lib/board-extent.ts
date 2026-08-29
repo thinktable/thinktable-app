@@ -66,8 +66,8 @@ export function expandSoftBounds(
 export function softBoundsFromNodes(
   nodes: Array<{
     position: { x: number; y: number }
-    width?: number
-    height?: number
+    width?: number | null // RF types these as nullable; the typeof checks below handle null
+    height?: number | null
     style?: { width?: number | string; height?: number | string }
     type?: string
   }>

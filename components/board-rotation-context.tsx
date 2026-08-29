@@ -22,7 +22,7 @@ import {
   twistSnapHeading,
   viewportKeepingPanePoint,
 } from '@/lib/board-rotation'
-import { beginBoardNavigating, endBoardNavigating } from '@/lib/board-navigating'
+import { beginBoardNavigating, endBoardNavigating, touchBoardNavigating } from '@/lib/board-navigating'
 import { clampBoardZoom } from '@/lib/board-extent'
 
 const CHROME_SEL =
@@ -252,6 +252,7 @@ export function BoardRotationProvider({ children }: { children: ReactNode }) {
     // Pinch always zooms. Scroll nav: mid travel pans (+ coast). Zoom nav: mid travel zooms (+ coast) like trackpad.
     const applyTwoFinger = (ax: number, ay: number, bx: number, by: number) => {
       if (!pinch) return
+      touchBoardNavigating() // Heartbeat — beginPinch fires once, gestures outlive the watchdog
       const dx = bx - ax
       const dy = by - ay
       const dist = Math.hypot(dx, dy) || 1
@@ -474,14 +475,21 @@ export function BoardRotationProvider({ children }: { children: ReactNode }) {
     if (domNode) gestureHosts.push(domNode) // Events that do target the board still bubble here
 
     const useSafariTrackpad = !isIosTouch() // Chrome never fires these; Safari Mac does
+    // Safari-only GestureEvent IDL slots — absent from TS's DOM lib, so widen before assigning.
+    type SafariGestureHost = HTMLElement & {
+      ongesturestart: unknown
+      ongesturechange: unknown
+      ongestureend: unknown
+    }
     const bindGesture = (t: EventTarget) => {
       t.addEventListener('gesturestart', onGestureStart, gestureBubble)
       t.addEventListener('gesturechange', onGestureChange, gestureBubble)
       t.addEventListener('gestureend', onGestureEnd, gestureBubble)
       if (t instanceof HTMLElement) {
-        t.ongesturestart = onGestureStart as never // IDL path — some Safari builds ignore addEventListener
-        t.ongesturechange = onGestureChange as never
-        t.ongestureend = onGestureEnd as never
+        const host = t as SafariGestureHost
+        host.ongesturestart = onGestureStart // IDL path — some Safari builds ignore addEventListener
+        host.ongesturechange = onGestureChange
+        host.ongestureend = onGestureEnd
       }
     }
     const unbindGesture = (t: EventTarget) => {
@@ -489,9 +497,10 @@ export function BoardRotationProvider({ children }: { children: ReactNode }) {
       t.removeEventListener('gesturechange', onGestureChange, false)
       t.removeEventListener('gestureend', onGestureEnd, false)
       if (t instanceof HTMLElement) {
-        t.ongesturestart = null
-        t.ongesturechange = null
-        t.ongestureend = null
+        const host = t as SafariGestureHost
+        host.ongesturestart = null
+        host.ongesturechange = null
+        host.ongestureend = null
       }
     }
     if (useSafariTrackpad) {

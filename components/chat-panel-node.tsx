@@ -1,7 +1,7 @@
 'use client'
 
 // Custom React Flow node for chat panels (prompt + response)
-import { NodeProps, Handle, Position, useReactFlow, useStore, useStoreApi, NodeResizeControl, useUpdateNodeInternals } from 'reactflow' // RF node primitives + store (unselect groups before dragItems) + remeasure; useStore = live zoom for screen-constant chrome
+import { NodeProps, Handle, Position, useReactFlow, useStore, useStoreApi, NodeResizeControl, ResizeControlVariant, useUpdateNodeInternals } from 'reactflow' // RF node primitives + store (unselect groups before dragItems) + remeasure; useStore = live zoom for screen-constant chrome
 import {
   useIsThreadConnecting,
   useIsNearThreadConnection,
@@ -41,8 +41,14 @@ import { findEditorBlockAtClientY } from '@/lib/tiptap/block-selection' // Click
 import {
   isBoardNavigating,
   navigationZoom,
+  subscribeBoardNavigating,
 } from '@/lib/board-navigating' // Freeze zoom selectors + skip hug while pinching
 import { isFrameDragging } from '@/lib/frame-dragging' // Skip O(n) stack scans mid frame drag
+import {
+  captureFrameSnapshot,
+  frameSnapshotKey,
+  readFrameSnapshot,
+} from '@/lib/frame-dom-snapshot' // Cold frames replay the live subtree instead of approximating it
 import { setFramePanelSelected } from '@/lib/frame-panel-selected' // DB NodeView: live table only while RF-selected
 import { readOnThread } from '@/lib/threads/on-thread-frame' // Compact chip layout for frames on threads
 import {
@@ -91,13 +97,13 @@ import {
 } from '@/components/frame-content-shimmer' // Frame vs text-line load shell while TipTap mounts
 import { NotionDbStaticPreview } from '@/components/notion-db-static-preview'
 import {
-  useFrameContentMount,
+  useFrameContentMountReason,
   useWarmFrameContentMount,
-} from '@/components/frame-viewport-mount-context' // Defer TipTap until near the viewport
+} from '@/components/frame-viewport-mount-context' // Defer TipTap until the frame is interacted with
 import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Strip blank lines on frame deselect
 import { setAiTextSelection } from '@/lib/ai/selection-bridge' // Live highlighted-text pills in AI composer
 import { BlockActionsMenu, type BoardInTarget } from '@/components/block-actions-menu'
-import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, Fragment, memo } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, useSyncExternalStore, Fragment, memo } from 'react'
 import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, ScanText, WrapText, FileText } from 'lucide-react' // Rotate + fit-to-text / wrap; FileText = deferred boardLink fallback icon
 import { useAiEditSession } from '@/lib/ai/edit-session' // Pending rainbow / review focus
 
@@ -549,7 +555,9 @@ interface ChatPanelNodeData {
   fillColor?: string // Panel fill color (optional, defaults to transparent)
   borderColor?: string // Panel border color (optional, defaults to theme-based)
   borderStyle?: string // Panel border style (solid, dashed, dotted)
-  borderWeight?: string // Panel border thickness (1px, 2px, 4px)
+  // Border thickness: '2px' from persisted metadata, bare number from the weight slider.
+  // Readers normalize with parseFloat(String(...)); CSS borderWidth takes either.
+  borderWeight?: string | number
   frameShape?: FrameShapeType | null // Silhouette when frames act as shapes
 }
 
@@ -562,7 +570,7 @@ interface ProjectBoardPanelNodeData {
   fillColor?: string // Panel fill color (optional, defaults to transparent)
   borderColor?: string // Panel border color (optional, defaults to theme-based)
   borderStyle?: string // Panel border style (solid, dashed, dotted)
-  borderWeight?: string // Panel border thickness (1px, 2px, 4px)
+  borderWeight?: string | number // Same as ChatPanelNodeData — persisted 'px' string or slider number
 }
 
 // Union type for node data
@@ -834,6 +842,9 @@ function TipTapContentDeferred({
   isFlashcard,
   isPanelSelected,
   deferredBox,
+  conversationId,
+  hostMessageId,
+  section,
 }: {
   content: string
   className?: string
@@ -841,8 +852,19 @@ function TipTapContentDeferred({
   isFlashcard?: boolean
   isPanelSelected?: boolean
   deferredBox?: DeferredFrameBox | null // Cached/estimated inner fill — parent owns outer chrome
+  conversationId?: string // Snapshot store is per board
+  hostMessageId?: string // Snapshot key — this frame's message row
+  section?: 'prompt' | 'response' // Prompt/response bodies are separate editors in one frame
 }) {
   if (!enableBlockHandles || isFlashcard) return null
+  // Preferred path: replay this frame's own last live DOM. Same markup, same stylesheet, so the cold
+  // frame is identical to the live one by construction — including JS-set inline sizes, which the
+  // hand-built shells below could only guess at.
+  const snapshot = readFrameSnapshot(
+    conversationId,
+    frameSnapshotKey(hostMessageId, section),
+    content
+  )
   // Prefer deferredBox.kind; fall back — boardLink titles are attrs-only (not frameHasVisibleText)
   const kind =
     deferredBox?.kind ??
@@ -874,8 +896,24 @@ function TipTapContentDeferred({
         otherClasses
       )}
     >
-      <div className="relative w-full h-full min-h-0 overflow-hidden">
-        {databasePreview ? (
+      <div
+        className={cn(
+          'relative w-full h-full min-h-0',
+          // Snapshots carry live's own box; the hand-built shells are sized to innerW/innerH and
+          // still need the clip.
+          snapshot ? 'overflow-visible' : 'overflow-hidden'
+        )}
+      >
+        {snapshot ? (
+          // Wrapper mirrors live's EditorContent host so inherited layout matches; `nodrag`/`nopan`
+          // are omitted because a cold frame is by definition not selected — the board owns the drag.
+          <div
+            className="block w-full"
+            data-tt-cold-frame=""
+            aria-hidden
+            dangerouslySetInnerHTML={{ __html: snapshot }}
+          />
+        ) : databasePreview ? (
           // Real static rows — empty shimmer inside a hugged DB box looked “disappeared”
           <NotionDbStaticPreview
             notionDatabaseId={databasePreview.notionDatabaseId}
@@ -955,6 +993,7 @@ function TipTapContentLive({
   frameFreeResize = false, // Unlocked user-sized frame — DB table fills clip box
   frameClipHeight = null, // Host clipBoxH (layout px) for DB scroll sizing
   frameClipPreview = false, // Hover peek — show full table, not the clip viewport
+  dbAlwaysExpanded = false, // Frame menu: DB shows every row even unselected (still static)
   forceContentSyncKey = 0, // Bump to setContent even while editor is focused (AI eye / remove / save)
   notionConnected = false, // Connections → Notion selected
   notionSync = 'live', // Live Sync vs Manual
@@ -1001,6 +1040,7 @@ function TipTapContentLive({
   frameFreeResize?: boolean
   frameClipHeight?: number | null
   frameClipPreview?: boolean
+  dbAlwaysExpanded?: boolean
   forceContentSyncKey?: number
   notionConnected?: boolean
   notionSync?: NotionSyncMode
@@ -1253,12 +1293,15 @@ function TipTapContentLive({
       }
       if (frameClipPreview) dom.setAttribute('data-clip-preview', 'true')
       else dom.removeAttribute('data-clip-preview')
+      // databaseBlock reads its expand policy off the host frame the same way it reads drag/clip state
+      if (dbAlwaysExpanded) dom.setAttribute('data-db-always-expanded', 'true')
+      else dom.removeAttribute('data-db-always-expanded')
       // Wake databaseBlock NodeViews — storage mutation alone does not re-render them
       dom.dispatchEvent(
         new CustomEvent('tt-frame-selected', { detail: { selected: !!isPanelSelected } })
       )
     }
-  }, [editor, frameDragging, frameFreeResize, frameClipHeight, frameClipPreview, isPanelSelected])
+  }, [editor, frameDragging, frameFreeResize, frameClipHeight, frameClipPreview, isPanelSelected, dbAlwaysExpanded])
 
   // Top icons = **empty** propertyBlock headers in doc order (filled cells stay in the body only)
   const [propertyHeaders, setPropertyHeaders] = useState<PropertyHeaderItem[]>(() => {
@@ -1424,6 +1467,39 @@ function TipTapContentLive({
       editorDOM.style.minWidth = ''
     }
   }, [editor, singleLineUntilEnter])
+
+  // Snapshot this frame's rendered subtree so the cold frame can replay it inert instead of
+  // re-deriving an approximation. Idle-scheduled and debounced: the capture is only needed the
+  // *next* time this frame goes cold, so it must never compete with typing or a gesture.
+  const snapshotKey = frameSnapshotKey(hostMessageId, section)
+  useEffect(() => {
+    if (!editor || editor.isDestroyed || !conversationId || !snapshotKey) return
+    let idleHandle: number | null = null
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const capture = () => {
+      if (!editor || editor.isDestroyed) return
+      if (isFrameDragging() || isBoardNavigating()) return // Mid-gesture DOM is a moving target
+      captureFrameSnapshot({
+        conversationId,
+        key: snapshotKey,
+        content,
+        root: editor.view.dom as HTMLElement,
+      })
+    }
+    // Wait for NodeViews + hug measurement to settle, then take the idle slot if the browser has one.
+    timer = setTimeout(() => {
+      timer = null
+      const ric = (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number })
+        .requestIdleCallback
+      if (ric) idleHandle = ric(capture, { timeout: 2000 })
+      else timer = setTimeout(capture, 300)
+    }, 500)
+    return () => {
+      if (timer) clearTimeout(timer)
+      const cic = (window as Window & { cancelIdleCallback?: (handle: number) => void }).cancelIdleCallback
+      if (idleHandle != null && cic) cic(idleHandle)
+    }
+  }, [editor, conversationId, snapshotKey, content])
 
   // Apply blue highlights to commented text when comments change
   useEffect(() => {
@@ -1621,14 +1697,17 @@ function TipTapContentLive({
       // Same Notion DB atom already in the editor — skip setContent (avoids table remount on drag-end)
       if (differs && hasDatabaseBlockHtml(content)) {
         const propId = content.match(/data-notion-database-id=["']([^"']+)["']/i)?.[1]
-        let editorId: string | null = null
+        // Holder object, not a `let`: TS narrows a captured `let` to its initializer and can't see
+        // the assignment inside `descendants`, which typed the id as `never` at the compare below.
+        const found: { id: string | null } = { id: null }
         editor.state.doc.descendants((node) => {
           if (node.type.name === 'databaseBlock') {
-            editorId = (node.attrs.notionDatabaseId as string) || null
+            found.id = (node.attrs.notionDatabaseId as string) || null
             return false
           }
           return true
         })
+        const editorId = found.id
         if (propId && editorId && propId.replace(/-/g, '') === editorId.replace(/-/g, '')) {
           differs = false
         }
@@ -1849,16 +1928,33 @@ function TipTapContent(
   props: Parameters<typeof TipTapContentLive>[0] & {
     mountImmediately?: boolean
     deferredBox?: DeferredFrameBox | null
+    coldReady?: boolean
   }
 ) {
-  const { mountImmediately, ...liveProps } = props
-  const mountContent = useFrameContentMount(liveProps.hostNodeId)
-  const shouldMountLive =
+  const { mountImmediately, coldReady, ...liveProps } = props
+  // Host computes coldReady once; re-deriving it here could disagree with `contentDeferred` and size
+  // the frame as if live while this renders cold.
+  const mountReason = useFrameContentMountReason(liveProps.hostNodeId)
+  const mountContent = mountReason !== false && !(mountReason === 'near' && coldReady)
+  // RF mounts nodes as they cross the viewport edge. A first TipTap mount costs 100–300ms
+  // (editor + NodeViews), so frames appearing mid-pan used to hitch the gesture — measured
+  // p95 120ms / p99 306ms panning a 33-frame board vs 9ms/18ms when the visible set held still.
+  const navigating = useSyncExternalStore(
+    subscribeBoardNavigating,
+    isBoardNavigating,
+    () => false
+  )
+  const everLiveRef = useRef(false) // Already-live frames must stay live — unmounting mid-pan flashes
+  const wantLive =
     mountImmediately ||
     liveProps.isPanelSelected ||
     liveProps.isFlashcard ||
     !liveProps.enableBlockHandles ||
     mountContent
+  const shouldMountLive = wantLive && (!navigating || everLiveRef.current)
+  useEffect(() => {
+    if (shouldMountLive) everLiveRef.current = true
+  }, [shouldMountLive])
   if (!shouldMountLive) {
     return <TipTapContentDeferred {...liveProps} deferredBox={liveProps.deferredBox} />
   }
@@ -2551,6 +2647,7 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
   const [frameUnlocked, setFrameUnlocked] = useState(false) // Unlocked: free resize; locked: content scales with frame
   const [frameTextWrap, setFrameTextWrap] = useState(false) // Unlocked only: wrap lines in the frame box instead of clipping
   const [wrapColWidth, setWrapColWidth] = useState<number | null>(null) // Unscaled wrap column width — fixed on locked resize, restored on rewrap
+  const [dbAlwaysExpanded, setDbAlwaysExpanded] = useState(false) // Notion DB frames: show every row even when unselected (still static — no editors)
   const [frameScale, setFrameScale] = useState(1) // Uniform content scale while frame is locked
   const [unlockedFrameSize, setUnlockedFrameSize] = useState<{ width: number; height: number } | null>(null) // Saved free-resize box — restored on unlock after fit-to-text
   const [unlockedFrameScale, setUnlockedFrameScale] = useState<number | null>(null) // Scale paired with unlockedFrameSize (bookkeeping only)
@@ -2774,15 +2871,22 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
        (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
 
     const loadResizeState = async () => {
-      // Get message metadata to check for saved resize state
-      const { data: message } = await supabase
-        .from('messages')
-        .select('metadata')
-        .eq('id', promptMessage.id)
-        .single()
+      // Saved frame state lives in the same metadata blob the board's bulk message query already
+      // loaded. Re-reading the row per frame was an N+1: 33 frames fired 33
+      // `messages?select=metadata&id=eq.…` GETs inside one millisecond, ~3.6s of request time on a
+      // cold load. Fall back to the network only when node data arrived without metadata.
+      let blob = promptMessage.metadata as Record<string, any> | null | undefined
+      if (!blob || typeof blob !== 'object') {
+        const { data: message } = await supabase
+          .from('messages')
+          .select('metadata')
+          .eq('id', promptMessage.id)
+          .single()
+        blob = (message?.metadata ?? null) as Record<string, any> | null
+      }
 
-      if (message?.metadata && typeof message.metadata === 'object') {
-        const metadata = message.metadata as Record<string, any>
+      if (blob && typeof blob === 'object') {
+        const metadata = blob
         
         // For note panels: load fontScale (legacy scale-to-fit)
         if (isBlockPanel && metadata.fontScale && typeof metadata.fontScale === 'number') {
@@ -2805,6 +2909,9 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
         }
         if (isBlockPanel && typeof metadata.frameTextWrap === 'boolean') {
           setFrameTextWrap(metadata.frameTextWrap) // Restore wrap-in-frame preference (unlocked chrome)
+        }
+        if (isBlockPanel && typeof metadata.dbAlwaysExpanded === 'boolean') {
+          setDbAlwaysExpanded(metadata.dbAlwaysExpanded) // Restore Always expanded vs Expand when selected
         }
         if (isBlockPanel && typeof metadata.wrapColWidth === 'number' && metadata.wrapColWidth > 0) {
           setWrapColWidth(metadata.wrapColWidth) // Restore the fixed wrap column width (unwrap/rewrap point)
@@ -3154,7 +3261,20 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
     (promptMessage?.role === 'user' && 
      !responseMessage && 
      (!promptMessage?.content || promptMessage.content.trim() === '' || promptMessage.content === '<p></p>' || promptMessage.content === '<p><br></p>'))
-  const mountContent = useFrameContentMount(id) // Viewport defer — TipTap only when near / selected / warm
+  const mountReason = useFrameContentMountReason(id) // always / warm / near — proximity is not enough
+  // A frame with a current DOM snapshot renders cold pixel-identically, so proximity no longer earns
+  // a live editor: mounting is reserved for interaction (hover, pointer-down, selection). Frames with
+  // no capture yet still promote on proximity so the board warms itself once and then stays cheap.
+  const coldReady = useMemo(
+    () =>
+      readFrameSnapshot(
+        conversationId,
+        frameSnapshotKey(promptMessage?.id, 'prompt'),
+        promptContent || ''
+      ) !== null,
+    [conversationId, promptMessage?.id, promptContent]
+  )
+  const mountContent = mountReason !== false && !(mountReason === 'near' && coldReady)
   const contentDeferred =
     isBlock &&
     !isFlashcard &&
@@ -4612,8 +4732,8 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
     setFrameUnlocked(nextUnlocked)
     const setNodes = getSetNodes()
     if (setNodes) {
-      setNodes((nds) =>
-        nds.map((n) => {
+      setNodes((nds: any[]) =>
+        nds.map((n: any) => {
           if (n.id !== id) return n
           const pm = n.data?.promptMessage
           if (!pm) return n
@@ -4650,6 +4770,21 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
     window.addEventListener('tt-toggle-frame-lock', onTopBar)
     return () => window.removeEventListener('tt-toggle-frame-lock', onTopBar)
   }, [id, toggleFrameLock])
+
+  // Frame menu → Table rows: Always expanded vs Expand when selected. The menus live outside this
+  // node (board right-click, block ⋮⋮), so they broadcast and the owning frame persists — same shape
+  // as `tt-toggle-frame-lock`, which keeps one writer for frame metadata.
+  useEffect(() => {
+    const onSetDbExpand = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ nodeIds?: string[]; always?: boolean }>).detail
+      if (!detail?.nodeIds?.includes(id)) return // Not this frame
+      const next = !!detail.always
+      setDbAlwaysExpanded(next)
+      void persistFrameMeta({ dbAlwaysExpanded: next })
+    }
+    window.addEventListener('tt-set-db-expand', onSetDbExpand)
+    return () => window.removeEventListener('tt-set-db-expand', onSetDbExpand)
+  }, [id, persistFrameMeta])
 
   // Unlocked: wrap lines inside the frame width (vs clip overflow)
   const handleToggleFrameTextWrap = useCallback((e: React.MouseEvent) => {
@@ -6747,6 +6882,9 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
         if (isBlock && !isFlashcard) warmFrameContentMount(id) // Mount TipTap before the frame fully enters view
       }}
       onPointerDownCapture={(e) => {
+        // Touch taps and fast direct clicks never fire pointerenter, so hover-warming alone would
+        // leave the frame cold under the press. Promote here too — same idempotent warm set.
+        if (isBlock && !isFlashcard) warmFrameContentMount(id)
         const t = e.target as HTMLElement | null
         // Text / ⋮⋮ / resize / rotate / connection simulators / property·connection marks —
         // those own the gesture. Body press only hides connection indicators (`pressing`).
@@ -6862,7 +7000,8 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
             <NodeResizeControl
               key={`line-${position}`} // Side line that joins the four corners
               position={position}
-              variant="line" // Hit target only — stroke painted by the square ring above
+              variant={ResizeControlVariant.Line} // Hit target only — stroke painted by the square ring above
+              // Enum, not the "line" literal: RF types `variant` as the enum (same runtime value)
               className={cn(
                 'nodrag nopan tt-frame-resize-line', // nodrag: resize must not start frame drag
                 !frameShape && 'tt-frame-resize-line-hit' // Hit only — square ring paints the stroke
@@ -7411,6 +7550,7 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
               frameFreeResize={unlockedResized}
               frameClipHeight={unlockedResized ? clipBoxH : null}
               frameClipPreview={showClipPreview}
+              dbAlwaysExpanded={dbAlwaysExpanded}
               dragSuspendRef={frameDragSuspendRef} // Sync arm on pointerdown — state lags one frame
               forceContentSyncKey={aiForceSyncKey} // AI eye / remove / save swaps content even while focused
               isLoading={false}
@@ -7430,6 +7570,7 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
               pinConnectionsToFrame={pinConnectionsToFrame}
               loadCrossfade={promptMessage?.metadata?.fadeIn !== true} // Load: dissolve the shell; new frames use note-fade-in
               mountImmediately={promptMessage?.metadata?.fadeIn === true} // I-bar / grip creates mount TipTap immediately
+              coldReady={coldReady} // Snapshot exists → proximity alone must not mount a live editor
               deferredBox={deferredBox}
               contentPadLeft={isBlock ? BLOCK_FRAME_PAD_X : 0}
               frameScale={frameScale}

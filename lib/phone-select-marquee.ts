@@ -16,11 +16,13 @@ type RfStore = {
     nodeInternals: Map<string, Node> // Live node map with measured width/height
     edges: Edge[] // For selecting threads attached to hit frames
     transform: [number, number, number] // Viewport x, y, zoom
-    onNodesChange?: (changes: NodeChange[]) => void // Apply select changes through the board handler
-    onEdgesChange?: (changes: EdgeChange[]) => void // Keep thread highlight in sync
+    onNodesChange?: ((changes: NodeChange[]) => void) | null // Board handler; RF types it nullable
+    onEdgesChange?: ((changes: EdgeChange[]) => void) | null // Keep thread highlight in sync
     getNodes: () => Node[] // Current nodes for diffing selected flags
     resetSelectedElements: () => void // Clear prior selection when a new rect starts
     domNode: HTMLElement | null // Flow root for pane bounds
+    userSelectionRect: PaneRect | null // Seeded on pointerdown, read back to grow the box
+    userSelectionActive: boolean // True once the finger passed tap slop
   }
   setState: (partial: {
     userSelectionActive?: boolean // True once the finger has moved past tap slop (draws the blue box)

@@ -198,7 +198,8 @@ export function useVoiceDictation(opts: {
   const cancelledRef = useRef(false)
   const pcmChunksRef = useRef<Float32Array[]>([])
   const sampleRateRef = useRef(44100)
-  const timeDataRef = useRef<Float32Array | null>(null)
+  // Explicit ArrayBuffer arg: getFloatTimeDomainData rejects the default Float32Array<ArrayBufferLike>
+  const timeDataRef = useRef<Float32Array<ArrayBuffer> | null>(null)
 
   useEffect(() => {
     const hasMic =

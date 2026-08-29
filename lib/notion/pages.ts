@@ -495,10 +495,9 @@ export async function collectMindmapSubtreeViaBlocks(
         const childId = block.id // child_page block id === page id
         const parent: NotionPageParent = { type: 'page_id', page_id: owningPageId }
         const fromSearch = byId.get(normalizeNotionId(childId))
-        const titleFromBlock =
-          typeof (block as { child_page?: { title?: string } }).child_page?.title === 'string'
-            ? (block as { child_page: { title: string } }).child_page.title
-            : 'Untitled'
+        // Read once through the optional shape — a required-property cast doesn't overlap NotionBlock
+        const childPageTitle = (block as { child_page?: { title?: string } }).child_page?.title
+        const titleFromBlock = typeof childPageTitle === 'string' ? childPageTitle : 'Untitled'
 
         let page: NotionSearchPage | null = fromSearch
           ? { ...fromSearch, parent }
@@ -513,10 +512,8 @@ export async function collectMindmapSubtreeViaBlocks(
         if (push(page)) await walk(childId, childId, depth + 1) // Nested sub-pages
       } else if (block.type === 'child_database') {
         // Nested DBs often live under headings (parent.block_id) — still one map frame
-        const titleFromBlock =
-          typeof (block as { child_database?: { title?: string } }).child_database?.title === 'string'
-            ? (block as { child_database: { title: string } }).child_database.title
-            : 'Untitled database'
+        const childDbTitle = (block as { child_database?: { title?: string } }).child_database?.title
+        const titleFromBlock = typeof childDbTitle === 'string' ? childDbTitle : 'Untitled database'
         await addDatabaseFrame(block.id, titleFromBlock, {
           type: 'page_id',
           page_id: owningPageId, // Thread DB under the page that contains it

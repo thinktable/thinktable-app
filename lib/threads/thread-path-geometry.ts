@@ -230,7 +230,7 @@ function linearFallback(a: XYPosition, b: XYPosition): ThreadPathGeometry {
   })
   const tangentAt = (): XYPosition => ({ x: dx / len, y: dy / len })
   const normalAt = (_t: number, side: 1 | -1 = 1): XYPosition => {
-    const tan = tangentAt(0)
+    const tan = tangentAt() // Constant along a straight line — takes no t
     return { x: -tan.y * side, y: tan.x * side }
   }
   const closestT = (x: number, y: number) => {

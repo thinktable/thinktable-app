@@ -2,7 +2,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js' // Persist transforms
 import type { BlockTypeId } from '@/components/block-actions-menu' // Shared type ids
-import { looksLikeImageSrc } from '@/lib/tiptap/image-block' // URL-only blocks become image src
+import { looksLikeImageSrc } from '@/lib/tiptap/image-src' // URL-only blocks become image src (server-safe — no TipTap)
 import { ensureBoardBodyBlock, isBlockContentEmpty, migrateLegacyBlockFlags } from '@/lib/blocks'
 import { boardTitleOrDefault } from '@/lib/board-title' // Turn into Board with no first line → New board
 

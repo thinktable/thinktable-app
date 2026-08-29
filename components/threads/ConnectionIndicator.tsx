@@ -1,6 +1,6 @@
 'use client'
 
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
+import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { addEdge, useNodeId, useStoreApi, type Connection } from 'reactflow'
 
 type Side = 'left' | 'right' | 'top' | 'bottom'
@@ -88,7 +88,9 @@ export function ConnectionIndicator({
       connectionStartHandle: { nodeId, handleId, type: handleType },
       connectionEndHandle: null,
     })
-    onConnectStart?.(event.nativeEvent, { nodeId, handleId, handleType })
+    // RF types OnConnectStart's event as React MouseEvent/TouchEvent but only forwards it to the
+    // consumer, so the native PointerEvent driving this gesture needs a cast through unknown.
+    onConnectStart?.(event.nativeEvent as unknown as ReactMouseEvent, { nodeId, handleId, handleType })
 
     const resetActive = () => {
       prevActive?.classList.remove(
@@ -128,7 +130,9 @@ export function ConnectionIndicator({
       const validFn = isValidConnection || (() => true)
       const radiusPx = SNAP_RADIUS_PX
 
-      let bestEl: HTMLElement | null = null
+      // Holder object, not a `let`: TS narrows a captured `let` to its initializer and can't see the
+      // assignment inside forEach, which typed the element as `never` at the reads below.
+      const best: { el: HTMLElement | null } = { el: null }
       let bestDist = Infinity
       let bestIsTarget = false
       doc.querySelectorAll('.react-flow__handle.connectable.connectableend').forEach((node) => {
@@ -144,12 +148,13 @@ export function ConnectionIndicator({
         const isTarget = el.classList.contains('target')
         // Prefer closer; at equal distance prefer target handles
         if (dist < bestDist - 0.5 || (Math.abs(dist - bestDist) <= 0.5 && isTarget && !bestIsTarget)) {
-          bestEl = el
+          best.el = el
           bestDist = dist
           bestIsTarget = isTarget
         }
       })
 
+      const bestEl = best.el
       if (!bestEl) return null
 
       const targetNodeId = bestEl.getAttribute('data-nodeid')!
@@ -225,7 +230,9 @@ export function ConnectionIndicator({
         const edgeParams = { ...defaultEdgeOptions, ...connection }
         // Controlled edges: only onConnect adds (avoid double-add via hasDefaultEdges)
         if (hasDefaultEdges && !onConnectAction) {
-          setEdges((eds) => addEdge(edgeParams, eds))
+          // RF's store setEdges takes an array (not a setState updater) — passing a function here
+          // stored the function itself as the edge list.
+          setEdges(addEdge(edgeParams, store.getState().edges))
         }
         onConnectAction?.(edgeParams as Connection)
       }

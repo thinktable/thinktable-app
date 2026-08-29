@@ -2,7 +2,7 @@
 
 // Virtualized Notion DB table/list bodies + memoized row cells (perf).
 
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Check, ChevronDown, ChevronRight, GripVertical, Plus } from 'lucide-react'
 import { createPortal } from 'react-dom'
@@ -23,6 +23,7 @@ import {
 import { NOTION_ROW_DRAG_MIME, type NotionRowDragPayload } from '@/lib/notion/row-to-card-client'
 import type { DatabaseViewSettings } from '@/lib/notion/database-view'
 import { columnWidthPx } from '@/lib/notion/database-view'
+import { elementUniformScale } from '@/lib/dom-transform'
 import { cn } from '@/lib/utils'
 import {
   DropdownMenu,
@@ -38,6 +39,87 @@ export const DB_TABLE_SCROLL_CAP = 480 // Internal scroll + virtualization above
 export const DB_TABLE_VIRTUALIZE_MIN = 20 // Row count before capping height
 
 const ROW_GUTTER = 20
+// Viewport-windowing granularity for expanded tables. Matches the static preview's 12-row slice, so
+// an on-screen chunk costs about what the unselected preview costs.
+const ROW_CHUNK = 12
+// Screen-px band kept mounted to each side of the window, so a column is already there when a pan
+// brings it in. Vertical margin is deliberately absurd: the observer must judge x only.
+const COL_BAND_PX = 400
+const COL_IGNORE_Y_PX = 100000
+
+/** Inclusive on-screen column band. `null` = no windowing (render every column). */
+export type ColumnRange = { start: number; end: number } | null
+
+/**
+ * Horizontal twin of `RowChunk`: which columns are on screen.
+ *
+ * Rows were already windowed, but every mounted row still painted *all* its columns — a 15-column,
+ * 2530px-wide table inside a 597px window built 363 cells to show ~100. A CPU profile of one select
+ * spent 477ms in `jsxDEV` versus 14ms in this file's own code, i.e. selection cost is cell *element
+ * count*, not logic, so off-screen cells must not be created at all.
+ *
+ * The `<th>`s are the probes: one per column, already rendered, already at the right x-offsets. That
+ * makes IntersectionObserver report horizontal visibility with zero per-frame JS and keeps it correct
+ * under the board's pan/zoom/rotate transform. The huge vertical rootMargin removes the y axis from
+ * the test — the sticky header leaves the screen long before its columns do.
+ */
+export function useVisibleColumnRange(
+  columns: NotionDbProperty[],
+  settings: DatabaseViewSettings,
+  headRef: React.RefObject<HTMLTableSectionElement | null>
+): ColumnRange {
+  // First commit has no layout to observe yet, so seed the band from the widest thing that could be
+  // on screen (window width in board px) starting at column 0 — the case when you zoom to a frame.
+  // A wrong guess self-corrects on the observer's first callback, one frame later.
+  const [range, setRange] = useState<ColumnRange>(() => {
+    if (typeof window === 'undefined' || columns.length === 0) return null
+    const viewport = document.querySelector('.react-flow__viewport')
+    const scale = viewport instanceof HTMLElement ? elementUniformScale(viewport) : 1
+    const budget = window.innerWidth / Math.max(scale, 0.05) + COL_BAND_PX
+    let acc = 0
+    for (let i = 0; i < columns.length; i++) {
+      acc += columnWidthPx(columns[i]!, settings)
+      if (acc > budget) return { start: 0, end: i }
+    }
+    return null // Whole table fits on screen — nothing to window
+  })
+
+  useEffect(() => {
+    const head = headRef.current
+    if (!head || typeof IntersectionObserver === 'undefined') {
+      setRange(null) // No observer (SSR / old browser): correctness beats the optimization
+      return
+    }
+    const probes = Array.from(head.querySelectorAll<HTMLElement>('th[data-col-index]'))
+    if (probes.length < 2) return
+    const onScreen = new Set<number>()
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const i = Number((entry.target as HTMLElement).dataset.colIndex)
+          if (Number.isNaN(i)) continue
+          if (entry.isIntersecting) onScreen.add(i)
+          else onScreen.delete(i)
+        }
+        // Table entirely off screen to the left/right: keep the last band rather than collapsing to
+        // nothing, so panning back does not have to rebuild from zero.
+        if (onScreen.size === 0) return
+        let start = Number.POSITIVE_INFINITY
+        let end = -1
+        for (const i of onScreen) {
+          if (i < start) start = i
+          if (i > end) end = i
+        }
+        setRange((prev) => (prev && prev.start === start && prev.end === end ? prev : { start, end }))
+      },
+      { rootMargin: `${COL_IGNORE_Y_PX}px ${COL_BAND_PX}px` }
+    )
+    for (const probe of probes) io.observe(probe)
+    return () => io.disconnect()
+  }, [headRef, columns.length])
+
+  return range
+}
 
 export type SaveFn = (
   pageId: string,
@@ -385,6 +467,27 @@ function MultiSelectCellEditor({
   )
 }
 
+/**
+ * Idle-row cell: the same box an unarmed `EditableCell` paints, minus the arm handlers.
+ * `px-0.5 -mx-0.5` on the interactive variant cancel out, so the layout box is identical and the
+ * hover affordance appears exactly when the row is hydrated — i.e. when it can actually be used.
+ */
+function StaticCell({
+  prop,
+  cell,
+  rowIcon,
+}: {
+  prop: NotionDbProperty
+  cell?: NotionDbCell
+  rowIcon?: string | null
+}) {
+  return (
+    <div className="min-h-[28px] w-full min-w-0 max-w-full overflow-hidden">
+      <CellDisplay prop={prop} cell={cell} rowIcon={rowIcon} />
+    </div>
+  )
+}
+
 /** Lazy-mount heavy editors on every platform — display until click. */
 function EditableCell({
   prop,
@@ -645,6 +748,17 @@ type DbTableRowProps = {
   onCreateRow: (afterId: string | null) => void
   onConvertLayout?: (layout: DbConvertLayoutId, rowId: string) => void
   rowBackground: string | undefined
+  /**
+   * Row owns editors + gutter chrome only while it is the one being used. An idle row renders
+   * `StaticCell`s, which is what makes an expanded table cost what the static preview costs: the
+   * gutter alone is a `RowHandle` (own state + a *document* mousedown listener) plus two
+   * `RowInsertBar` buttons, so 200 idle rows meant 200 document listeners firing on every click.
+   */
+  hydrated: boolean
+  onHover: (id: string | null) => void
+  onActivate: (id: string) => void
+  /** On-screen column band; columns outside it collapse into one spanned spacer cell per side. */
+  colRange: ColumnRange
 }
 
 export const DbTableRow = memo(function DbTableRow({
@@ -670,7 +784,16 @@ export const DbTableRow = memo(function DbTableRow({
   onCreateRow,
   onConvertLayout,
   rowBackground,
+  hydrated,
+  onHover,
+  onActivate,
+  colRange,
 }: DbTableRowProps) {
+  // `tableLayout: 'fixed'` means the header row alone decides column widths, so a spanned spacer here
+  // cannot shift alignment — the skipped columns keep their exact geometry with one element instead of
+  // one per column.
+  const colStart = colRange ? Math.max(0, colRange.start) : 0
+  const colEnd = colRange ? Math.min(columns.length - 1, colRange.end) : columns.length - 1
   return (
     <tr
       className={cn(
@@ -679,8 +802,17 @@ export const DbTableRow = memo(function DbTableRow({
       )}
       style={{ background: selected ? undefined : rowBackground }}
       onClick={() => onSelect(row.id)}
+      onPointerEnter={() => onHover(row.id)}
+      onPointerLeave={() => onHover(null)}
+      // Capture phase: `EditableCell` stops propagation on pointerdown/click, so a bubbling
+      // handler here would never see a cell press and the edited row could unhydrate under the caret.
+      onPointerDownCapture={() => onActivate(row.id)}
     >
-      {columns.map((prop, colIndex) => {
+      {colStart > 0 ? (
+        <td colSpan={colStart} style={{ padding: 0, border: 'none' }} aria-hidden />
+      ) : null}
+      {columns.slice(colStart, colEnd + 1).map((prop, i) => {
+        const colIndex = colStart + i
         const colW = columnWidthPx(prop, settings)
         return (
           <td
@@ -694,7 +826,7 @@ export const DbTableRow = memo(function DbTableRow({
               !settings.layoutOptions.wrapAllContent && 'tt-db-cell-nowrap whitespace-nowrap'
             )}
           >
-            {colIndex === 0 ? (
+            {colIndex === 0 && hydrated ? (
               <div
                 data-tt-db-gutter
                 className="group/gutter absolute -left-5 top-0 bottom-0 z-[2] w-5"
@@ -760,17 +892,25 @@ export const DbTableRow = memo(function DbTableRow({
                     )
                   })()}
                   <div className="min-w-0 flex-1">
-                    <EditableCell
-                      prop={prop}
-                      cell={row.cells[prop.name]}
-                      rowIcon={settings.layoutOptions.showPageIcon ? row.icon : null}
-                      pageId={row.id}
-                      onSave={onSave}
-                      saving={savingKey === `${row.id}:${prop.name}`}
-                    />
+                    {hydrated ? (
+                      <EditableCell
+                        prop={prop}
+                        cell={row.cells[prop.name]}
+                        rowIcon={settings.layoutOptions.showPageIcon ? row.icon : null}
+                        pageId={row.id}
+                        onSave={onSave}
+                        saving={savingKey === `${row.id}:${prop.name}`}
+                      />
+                    ) : (
+                      <StaticCell
+                        prop={prop}
+                        cell={row.cells[prop.name]}
+                        rowIcon={settings.layoutOptions.showPageIcon ? row.icon : null}
+                      />
+                    )}
                   </div>
                 </div>
-              ) : (
+              ) : hydrated ? (
                 <EditableCell
                   prop={prop}
                   cell={row.cells[prop.name]}
@@ -781,11 +921,22 @@ export const DbTableRow = memo(function DbTableRow({
                   onSave={onSave}
                   saving={savingKey === `${row.id}:${prop.name}`}
                 />
+              ) : (
+                <StaticCell
+                  prop={prop}
+                  cell={row.cells[prop.name]}
+                  rowIcon={
+                    prop.type === 'title' && settings.layoutOptions.showPageIcon ? row.icon : null
+                  }
+                />
               )}
             </div>
           </td>
         )
       })}
+      {colEnd < columns.length - 1 ? (
+        <td colSpan={columns.length - 1 - colEnd} style={{ padding: 0, border: 'none' }} aria-hidden />
+      ) : null}
     </tr>
   )
 })
@@ -815,6 +966,8 @@ type VirtualizedTableBodyProps = {
   scrollParentRef: React.RefObject<HTMLDivElement | null>
   /** When false, render every row (selected hug / show-all). Virtualize only inside a clip scroller. */
   virtualize?: boolean
+  /** On-screen column band from `useVisibleColumnRange`. */
+  colRange: ColumnRange
 }
 
 export function VirtualizedTableBody({
@@ -841,9 +994,15 @@ export function VirtualizedTableBody({
   rowBackgroundFn,
   scrollParentRef,
   virtualize = true,
+  colRange,
 }: VirtualizedTableBodyProps) {
   const rowCount = flatItems.length
   const useCap = virtualize && rowCount > DB_TABLE_VIRTUALIZE_MIN
+  // Exactly one row owns editors + gutter chrome. Hover drives it; the last pressed row keeps it so
+  // an open editor cannot be unmounted from under the caret when the pointer wanders off.
+  const [hoverRowId, setHoverRowId] = useState<string | null>(null)
+  const [activeRowId, setActiveRowId] = useState<string | null>(null)
+  const hydratedRowId = hoverRowId ?? activeRowId
   const virtualizer = useVirtualizer({
     count: flatItems.length,
     getScrollElement: () => scrollParentRef.current,
@@ -896,63 +1055,218 @@ export function VirtualizedTableBody({
     )
   }
 
-  return (
-    <tbody>
-      {useCap && paddingTop > 0 ? (
-        <tr aria-hidden>
-          <td colSpan={colSpan} style={{ height: paddingTop, padding: 0, border: 'none' }} />
+  const renderItem = (index: number) => {
+    const item = flatItems[index]
+    if (!item) return null
+    if (item.kind === 'group') {
+      return (
+        <tr key={`g:${item.key}`}>
+          <td
+            colSpan={colSpan}
+            className="px-2 py-1 text-[12px] font-semibold text-gray-600 border-b border-gray-200"
+          >
+            {item.label}
+            <span className="ml-2 font-normal text-gray-400">{item.count}</span>
+          </td>
         </tr>
-      ) : null}
-      {(useCap ? virtualRows : flatItems.map((_, i) => ({ index: i }))).map((vi) => {
-        const index = vi.index
-        const item = flatItems[index]
-        if (!item) return null
-        if (item.kind === 'group') {
-          return (
-            <tr key={`g:${item.key}`}>
-              <td
-                colSpan={colSpan}
-                className="px-2 py-1 text-[12px] font-semibold text-gray-600 border-b border-gray-200"
-              >
-                {item.label}
-                <span className="ml-2 font-normal text-gray-400">{item.count}</span>
-              </td>
-            </tr>
-          )
-        }
+      )
+    }
+    return (
+      <DbTableRow
+        key={item.row.id}
+        row={item.row}
+        depth={item.depth}
+        insertBeforeAfterId={item.insertBeforeAfterId}
+        columns={columns}
+        settings={settings}
+        selected={selectedRowId === item.row.id}
+        savingKey={savingKey}
+        vLines={vLines}
+        notionDatabaseId={notionDatabaseId}
+        databaseTitle={databaseTitle}
+        properties={properties}
+        conversationId={conversationId}
+        childrenOf={childrenOf}
+        expandedParents={expandedParents}
+        onSelect={onSelect}
+        onToggleExpand={onToggleExpand}
+        onSave={onSave}
+        onDelete={onDelete}
+        onOpen={onOpen}
+        onCreateRow={onCreateRow}
+        onConvertLayout={onConvertLayout}
+        rowBackground={rowBackgroundFn(item.row)}
+        hydrated={hydratedRowId === item.row.id || selectedRowId === item.row.id}
+        onHover={setHoverRowId}
+        onActivate={setActiveRowId}
+        colRange={colRange}
+      />
+    )
+  }
+
+  if (useCap) {
+    return (
+      <tbody>
+        {paddingTop > 0 ? (
+          <tr aria-hidden>
+            <td colSpan={colSpan} style={{ height: paddingTop, padding: 0, border: 'none' }} />
+          </tr>
+        ) : null}
+        {virtualRows.map((vi) => renderItem(vi.index))}
+        {paddingBottom > 0 ? (
+          <tr aria-hidden>
+            <td colSpan={colSpan} style={{ height: paddingBottom, padding: 0, border: 'none' }} />
+          </tr>
+        ) : null}
+      </tbody>
+    )
+  }
+
+  // Expanded (hug) table: the frame is as tall as the whole table, so there is no inner scroller for
+  // `useVirtualizer` to window against — and adding one is wrong, because inner scroll fights the
+  // board's own pan/zoom. Window against the *browser viewport* instead: rows live in chunks that
+  // mount only while on screen and hold a measured spacer when not. IntersectionObserver does this
+  // with zero per-frame JS and stays correct under the board's transform (pan, zoom, rotate).
+  return (
+    <ChunkedRowGroups
+      count={flatItems.length}
+      colSpan={colSpan}
+      renderRange={(start, end) => {
+        const out: React.ReactNode[] = []
+        for (let i = start; i < end; i++) out.push(renderItem(i))
+        return out
+      }}
+    />
+  )
+}
+
+/**
+ * Splits `count` rows into viewport-windowed `<tbody>` chunks. Shared by the live table and the
+ * static preview so "always expanded" costs the same as "expand when selected".
+ */
+export function ChunkedRowGroups({
+  count,
+  colSpan,
+  renderRange,
+}: {
+  count: number
+  colSpan: number
+  /** Rows for `[start, end)` — called only while that chunk is on screen. */
+  renderRange: (start: number, end: number) => React.ReactNode
+}) {
+  // Real average row height, learned from the first chunk that mounts, so collapsed spacers reserve
+  // the height their rows would actually take.
+  const [measuredRowH, setMeasuredRowHState] = useState<number | null>(null)
+  const setMeasuredRowH = useCallback((h: number) => {
+    if (!(h > 8) || h > 400) return // Ignore nonsense (collapsed/hidden measurement)
+    setMeasuredRowHState((prev) => (prev != null && Math.abs(prev - h) < 1 ? prev : h))
+  }, [])
+  const chunks = useMemo(() => {
+    const out: Array<{ start: number; end: number }> = []
+    for (let start = 0; start < count; start += ROW_CHUNK) {
+      out.push({ start, end: Math.min(start + ROW_CHUNK, count) })
+    }
+    return out
+  }, [count])
+
+  return (
+    <>
+      {chunks.map((chunk, ci) => {
+        const rows = chunk.end - chunk.start
         return (
-          <DbTableRow
-            key={item.row.id}
-            row={item.row}
-            depth={item.depth}
-            insertBeforeAfterId={item.insertBeforeAfterId}
-            columns={columns}
-            settings={settings}
-            selected={selectedRowId === item.row.id}
-            savingKey={savingKey}
-            vLines={vLines}
-            notionDatabaseId={notionDatabaseId}
-            databaseTitle={databaseTitle}
-            properties={properties}
-            conversationId={conversationId}
-            childrenOf={childrenOf}
-            expandedParents={expandedParents}
-            onSelect={onSelect}
-            onToggleExpand={onToggleExpand}
-            onSave={onSave}
-            onDelete={onDelete}
-            onOpen={onOpen}
-            onCreateRow={onCreateRow}
-            onConvertLayout={onConvertLayout}
-            rowBackground={rowBackgroundFn(item.row)}
+          <RowChunk
+            key={chunk.start}
+            colSpan={colSpan}
+            eager={ci < 2} // Top of the table paints on first commit — no blank flash before IO fires
+            estimateHeight={rows * (measuredRowH ?? DB_TABLE_ROW_HEIGHT)}
+            rowCount={rows}
+            onMeasureRowHeight={setMeasuredRowH}
+            render={() => renderRange(chunk.start, chunk.end)}
           />
         )
       })}
-      {useCap && paddingBottom > 0 ? (
+    </>
+  )
+}
+
+/**
+ * One `<tbody>` of rows that mounts only while it intersects the viewport, and collapses to a
+ * single spacer row of its last measured height when it does not. Multiple `<tbody>` per `<table>`
+ * is valid HTML, and keeping the spacer in the same table means column widths never shift.
+ */
+function RowChunk({
+  colSpan,
+  eager,
+  estimateHeight,
+  rowCount,
+  onMeasureRowHeight,
+  render,
+}: {
+  colSpan: number
+  eager: boolean
+  estimateHeight: number
+  rowCount: number
+  onMeasureRowHeight: (h: number) => void
+  render: () => React.ReactNode
+}) {
+  const ref = useRef<HTMLTableSectionElement | null>(null)
+  const [visible, setVisible] = useState(eager)
+  // Own measurement once this chunk has been on screen; until then follow the shared estimate, which
+  // improves as soon as any sibling measures. A ref seeded from `estimateHeight` would freeze the
+  // initial guess and never pick that up.
+  const measuredRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      setVisible(true) // No IO (SSR / old browser) — correctness beats the optimization
+      return
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) setVisible(entry.isIntersecting)
+      },
+      // Generous band: a chunk should already be mounted by the time it scrolls/pans into view.
+      { rootMargin: '600px 0px' }
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [])
+
+  useEffect(() => {
+    if (!visible) return
+    const el = ref.current
+    if (!el) return
+    const measure = () => {
+      // offsetHeight is layout px, so the board's zoom transform does not skew it.
+      const h = el.offsetHeight
+      if (!h) return
+      measuredRef.current = h
+      // Teach every *other* chunk the real row height. Rows measure ~37px against a 32px constant, so
+      // unvisited spacers were 13% short and the hugged frame grew as you panned down the table.
+      if (rowCount > 0) onMeasureRowHeight(h / rowCount)
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    // A one-shot measure on mount reads 0 — the frame stages its content in, so the rows have no
+    // layout height yet on the first commit. Observing catches the real height whenever it lands.
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [visible, rowCount, onMeasureRowHeight])
+
+  return (
+    <tbody ref={ref}>
+      {visible ? (
+        render()
+      ) : (
         <tr aria-hidden>
-          <td colSpan={colSpan} style={{ height: paddingBottom, padding: 0, border: 'none' }} />
+          <td
+            colSpan={colSpan}
+            style={{ height: measuredRef.current ?? estimateHeight, padding: 0, border: 'none' }}
+          />
         </tr>
-      ) : null}
+      )}
     </tbody>
   )
 }

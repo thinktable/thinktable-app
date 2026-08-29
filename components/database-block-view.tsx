@@ -2,7 +2,8 @@
 
 // React NodeView for databaseBlock: Notion-like structured table (columns + typed cells).
 // Selected → full live table. Unselected → compact static (~12 rows) + hug shrink.
-// Pan/drag → same-size static freeze. Selection is `lib/frame-panel-selected` (host RF
+// Pan/drag no longer swap the table — only the idle box freeze reads those flags.
+// Selection is `lib/frame-panel-selected` (host RF
 // `selected`) — never isEditable / DOM attrs (those stayed true after deselect).
 
 import {
@@ -32,6 +33,7 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
   const notionDatabaseId = (node.attrs.notionDatabaseId as string | null) || null
   const icon = (node.attrs.icon as string | null) || null
   const url = (node.attrs.url as string | null) || null
+  const viewSettingsJson = (node.attrs.viewSettings as string | null) || null
   const actions = useBoardLinkActions()
   const hostPageId = actions.hostLinkedBoardId || null
   const notionUrl = url || actions.notionUrl || null
@@ -62,6 +64,7 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
   const [frameFreeResize, setFrameFreeResize] = useState(false)
   const [frameClipHeight, setFrameClipHeight] = useState<number | null>(null)
   const [frameClipPreview, setFrameClipPreview] = useState(false)
+  const [alwaysExpanded, setAlwaysExpanded] = useState(false) // Frame menu: show every row while unselected
 
   const instanceId = useMemo(() => {
     if (!notionDatabaseId) return undefined
@@ -76,17 +79,65 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
     () => false
   )
 
-  const showLiveTable =
-    !!notionDatabaseId && frameSelected && !frameDragging && !navigating
+  // Selection alone decides this. Gating on nav/drag as well meant every pan, pinch and frame drag
+  // unmounted the live table at gesture start and rebuilt it at gesture end — measured **472ms of
+  // blocking across 3 long tasks per gesture** (vs 0 with nothing selected), because a table build is
+  // ~130-220ms and the freeze paid it twice. That freeze was worth it when a selected table mounted
+  // every loaded row with full per-row chrome ("fast pan over DB OOMed Safari"); now that idle rows
+  // are `StaticCell`s and only on-screen chunks mount, a mounted table pans for **0 long tasks**, so
+  // the swap costs everything and saves nothing.
+  const showLiveTable = !!notionDatabaseId && frameSelected
   const freezeToLastBox = (frameDragging || navigating) && !!lastBox
+
+  // A nav notification must not re-render the live table. `navigating` feeds only the *static* path
+  // (freeze box + idle-compact hug), yet subscribing to it re-rendered this NodeView at every gesture
+  // start and end, and re-rendering the table subtree cost **370ms across 2 long tasks per gesture**
+  // even after the unmount/remount swap was removed. Holding the element in a memo lets React reuse
+  // it and skip the subtree; exhaustive-deps polices the dependency list.
+  const liveTable = useMemo(
+    () => (
+      <NotionDatabaseTableView
+        notionDatabaseId={notionDatabaseId || ''}
+        fallbackTitle={title}
+        viewSettingsJson={viewSettingsJson}
+        onViewSettingsChange={(json) => updateAttributes({ viewSettings: json })}
+        conversationId={hostConversationId}
+        hostMessageId={hostMessageId}
+        frameSelected={frameSelected}
+        frameDragging={false}
+        frameFreeResize={frameFreeResize}
+        frameClipHeight={frameClipHeight}
+        frameClipPreview={frameClipPreview}
+        interactive
+      />
+    ),
+    [
+      notionDatabaseId,
+      title,
+      viewSettingsJson,
+      hostConversationId,
+      hostMessageId,
+      frameSelected,
+      frameFreeResize,
+      frameClipHeight,
+      frameClipPreview,
+      updateAttributes,
+    ]
+  )
 
   useEffect(() => {
     const dom = editor?.view?.dom as HTMLElement | undefined
     if (!dom) return
-    const sync = () => setFrameDragging(dom.hasAttribute('data-frame-dragging'))
+    const sync = () => {
+      setFrameDragging(dom.hasAttribute('data-frame-dragging'))
+      setAlwaysExpanded(dom.hasAttribute('data-db-always-expanded'))
+    }
     sync()
     const mo = new MutationObserver(sync)
-    mo.observe(dom, { attributes: true, attributeFilter: ['data-frame-dragging'] })
+    mo.observe(dom, {
+      attributes: true,
+      attributeFilter: ['data-frame-dragging', 'data-db-always-expanded'],
+    })
     return () => mo.disconnect()
   }, [editor])
 
@@ -162,8 +213,6 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
   ) : (
     <Table2 className="tt-database-block-fallback h-4 w-4 text-blue-500" aria-hidden />
   )
-
-  const viewSettingsJson = (node.attrs.viewSettings as string | null) || null
 
   return (
     <NodeViewWrapper
@@ -241,29 +290,18 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
       {notionDatabaseId ? (
         <div ref={boxRef} className="min-w-0">
           {showLiveTable ? (
-            <NotionDatabaseTableView
-              notionDatabaseId={notionDatabaseId}
-              fallbackTitle={title}
-              viewSettingsJson={viewSettingsJson}
-              onViewSettingsChange={(json) => updateAttributes({ viewSettings: json })}
-              conversationId={hostConversationId}
-              hostMessageId={hostMessageId}
-              frameSelected={frameSelected}
-              frameDragging={false}
-              frameFreeResize={frameFreeResize}
-              frameClipHeight={frameClipHeight}
-              frameClipPreview={frameClipPreview}
-              interactive
-            />
+            liveTable
           ) : (
             <NotionDbStaticPreview
               notionDatabaseId={notionDatabaseId}
               fallbackTitle={title}
               viewSettingsJson={viewSettingsJson}
               frameSelected={false}
-              // Always ~12 rows when not live: pan/drag freeze needs a stable *box*, not rows.
-              // (An all-rows branch here re-showed full tables whenever a nav flag wedged true.)
-              compact
+              // ~12 rows by default: the pan/drag freeze needs a stable *box*, not rows. The earlier
+              // "full tables on deselect" regression came from keying all-rows on a nav flag that
+              // could wedge true — this is an explicit frame setting instead, and it must hold during
+              // nav too, since for these frames the full table *is* the at-rest box.
+              compact={!alwaysExpanded}
               minWidth={freezeToLastBox ? lastBox?.w : undefined}
               minHeight={freezeToLastBox ? lastBox?.h : undefined}
             />

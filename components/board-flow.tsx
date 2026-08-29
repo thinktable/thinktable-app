@@ -11,6 +11,7 @@ import ReactFlow, {
   ConnectionMode,
   BackgroundVariant,
   useReactFlow,
+  useStore,
   useStoreApi,
   useUpdateNodeInternals,
   ConnectionLineType,
@@ -88,7 +89,12 @@ import { useReactFlowContext } from './react-flow-context'
 import { useSidebarContext } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
 import { setAiSelectedFrames, setAiViewportCenter } from '@/lib/ai/selection-bridge' // Bridge RF selection + viewport → AI context
-import { beginBoardNavigating, endBoardNavigating } from '@/lib/board-navigating' // Freeze React zoom during pan/pinch
+import {
+  beginBoardNavigating,
+  endBoardNavigating,
+  isBoardNavigating,
+  touchBoardNavigating,
+} from '@/lib/board-navigating' // Freeze React zoom during pan/pinch
 import { beginFrameDragging, endFrameDragging, isFrameDragging } from '@/lib/frame-dragging' // Skip O(n) work mid-drag on large boards
 import { takeBoardCapture } from '@/lib/captures' // Board-menu Capture view
 import { htmlToPlain } from '@/lib/ai/context-pack' // Frame hover previews from content
@@ -211,7 +217,8 @@ interface ChatPanelNodeData {
   fillColor?: string // Panel fill color (optional, defaults to transparent)
   borderColor?: string // Panel border color (optional, defaults to theme-based)
   borderStyle?: string // Panel border style (solid, dashed, dotted)
-  borderWeight?: string // Panel border thickness (1px, 2px, 4px)
+  // Border thickness: '2px' from persisted metadata, bare number from the weight slider
+  borderWeight?: string | number
   frameShape?: string | null // Silhouette when frames act as shapes
 }
 
@@ -607,6 +614,19 @@ function BoardFlowInner({
   const [paneSize, setPaneSize] = useState({ width: 1200, height: 800 }) // RF pane — flow bounds for mount prefetch
   const [simplifyLowZoom, setSimplifyLowZoom] = useState(false) // <40%: cached previews, not hundreds of live editors
   const simplifyLowZoomRef = useRef(false) // Only cross-threshold updates may re-render BoardFlow
+  // Zoom also crosses 40% without a gesture: Free nav % presets, Fit, boardLink jumps, minimap clicks
+  // all call setViewport, which fires neither onMove nor onMoveEnd. Zooming in that way used to leave
+  // the latch true, so every frame stayed a deferred shell (title clipped to the 98×32 empty-frame
+  // hug, no live editor) until the user happened to pan. Selector returns a *boolean*, so BoardFlow
+  // re-renders on threshold crossings only — not on every zoom tick.
+  const lowZoomFromStore = useStore((s) => !embedded && s.transform[2] < 0.4)
+  useEffect(() => {
+    if (lowZoomFromStore === simplifyLowZoomRef.current) return
+    if (isBoardNavigating()) return // Mid-gesture: onMove latches, onMoveEnd settles — no mount storm mid-pinch
+    simplifyLowZoomRef.current = lowZoomFromStore
+    setSimplifyLowZoom(lowZoomFromStore)
+    setFrameMountRecomputeKey((k) => k + 1) // Near set is zoom-dependent (pad scales with zoom)
+  }, [lowZoomFromStore])
   // Pan is already infinite (RF default translateExtent). Grow zoom limits + soft fit world with content.
   const [zoomRange, setZoomRange] = useState<BoardZoomRange>(BOARD_ZOOM_DEFAULT)
   const zoomRangeRef = useRef(zoomRange)
@@ -1751,13 +1771,14 @@ function BoardFlowInner({
     }
     
     // Add event listeners
-    window.addEventListener('create-block-at-placeholder', handleCreateBlockAtPlaceholder as EventListener)
-    window.addEventListener('create-flashcard-at-placeholder', handleCreateFlashcardAtPlaceholder as EventListener)
+    // Cast through unknown: a CustomEvent<T> handler doesn't overlap EventListener's Event param
+    window.addEventListener('create-block-at-placeholder', handleCreateBlockAtPlaceholder as unknown as EventListener)
+    window.addEventListener('create-flashcard-at-placeholder', handleCreateFlashcardAtPlaceholder as unknown as EventListener)
     
     // Cleanup
     return () => {
-      window.removeEventListener('create-block-at-placeholder', handleCreateBlockAtPlaceholder as EventListener)
-      window.removeEventListener('create-flashcard-at-placeholder', handleCreateFlashcardAtPlaceholder as EventListener)
+      window.removeEventListener('create-block-at-placeholder', handleCreateBlockAtPlaceholder as unknown as EventListener)
+      window.removeEventListener('create-flashcard-at-placeholder', handleCreateFlashcardAtPlaceholder as unknown as EventListener)
     }
   }, [nodes, conversationId, supabase, queryClient])
 
@@ -6526,7 +6547,8 @@ function BoardFlowInner({
               : n
           )
         )
-        replaceBoardUrl(currentConversationId) // Address bar only — router.replace remounts the frame
+        // Pass the row id directly: `currentConversationId` stays `string | undefined` to the compiler
+        replaceBoardUrl(newConversation.id) // Address bar only — router.replace remounts the frame
       }
 
       const { error } = await supabase.from('messages').insert({
@@ -7231,7 +7253,9 @@ function BoardFlowInner({
         }
         return out
       }
-      const patchData = (data: ChatPanelNodeData) => {
+      // Annotated return: the computed `[kind]` key + widened metadata otherwise infer a shape
+      // that no longer matches ChatPanelNodeData at the setRightClickedNode call below.
+      const patchData = (data: ChatPanelNodeData): ChatPanelNodeData => {
         const pm = data?.promptMessage
         const meta = patchMeta({ ...((pm?.metadata as Record<string, unknown>) || {}) })
         return {
@@ -7290,7 +7314,7 @@ function BoardFlowInner({
         borderStyle:
           meta.borderStyle && meta.borderStyle !== 'none' ? meta.borderStyle : 'solid',
       })
-      const patchData = (data: ChatPanelNodeData) => {
+      const patchData = (data: ChatPanelNodeData): ChatPanelNodeData => {
         const pm = data?.promptMessage
         const meta = patchMeta({ ...((pm?.metadata as Record<string, unknown>) || {}) })
         return {
@@ -7704,6 +7728,17 @@ function BoardFlowInner({
             void handleConvertLayout(payload.convertLayout)
           }
           break
+        case 'setDbExpand': {
+          // The frame owns this metadata (it already persists frameUnlocked / frameTextWrap), so
+          // broadcast the choice and let ChatPanelNode write it — one writer, same as frame lock.
+          if (!payload?.dbExpand || !rightClickedNode) break
+          window.dispatchEvent(
+            new CustomEvent('tt-set-db-expand', {
+              detail: { nodeIds: [rightClickedNode.id], always: payload.dbExpand === 'always' },
+            })
+          )
+          break
+        }
         // Baseline stubs — menu entries present; behavior later
         case 'color':
         case 'listFormat':
@@ -8607,7 +8642,8 @@ function BoardFlowInner({
                     : n
                 )
               )
-              replaceBoardUrl(currentConversationId) // No App Router remount mid-type
+              // Row id directly: `currentConversationId` stays `string | undefined` to the compiler
+              replaceBoardUrl(newConversation.id) // No App Router remount mid-type
             }
 
             const latestHtml = bufferToHtml(iBarTypeBufferRef.current)
@@ -9412,7 +9448,8 @@ function BoardFlowInner({
 
                 currentConversationId = newConversation.id
 
-                replaceBoardUrl(currentConversationId) // Address bar only — router.replace remounts the map
+                // Row id directly: `currentConversationId` stays `string | undefined` to the compiler
+                replaceBoardUrl(newConversation.id) // Address bar only — router.replace remounts the map
               }
 
               // Find source and target nodes to get message IDs
@@ -9723,6 +9760,7 @@ function BoardFlowInner({
           setFrameMountRecomputeKey((k) => k + 1) // Mount/unmount deferred TipTap after pan settles
         }}
         onMove={(event, viewport) => {
+          touchBoardNavigating() // Keep the freeze alive — begin only fires on onMoveStart
           if (!embedded && viewport.zoom < 0.4 && !simplifyLowZoomRef.current) {
             simplifyLowZoomRef.current = true
             setSimplifyLowZoom(true) // One threshold transition; stay simplified through the gesture
@@ -10407,6 +10445,16 @@ function BoardFlowInner({
             if (meta.dbLayout === 'card') return 'card' as const // Already Card view → offer Table
             if (isNotionDatabaseTableFrame(content, meta)) return 'table' as const // Table → offer Card
             return null
+          })()}
+          dbExpandMode={(() => {
+            const content = String(rightClickedNode.data?.promptMessage?.content || '')
+            const meta =
+              (rightClickedNode.data?.promptMessage?.metadata as
+                | Record<string, unknown>
+                | undefined) || {}
+            // Card view has no rows to expand — table frames only.
+            if (!isNotionDatabaseTableFrame(content, meta)) return null
+            return meta.dbAlwaysExpanded === true ? ('always' as const) : ('selected' as const)
           })()}
           canLockFramesTogether={
             nodes.filter((n) => n.selected && n.type === 'chatPanel').length >= 2

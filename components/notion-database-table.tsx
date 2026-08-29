@@ -62,6 +62,7 @@ import {
   DB_TABLE_VIRTUALIZE_MIN,
   VirtualizedListBody,
   VirtualizedTableBody,
+  useVisibleColumnRange,
   type SaveFn,
 } from '@/components/notion-db-virtual-body'
 import { rowTitleFromCells } from '@/lib/notion/property-map'
@@ -563,6 +564,12 @@ export function NotionDatabaseTableView({
     [data, settings]
   )
 
+  // Which columns are on screen. Rows outside the window already collapse to spacers; without this a
+  // mounted row still built a cell for every column, on- or off-screen, which is what made selecting a
+  // wide table cost the whole table instead of the part you can see.
+  const theadRef = useRef<HTMLTableSectionElement | null>(null)
+  const colRange = useVisibleColumnRange(columns, settings, theadRef)
+
   // Re-render when board frames change so peeled cards drop out of the table
   const [messagesTick, setMessagesTick] = useState(0)
   useEffect(() => {
@@ -842,19 +849,27 @@ export function NotionDatabaseTableView({
   // Explicit px widths (Notion view or defaults) so fixed-layout cells clip instead of expanding the hug
   const tablePixelWidth = columns.reduce((sum, prop) => sum + columnWidthPx(prop, settings), 0)
 
-  const tableLayout = (
+  // Every layout below is a thunk, and only the selected one is called.
+  //
+  // They used to be plain `const`s, so each render of a *table* also built the gallery, board and
+  // calendar views and threw them away — each one walking `filteredRows` (all rows, unwindowed) and
+  // emitting a card per row. A CPU profile of one selection put 132ms in the gallery map, 51ms in the
+  // board grouping and 29ms in the calendar bucketing: 212ms of the table's 229ms render was invisible
+  // output. This is why selecting slowed with total row count rather than with what was on screen.
+  const renderTable = () => (
     <div className="relative tt-db-table-wrap overflow-hidden" style={{ paddingLeft: ROW_GUTTER }}>
       <table
         className="border-separate border-spacing-0 text-left border-0"
         style={{ width: tablePixelWidth, tableLayout: 'fixed' }}
       >
-        <thead>
+        <thead ref={theadRef}>
           <tr className="border-b border-gray-200">
             {columns.map((prop, colIndex) => {
               const colW = columnWidthPx(prop, settings)
               return (
                 <th
                   key={prop.id}
+                  data-col-index={colIndex}
                   style={{ width: colW, maxWidth: colW, minWidth: 0 }}
                   className={cn(
                     'sticky top-0 z-[1] overflow-hidden whitespace-nowrap px-2 py-1 text-[12px] font-medium text-gray-500 bg-transparent',
@@ -898,12 +913,13 @@ export function NotionDatabaseTableView({
           rowBackgroundFn={rowBgFn}
           scrollParentRef={scrollRef}
           virtualize={virtualizeRows}
+          colRange={colRange}
         />
       </table>
     </div>
   )
 
-  const listLayout = (
+  const renderList = () => (
     <VirtualizedListBody
       rows={filteredRows}
       titleProp={titleProp}
@@ -915,7 +931,7 @@ export function NotionDatabaseTableView({
     />
   )
 
-  const boardLayout = (() => {
+  const renderBoard = () => {
     const boardProp =
       data.properties.find((p) => p.name === settings.groupBy) ||
       data.properties.find((p) => p.type === 'status' || p.type === 'select')
@@ -967,9 +983,9 @@ export function NotionDatabaseTableView({
         ))}
       </div>
     )
-  })()
+  }
 
-  const galleryLayout = (
+  const renderGallery = () => (
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-2">
       {filteredRows.map((row) => {
         const title = titleProp ? row.cells[titleProp.name]?.text || 'Untitled' : 'Untitled'
@@ -997,7 +1013,7 @@ export function NotionDatabaseTableView({
     </div>
   )
 
-  const calendarLayout = (() => {
+  const renderCalendar = () => {
     const dateProp =
       data.properties.find((p) => p.type === 'date') ||
       data.properties.find((p) => /due|date/i.test(p.name))
@@ -1039,18 +1055,18 @@ export function NotionDatabaseTableView({
         ))}
       </div>
     )
-  })()
+  }
 
   const body =
     settings.layout === 'list'
-      ? listLayout
+      ? renderList()
       : settings.layout === 'board'
-        ? boardLayout
+        ? renderBoard()
         : settings.layout === 'gallery'
-          ? galleryLayout
+          ? renderGallery()
           : settings.layout === 'calendar'
-            ? calendarLayout
-            : tableLayout
+            ? renderCalendar()
+            : renderTable()
 
   const bringDialogRow = bringDialogRowId
     ? data.rows.find((r) => r.id === bringDialogRowId) || null

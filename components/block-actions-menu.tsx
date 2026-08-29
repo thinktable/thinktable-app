@@ -65,6 +65,7 @@ import {
   LayoutGrid,
   Table2,
   AppWindow,
+  Rows3,
 } from 'lucide-react' // Action + Turn into + Property + Connections icons
 import { NotionMarkIcon } from '@/components/notion-mark-icon' // Notion row in Connections
 import type { NotionSyncMode } from '@/lib/blocks' // Live vs Manual sync
@@ -189,9 +190,11 @@ export type BlockActionId =
   | 'setNotionSync' // Live Sync vs Manual
   | 'removeNotionConnection' // Unlink Notion from this frame
   | 'convertLayout' // Frame menu → Card view / Table view (Notion DB)
+  | 'setDbExpand' // Frame menu → Always expanded vs Expand when selected (Notion DB)
   | 'open' // Open linked board / Notion page (DB row ⋮⋮, boardLink)
 
 export type DbConvertLayoutId = 'card' | 'table' // Convert layout flyout picks
+export type DbExpandModeId = 'selected' | 'always' // Expand-on-select vs permanently expanded
 
 export type BlockActionPayload = {
   blockType?: BlockTypeId // Present when action === 'turnInto'
@@ -205,6 +208,7 @@ export type BlockActionPayload = {
   borderWeightCommit?: boolean // true = undo snapshot + DB save (slider release)
   notionSync?: NotionSyncMode // Present when action === 'setNotionSync'
   convertLayout?: DbConvertLayoutId // Present when action === 'convertLayout'
+  dbExpand?: DbExpandModeId // Present when action === 'setDbExpand'
 }
 
 /** AI Autofill rows in the Property pane (stubs until wired). */
@@ -254,6 +258,11 @@ export type BlockActionsMenuProps = {
    * null/undefined = hide Convert layout. Flyout checks the current mode.
    */
   convertLayoutMode?: DbConvertLayoutId | null
+  /**
+   * Current row-expand policy on this Notion DB frame.
+   * null/undefined = hide Table rows (not a DB frame).
+   */
+  dbExpandMode?: DbExpandModeId | null
   /** Show Open (DB row / page) at the top of the block menu. */
   showOpen?: boolean
   /** Override the gray context label under search (e.g. "Page" for DB rows). */
@@ -333,7 +342,7 @@ type RowDef =
       shortcut?: string
       icon: React.ReactNode
       danger?: boolean
-      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape' | 'frameColor' | 'connections' | 'convertLayout'
+      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape' | 'frameColor' | 'connections' | 'convertLayout' | 'dbExpand'
       hidden?: boolean
       beta?: boolean
     }
@@ -479,6 +488,7 @@ export function BlockActionsMenu({
   notionConnected = false,
   notionSync = 'live',
   convertLayoutMode = null,
+  dbExpandMode = null,
   showOpen = false,
   menuHeader,
   variant = 'default',
@@ -500,6 +510,7 @@ export function BlockActionsMenu({
     | 'frameColor'
     | 'connections'
     | 'convertLayout'
+    | 'dbExpand'
     | null
   >(null) // Flyout
   const inputRef = useRef<HTMLInputElement>(null) // Autofocus search
@@ -678,6 +689,14 @@ export function BlockActionsMenu({
       },
       {
         kind: 'action',
+        id: 'setDbExpand',
+        label: 'Table rows',
+        icon: <Rows3 className="h-4 w-4" />,
+        submenu: 'dbExpand', // Always expanded / Expand when selected
+        hidden: !dbExpandMode, // Notion DB frames only
+      },
+      {
+        kind: 'action',
         id: 'lockToBoard',
         label: boardLocked ? 'Unanchor from board' : 'Anchor to board',
         icon: <Anchor className="h-4 w-4" />, // Same anchor as Actions-bar board lock
@@ -764,7 +783,7 @@ export function BlockActionsMenu({
                 .includes(q)
             )))
     )
-  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape, boardLocked, framesLockedTogether, canLockFramesTogether, notionConnected, convertLayoutMode, showOpen])
+  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape, boardLocked, framesLockedTogether, canLockFramesTogether, notionConnected, convertLayoutMode, dbExpandMode, showOpen])
 
   // When searching, also surface matching Turn into types as flat picks
   const turnIntoMatches = useMemo(() => {
@@ -811,8 +830,9 @@ export function BlockActionsMenu({
           ? 'translate(calc(-100% - 8px), 4px)'
           : 'translate(8px, 4px)'
         : 'translate(-50%, -100%)',
+    // No `as const` — it's invalid on a conditional, and CSSProperties.transformOrigin takes any string
     transformOrigin:
-      (positionMode === 'fixed' ? (openLeft ? 'top right' : 'top left') : 'center bottom') as const,
+      positionMode === 'fixed' ? (openLeft ? 'top right' : 'top left') : 'center bottom',
     marginTop: positionMode === 'fixed' ? 0 : '-8px',
   }
 
@@ -981,6 +1001,7 @@ export function BlockActionsMenu({
                 else if (row.submenu === 'frameShape') setOpenSubmenu('frameShape')
                 else if (row.submenu === 'frameColor') setOpenSubmenu('frameColor')
                 else if (row.submenu === 'convertLayout') setOpenSubmenu('convertLayout')
+                else if (row.submenu === 'dbExpand') setOpenSubmenu('dbExpand')
                 else if (row.submenu === 'connections') return // Click-only picker
                 else setOpenSubmenu(null)
               }}
@@ -1001,6 +1022,10 @@ export function BlockActionsMenu({
                 }
                 if (row.submenu === 'convertLayout') {
                   setOpenSubmenu((s) => (s === 'convertLayout' ? null : 'convertLayout'))
+                  return
+                }
+                if (row.submenu === 'dbExpand') {
+                  setOpenSubmenu((s) => (s === 'dbExpand' ? null : 'dbExpand'))
                   return
                 }
                 if (row.submenu === 'connections') {
@@ -1420,6 +1445,43 @@ export function BlockActionsMenu({
             <span className="flex-1 text-left">Table view</span>
             {convertLayoutMode === 'table' && <Check className="h-3.5 w-3.5 text-gray-500" />}
           </Button>
+        </div>
+      )}
+
+      {/* Table rows — Expand when selected / Always expanded (Notion database frames) */}
+      {openSubmenu === 'dbExpand' && dbExpandMode && (
+        <div
+          data-tt-menu-flyout="main"
+          className="absolute z-[1001] min-w-[210px] tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
+          onMouseEnter={() => setOpenSubmenu('dbExpand')}
+        >
+          <div className="px-2 py-1.5 text-[11px] text-gray-400">Rows</div>
+          {(
+            [
+              { id: 'selected' as const, label: 'Expand when selected', icon: Rows3 },
+              { id: 'always' as const, label: 'Always expanded', icon: Table2 },
+            ]
+          ).map(({ id: mode, label, icon: Icon }) => (
+            <Button
+              key={mode}
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                if (dbExpandMode !== mode) onAction('setDbExpand', { dbExpand: mode })
+                onClose()
+              }}
+              className={cn(
+                'justify-start text-sm h-8 px-2 font-normal w-full',
+                dbExpandMode === mode && 'bg-blue-50 dark:bg-blue-950/40'
+              )}
+            >
+              <Icon className="h-4 w-4 mr-2 text-gray-500" />
+              <span className="flex-1 text-left">{label}</span>
+              {dbExpandMode === mode && <Check className="h-3.5 w-3.5 text-gray-500" />}
+            </Button>
+          ))}
         </div>
       )}
 

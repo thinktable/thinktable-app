@@ -439,7 +439,8 @@ export function CapturesMenu({
               <Presentation className="h-3.5 w-3.5" />
               Add to presentation
             </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-44 p-1" side="left" sideOffset={6}>
+            {/* No `side`: Radix omits it on SubContent — submenu side comes from collision detection */}
+            <DropdownMenuSubContent className="w-44 p-1" sideOffset={6}>
               <DropdownMenuItem
                 onSelect={() => {
                   createPresentation(selectedIds())
@@ -451,7 +452,7 @@ export function CapturesMenu({
                 <DropdownMenuSubTrigger disabled={presentations.length === 0}>
                   Select
                 </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent className="max-h-56 w-48 overflow-y-auto p-1" side="left" sideOffset={6}>
+                <DropdownMenuSubContent className="max-h-56 w-48 overflow-y-auto p-1" sideOffset={6}>
                   {presentations.length === 0 ? (
                     <div className="px-2 py-2 text-xs text-gray-400">No presentations yet</div>
                   ) : (

@@ -7,6 +7,7 @@ import type { Editor } from '@tiptap/core' // Walk the live doc for top-strip gr
 import { ReactNodeViewRenderer } from '@tiptap/react' // React NodeView for icon + cell
 import { PropertyBlockView } from '@/components/property-block-view' // The rendered chrome
 import { isPropertyTypeId, type PropertyTypeId } from '@/lib/blocks/property' // Known type ids
+import { parsePropertyBlockTag } from '@/lib/tiptap/property-block-html' // Shared tag parse (server-safe module)
 import type { EditorBlockRef } from '@/lib/tiptap/block-selection' // Top ⋮⋮ click → that propertyBlock
 import { moveEditorBlockToPos } from '@/lib/tiptap/block-selection' // Header drag reorder
 
@@ -14,32 +15,7 @@ export interface PropertyBlockOptions {
   HTMLAttributes: Record<string, unknown> // Passthrough HTML attrs for mergeAttributes
 }
 
-/** Options when serializing a property cell to HTML. */
-export type PropertyBlockHtmlOpts = {
-  inline?: boolean // User Turn into / persisted preference — stay in body even when empty
-  propertyName?: string // Notion column name (card↔table inline preference key)
-}
-
-/** Escape a value for a double-quoted HTML attribute. */
-function escapeAttr(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
-}
-
-/** Serialized HTML for a property cell (I-bar / Turn into / DB card seed). */
-export function propertyBlockHtml(
-  type: PropertyTypeId,
-  value = '',
-  opts?: PropertyBlockHtmlOpts
-): string {
-  const typeAttr = ` data-property-type="${type}"` // Which Property pane type this cell is
-  const valueAttr = value ? ` data-value="${escapeAttr(value)}"` : '' // Omit when empty (placeholder)
-  const inlineAttr = opts?.inline ? ' data-inline="true"' : '' // Default false — omit attr
-  const nameAttr =
-    opts?.propertyName && opts.propertyName.trim()
-      ? ` data-property-name="${escapeAttr(opts.propertyName.trim())}"`
-      : '' // Notion column name for round-trip
-  return `<div data-type="propertyBlock"${typeAttr}${valueAttr}${inlineAttr}${nameAttr}></div>`
-}
+export { propertyBlockHtml, type PropertyBlockHtmlOpts } from '@/lib/tiptap/property-block-html'
 
 /** True when the cell has no persisted value. */
 export function isPropertyBlockValueEmpty(value: unknown): boolean {
@@ -118,57 +94,18 @@ export function readPropertyBlockTypesFromDoc(doc: {
   return types
 }
 
-/** True when the HTML still has any propertyBlock (filled or empty) — vs legacy metadata-only. */
-export function htmlHasPropertyBlocks(html: string): boolean {
-  return !!html && /data-type=["']propertyBlock["']/.test(html) // Any cell present
-}
-
-/** Parse one propertyBlock opening tag for top-strip / inline harvest. */
-function parsePropertyBlockTag(tag: string): {
-  type: PropertyTypeId | null
-  empty: boolean
-  inline: boolean
-  propertyName: string
-} {
-  const vm = tag.match(/data-value=["']([^"']*)["']/) // Missing / blank → empty
-  const empty = !(vm && vm[1].trim() !== '')
-  const inline = /\bdata-inline=["']true["']/i.test(tag) // User / persisted inline
-  const tm = tag.match(/data-property-type=["']([^"']+)["']/)
-  const type = tm && isPropertyTypeId(tm[1]) ? tm[1] : null
-  const nm = tag.match(/data-property-name=["']([^"']*)["']/)
-  const propertyName = nm ? nm[1].trim() : ''
-  return { type, empty, inline, propertyName }
-}
-
-/** Header-only type list from persisted HTML (before the editor mounts). */
-export function readPropertyBlockTypesFromHtml(html: string): PropertyTypeId[] {
-  if (!html || !html.includes('propertyBlock')) return [] // Fast out
-  const types: PropertyTypeId[] = []
-  const re = /<div\b[^>]*data-type=["']propertyBlock["'][^>]*>/gi // Opening tag, any attr order
-  let m: RegExpExecArray | null
-  while ((m = re.exec(html))) {
-    const { type, empty, inline } = parsePropertyBlockTag(m[0])
-    if (!empty || inline) continue // Body-only — skip top strip
-    if (type) types.push(type)
-  }
-  return types
-}
+// String-only helpers live in property-block-html.ts so server routes can import them
+// without pulling @tiptap/react + the NodeView component into a server bundle.
+export {
+  htmlHasPropertyBlocks,
+  readPropertyBlockTypesFromHtml,
+} from '@/lib/tiptap/property-block-html'
 
 /**
  * Notion property names marked `data-inline="true"` in card HTML.
  * Used when collapsing cards → table so table→card can restore inline empties.
  */
-export function readInlinePropertyNamesFromHtml(html: string): string[] {
-  if (!html || !html.includes('propertyBlock')) return []
-  const names: string[] = []
-  const re = /<div\b[^>]*data-type=["']propertyBlock["'][^>]*>/gi
-  let m: RegExpExecArray | null
-  while ((m = re.exec(html))) {
-    const { inline, propertyName } = parsePropertyBlockTag(m[0])
-    if (inline && propertyName && !names.includes(propertyName)) names.push(propertyName)
-  }
-  return names
-}
+export { readInlinePropertyNamesFromHtml } from '@/lib/tiptap/property-block-html'
 
 /** propertyBlock refs in document order (optionally header-only for the top icon row). */
 export function collectPropertyBlocks(

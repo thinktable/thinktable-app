@@ -1,7 +1,7 @@
 // Map Notion database property types ↔ Thinktable propertyBlock cells (Convert layout → Card view).
 
 import type { PropertyTypeId } from '@/lib/blocks/property' // Frame property cell kinds
-import { propertyBlockHtml } from '@/lib/tiptap/property-block' // Serialized property cell HTML
+import { propertyBlockHtml } from '@/lib/tiptap/property-block-html' // Serialized property cell HTML (server-safe — no TipTap)
 import type { NotionDbCell, NotionDbProperty } from '@/lib/notion/database' // Live table schema + cells
 
 /** Escape a value for a double-quoted HTML attribute. */

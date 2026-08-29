@@ -7,6 +7,14 @@ import { createClient } from '@/lib/supabase/client'
 import { usePathname } from 'next/navigation'
 import { parseBoardFontId, type BoardFontId } from '@/lib/board-font'
 
+/** Public homepage board id from env — only that board may probe /api/homepage-board. */
+const HOMEPAGE_BOARD_ID = process.env.NEXT_PUBLIC_HOMEPAGE_BOARD_ID || ''
+
+/** True when this conversation is the configured public homepage map. */
+function isHomepageBoardId(conversationId?: string): boolean {
+  return Boolean(HOMEPAGE_BOARD_ID && conversationId === HOMEPAGE_BOARD_ID)
+}
+
 interface ReactFlowContextType {
   reactFlowInstance: ReactFlowInstance | null
   setReactFlowInstance: (instance: ReactFlowInstance | null) => void
@@ -238,18 +246,22 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
     const supabase = createClient()
 
     try {
-      // Check if this is the homepage board (public access via API route)
+      // Check if this is the homepage board (public access via API route).
+      // Gate on the env id like board-flow: this probe returns the whole public board
+      // (service-role query, ~400ms) and ran on every board load before the real prefs fetch.
       let homepageBoardPrefs: any = null
-      try {
-        const homepageResponse = await fetch('/api/homepage-board')
-        if (homepageResponse.ok) {
-          const homepageData = await homepageResponse.json()
-          if (homepageData.conversation?.id === currentConversationId && homepageData.conversation?.metadata) {
-            homepageBoardPrefs = homepageData.conversation.metadata
+      if (isHomepageBoardId(currentConversationId)) {
+        try {
+          const homepageResponse = await fetch('/api/homepage-board')
+          if (homepageResponse.ok) {
+            const homepageData = await homepageResponse.json()
+            if (homepageData.conversation?.id === currentConversationId && homepageData.conversation?.metadata) {
+              homepageBoardPrefs = homepageData.conversation.metadata
+            }
           }
+        } catch (e) {
+          // API failed — continue to the authenticated fetch below
         }
-      } catch (e) {
-        // Not homepage board or API failed, continue to normal fetch
       }
 
       // If we got homepage board prefs, use them (works even if unauthenticated)
@@ -386,21 +398,9 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
     conversationIdRef.current = conversationId
   }, [conversationId])
 
-  // Load preferences from Supabase (with localStorage fallback) after hydration
-  // This ensures consistent initial render on server and client, then updates after hydration
-  // Also loads when conversationId changes (navigating between boards)
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-
-    // Set loading flag to prevent saves during navigation/loading
-    isLoadingRef.current = true
-
-    // Load preferences for the current board
-    loadPreferencesFromSupabase(conversationId).finally(() => {
-      // Clear loading flag after load completes (allows saves to proceed)
-      isLoadingRef.current = false
-    })
-  }, [loadPreferencesFromSupabase, conversationId])
+  // Mount / board / pathname loads all live in ONE effect below (`pathname, conversationId`).
+  // Three effects used to call this loader with the same deps, so every mount and every board
+  // switch ran 3× auth.getUser + 3× conversations select before the board could settle.
 
   // Also reload from Supabase when window gains focus (to catch changes made in other tabs/windows)
   useEffect(() => {
@@ -1090,18 +1090,7 @@ export function ReactFlowContextProvider({ children, conversationId, projectId }
     })
   }, [pathname, conversationId, loadPreferencesFromSupabase])
 
-  // Also reload preferences when the component mounts (in case it re-mounts on navigation)
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-
-    // Set loading flag to prevent saves during reload
-    isLoadingRef.current = true
-
-    // Load immediately - localStorage is instant, Supabase syncs in background
-    loadPreferencesFromSupabase(conversationId).finally(() => {
-      isLoadingRef.current = false
-    })
-  }, [loadPreferencesFromSupabase, conversationId])
+  // (Mount reload folded into the pathname/conversationId effect above — it fired on the same deps.)
 
   // Sync deterministic mapping state with layoutMode
   // None = no branching (disabled), Auto/Tree/Cluster = branching (enabled)

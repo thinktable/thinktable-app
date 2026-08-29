@@ -17,7 +17,7 @@ import {
   rowBoardLinkHtml,
   rowTitleFromCells,
 } from '@/lib/notion/property-map'
-import { readInlinePropertyNamesFromHtml } from '@/lib/tiptap/property-block' // Survive card↔table
+import { readInlinePropertyNamesFromHtml } from '@/lib/tiptap/property-block-html' // Survive card↔table (server-safe — no TipTap)
 
 /** Default Smooth thread algorithm (matches board-flow / EditableThread). */
 const THREAD_ALGORITHM = 'Bezier Catmull-Rom'

@@ -52,7 +52,7 @@ export function BoardLinkView({ node, updateAttributes, editor, getPos }: NodeVi
   const variant = (node.attrs.variant as string) === 'title' ? 'title' : 'inline' // Layout mode
   const actions = useBoardLinkActions() // Host frame preview / open / rename / setIcon bridge
   const propertyHeaderSlot = usePropertyHeaderSlot() // Empty property icons — first title link only
-  const linkPos = typeof getPos === 'function' ? getPos() : -1
+  const linkPos = typeof getPos === 'function' ? getPos() ?? -1 : -1 // TipTap getPos() may return undefined mid-teardown
   const isFirstTitleBoardLink = (() => {
     if (variant !== 'title' || !editor || editor.isDestroyed || linkPos < 0) return false
     let firstLinkPos = -1

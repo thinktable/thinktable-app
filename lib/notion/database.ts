@@ -251,11 +251,13 @@ async function resolveDataSourceByTitleSearch(
   }
 
   const pickFromHits = async (results: SearchHit[]): Promise<ResolvedDataSource | null> => {
-    let best: { score: number; hit: ResolvedDataSource } | null = null
+    // Holder object, not a `let`: TS narrows a captured `let` to its initializer and can't see the
+    // assignment inside `consider`, which typed the winner as `never` at the return below.
+    const best: { top: { score: number; hit: ResolvedDataSource } | null } = { top: null }
 
     const consider = (score: number, hit: ResolvedDataSource) => {
       if (score < 30) return // Allow single shared token (e.g. "tasks") across view vs source titles
-      if (!best || score > best.score) best = { score, hit }
+      if (!best.top || score > best.top.score) best.top = { score, hit }
     }
 
     for (const r of results) {
@@ -297,7 +299,7 @@ async function resolveDataSourceByTitleSearch(
       })
     }
 
-    return best?.hit || null
+    return best.top?.hit || null
   }
 
   // 1) Targeted search with the cleaned title

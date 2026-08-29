@@ -1,6 +1,7 @@
 // Board pan/pinch in progress. Freeze React zoom selectors so chrome/threads don’t
 // re-render every tick — the RF viewport CSS transform still tracks fingers live.
-// Notion DB tables swap to a same-size static preview (not CSS hide — that popped on phone).
+// Notion DB tables no longer swap on this flag — see `database-block-view.tsx`. A selected table
+// stays mounted through the gesture; only its idle *box* freeze (`freezeToLastBox`) still reads it.
 
 let navigating = false
 let frozenZoom: number | null = null // Stable zoom for useStore selectors during the gesture
@@ -48,20 +49,32 @@ function clearNavigating(): void {
   notifyNavigating()
 }
 
+/**
+ * Failsafe: a gesture that never calls `endBoardNavigating` (pointercancel, unmount mid-pinch,
+ * RF skipping onMoveEnd) used to wedge `navigating` true forever — hug then skips, so DB frames
+ * never shrink back on deselect. Callers heartbeat via `touchBoardNavigating` while moving.
+ */
+function armWatchdog(): void {
+  if (watchdogTimer) clearTimeout(watchdogTimer)
+  watchdogTimer = setTimeout(() => {
+    watchdogTimer = null
+    clearNavigating()
+  }, NAV_WATCHDOG_MS)
+}
+
+/** Keep the freeze alive mid-gesture — call from per-tick move handlers (two timer ops, no state). */
+export function touchBoardNavigating(): void {
+  if (!navigating) return
+  armWatchdog()
+}
+
 /** Mark gesture start — freeze zoom selectors; RF setViewport keeps tracking. */
 export function beginBoardNavigating(zoom?: number): void {
   if (settleTimer) {
     clearTimeout(settleTimer)
     settleTimer = null
   }
-  // Re-arm every tick. A gesture ending without `endBoardNavigating` (pointercancel, unmount
-  // mid-pinch, RF skipping onMoveEnd) used to wedge this true forever — hug then skips, so DB
-  // frames never shrink back on deselect.
-  if (watchdogTimer) clearTimeout(watchdogTimer)
-  watchdogTimer = setTimeout(() => {
-    watchdogTimer = null
-    clearNavigating()
-  }, NAV_WATCHDOG_MS)
+  armWatchdog()
   if (navigating) return
   navigating = true
   const z = zoom ?? 1

@@ -49,7 +49,8 @@ export const SlashCommand = Extension.create({
           let component: ReactRenderer | null = null
           let unmountPopup: (() => void) | null = null
           let menuRef: SlashCommandMenuRef | null = null
-          let getClientRect: (() => DOMRect | null) | null = null // Live caret from TipTap
+          // Suggestion's clientRect is optional as well as nullable — the optional call below covers both
+          let getClientRect: (() => DOMRect | null) | null | undefined = null // Live caret from TipTap
 
           const place = () => {
             const el = component?.element as HTMLElement | undefined

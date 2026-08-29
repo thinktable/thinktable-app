@@ -274,7 +274,7 @@ export function useOnThreadFrames({
       nodeWithOnThreadAnchor(node, session.anchor),
       node.position
     )
-    if (projected) dragRef.current.anchor = projected.anchor
+    if (projected) session.anchor = projected.anchor // Same object as dragRef.current, already narrowed non-null
   }, [edges, getNodes])
 
   const onNodeDragStop = useCallback(

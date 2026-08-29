@@ -1,6 +1,5 @@
 import type {
   Box,
-  InternalNode,
   Node,
   NodeDimensionChange,
   NodePositionChange,
@@ -11,8 +10,10 @@ import {
   AnchorMatch,
   CandidateLine,
   HelperLine,
+  MeasuredNode,
   Orientation,
-} from './types';
+  RfInternalNode,
+} from './types'; // RfInternalNode/MeasuredNode model the v11 shape (v11 exports no InternalNode)
 
 const isInViewport = (a: Box, b: Box) =>
   a.x < b.x2 && a.x2 > b.x && a.y < b.y2 && a.y2 > b.y;
@@ -54,7 +55,7 @@ export class SpatialIndex {
   search(
     orientation: Orientation,
     pos: number,
-    node: Node,
+    node: MeasuredNode,
     viewportBox: Box,
   ): HelperLine | undefined {
     // Select lines of the correct orientation
@@ -134,8 +135,8 @@ export class SpatialIndex {
 
 // =============== Helper line rebuilding ===============
 
-// Helper function to compute box from an InternalNode (reactflow v11 doesn't export nodeToBox)
-function nodeToBox(internalNode: InternalNode): Box {
+// Helper function to compute box from an internal node (reactflow v11 doesn't export nodeToBox)
+function nodeToBox(internalNode: RfInternalNode): Box {
   // Try to get position from internals.positionAbsolute, internals.position, or position
   const positionAbsolute = internalNode.internals?.positionAbsolute;
   const positionInternal = internalNode.internals?.position;
@@ -152,8 +153,8 @@ function nodeToBox(internalNode: InternalNode): Box {
   };
 }
 
-// Helper function to compute box from a Node (when InternalNode is not available)
-function nodeToBoxFromNode(node: Node): Box {
+// Helper function to compute box from a Node (when the internal node is not available)
+function nodeToBoxFromNode(node: MeasuredNode): Box {
   const width = node.width || node.measured?.width || 0;
   const height = node.height || node.measured?.height || 0;
   const x = node.position.x;
@@ -170,7 +171,7 @@ function nodeToBoxFromNode(node: Node): Box {
 export function buildHelperLines(
   nodes: Node[],
   anchors: Record<string, Anchor> = ANCHORS,
-  getInternalNode: (id: string) => InternalNode | undefined,
+  getInternalNode: (id: string) => RfInternalNode | undefined,
 ): HelperLine[] {
   const helperLines: HelperLine[] = [];
 
@@ -320,12 +321,12 @@ export function getHelperLines(
 // =============== Snapping Nodes to Helper Lines ===============
 
 export function snapToHelperLines(
-  node: Node,
-  internalNode: InternalNode,
+  node: MeasuredNode,
+  internalNode: RfInternalNode,
   snapChange: NodePositionChange,
   positionChange?: NodePositionChange,
   dimensionChange?: NodeDimensionChange,
-  parentNode?: InternalNode,
+  parentNode?: RfInternalNode,
   hMatch?: AnchorMatch,
   vMatch?: AnchorMatch,
   nodeBox?: Box,

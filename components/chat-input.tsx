@@ -737,8 +737,9 @@ export function ChatInput({ conversationId, projectId, onHeightChange, variant =
 
         currentConversationId = newConversation.id
 
-        // Dispatch + address-bar only — Next router.replace would remount BoardFlow mid-send
-        replaceBoardUrl(currentConversationId)
+        // Dispatch + address-bar only — Next router.replace would remount BoardFlow mid-send.
+        // Pass the row id directly: `currentConversationId` stays `string | undefined` to the compiler.
+        replaceBoardUrl(newConversation.id)
       }
 
       // If already loading, add to queue instead of processing immediately

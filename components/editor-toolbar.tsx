@@ -135,12 +135,14 @@ function paintSpaceIcon(icon: HTMLImageElement | null, on: boolean) {
   icon.style.opacity = on ? '1' : '0.8' // Idle icons sit slightly back like the text tools
 }
 
-function canEditorUndo(editor: Editor | null): boolean {
+// Predicate return type (not plain boolean): true implies non-null, so call sites can chain
+// `editor.chain()` in the same branch without a redundant null check.
+function canEditorUndo(editor: Editor | null): editor is Editor {
   if (!editor || editor.isDestroyed) return false
   return editor.can().undo()
 }
 
-function canEditorRedo(editor: Editor | null): boolean {
+function canEditorRedo(editor: Editor | null): editor is Editor {
   if (!editor || editor.isDestroyed) return false
   return editor.can().redo()
 }

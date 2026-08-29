@@ -2,11 +2,11 @@ import { useReactFlow, useStore } from 'reactflow';
 import type {
   Box,
   Node,
-  InternalNode,
   NodeChange,
   NodeDimensionChange,
   NodePositionChange,
 } from 'reactflow'; // Types only — Node/Box are not runtime exports
+import type { MeasuredNode, RfInternalNode } from './types'; // v11 shape (v11 exports no InternalNode)
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import HelperLinesRenderer from './HelperLinesRenderer';
@@ -36,7 +36,7 @@ export function useHelperLines(enabled: boolean = true) {
 
   // Get internal nodes from store (reactflow v11 doesn't have getInternalNode in useReactFlow)
   // Try to access nodeLookup from store, but handle gracefully if it doesn't exist
-  const nodeLookupRef = useRef<Map<string, InternalNode> | undefined>(undefined);
+  const nodeLookupRef = useRef<Map<string, RfInternalNode> | undefined>(undefined);
   
   // Subscribe to store and try to get nodeLookup
   // In reactflow v11, internal nodes might be stored differently or not directly accessible
@@ -53,7 +53,7 @@ export function useHelperLines(enabled: boolean = true) {
   });
   
   const getInternalNodeFromStore = useCallback(
-    (id: string): InternalNode | undefined => {
+    (id: string): RfInternalNode | undefined => {
       // Return undefined if nodeLookup is not available - buildHelperLines will fall back to computing from node
       if (!nodeLookupRef.current) {
         return undefined;
@@ -139,9 +139,10 @@ export function useHelperLines(enabled: boolean = true) {
         }
       }
 
+      // MeasuredNode: the width/height reads below fall back to v12's `measured` box
       const node = nodes.find(
         (node) => node.id === (changes[0] as NodePositionChange).id,
-      );
+      ) as MeasuredNode | undefined;
 
       if (!node) {
         return changes;

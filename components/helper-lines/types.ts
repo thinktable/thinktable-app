@@ -1,8 +1,24 @@
 // Helper lines can either be 'horizontal' or 'vertical'.
 
-import type { Box, Node } from 'reactflow'; // Types only — Node/Box are not runtime exports
+import type { Box, Node, XYPosition } from 'reactflow'; // Types only — Node/Box are not runtime exports
 
 export type Orientation = 'horizontal' | 'vertical';
+
+// This module reads node geometry defensively across React Flow versions: v11 (`reactflow`, what we
+// ship) keeps width/height/position on the node, while v12 (`@xyflow/react`) moved dimensions to
+// `measured` and absolute position to `internals`. v11 exports no `InternalNode`, so model only the
+// fields read here and keep the v12 fields optional.
+
+/** Node plus v12's optional `measured` box. */
+export type MeasuredNode = Node & {
+  measured?: { width?: number; height?: number };
+};
+
+/** Internal node as read by this module — v11 fields, with v12's `internals`/`measured` optional. */
+export type RfInternalNode = MeasuredNode & {
+  parentId?: string;
+  internals?: { positionAbsolute?: XYPosition; position?: XYPosition };
+};
 
 export type HelperLine = {
   // Used to filter out helper lines corresponding to the node being dragged
