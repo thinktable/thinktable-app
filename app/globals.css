@@ -1966,6 +1966,45 @@ span[data-added="true"] {
     color: #9ca3af;
   }
 
+  /* Deferred TipTap shell — boardLink title/icon without mounting the NodeView (semantic zoom / near-miss). */
+  .tt-board-link-deferred {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+    max-width: 100%;
+    pointer-events: none;
+  }
+  .tt-board-link-deferred-title {
+    margin-bottom: 0.4rem;
+  }
+  .tt-board-link-deferred-icon {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .tt-board-link-deferred-emoji {
+    font-size: 1.05em;
+    line-height: 1;
+  }
+  .tt-board-link-deferred-title .tt-board-link-deferred-emoji {
+    font-size: 1.6em;
+  }
+  .tt-board-link-deferred-title .tt-board-link-deferred-fallback {
+    width: 1.4rem;
+    height: 1.4rem;
+  }
+  .tt-board-link-deferred-label {
+    text-decoration: underline;
+    text-decoration-color: rgba(55, 53, 47, 0.28);
+    text-underline-offset: 2px;
+    min-width: 1ch;
+    white-space: pre-wrap;
+  }
+  .tt-board-link-deferred-title .tt-board-link-deferred-label {
+    font-size: 1.4em;
+    font-weight: 600;
+  }
+
   /* databaseBlock — Notion-like structured table (header + live property grid) */
   .ProseMirror .tt-database-block {
     position: relative;

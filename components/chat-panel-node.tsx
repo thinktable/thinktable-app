@@ -43,6 +43,7 @@ import {
   navigationZoom,
 } from '@/lib/board-navigating' // Freeze zoom selectors + skip hug while pinching
 import { isFrameDragging } from '@/lib/frame-dragging' // Skip O(n) stack scans mid frame drag
+import { setFramePanelSelected } from '@/lib/frame-panel-selected' // DB NodeView: live table only while RF-selected
 import { readOnThread } from '@/lib/threads/on-thread-frame' // Compact chip layout for frames on threads
 import {
   deleteLinkedBoardForBlock,
@@ -84,8 +85,11 @@ import {
   shimmerBarCountFromHtml,
   BOARD_LOAD_FADE_MS,
   resolveDeferredFrameBox,
+  parseBoardLinkPreview,
+  parseDatabaseBlockPreview,
   type DeferredFrameBox,
 } from '@/components/frame-content-shimmer' // Frame vs text-line load shell while TipTap mounts
+import { NotionDbStaticPreview } from '@/components/notion-db-static-preview'
 import {
   useFrameContentMount,
   useWarmFrameContentMount,
@@ -94,7 +98,7 @@ import { pruneEmptyTextblocks } from '@/lib/tiptap/empty-block-backspace' // Str
 import { setAiTextSelection } from '@/lib/ai/selection-bridge' // Live highlighted-text pills in AI composer
 import { BlockActionsMenu, type BoardInTarget } from '@/components/block-actions-menu'
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, Fragment, memo } from 'react'
-import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, ScanText, WrapText } from 'lucide-react' // Rotate + fit-to-text / wrap
+import { MoreHorizontal, Trash2, Loader2, X, ChevronRight, ChevronLeft, ChevronsRight, ChevronsLeft, Plus, RotateCw, ScanText, WrapText, FileText } from 'lucide-react' // Rotate + fit-to-text / wrap; FileText = deferred boardLink fallback icon
 import { useAiEditSession } from '@/lib/ai/edit-session' // Pending rainbow / review focus
 
 // Helper to check if content is effectively empty (handling HTML tags)
@@ -839,7 +843,14 @@ function TipTapContentDeferred({
   deferredBox?: DeferredFrameBox | null // Cached/estimated inner fill — parent owns outer chrome
 }) {
   if (!enableBlockHandles || isFlashcard) return null
-  const kind = deferredBox?.kind ?? (frameHasVisibleText(content) ? 'text' : 'empty')
+  // Prefer deferredBox.kind; fall back — boardLink titles are attrs-only (not frameHasVisibleText)
+  const kind =
+    deferredBox?.kind ??
+    (/data-type=["'](?:boardLink|pageLink)["']/i.test(content)
+      ? 'boardLink'
+      : frameHasVisibleText(content)
+        ? 'text'
+        : 'empty')
   const shimmerHasText = deferredBox?.hasText ?? frameHasVisibleText(content)
   const barCount = deferredBox?.barCount ?? shimmerBarCountFromHtml(content)
   const innerW = deferredBox
@@ -850,6 +861,9 @@ function TipTapContentDeferred({
     : BLOCK_MIN_FRAME_H
   const isInline = className?.includes('inline')
   const otherClasses = className?.replace(/\binline\b/g, '').trim()
+  // boardLink titles live in data-title attrs — solid shimmer looked “empty until hover”
+  const boardLinkPreview = kind === 'boardLink' ? parseBoardLinkPreview(content) : null
+  const databasePreview = kind === 'database' ? parseDatabaseBlockPreview(content) : null
   return (
     <div
       className={cn(
@@ -861,10 +875,36 @@ function TipTapContentDeferred({
       )}
     >
       <div className="relative w-full h-full min-h-0 overflow-hidden">
-        {kind === 'database' ? (
-          <div className="flex h-full w-full flex-col gap-1 p-0">
-            <div className="tt-frame-shimmer h-7 w-2/5 shrink-0 rounded-sm" />
-            <div className="tt-frame-shimmer min-h-0 flex-1 rounded-sm" />
+        {databasePreview ? (
+          // Real static rows — empty shimmer inside a hugged DB box looked “disappeared”
+          <NotionDbStaticPreview
+            notionDatabaseId={databasePreview.notionDatabaseId}
+            fallbackTitle={databasePreview.title}
+            viewSettingsJson={databasePreview.viewSettings}
+            minWidth={innerW}
+            minHeight={innerH}
+          />
+        ) : boardLinkPreview ? (
+          <div
+            className={cn(
+              'tt-board-link-deferred',
+              boardLinkPreview.variant === 'title'
+                ? 'tt-board-link-deferred-title'
+                : 'tt-board-link-deferred-inline'
+            )}
+            style={{ width: innerW, minHeight: innerH }}
+            aria-hidden
+          >
+            <span className="tt-board-link-deferred-icon">
+              {boardLinkPreview.icon ? (
+                <span className="tt-board-link-deferred-emoji">{boardLinkPreview.icon}</span>
+              ) : (
+                <FileText className="tt-board-link-deferred-fallback h-4 w-4 text-gray-500 dark:text-gray-400" />
+              )}
+            </span>
+            <span className="tt-board-link-deferred-label">
+              {boardLinkPreview.title || boardTitleOrDefault(null)}
+            </span>
           </div>
         ) : (
           <FrameContentShimmer
@@ -1174,30 +1214,36 @@ function TipTapContentLive({
       frameHost?: {
         conversationId: string | null
         hostMessageId: string | null
+        hostNodeId: string | null
         frameDragging: boolean
       }
     }
     if (!storage.frameHost) return
     storage.frameHost.conversationId = conversationId || null
     storage.frameHost.hostMessageId = hostMessageId || null
-  }, [editor, conversationId, hostMessageId])
+    storage.frameHost.hostNodeId = hostNodeId || null
+  }, [editor, conversationId, hostMessageId, hostNodeId])
 
-  // Sync RF drag + free-resize so databaseBlock can drop the heavy table / size scroll to the clip box
-  useEffect(() => {
+  // Sync RF drag + free-resize + selection before paint so databaseBlock expands on every select
+  useLayoutEffect(() => {
     if (!editor || editor.isDestroyed) return
     const storage = editor.storage as {
       frameHost?: {
         conversationId: string | null
         hostMessageId: string | null
         frameDragging: boolean
+        frameSelected: boolean
       }
     }
     if (!storage.frameHost) return
     storage.frameHost.frameDragging = !!frameDragging
+    storage.frameHost.frameSelected = !!isPanelSelected
     const dom = editor.view?.dom as HTMLElement | undefined
     if (dom) {
       if (frameDragging) dom.setAttribute('data-frame-dragging', 'true')
       else dom.removeAttribute('data-frame-dragging')
+      if (isPanelSelected) dom.setAttribute('data-frame-selected', 'true')
+      else dom.removeAttribute('data-frame-selected')
       if (frameFreeResize) dom.setAttribute('data-frame-free-resize', 'true')
       else dom.removeAttribute('data-frame-free-resize')
       if (frameFreeResize && frameClipHeight != null && frameClipHeight > 0) {
@@ -1207,8 +1253,12 @@ function TipTapContentLive({
       }
       if (frameClipPreview) dom.setAttribute('data-clip-preview', 'true')
       else dom.removeAttribute('data-clip-preview')
+      // Wake databaseBlock NodeViews — storage mutation alone does not re-render them
+      dom.dispatchEvent(
+        new CustomEvent('tt-frame-selected', { detail: { selected: !!isPanelSelected } })
+      )
     }
-  }, [editor, frameDragging, frameFreeResize, frameClipHeight, frameClipPreview])
+  }, [editor, frameDragging, frameFreeResize, frameClipHeight, frameClipPreview, isPanelSelected])
 
   // Top icons = **empty** propertyBlock headers in doc order (filled cells stay in the body only)
   const [propertyHeaders, setPropertyHeaders] = useState<PropertyHeaderItem[]>(() => {
@@ -2343,6 +2393,14 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
     : data.responseMessage
   const conversationId = isProjectBoard ? data.boardId : data.conversationId
   const projectId = isProjectBoard ? data.projectId : undefined
+  // TipTap NodeViews cannot see RF `selected` — publish so databaseBlock collapses on deselect
+  useLayoutEffect(() => {
+    const keys = [id, promptMessage?.id].filter(Boolean) as string[]
+    for (const k of keys) setFramePanelSelected(k, !!selected)
+    return () => {
+      for (const k of keys) setFramePanelSelected(k, false)
+    }
+  }, [id, promptMessage?.id, selected])
   const dataCollapsed = data.isResponseCollapsed || false
   const supabase = createClient()
   const queryClient = useQueryClient()
@@ -3735,14 +3793,20 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
           return
         }
         const rowCard = isRowCardAtomHtml(promptContent)
+        // Prefer DB scrollHeight extents — contentFit border-box stays fixed when the frame
+        // already has resizeDimensions, so RO on contentFit alone never sees live-table growth.
+        const dbBox = measureDatabaseBlockExtents(el)
         const width = Math.max(
           1,
           Math.round(
-            rowCard ? measureRowCardContentWidth(el) : measureNaturalContentWidth(el)
+            dbBox?.width ??
+              (rowCard ? measureRowCardContentWidth(el) : measureNaturalContentWidth(el))
           )
         )
-        const height = Math.max(1, Math.round(measureNaturalContentHeight(el)))
-        const dbBox = measureDatabaseBlockExtents(el)
+        const height = Math.max(
+          1,
+          Math.round(dbBox?.height ?? measureNaturalContentHeight(el))
+        )
         setDatabaseExtents(dbBox)
         if (
           (dbHost || hasDatabaseBlockHtml(promptContent)) &&
@@ -3769,9 +3833,9 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
           return
         }
         setIntrinsicMeasured(true)
-        setIntrinsicSize((prev) =>
-          Math.abs(prev.width - width) <= 1 && Math.abs(prev.height - height) <= 1
-            ? prev
+        setIntrinsicSize((prevSize) =>
+          Math.abs(prevSize.width - width) <= 1 && Math.abs(prevSize.height - height) <= 1
+            ? prevSize
             : { width, height }
         )
       })
@@ -3779,11 +3843,28 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
+    // Live/static DB swaps change inner scrollHeight without resizing contentFit’s border box
+    const dbHost = el.querySelector('.tt-database-block') as HTMLElement | null
+    if (dbHost) ro.observe(dbHost)
+    const notionDb = dbHost?.querySelector('.tt-notion-db') as HTMLElement | null
+    if (notionDb) ro.observe(notionDb)
+    const onDbResize = () => measure()
+    el.addEventListener('tt-db-content-resize', onDbResize)
+    const mo = new MutationObserver(() => {
+      const nextDb = el.querySelector('.tt-notion-db') as HTMLElement | null
+      if (nextDb) ro.observe(nextDb)
+      measure()
+    })
+    if (dbHost) {
+      mo.observe(dbHost, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-tt-db-live'] })
+    }
     return () => {
       cancelAnimationFrame(raf)
       ro.disconnect()
+      el.removeEventListener('tt-db-content-resize', onDbResize)
+      mo.disconnect()
     }
-  }, [isBlock, dragging, promptContent, frameUnlocked, frameTextWrap, frameScale])
+  }, [isBlock, dragging, promptContent, frameUnlocked, frameTextWrap, frameScale, selected])
   // Note: do NOT depend on resizeDimensions — hug writes that and would loop
 
   // After frame drag: restore atom HTML only if the editor actually lost atoms.

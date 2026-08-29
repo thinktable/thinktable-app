@@ -813,6 +813,8 @@ type VirtualizedTableBodyProps = {
   onConvertLayout?: (layout: DbConvertLayoutId, rowId: string) => void
   rowBackgroundFn: (row: NotionDbRow) => string | undefined
   scrollParentRef: React.RefObject<HTMLDivElement | null>
+  /** When false, render every row (selected hug / show-all). Virtualize only inside a clip scroller. */
+  virtualize?: boolean
 }
 
 export function VirtualizedTableBody({
@@ -838,15 +840,20 @@ export function VirtualizedTableBody({
   onConvertLayout,
   rowBackgroundFn,
   scrollParentRef,
+  virtualize = true,
 }: VirtualizedTableBodyProps) {
   const rowCount = flatItems.length
-  const useCap = rowCount > DB_TABLE_VIRTUALIZE_MIN
+  const useCap = virtualize && rowCount > DB_TABLE_VIRTUALIZE_MIN
   const virtualizer = useVirtualizer({
     count: flatItems.length,
     getScrollElement: () => scrollParentRef.current,
     estimateSize: (i) =>
       flatItems[i]?.kind === 'group' ? DB_TABLE_ROW_HEIGHT + 4 : DB_TABLE_ROW_HEIGHT,
-    overscan: 10,
+    overscan: 4, // Smaller window = fewer React cell trees on Chromium
+    // Skip scroll-only React work (padding-row layout — no containerRef / absolute items)
+    directDomUpdates: true,
+    useFlushSync: false,
+    enabled: useCap,
   })
   useEffect(() => {
     const el = scrollParentRef.current
@@ -957,6 +964,7 @@ export function VirtualizedListBody({
   settings,
   rowBackgroundFn,
   scrollParentRef,
+  virtualize = true,
 }: {
   rows: NotionDbRow[]
   titleProp?: NotionDbProperty
@@ -964,13 +972,17 @@ export function VirtualizedListBody({
   settings: DatabaseViewSettings
   rowBackgroundFn: (row: NotionDbRow) => string | undefined
   scrollParentRef: React.RefObject<HTMLDivElement | null>
+  virtualize?: boolean
 }) {
-  const useCap = rows.length > DB_TABLE_VIRTUALIZE_MIN
+  const useCap = virtualize && rows.length > DB_TABLE_VIRTUALIZE_MIN
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollParentRef.current,
     estimateSize: () => DB_TABLE_ROW_HEIGHT + 8,
-    overscan: 8,
+    overscan: 4,
+    directDomUpdates: true,
+    useFlushSync: false,
+    enabled: useCap,
   })
   useEffect(() => {
     const el = scrollParentRef.current

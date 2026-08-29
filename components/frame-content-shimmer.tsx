@@ -179,6 +179,47 @@ const DEFER_DB_H = 280
 const DEFER_ROW_CARD_W = 340
 const DEFER_ROW_CARD_H = 200
 
+/** Decode attr values written with escapeHtml (&quot; &amp; &lt; &gt;). */
+function decodeHtmlAttr(raw: string): string {
+  return raw
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+}
+
+/** First boardLink/pageLink atom in HTML — title lives in attrs (no visible text nodes). */
+export function parseBoardLinkPreview(
+  html: string | undefined | null
+): { title: string; icon: string | null; variant: 'title' | 'inline' } | null {
+  if (!html) return null
+  const tag = html.match(/<div\b[^>]*data-type=["'](?:boardLink|pageLink)["'][^>]*>/i)?.[0]
+  if (!tag) return null
+  const title = decodeHtmlAttr(tag.match(/data-title=["']([^"']*)["']/i)?.[1] ?? '')
+  const iconRaw = tag.match(/data-icon=["']([^"']*)["']/i)?.[1]
+  const icon = iconRaw ? decodeHtmlAttr(iconRaw) : null
+  const variant = /data-variant=["']title["']/i.test(tag) ? 'title' : 'inline'
+  return { title, icon, variant }
+}
+
+/** First databaseBlock atom — id/title in attrs for deferred static preview (no TipTap). */
+export function parseDatabaseBlockPreview(
+  html: string | undefined | null
+): { notionDatabaseId: string; title: string; viewSettings: string | null } | null {
+  if (!html) return null
+  const tag = html.match(/<div\b[^>]*data-type=["']databaseBlock["'][^>]*>/i)?.[0]
+  if (!tag) return null
+  const id = tag.match(/data-notion-database-id=["']([^"']+)["']/i)?.[1]
+  if (!id) return null
+  const title = decodeHtmlAttr(tag.match(/data-title=["']([^"']*)["']/i)?.[1] ?? '')
+  const viewRaw = tag.match(/data-view-settings=["']([^"']*)["']/i)?.[1]
+  return {
+    notionDatabaseId: decodeHtmlAttr(id),
+    title: title || 'Untitled database',
+    viewSettings: viewRaw ? decodeHtmlAttr(viewRaw) : null,
+  }
+}
+
 function deferredContentKind(html: string | undefined | null): DeferredFrameBox['kind'] {
   const h = html || ''
   if (/data-type=["']databaseBlock["']/i.test(h)) return 'database'

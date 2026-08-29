@@ -43,7 +43,9 @@ const FrameHost = Extension.create({
     return {
       conversationId: null as string | null, // Board the host frame sits on
       hostMessageId: null as string | null, // Host frame message id
+      hostNodeId: null as string | null, // RF node id — DB NodeView selection store key
       frameDragging: false, // RF frame drag — DB NodeView swaps to a light shell
+      frameSelected: false, // Host RF selection — DB expands to full live table
     }
   },
 })

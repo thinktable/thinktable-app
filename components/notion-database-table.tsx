@@ -31,6 +31,7 @@ import {
 } from '@/lib/notion/row-to-card-client'
 import {
   applyEditToCell,
+  NOTION_DB_CLIENT_ROW_CAP,
   NOTION_DB_CLIENT_ROW_PAGE,
   type NotionDatabaseTable,
   type NotionDbCell,
@@ -89,6 +90,8 @@ type NotionDatabaseTableViewProps = {
   frameClipHeight?: number | null
   /** Hover clip preview — expand to full table, not the free-resize viewport. */
   frameClipPreview?: boolean
+  /** Focus-gated live table (false = caller should use static preview instead). */
+  interactive?: boolean
 }
 
 /** Column-type icon for property headers. */
@@ -116,6 +119,7 @@ export function NotionDatabaseTableView({
   frameFreeResize = false,
   frameClipHeight = null,
   frameClipPreview = false,
+  interactive = true,
 }: NotionDatabaseTableViewProps) {
   const queryClient = useQueryClient()
   const boardLink = useBoardLinkActions() // Fallback when props missing
@@ -153,6 +157,7 @@ export function NotionDatabaseTableView({
     },
     staleTime: 5 * 60 * 1000, // Fresh enough for edits; drag remounts reuse cache instantly
     gcTime: 30 * 60 * 1000,
+    refetchOnWindowFocus: interactive, // Idle/static embeds skip refocus churn
   })
 
   const error = queryError ? (queryError instanceof Error ? queryError.message : 'Failed to load database') : null
@@ -626,9 +631,12 @@ export function NotionDatabaseTableView({
     () => flatItems.filter((i) => i.kind === 'row').length,
     [flatItems]
   )
-  const useScrollCap = rowItemCount > DB_TABLE_VIRTUALIZE_MIN
-  const useFrameFill = frameFreeResize && !frameClipPreview // Free-resize: fill clip box unless hover preview
-  const useBoundedScroll = useScrollCap || useFrameFill
+  // Nested table scroll only when the user free-resized a clip shorter than content.
+  // Selected/locked tables hug and show all loaded rows — wheel stays with the board
+  // (inner scroll on a zoom/pan canvas is a fight; idle uses static preview slice).
+  const useFrameFill = frameFreeResize && !frameClipPreview
+  const useBoundedScroll = useFrameFill
+  const virtualizeRows = useBoundedScroll && rowItemCount > DB_TABLE_VIRTUALIZE_MIN
 
   /** Free-resize: measure clip box so the table shows as many rows as fit (not a fixed 480px cap). */
   const syncFreeResizeScrollCap = useCallback(() => {
@@ -671,6 +679,7 @@ export function NotionDatabaseTableView({
   const scrollBodyStyle = useMemo((): CSSProperties | undefined => {
     if (frameClipPreview) return undefined // Hover preview — full table height, no scroll cap
     if (frameFreeResize) {
+      // Only free-resize clip boxes scroll internally
       const cap =
         freeResizeScrollCap ??
         (frameClipHeight != null && frameClipHeight > 96
@@ -679,9 +688,9 @@ export function NotionDatabaseTableView({
         DB_TABLE_SCROLL_CAP
       return { maxHeight: cap }
     }
-    if (useScrollCap) return { maxHeight: DB_TABLE_SCROLL_CAP }
+    // Selected / locked: show all loaded rows (hug). No fixed 480px inner scroller.
     return undefined
-  }, [frameFreeResize, freeResizeScrollCap, frameClipHeight, useScrollCap, frameClipPreview])
+  }, [frameFreeResize, freeResizeScrollCap, frameClipHeight, frameClipPreview])
 
   /** Top/bottom … when capped table is not fully scrolled (or more rows on server). */
   const syncScrollHints = useCallback(() => {
@@ -734,14 +743,21 @@ export function NotionDatabaseTableView({
   }, [])
 
   const loadMoreRows = useCallback(async () => {
+    if (!interactive) return // Only the focus-gated live table paginates
     if (!data?.rowsHasMore || !data.rowsNextCursor || loadingMore) return
+    // Cap client heap — full row sets kill the board regardless of virtualization
+    if (data.rows.length >= NOTION_DB_CLIENT_ROW_CAP) return
     setLoadingMore(true)
     try {
       const url = new URL(
         `/api/notion/database/${encodeURIComponent(notionDatabaseId)}`,
         window.location.origin
       )
-      url.searchParams.set('limit', String(NOTION_DB_CLIENT_ROW_PAGE))
+      const page = Math.min(
+        NOTION_DB_CLIENT_ROW_PAGE,
+        NOTION_DB_CLIENT_ROW_CAP - data.rows.length
+      )
+      url.searchParams.set('limit', String(page))
       url.searchParams.set('cursor', data.rowsNextCursor)
       const res = await fetch(url.toString())
       const json = (await res.json()) as NotionDatabaseTable & { error?: string }
@@ -751,6 +767,7 @@ export function NotionDatabaseTableView({
         const seen = new Set(prev.rows.map((r) => r.id.replace(/-/g, '').toLowerCase()))
         const merged = [...prev.rows]
         for (const row of json.rows) {
+          if (merged.length >= NOTION_DB_CLIENT_ROW_CAP) break
           const k = row.id.replace(/-/g, '').toLowerCase()
           if (!seen.has(k)) {
             seen.add(k)
@@ -760,7 +777,8 @@ export function NotionDatabaseTableView({
         return {
           ...prev,
           rows: merged,
-          rowsHasMore: json.rowsHasMore,
+          rowsHasMore:
+            merged.length < NOTION_DB_CLIENT_ROW_CAP && !!json.rowsHasMore,
           rowsNextCursor: json.rowsNextCursor,
         }
       })
@@ -769,7 +787,7 @@ export function NotionDatabaseTableView({
     } finally {
       setLoadingMore(false)
     }
-  }, [data, loadingMore, notionDatabaseId, setCachedTable])
+  }, [data, loadingMore, notionDatabaseId, setCachedTable, interactive])
 
   if (loading) {
     return (
@@ -879,6 +897,7 @@ export function NotionDatabaseTableView({
           }
           rowBackgroundFn={rowBgFn}
           scrollParentRef={scrollRef}
+          virtualize={virtualizeRows}
         />
       </table>
     </div>
@@ -892,6 +911,7 @@ export function NotionDatabaseTableView({
       settings={settings}
       rowBackgroundFn={rowBgFn}
       scrollParentRef={scrollRef}
+      virtualize={virtualizeRows}
     />
   )
 
@@ -1074,8 +1094,7 @@ export function NotionDatabaseTableView({
               ? frameSelected
                 ? 'overflow-y-auto overflow-x-auto tt-notion-db-scroll-active'
                 : 'overflow-y-hidden overflow-x-auto'
-              : 'overflow-auto',
-            useBoundedScroll && frameSelected && 'tt-notion-db-scroll-active'
+              : 'overflow-x-auto overflow-y-visible'
           )}
           style={scrollBodyStyle}
         >

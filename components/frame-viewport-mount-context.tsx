@@ -21,7 +21,6 @@ import {
   type SpatialEntry,
 } from '@/lib/board-spatial-index'
 import { readFrameLayoutCache } from '@/components/frame-content-shimmer'
-import { isBoardNavigating } from '@/lib/board-navigating'
 import { isFrameDragging } from '@/lib/frame-dragging'
 
 type FrameViewportMountContextValue = {
@@ -97,7 +96,10 @@ export function FrameViewportMountProvider({
 
   const syncNearViewport = useCallback(() => {
     if (!deferEnabled) return
-    if (isBoardNavigating() || isFrameDragging()) return // Flush on pan/drag end via recomputeKey bump
+    // Skip mid-drag only. Do NOT gate on isBoardNavigating(): onMoveEnd bumps recomputeKey
+    // while navigating stays true for ~80ms (chrome freeze), which left nearRef empty until
+    // hover warmMount — Notion boardLink mindmaps looked blank until pointerenter.
+    if (isFrameDragging()) return
     const vp = getViewportRef.current()
     // Prefer spatial index + flow-space pad (scales with zoom) for large boards; fall back to
     // the older pane-buffer scan when the catalog is small.

@@ -38,6 +38,9 @@ export type NotionDbRow = {
 /** Default row page size for in-app table loads (Load more uses rowsNextCursor). */
 export const NOTION_DB_CLIENT_ROW_PAGE = 50
 
+/** Hard ceiling for rows kept in the browser for one DB (virtualization ≠ free memory). */
+export const NOTION_DB_CLIENT_ROW_CAP = 200
+
 export type FetchNotionDatabaseOptions = {
   /** Cap rows returned; omit to fetch all (convert-layout / server paths). */
   rowLimit?: number

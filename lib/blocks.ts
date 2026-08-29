@@ -395,6 +395,96 @@ export async function syncBoardRenameToBlock(
   return match.conversation_id as string
 }
 
+/**
+ * Expand board ids to delete so nested boards (parent_id tree) and boards linked from
+ * frames on those maps (linkedBoardId) are included. Returns children-before-parents order
+ * so demote can clear parent map links before the parent row is removed.
+ */
+export async function expandBoardsForDelete(
+  supabase: SupabaseClient,
+  userId: string,
+  roots: { id: string; title: string }[]
+): Promise<{ id: string; title: string }[]> {
+  if (roots.length === 0) return []
+
+  // Full nav tree for this user (sidebar query is capped — delete must see every child)
+  const { data: all, error } = await supabase
+    .from('conversations')
+    .select('id, title, metadata')
+    .eq('user_id', userId)
+  if (error) throw error
+
+  const byId = new Map((all || []).map((c) => [c.id as string, c]))
+  const childrenOf = new Map<string, string[]>() // parent_id → child conversation ids
+  for (const c of all || []) {
+    const meta = (c.metadata as Record<string, unknown> | null) || {}
+    const parentId = meta.parent_id
+    if (typeof parentId === 'string' && parentId.trim()) {
+      const list = childrenOf.get(parentId) || []
+      list.push(c.id as string)
+      childrenOf.set(parentId, list)
+    }
+  }
+
+  const addSubtree = (id: string, into: Set<string>) => {
+    if (into.has(id)) return
+    into.add(id)
+    for (const childId of childrenOf.get(id) || []) addSubtree(childId, into)
+  }
+
+  const toDelete = new Set<string>()
+  for (const root of roots) addSubtree(root.id, toDelete)
+
+  // Boards linked from frames on maps being deleted (boardLink / titled cards)
+  const scannedMsgs = new Set<string>() // conversation_ids whose messages we already walked
+  let expanded = true
+  while (expanded) {
+    expanded = false
+    const unscanned = [...toDelete].filter((id) => !scannedMsgs.has(id))
+    for (let i = 0; i < unscanned.length; i += 100) {
+      const batch = unscanned.slice(i, i + 100)
+      for (const id of batch) scannedMsgs.add(id)
+      const { data: msgs } = await supabase
+        .from('messages')
+        .select('metadata')
+        .in('conversation_id', batch)
+      for (const m of msgs || []) {
+        const meta = (m.metadata as Record<string, unknown> | null) || {}
+        const linked =
+          typeof meta.linkedBoardId === 'string' && meta.linkedBoardId.trim()
+            ? meta.linkedBoardId.trim()
+            : typeof meta.linkedPageId === 'string' && meta.linkedPageId.trim()
+              ? meta.linkedPageId.trim()
+              : null
+        if (!linked || toDelete.has(linked) || !byId.has(linked)) continue
+        const before = toDelete.size
+        addSubtree(linked, toDelete) // Include that board + its nested children
+        if (toDelete.size > before) expanded = true
+      }
+    }
+  }
+
+  // Children before parents so demote still finds the parent map frame
+  const ordered: { id: string; title: string }[] = []
+  const seen = new Set<string>()
+  const walk = (id: string) => {
+    if (seen.has(id) || !toDelete.has(id)) return
+    for (const childId of childrenOf.get(id) || []) walk(childId)
+    if (seen.has(id)) return
+    seen.add(id)
+    const row = byId.get(id)
+    const rootTitle = roots.find((r) => r.id === id)?.title
+    ordered.push({
+      id,
+      title: rootTitle || (typeof row?.title === 'string' ? row.title : 'Untitled'),
+    })
+  }
+  for (const root of roots) walk(root.id)
+  for (const id of toDelete) walk(id) // Linked-only boards not under a root parent_id
+
+  return ordered
+}
+
 /** When a page is deleted from the menu, demote its block card (keep body, clear page link). */
 export async function demoteBlockForDeletedBoard(
   supabase: SupabaseClient,

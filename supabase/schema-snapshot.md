@@ -1,13 +1,23 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-27T17:49:30Z`
+- Snapped at: `2026-08-29T14:08:59Z`
 - Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
-- CLI: `supabase` `2.90.0` (marker via `migration new`)
+- CLI: `supabase` `2.116.0` (marker via `migration new`)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260829140859_notion_db_focus_gated_static_preview_boards_multi_select.sql`.
+- Notion DB frames are **focus-gated, not zoom-gated**: full live table only while the host frame is RF-selected. `ChatPanelNode` publishes `selected` to `lib/frame-panel-selected.ts` (node id + message id) and `databaseBlock` NodeViews subscribe — never inferred from `isEditable` / DOM attrs (those stayed true after deselect).
+- Unselected DB frames render `components/notion-db-static-preview.tsx` and the not-live branch is **always `compact`** (~12 rows). Pan/drag freeze passes only `minWidth`/`minHeight` from the last live box; the old all-rows freeze branch re-showed full tables whenever a nav flag wedged true.
+- `lib/board-navigating.ts`: `beginBoardNavigating` re-arms a ~1.2s watchdog each move tick so a gesture that never calls `endBoardNavigating` cannot wedge `navigating` (while wedged, hug returned early and DB frames never shrank back on deselect).
+- One live table at a time via `lib/frame-db-live.ts`; shared react-query cache; client row cap 200; virtualizer `overscan: 4` + `directDomUpdates`.
+- Boards nav (`components/app-sidebar.tsx`): Shift / ⌘-Ctrl row multi-select with bulk share / move-to-project / remove / delete; `lib/blocks.ts` keeps block cards ↔ pages in sync (rename sync, cascade nested deletes, demote block for deleted board).
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Slash commands, media blocks, and board font
 
 - No DDL. Marker `20260827174930_slash_commands_media_board_font_phone_menu.sql`.
 - Slash commands: TipTap `/` menu (`lib/tiptap/slash-command.ts`, `components/slash-command-menu.tsx`); I-bar `/` spawn with pending menu; space dismisses and keeps literal `/`.
