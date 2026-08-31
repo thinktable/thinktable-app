@@ -239,7 +239,7 @@ export function defaultDatabaseViewSettings(name = 'Default'): DatabaseViewSetti
       filterMode: 'parents_and_subs',
     },
     layoutOptions: {
-      showDataSourceTitle: true,
+      showDataSourceTitle: false, // Blue databaseBlock header owns the name — no grey duplicate in the table
       showVerticalLines: false,
       showPageIcon: true,
       wrapAllContent: true,

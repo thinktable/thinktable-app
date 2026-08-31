@@ -43,31 +43,35 @@ const ROW_GUTTER = 20
 // an on-screen chunk costs about what the unselected preview costs.
 const ROW_CHUNK = 12
 // Screen-px band kept mounted to each side of the window, so a column is already there when a pan
-// brings it in. Vertical margin is deliberately absurd: the observer must judge x only.
+// brings it in.
 const COL_BAND_PX = 400
-const COL_IGNORE_Y_PX = 100000
 
 /** Inclusive on-screen column band. `null` = no windowing (render every column). */
 export type ColumnRange = { start: number; end: number } | null
 
 /**
- * Horizontal twin of `RowChunk`: which columns are on screen.
+ * Horizontal twin of `RowChunk`: which columns are on screen, plus the probe overlay that measures it.
  *
  * Rows were already windowed, but every mounted row still painted *all* its columns — a 15-column,
  * 2530px-wide table inside a 597px window built 363 cells to show ~100. A CPU profile of one select
  * spent 477ms in `jsxDEV` versus 14ms in this file's own code, i.e. selection cost is cell *element
  * count*, not logic, so off-screen cells must not be created at all.
  *
- * The `<th>`s are the probes: one per column, already rendered, already at the right x-offsets. That
- * makes IntersectionObserver report horizontal visibility with zero per-frame JS and keeps it correct
- * under the board's pan/zoom/rotate transform. The huge vertical rootMargin removes the y axis from
- * the test — the sticky header leaves the screen long before its columns do.
+ * Probes are **full-height absolute bars, one per column**, rendered into the table wrapper. The
+ * obvious probe — the `<th>`s, already one per column at the right offsets — does not work: React
+ * Flow's pane is `overflow: hidden`, ancestor clipping is applied *before* `rootMargin`, so the moment
+ * the header pans above the window every `<th>` reports off-screen, the observer sees an empty set and
+ * windowing silently turns itself off. A bar spanning the table's height always overlaps whatever
+ * slice of the table is visible, so the test reduces to the x axis on its own.
+ *
+ * IntersectionObserver (not transform math) keeps this correct under the board's pan/zoom/rotate with
+ * zero per-frame JS, and the wrapper's own `overflow: hidden` clips the bars for free, so columns the
+ * frame itself hides are windowed out too.
  */
 export function useVisibleColumnRange(
   columns: NotionDbProperty[],
-  settings: DatabaseViewSettings,
-  headRef: React.RefObject<HTMLTableSectionElement | null>
-): ColumnRange {
+  settings: DatabaseViewSettings
+): { colRange: ColumnRange; columnProbes: React.ReactNode } {
   // First commit has no layout to observe yet, so seed the band from the widest thing that could be
   // on screen (window width in board px) starting at column 0 — the case when you zoom to a frame.
   // A wrong guess self-corrects on the observer's first callback, one frame later.
@@ -84,13 +88,20 @@ export function useVisibleColumnRange(
     return null // Whole table fits on screen — nothing to window
   })
 
+  // The probe host node, not a ref: a ref object never changes identity, so the effect could not
+  // re-run when React replaced the overlay (loading → loaded, layout switch) and the observer would
+  // keep watching detached bars.
+  const [probeHost, setProbeHost] = useState<HTMLDivElement | null>(null)
+
   useEffect(() => {
-    const head = headRef.current
-    if (!head || typeof IntersectionObserver === 'undefined') {
+    if (typeof IntersectionObserver === 'undefined') {
       setRange(null) // No observer (SSR / old browser): correctness beats the optimization
       return
     }
-    const probes = Array.from(head.querySelectorAll<HTMLElement>('th[data-col-index]'))
+    // A missing host is transient — keep the current band rather than widening to every column, which
+    // would look like a fix and cost like the bug.
+    if (!probeHost) return
+    const probes = Array.from(probeHost.querySelectorAll<HTMLElement>('[data-col-index]'))
     if (probes.length < 2) return
     const onScreen = new Set<number>()
     const io = new IntersectionObserver(
@@ -112,13 +123,36 @@ export function useVisibleColumnRange(
         }
         setRange((prev) => (prev && prev.start === start && prev.end === end ? prev : { start, end }))
       },
-      { rootMargin: `${COL_IGNORE_Y_PX}px ${COL_BAND_PX}px` }
+      { rootMargin: `0px ${COL_BAND_PX}px` }
     )
     for (const probe of probes) io.observe(probe)
     return () => io.disconnect()
-  }, [headRef, columns.length])
+  }, [probeHost, columns.length])
 
-  return range
+  // `left` starts at ROW_GUTTER because the wrapper pads that much for the row gutter, and an absolute
+  // child is placed against the *padding* box — without it every bar sits one gutter left of its column.
+  const columnProbes = useMemo(() => {
+    let x = ROW_GUTTER
+    const bars = columns.map((prop, i) => {
+      const left = x
+      const width = columnWidthPx(prop, settings)
+      x += width
+      return (
+        <div
+          key={prop.id}
+          data-col-index={i}
+          style={{ position: 'absolute', top: 0, bottom: 0, left, width }}
+        />
+      )
+    })
+    return (
+      <div ref={setProbeHost} aria-hidden className="pointer-events-none absolute inset-0">
+        {bars}
+      </div>
+    )
+  }, [columns, settings])
+
+  return { colRange: range, columnProbes }
 }
 
 export type SaveFn = (
@@ -968,6 +1002,8 @@ type VirtualizedTableBodyProps = {
   virtualize?: boolean
   /** On-screen column band from `useVisibleColumnRange`. */
   colRange: ColumnRange
+  /** Seed hydration from a static-preview row click. */
+  initialActiveRowId?: string | null
 }
 
 export function VirtualizedTableBody({
@@ -995,13 +1031,18 @@ export function VirtualizedTableBody({
   scrollParentRef,
   virtualize = true,
   colRange,
+  initialActiveRowId = null,
 }: VirtualizedTableBodyProps) {
   const rowCount = flatItems.length
   const useCap = virtualize && rowCount > DB_TABLE_VIRTUALIZE_MIN
   // Exactly one row owns editors + gutter chrome. Hover drives it; the last pressed row keeps it so
   // an open editor cannot be unmounted from under the caret when the pointer wanders off.
   const [hoverRowId, setHoverRowId] = useState<string | null>(null)
-  const [activeRowId, setActiveRowId] = useState<string | null>(null)
+  const [activeRowId, setActiveRowId] = useState<string | null>(initialActiveRowId)
+  useEffect(() => {
+    // Static → live handoff: keep the clicked row hydrated on first paint.
+    if (initialActiveRowId) setActiveRowId(initialActiveRowId)
+  }, [initialActiveRowId])
   const hydratedRowId = hoverRowId ?? activeRowId
   const virtualizer = useVirtualizer({
     count: flatItems.length,

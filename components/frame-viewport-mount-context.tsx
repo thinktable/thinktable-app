@@ -9,7 +9,7 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
+  useSyncExternalStore,
   type ReactNode,
 } from 'react'
 import { computeNearViewportFrameIds, FRAME_VIEWPORT_DEFER_MIN } from '@/lib/frame-viewport-mount'
@@ -22,6 +22,7 @@ import {
 } from '@/lib/board-spatial-index'
 import { readFrameLayoutCache } from '@/components/frame-content-shimmer'
 import { isFrameDragging } from '@/lib/frame-dragging'
+import { useStoreApi, type ReactFlowState } from 'reactflow'
 
 // Frames mounted per animation frame. One frame costs ~40ms (TipTap mount plus applying its saved
 // size / scale / shape), so 2 per commit measured 51–80ms tasks; 1 keeps each commit near a single
@@ -36,23 +37,38 @@ const MOUNT_PROMOTE_BATCH = 1
 export type FrameMountReason = 'always' | 'warm' | 'near' | false
 
 type FrameViewportMountContextValue = {
-  deferEnabled: boolean
-  shouldMountContent: (nodeId: string | undefined) => FrameMountReason
+  /** Subscribe to one frame's reason. Returns an unsubscribe. */
+  subscribeReason: (nodeId: string | undefined, onChange: () => void) => () => void
+  getReason: (nodeId: string | undefined) => FrameMountReason
   warmMount: (nodeId: string | undefined) => void
 }
 
 const FrameViewportMountContext = createContext<FrameViewportMountContextValue>({
-  deferEnabled: false,
-  shouldMountContent: () => 'always',
+  subscribeReason: () => () => {},
+  getReason: () => 'always',
   warmMount: () => {},
 })
 
-// Deliberately no boolean `useFrameContentMount` wrapper: a caller that only asked "may I mount?"
-// would treat 'near' as yes and silently reintroduce proximity mounting. Callers must see the reason.
+/**
+ * Deliberately no boolean `useFrameContentMount` wrapper: a caller that only asked "may I mount?"
+ * would treat 'near' as yes and silently reintroduce proximity mounting. Callers must see the reason.
+ *
+ * This is a **per-frame** subscription, not context state, because the provider wraps the entire board.
+ * It used to keep `nearVersion` / `liveVersion` / `warmIds` in `useState`, so every near-set change
+ * during a pan re-rendered the whole subtree — a pan over 22 frames with **nothing selected** measured
+ * 489ms of blocking across 3 long tasks, and the profile was full of components that have nothing to do
+ * with mounting (`BoardTopBarShare`, `EditableThread`, `EditorToolbar`) plus `ChatPanelNodeInner` at
+ * 178ms inclusive. The provider now mutates refs and notifies only the ids whose reason actually
+ * changed, so promoting one frame re-renders one frame.
+ */
 export function useFrameContentMountReason(nodeId: string | undefined): FrameMountReason {
-  const { deferEnabled, shouldMountContent } = useContext(FrameViewportMountContext)
-  if (!deferEnabled || !nodeId) return 'always'
-  return shouldMountContent(nodeId)
+  const { subscribeReason, getReason } = useContext(FrameViewportMountContext)
+  const subscribe = useCallback(
+    (onChange: () => void) => subscribeReason(nodeId, onChange),
+    [subscribeReason, nodeId]
+  )
+  const snapshot = useCallback(() => getReason(nodeId), [getReason, nodeId])
+  return useSyncExternalStore(subscribe, snapshot, () => 'always')
 }
 
 export function useWarmFrameContentMount(): (nodeId: string | undefined) => void {
@@ -91,21 +107,76 @@ export function FrameViewportMountProvider({
   recomputeKey?: number
 }) {
   const nearRef = useRef<Set<string>>(new Set())
-  const [nearVersion, setNearVersion] = useState(0)
-  const [warmIds, setWarmIds] = useState<Set<string>>(() => new Set())
+  const warmRef = useRef<Set<string>>(new Set())
+  // Live set trails the near set, and is the *only* mount throttle — a pan revealing frames and a
+  // return from low zoom both drain through it. Mounting everything a gesture revealed in one commit
+  // was the whole hitch: a TipTap mount costs ~40ms, so 15 frames blocked 66/149/67/58ms (two
+  // throttles used to stack, hence the 149). Staged, each commit is one frame's worth of work.
+  const liveRef = useRef<Set<string>>(new Set())
+  const pendingRef = useRef<string[]>([]) // Near, awaiting promotion
+  const promoteRafRef = useRef<number | null>(null)
+
+  // Props feeding the reason are mirrored into refs so `reasonFor` can be identity-stable: a changing
+  // `getSnapshot` would make `useSyncExternalStore` re-subscribe every frame in the board.
+  const deferEnabledRef = useRef(deferEnabled)
+  deferEnabledRef.current = deferEnabled
+  const alwaysMountRef = useRef(alwaysMountIds)
+  alwaysMountRef.current = alwaysMountIds
+  const simplifyRef = useRef(simplifyContent)
+  simplifyRef.current = simplifyContent
+
+  const listenersRef = useRef(new Map<string, Set<() => void>>())
+  const lastReasonRef = useRef(new Map<string, FrameMountReason>())
+
+  const reasonFor = useCallback((nodeId: string | undefined): FrameMountReason => {
+    if (!deferEnabledRef.current || !nodeId) return 'always'
+    if (alwaysMountRef.current.has(nodeId)) return 'always'
+    if (warmRef.current.has(nodeId)) return 'warm'
+    if (simplifyRef.current) return false
+    return liveRef.current.has(nodeId) ? 'near' : false
+  }, [])
+
+  /** Wake only the frames whose reason moved. Set lookups, so this stays cheap per mutation. */
+  const notifyReasonChanges = useCallback(() => {
+    for (const [nodeId, listeners] of listenersRef.current) {
+      const next = reasonFor(nodeId)
+      if (lastReasonRef.current.get(nodeId) === next) continue
+      lastReasonRef.current.set(nodeId, next)
+      for (const listener of listeners) listener()
+    }
+  }, [reasonFor])
+
+  const subscribeReason = useCallback(
+    (nodeId: string | undefined, onChange: () => void) => {
+      if (!nodeId) return () => {}
+      let listeners = listenersRef.current.get(nodeId)
+      if (!listeners) {
+        listeners = new Set()
+        listenersRef.current.set(nodeId, listeners)
+      }
+      listeners.add(onChange)
+      lastReasonRef.current.set(nodeId, reasonFor(nodeId))
+      return () => {
+        const set = listenersRef.current.get(nodeId)
+        if (!set) return
+        set.delete(onChange)
+        if (set.size > 0) return
+        listenersRef.current.delete(nodeId)
+        lastReasonRef.current.delete(nodeId)
+      }
+    },
+    [reasonFor]
+  )
+
+  // Props are not part of the store, so a change in them has to be announced explicitly.
+  useEffect(() => {
+    notifyReasonChanges()
+  }, [deferEnabled, alwaysMountIds, simplifyContent, notifyReasonChanges])
   const nodesRef = useRef(nodes)
   nodesRef.current = nodes
   const getViewportRef = useRef(getViewport)
   getViewportRef.current = getViewport
   const nodeCountKey = nodes.length
-  // Live set trails the near set, and is the *only* mount throttle — a pan revealing frames and a
-  // return from low zoom both drain through it. Mounting everything a gesture revealed in one commit
-  // was the whole hitch: a TipTap mount costs ~20ms, so 15 frames blocked 66/149/67/58ms (two
-  // throttles used to stack, hence the 149). Staged, each commit is one frame's worth of work.
-  const liveRef = useRef<Set<string>>(new Set())
-  const pendingRef = useRef<string[]>([]) // Near, awaiting promotion
-  const promoteRafRef = useRef<number | null>(null)
-  const [liveVersion, setLiveVersion] = useState(0)
 
   const promoteBatch = useCallback(() => {
     promoteRafRef.current = null
@@ -121,10 +192,10 @@ export function FrameViewportMountProvider({
     }
     if (added) {
       liveRef.current = next
-      setLiveVersion((v) => v + 1)
+      notifyReasonChanges()
     }
     if (queue.length > 0) promoteRafRef.current = requestAnimationFrame(promoteBatch)
-  }, [])
+  }, [notifyReasonChanges])
 
   /** Adopt a fresh near set: unmount departures at once, queue arrivals for staged promotion. */
   const commitNear = useCallback(
@@ -151,10 +222,9 @@ export function FrameViewportMountProvider({
           promoteRafRef.current = requestAnimationFrame(promoteBatch)
         }
       }
-      setLiveVersion((v) => v + 1)
-      setNearVersion((v) => v + 1)
+      notifyReasonChanges()
     },
-    [promoteBatch]
+    [promoteBatch, notifyReasonChanges]
   )
 
   useEffect(
@@ -224,6 +294,35 @@ export function FrameViewportMountProvider({
     syncNearViewport()
   }, [syncNearViewport, recomputeKey, nodeCountKey])
 
+  // The near set has to follow the viewport *during* a gesture, not just at its end. `recomputeKey` is
+  // bumped by RF's `onMoveEnd` and the wheel settle, so a frame that scrolled into view mid-zoom was
+  // absent from the near set until the gesture stopped: measured on board 56faeee0, mid-zoom-out gave
+  // 9 frames in view with 3 rendering *nothing*, and all 9 only went live at release — which is what
+  // "frames out of view don't render until I let go of the zoom" was. Subscribing to the store's
+  // transform covers every source (wheel, d3, setViewport, minimap, Fit) without a provider re-render;
+  // one rAF coalesces a burst, and `commitNear` still stages the actual mounts one frame at a time.
+  const storeApi = useStoreApi()
+  useEffect(() => {
+    if (!deferEnabled) return
+    let raf = 0
+    let last = ''
+    const unsubscribe = storeApi.subscribe((state: ReactFlowState) => {
+      const [x, y, zoom] = state.transform
+      const key = `${Math.round(x)}:${Math.round(y)}:${zoom.toFixed(3)}`
+      if (key === last) return // Store updates for many reasons — only the viewport matters here
+      last = key
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        syncNearViewport()
+      })
+    })
+    return () => {
+      unsubscribe()
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [deferEnabled, storeApi, syncNearViewport])
+
   // Low zoom keeps frames as cached lightweight previews. Entering it drops the live set so that
   // zooming back in re-promotes through the same staged throttle a pan uses — restoring in one
   // commit caused the same FPS cliff as live RF culling.
@@ -235,41 +334,27 @@ export function FrameViewportMountProvider({
       }
       liveRef.current = new Set()
       pendingRef.current = []
-      setLiveVersion((v) => v + 1)
+      notifyReasonChanges()
       return
     }
     commitNear(new Set(nearRef.current)) // Live set is empty here, so every near frame queues
-  }, [simplifyContent, commitNear])
+  }, [simplifyContent, commitNear, notifyReasonChanges])
 
   const warmMount = useCallback(
     (nodeId: string | undefined) => {
-      if (!deferEnabled || !nodeId || alwaysMountIds.has(nodeId)) return
-      setWarmIds((prev) => {
-        if (prev.has(nodeId)) return prev
-        const next = new Set(prev)
-        next.add(nodeId)
-        return next
-      })
+      if (!deferEnabledRef.current || !nodeId || alwaysMountRef.current.has(nodeId)) return
+      if (warmRef.current.has(nodeId)) return
+      warmRef.current = new Set(warmRef.current).add(nodeId)
+      notifyReasonChanges()
     },
-    [deferEnabled, alwaysMountIds]
+    [notifyReasonChanges]
   )
 
-  const shouldMountContent = useCallback(
-    (nodeId: string | undefined): FrameMountReason => {
-      if (!deferEnabled || !nodeId) return 'always'
-      if (alwaysMountIds.has(nodeId)) return 'always'
-      if (warmIds.has(nodeId)) return 'warm'
-      if (simplifyContent) return false
-      void nearVersion // Subscribe to near-viewport updates
-      void liveVersion // Subscribe to staged promotion
-      return liveRef.current.has(nodeId) ? 'near' : false
-    },
-    [deferEnabled, alwaysMountIds, warmIds, simplifyContent, nearVersion, liveVersion]
-  )
-
+  // Stable for the life of the provider: every callback closes over refs, so the board subtree never
+  // re-renders because of this context — only the individual frames whose reason changed do.
   const value = useMemo(
-    () => ({ deferEnabled, shouldMountContent, warmMount }),
-    [deferEnabled, shouldMountContent, warmMount]
+    () => ({ subscribeReason, getReason: reasonFor, warmMount }),
+    [subscribeReason, reasonFor, warmMount]
   )
 
   return (

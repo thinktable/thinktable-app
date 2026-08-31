@@ -190,7 +190,7 @@ export type BlockActionId =
   | 'setNotionSync' // Live Sync vs Manual
   | 'removeNotionConnection' // Unlink Notion from this frame
   | 'convertLayout' // Frame menu → Card view / Table view (Notion DB)
-  | 'setDbExpand' // Frame menu → Always expanded vs Expand when selected (Notion DB)
+  | 'setDbExpand' // Frame menu → Expanded vs Preview (Notion DB)
   | 'open' // Open linked board / Notion page (DB row ⋮⋮, boardLink)
 
 export type DbConvertLayoutId = 'card' | 'table' // Convert layout flyout picks
@@ -692,7 +692,7 @@ export function BlockActionsMenu({
         id: 'setDbExpand',
         label: 'Table rows',
         icon: <Rows3 className="h-4 w-4" />,
-        submenu: 'dbExpand', // Always expanded / Expand when selected
+        submenu: 'dbExpand', // Expanded / Preview
         hidden: !dbExpandMode, // Notion DB frames only
       },
       {
@@ -1448,7 +1448,7 @@ export function BlockActionsMenu({
         </div>
       )}
 
-      {/* Table rows — Expand when selected / Always expanded (Notion database frames) */}
+      {/* Table rows — Preview / Expanded (Notion database frames) */}
       {openSubmenu === 'dbExpand' && dbExpandMode && (
         <div
           data-tt-menu-flyout="main"
@@ -1458,8 +1458,8 @@ export function BlockActionsMenu({
           <div className="px-2 py-1.5 text-[11px] text-gray-400">Rows</div>
           {(
             [
-              { id: 'selected' as const, label: 'Expand when selected', icon: Rows3 },
-              { id: 'always' as const, label: 'Always expanded', icon: Table2 },
+              { id: 'selected' as const, label: 'Preview', icon: Rows3 },
+              { id: 'always' as const, label: 'Expanded', icon: Table2 },
             ]
           ).map(({ id: mode, label, icon: Icon }) => (
             <Button

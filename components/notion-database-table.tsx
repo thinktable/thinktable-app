@@ -53,7 +53,10 @@ import {
   visibleProperties,
   type DatabaseViewSettings,
 } from '@/lib/notion/database-view'
-import { DatabaseViewToolbar } from '@/components/database-view-settings'
+import {
+  COMPACT_PREVIEW_ROWS,
+  formatShowMoreLabel,
+} from '@/components/notion-db-static-preview'
 import {
   buildFlatTableItems,
   CellDisplay,
@@ -93,6 +96,11 @@ type NotionDatabaseTableViewProps = {
   frameClipPreview?: boolean
   /** Focus-gated live table (false = caller should use static preview instead). */
   interactive?: boolean
+  /** How many filtered rows to paint; parent pages 12 → 50 → 100… via onShowMore. */
+  rowCap?: number
+  onShowMore?: () => void
+  /** Row clicked on static preview — hydrate this row as soon as the live table mounts. */
+  initialActiveRowId?: string | null
 }
 
 /** Column-type icon for property headers. */
@@ -105,7 +113,7 @@ function PropertyTypeIcon({ type }: { type: string }) {
   return <Type className="h-3 w-3 opacity-50" aria-hidden />
 }
 
-const MemoDatabaseViewToolbar = memo(DatabaseViewToolbar)
+const MemoVirtualizedTableBody = memo(VirtualizedTableBody)
 
 export function NotionDatabaseTableView({
   notionDatabaseId,
@@ -121,6 +129,9 @@ export function NotionDatabaseTableView({
   frameClipHeight = null,
   frameClipPreview = false,
   interactive = true,
+  rowCap,
+  onShowMore,
+  initialActiveRowId = null,
 }: NotionDatabaseTableViewProps) {
   const queryClient = useQueryClient()
   const boardLink = useBoardLinkActions() // Fallback when props missing
@@ -170,11 +181,13 @@ export function NotionDatabaseTableView({
     normalizeViewSettings(parseViewSettings(viewSettingsJson), [])
   )
   const [expandedParents, setExpandedParents] = useState<Set<string>>(() => new Set()) // Nested: empty = collapsed (Notion default)
-  const [selectedRowId, setSelectedRowId] = useState<string | null>(null)
+  const [selectedRowId, setSelectedRowId] = useState<string | null>(initialActiveRowId)
+  useEffect(() => {
+    if (initialActiveRowId) setSelectedRowId(initialActiveRowId)
+  }, [initialActiveRowId])
   const [rowBusy, setRowBusy] = useState(false)
   /** Nested/parent Card convert — pending row until bring-options dialog confirms. */
   const [bringDialogRowId, setBringDialogRowId] = useState<string | null>(null)
-  const [loadingMore, setLoadingMore] = useState(false)
   const [freeResizeScrollCap, setFreeResizeScrollCap] = useState<number | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollWrapRef = useRef<HTMLDivElement>(null)
@@ -567,8 +580,7 @@ export function NotionDatabaseTableView({
   // Which columns are on screen. Rows outside the window already collapse to spacers; without this a
   // mounted row still built a cell for every column, on- or off-screen, which is what made selecting a
   // wide table cost the whole table instead of the part you can see.
-  const theadRef = useRef<HTMLTableSectionElement | null>(null)
-  const colRange = useVisibleColumnRange(columns, settings, theadRef)
+  const { colRange, columnProbes } = useVisibleColumnRange(columns, settings)
 
   // Re-render when board frames change so peeled cards drop out of the table
   const [messagesTick, setMessagesTick] = useState(0)
@@ -617,17 +629,23 @@ export function NotionDatabaseTableView({
     if (cardedRowIds.size === 0) return viewed
     return viewed.filter((r) => !cardedRowIds.has(r.id.replace(/-/g, '').toLowerCase()))
   }, [data, settings, cardedRowIds])
+  // Parent owns paging (12 → 50 → +50…). Default to the compact preview when no cap is passed.
+  const effectiveRowCap = rowCap ?? COMPACT_PREVIEW_ROWS
+  const displayRows = useMemo(
+    () => filteredRows.slice(0, effectiveRowCap),
+    [filteredRows, effectiveRowCap]
+  )
   const groups = useMemo(
-    () => groupRows(filteredRows, settings.groupBy),
-    [filteredRows, settings.groupBy]
+    () => groupRows(displayRows, settings.groupBy),
+    [displayRows, settings.groupBy]
   )
   // Parent→children once — title chevrons + nested walk share this (before early returns)
   const subTaskTree = useMemo(() => {
     if (!settings.subTasks.enabled || !settings.subTasks.relationProperty) {
-      return { roots: filteredRows, childrenOf: new Map<string, NotionDbRow[]>() }
+      return { roots: displayRows, childrenOf: new Map<string, NotionDbRow[]>() }
     }
-    return buildSubTaskTree(filteredRows, settings.subTasks.relationProperty)
-  }, [filteredRows, settings.subTasks.enabled, settings.subTasks.relationProperty])
+    return buildSubTaskTree(displayRows, settings.subTasks.relationProperty)
+  }, [displayRows, settings.subTasks.enabled, settings.subTasks.relationProperty])
 
   const flatItems = useMemo(
     () => buildFlatTableItems(groups, settings, subTaskTree, settings.groupBy, expandedParents),
@@ -749,52 +767,9 @@ export function NotionDatabaseTableView({
     })
   }, [])
 
-  const loadMoreRows = useCallback(async () => {
-    if (!interactive) return // Only the focus-gated live table paginates
-    if (!data?.rowsHasMore || !data.rowsNextCursor || loadingMore) return
-    // Cap client heap — full row sets kill the board regardless of virtualization
-    if (data.rows.length >= NOTION_DB_CLIENT_ROW_CAP) return
-    setLoadingMore(true)
-    try {
-      const url = new URL(
-        `/api/notion/database/${encodeURIComponent(notionDatabaseId)}`,
-        window.location.origin
-      )
-      const page = Math.min(
-        NOTION_DB_CLIENT_ROW_PAGE,
-        NOTION_DB_CLIENT_ROW_CAP - data.rows.length
-      )
-      url.searchParams.set('limit', String(page))
-      url.searchParams.set('cursor', data.rowsNextCursor)
-      const res = await fetch(url.toString())
-      const json = (await res.json()) as NotionDatabaseTable & { error?: string }
-      if (!res.ok) throw new Error(json.error || 'Failed to load more rows')
-      setCachedTable((prev) => {
-        if (!prev) return prev
-        const seen = new Set(prev.rows.map((r) => r.id.replace(/-/g, '').toLowerCase()))
-        const merged = [...prev.rows]
-        for (const row of json.rows) {
-          if (merged.length >= NOTION_DB_CLIENT_ROW_CAP) break
-          const k = row.id.replace(/-/g, '').toLowerCase()
-          if (!seen.has(k)) {
-            seen.add(k)
-            merged.push(row)
-          }
-        }
-        return {
-          ...prev,
-          rows: merged,
-          rowsHasMore:
-            merged.length < NOTION_DB_CLIENT_ROW_CAP && !!json.rowsHasMore,
-          rowsNextCursor: json.rowsNextCursor,
-        }
-      })
-    } catch (e) {
-      console.error('Load more rows failed:', e)
-    } finally {
-      setLoadingMore(false)
-    }
-  }, [data, loadingMore, notionDatabaseId, setCachedTable, interactive])
+  const handleShowMore = useCallback(() => {
+    onShowMore?.()
+  }, [onShowMore])
 
   if (loading) {
     return (
@@ -858,18 +833,18 @@ export function NotionDatabaseTableView({
   // output. This is why selecting slowed with total row count rather than with what was on screen.
   const renderTable = () => (
     <div className="relative tt-db-table-wrap overflow-hidden" style={{ paddingLeft: ROW_GUTTER }}>
+      {columnProbes}
       <table
         className="border-separate border-spacing-0 text-left border-0"
         style={{ width: tablePixelWidth, tableLayout: 'fixed' }}
       >
-        <thead ref={theadRef}>
+        <thead>
           <tr className="border-b border-gray-200">
             {columns.map((prop, colIndex) => {
               const colW = columnWidthPx(prop, settings)
               return (
                 <th
                   key={prop.id}
-                  data-col-index={colIndex}
                   style={{ width: colW, maxWidth: colW, minWidth: 0 }}
                   className={cn(
                     'sticky top-0 z-[1] overflow-hidden whitespace-nowrap px-2 py-1 text-[12px] font-medium text-gray-500 bg-transparent',
@@ -914,6 +889,7 @@ export function NotionDatabaseTableView({
           scrollParentRef={scrollRef}
           virtualize={virtualizeRows}
           colRange={colRange}
+          initialActiveRowId={initialActiveRowId}
         />
       </table>
     </div>
@@ -921,7 +897,7 @@ export function NotionDatabaseTableView({
 
   const renderList = () => (
     <VirtualizedListBody
-      rows={filteredRows}
+      rows={displayRows}
       titleProp={titleProp}
       columns={columns}
       settings={settings}
@@ -935,7 +911,7 @@ export function NotionDatabaseTableView({
     const boardProp =
       data.properties.find((p) => p.name === settings.groupBy) ||
       data.properties.find((p) => p.type === 'status' || p.type === 'select')
-    const boardGroups = groupRows(filteredRows, boardProp?.name || null)
+    const boardGroups = groupRows(displayRows, boardProp?.name || null)
     const cols =
       boardProp?.options?.map((o) => o.name) ||
       boardGroups.map((g) => g.key).filter(Boolean)
@@ -987,7 +963,7 @@ export function NotionDatabaseTableView({
 
   const renderGallery = () => (
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-2">
-      {filteredRows.map((row) => {
+      {displayRows.map((row) => {
         const title = titleProp ? row.cells[titleProp.name]?.text || 'Untitled' : 'Untitled'
         return (
           <div
@@ -1025,7 +1001,7 @@ export function NotionDatabaseTableView({
       )
     }
     const byDay = new Map<string, NotionDbRow[]>()
-    for (const row of filteredRows) {
+    for (const row of displayRows) {
       const day = (row.cells[dateProp.name]?.text || '').slice(0, 10) || 'No date'
       const list = byDay.get(day) || []
       list.push(row)
@@ -1084,18 +1060,7 @@ export function NotionDatabaseTableView({
       )}
       onPointerDown={frameSelected ? (e) => e.stopPropagation() : undefined}
     >
-      {settings.layoutOptions.showDataSourceTitle ? (
-        <div className="px-1 pb-1 text-[12px] font-medium text-gray-500 truncate shrink-0">
-          {data.title || fallbackTitle}
-        </div>
-      ) : null}
-      <MemoDatabaseViewToolbar
-        settings={settings}
-        onChange={updateSettings}
-        properties={data.properties}
-        sourceTitle={data.title}
-        className="shrink-0"
-      />
+      {/* Data-source title belongs on the blue databaseBlock header — not a second grey line here. */}
       {saveError ? (
         <div className="px-2 py-1 text-[11px] text-red-600 border-b border-red-100 bg-red-50">
           {saveError}
@@ -1115,20 +1080,26 @@ export function NotionDatabaseTableView({
           style={scrollBodyStyle}
         >
           {body}
-          {data.rowsHasMore ? (
-            <div className="flex justify-center py-2 border-t border-gray-100">
-              <button
-                type="button"
-                className="rounded-md px-3 py-1 text-[12px] text-blue-600 hover:bg-blue-50 disabled:opacity-50"
-                disabled={loadingMore}
-                onClick={() => void loadMoreRows()}
-              >
-                {loadingMore ? 'Loading…' : 'Load more rows'}
-              </button>
-            </div>
-          ) : null}
         </div>
       </div>
+      {filteredRows.length > displayRows.length ||
+      (!!data.rowsHasMore && displayRows.length < NOTION_DB_CLIENT_ROW_CAP) ? (
+        <button
+          type="button"
+          className="nodrag nopan w-full shrink-0 px-3 py-1.5 text-left text-[11px] text-gray-400 hover:text-blue-600 border-t border-gray-100"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation()
+            e.preventDefault()
+            handleShowMore()
+          }}
+        >
+          {formatShowMoreLabel(
+            Math.max(0, filteredRows.length - displayRows.length),
+            !!data.rowsHasMore
+          )}
+        </button>
+      ) : null}
       <CardConvertBringDialog
         open={!!bringDialogRowId}
         onOpenChange={(open) => {

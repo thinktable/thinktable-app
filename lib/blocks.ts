@@ -586,6 +586,7 @@ export function duplicateBlockMetadata(
   delete next.blockTitle // Untitled until user retitles
   delete next.blockGroupId // Outside any group until grouped again
   delete next.isBlockGroup
+  delete next.dbVisibleRowCap // Each copy pages show-more on its own
   return next
 }
 

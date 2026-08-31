@@ -51,6 +51,19 @@ export const DatabaseBlock = Node.create<DatabaseBlockOptions>({
         renderHTML: (attrs) =>
           attrs.viewSettings ? { 'data-view-settings': attrs.viewSettings } : {},
       },
+      // Per-copy row unlock (12 → 50 → +50…). Not shared across frames/nodes for the same Notion DB.
+      visibleRowCap: {
+        default: null as number | null,
+        parseHTML: (el) => {
+          const raw = (el as HTMLElement).getAttribute('data-visible-row-cap')
+          const n = raw ? parseInt(raw, 10) : NaN
+          return Number.isFinite(n) && n > 0 ? n : null
+        },
+        renderHTML: (attrs) =>
+          typeof attrs.visibleRowCap === 'number' && attrs.visibleRowCap > 0
+            ? { 'data-visible-row-cap': String(attrs.visibleRowCap) }
+            : {},
+      },
     }
   },
 

@@ -19,12 +19,21 @@ import { Table2 } from 'lucide-react'
 import { BoardOpenMenu } from '@/components/board-open-menu'
 import { NotionMarkIcon } from '@/components/notion-mark-icon'
 import { NotionDatabaseTableView } from '@/components/notion-database-table'
-import { NotionDbStaticPreview } from '@/components/notion-db-static-preview'
+import {
+  COMPACT_PREVIEW_ROWS,
+  NotionDbStaticPreview,
+} from '@/components/notion-db-static-preview'
 import { useBoardLinkActions } from '@/lib/board-link-context'
 import {
   isBoardNavigating,
   subscribeBoardNavigating,
 } from '@/lib/board-navigating'
+import { useQueryClient } from '@tanstack/react-query'
+import {
+  NOTION_DB_CLIENT_ROW_CAP,
+  NOTION_DB_CLIENT_ROW_PAGE,
+  type NotionDatabaseTable,
+} from '@/lib/notion/database'
 import { useDbLiveClaims } from '@/lib/frame-db-live'
 import { useFramePanelSelected } from '@/lib/frame-panel-selected'
 import { cn } from '@/lib/utils'
@@ -64,7 +73,32 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
   const [frameFreeResize, setFrameFreeResize] = useState(false)
   const [frameClipHeight, setFrameClipHeight] = useState<number | null>(null)
   const [frameClipPreview, setFrameClipPreview] = useState(false)
-  const [alwaysExpanded, setAlwaysExpanded] = useState(false) // Frame menu: show every row while unselected
+  const queryClient = useQueryClient()
+
+  // Prefer the live Notion database name for the blue header (attrs can be stale import junk like
+  // "… and New data source"). Same react-query cache as the table/preview — no extra fetch.
+  useEffect(() => {
+    if (!notionDatabaseId || editing) return
+    const key = ['notion-database', notionDatabaseId] as const
+    const apply = (next: string | undefined) => {
+      if (!next) return
+      setTitle((prev) => {
+        if (prev === next) return prev
+        updateAttributes({ title: next })
+        if (titleRef.current && titleRef.current.textContent !== next) {
+          titleRef.current.textContent = next
+        }
+        return next
+      })
+    }
+    apply(queryClient.getQueryData<NotionDatabaseTable>(key)?.title)
+    return queryClient.getQueryCache().subscribe((event) => {
+      if (event.type !== 'updated' && event.type !== 'added') return
+      const qk = event.query.queryKey
+      if (qk[0] !== 'notion-database' || qk[1] !== notionDatabaseId) return
+      apply((event.query.state.data as NotionDatabaseTable | undefined)?.title)
+    })
+  }, [notionDatabaseId, queryClient, editing, updateAttributes])
 
   const instanceId = useMemo(() => {
     if (!notionDatabaseId) return undefined
@@ -79,14 +113,117 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
     () => false
   )
 
-  // Selection alone decides this. Gating on nav/drag as well meant every pan, pinch and frame drag
-  // unmounted the live table at gesture start and rebuilt it at gesture end — measured **472ms of
-  // blocking across 3 long tasks per gesture** (vs 0 with nothing selected), because a table build is
-  // ~130-220ms and the freeze paid it twice. That freeze was worth it when a selected table mounted
-  // every loaded row with full per-row chrome ("fast pan over DB OOMed Safari"); now that idle rows
-  // are `StaticCell`s and only on-screen chunks mount, a mounted table pans for **0 long tasks**, so
-  // the swap costs everything and saves nothing.
-  const showLiveTable = !!notionDatabaseId && frameSelected
+  // Live table waits for a *row* click (not frame select). Reset on deselect.
+  const [engaged, setEngaged] = useState(false)
+  const [engageRowId, setEngageRowId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!frameSelected) {
+      setEngaged(false)
+      setEngageRowId(null)
+    }
+  }, [frameSelected])
+  const engageRow = useCallback((rowId: string) => {
+    setEngageRowId(rowId)
+    setEngaged(true)
+  }, [])
+  // Per host *frame* (message metadata → data-db-visible-row-cap). Never key off notionDatabaseId —
+  // duplicate frames share that id and must still page independently.
+  const [visibleRowCap, setVisibleRowCap] = useState(COMPACT_PREVIEW_ROWS)
+  const effectiveRowCap = visibleRowCap
+
+  // Pull enough pages into the shared cache for `target` rows (display still slices per frame cap).
+  const ensureRowsCached = useCallback(
+    (target: number) => {
+      if (!notionDatabaseId) return
+      const tableQueryKey = ['notion-database', notionDatabaseId] as const
+      void (async () => {
+        try {
+          for (;;) {
+            const current = queryClient.getQueryData<NotionDatabaseTable>(tableQueryKey)
+            if (!current) break
+            if (current.rows.length >= target) break
+            if (!current.rowsHasMore || !current.rowsNextCursor) break
+            if (current.rows.length >= NOTION_DB_CLIENT_ROW_CAP) break
+            const url = new URL(
+              `/api/notion/database/${encodeURIComponent(notionDatabaseId)}`,
+              window.location.origin
+            )
+            const page = Math.min(
+              NOTION_DB_CLIENT_ROW_PAGE,
+              NOTION_DB_CLIENT_ROW_CAP - current.rows.length
+            )
+            url.searchParams.set('limit', String(page))
+            url.searchParams.set('cursor', current.rowsNextCursor)
+            const res = await fetch(url.toString())
+            const json = (await res.json()) as NotionDatabaseTable & { error?: string }
+            if (!res.ok) break
+            queryClient.setQueryData<NotionDatabaseTable>(tableQueryKey, (prevTable) => {
+              if (!prevTable) return prevTable
+              const seen = new Set(prevTable.rows.map((r) => r.id.replace(/-/g, '').toLowerCase()))
+              const merged = [...prevTable.rows]
+              for (const row of json.rows) {
+                if (merged.length >= NOTION_DB_CLIENT_ROW_CAP) break
+                const k = row.id.replace(/-/g, '').toLowerCase()
+                if (!seen.has(k)) {
+                  seen.add(k)
+                  merged.push(row)
+                }
+              }
+              return {
+                ...prevTable,
+                rows: merged,
+                rowsHasMore: merged.length < NOTION_DB_CLIENT_ROW_CAP && !!json.rowsHasMore,
+                rowsNextCursor: json.rowsNextCursor,
+              }
+            })
+            if (!json.rowsHasMore || !json.rowsNextCursor) break
+          }
+        } catch (e) {
+          console.error('Show more rows failed:', e)
+        }
+      })()
+    },
+    [notionDatabaseId, queryClient]
+  )
+
+  const persistVisibleRowCap = useCallback(
+    (cap: number) => {
+      // Optimistic local paint; host ChatPanelNode owns metadata + DOM attr for siblings.
+      setVisibleRowCap(cap)
+      window.dispatchEvent(
+        new CustomEvent('tt-set-db-visible-row-cap', {
+          detail: {
+            nodeIds: hostNodeId ? [hostNodeId] : [],
+            messageIds: hostMessageId ? [hostMessageId] : [],
+            cap,
+          },
+        })
+      )
+      ensureRowsCached(cap)
+    },
+    [hostNodeId, hostMessageId, ensureRowsCached]
+  )
+
+  const onShowMoreRows = useCallback(() => {
+    // 12 → 50 on first click; then +50 each click (Preview and Expanded alike).
+    const next =
+      effectiveRowCap < NOTION_DB_CLIENT_ROW_PAGE
+        ? NOTION_DB_CLIENT_ROW_PAGE
+        : Math.min(NOTION_DB_CLIENT_ROW_CAP, effectiveRowCap + NOTION_DB_CLIENT_ROW_PAGE)
+    if (next === effectiveRowCap) return
+    persistVisibleRowCap(next)
+  }, [effectiveRowCap, persistVisibleRowCap])
+
+  // Cover the current unlock (menu Expanded seed, reload, or show-more) without waiting for a click.
+  useEffect(() => {
+    ensureRowsCached(visibleRowCap)
+  }, [visibleRowCap, ensureRowsCached])
+
+  // Frame select is for move/resize/menu — not edit intent. Live table mounts only after a row
+  // click (`engaged`); that row is seeded as the sole hydrated row. Show-more stays on static.
+  const showLiveTable = !!notionDatabaseId && frameSelected && engaged
+  // Row engage only while selected and still static (selecting press must not warm — RF selects after).
+  const canRowEngage = frameSelected && !engaged && !frameDragging
   const freezeToLastBox = (frameDragging || navigating) && !!lastBox
 
   // A nav notification must not re-render the live table. `navigating` feeds only the *static* path
@@ -109,6 +246,9 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
         frameClipHeight={frameClipHeight}
         frameClipPreview={frameClipPreview}
         interactive
+        rowCap={effectiveRowCap}
+        onShowMore={onShowMoreRows}
+        initialActiveRowId={engageRowId}
       />
     ),
     [
@@ -122,6 +262,9 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
       frameClipHeight,
       frameClipPreview,
       updateAttributes,
+      effectiveRowCap,
+      onShowMoreRows,
+      engageRowId,
     ]
   )
 
@@ -130,13 +273,15 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
     if (!dom) return
     const sync = () => {
       setFrameDragging(dom.hasAttribute('data-frame-dragging'))
-      setAlwaysExpanded(dom.hasAttribute('data-db-always-expanded'))
+      const raw = dom.getAttribute('data-db-visible-row-cap')
+      const n = raw ? parseInt(raw, 10) : NaN
+      if (Number.isFinite(n) && n > 0) setVisibleRowCap(n)
     }
     sync()
     const mo = new MutationObserver(sync)
     mo.observe(dom, {
       attributes: true,
-      attributeFilter: ['data-frame-dragging', 'data-db-always-expanded'],
+      attributeFilter: ['data-frame-dragging', 'data-db-visible-row-cap'],
     })
     return () => mo.disconnect()
   }, [editor])
@@ -296,12 +441,16 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
               notionDatabaseId={notionDatabaseId}
               fallbackTitle={title}
               viewSettingsJson={viewSettingsJson}
-              frameSelected={false}
-              // ~12 rows by default: the pan/drag freeze needs a stable *box*, not rows. The earlier
-              // "full tables on deselect" regression came from keying all-rows on a nav flag that
-              // could wedge true — this is an explicit frame setting instead, and it must hold during
-              // nav too, since for these frames the full table *is* the at-rest box.
-              compact={!alwaysExpanded}
+              frameSelected={frameSelected}
+              // Preview starts at ~12; Expanded seeds to 50. Cap is owned here so idle and live
+              // stay in sync when the user pages with "click to show more".
+              compact={effectiveRowCap <= COMPACT_PREVIEW_ROWS}
+              rowCap={effectiveRowCap}
+              // Idle TipTap paint is what gets snapshotted for cold replay — windowing would store
+              // spacer stubs and cold frames would miss columns/rows.
+              completePaint
+              onShowMore={onShowMoreRows}
+              onRowEngage={canRowEngage ? engageRow : undefined}
               minWidth={freezeToLastBox ? lastBox?.w : undefined}
               minHeight={freezeToLastBox ? lastBox?.h : undefined}
             />

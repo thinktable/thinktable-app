@@ -23,11 +23,34 @@ function box(left: number, top: number, width: number, height: number): MenuRect
   return { left, top, right: left + width, bottom: top + height, width, height } // Derived right/bottom
 }
 
+// Cached safe rect. `DropdownMenuContent` evaluates `getMenuCollisionPadding()` on every render —
+// including while the menu is closed — so four querySelector passes plus getBoundingClientRect /
+// getComputedStyle ran per menu per render: ~150ms of forced layout during a single zoom gesture.
+// The lane only moves when the window resizes, the phone keyboard shifts visualViewport, or a click /
+// keypress toggles chrome (sidebar, dock), so cache between those and keep a TTL as a safety net.
+let safeRectCache: MenuRect | null = null // Last computed lane (null = recompute)
+let safeRectCacheAt = 0 // performance.now() of that computation
+const SAFE_RECT_TTL = 500 // ms — bounds staleness from anything the listeners below miss (CSS transitions)
+
+function invalidateMenuSafeRect(): void {
+  safeRectCache = null // Next read recomputes
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', invalidateMenuSafeRect) // Window / top-bar wrap
+  window.addEventListener('pointerdown', invalidateMenuSafeRect, true) // Capture: fresh lane before a click opens a menu
+  window.addEventListener('keydown', invalidateMenuSafeRect, true) // Keyboard-opened menus + focus-driven chrome
+  window.visualViewport?.addEventListener('resize', invalidateMenuSafeRect) // iOS keyboard inset
+  window.visualViewport?.addEventListener('scroll', invalidateMenuSafeRect) // iOS visualViewport offset
+}
+
 /**
  * Usable screen rectangle for menus.
  * Excludes the top bar (toggle + tools) and the chat dock / sidebar so menus never cover them.
  */
 export function getMenuSafeRect(): MenuRect {
+  const now = typeof performance !== 'undefined' ? performance.now() : Date.now() // Monotonic when available
+  if (safeRectCache && now - safeRectCacheAt < SAFE_RECT_TTL) return safeRectCache // Reuse: no layout reads
   let left = PAD // Start inset from the window
   let top = PAD // Start inset from the window
   let right = window.innerWidth - PAD // Start inset from the window
@@ -68,7 +91,9 @@ export function getMenuSafeRect(): MenuRect {
 
   if (right < left) right = left // Degenerate: empty width
   if (bottom < top) bottom = top // Degenerate: empty height
-  return { left, top, right, bottom, width: right - left, height: bottom - top } // Usable area
+  safeRectCache = { left, top, right, bottom, width: right - left, height: bottom - top } // Usable area
+  safeRectCacheAt = now // Timestamp for the TTL
+  return safeRectCache
 }
 
 /** Re-place when the window or the phone keyboard (visualViewport) changes the safe rect. */

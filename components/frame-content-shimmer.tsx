@@ -202,10 +202,15 @@ export function parseBoardLinkPreview(
   return { title, icon, variant }
 }
 
-/** First databaseBlock atom — id/title in attrs for deferred static preview (no TipTap). */
+/** First databaseBlock atom — id/title in attrs (sizing estimates / kind sniff). */
 export function parseDatabaseBlockPreview(
   html: string | undefined | null
-): { notionDatabaseId: string; title: string; viewSettings: string | null } | null {
+): {
+  notionDatabaseId: string
+  title: string
+  viewSettings: string | null
+  icon: string | null
+} | null {
   if (!html) return null
   const tag = html.match(/<div\b[^>]*data-type=["']databaseBlock["'][^>]*>/i)?.[0]
   if (!tag) return null
@@ -213,10 +218,12 @@ export function parseDatabaseBlockPreview(
   if (!id) return null
   const title = decodeHtmlAttr(tag.match(/data-title=["']([^"']*)["']/i)?.[1] ?? '')
   const viewRaw = tag.match(/data-view-settings=["']([^"']*)["']/i)?.[1]
+  const icon = decodeHtmlAttr(tag.match(/data-icon=["']([^"']*)["']/i)?.[1] ?? '')
   return {
     notionDatabaseId: decodeHtmlAttr(id),
     title: title || 'Untitled database',
     viewSettings: viewRaw ? decodeHtmlAttr(viewRaw) : null,
+    icon: icon || null, // Emoji when the Notion DB has one; caller falls back to the table glyph
   }
 }
 
@@ -227,6 +234,49 @@ function deferredContentKind(html: string | undefined | null): DeferredFrameBox[
   if (/data-type=["']boardLink["']/i.test(h)) return 'boardLink'
   if (frameHasVisibleText(h)) return 'text'
   return 'empty'
+}
+
+// Measured off live page-link frames (8 samples, board 3b22e093): the outer box is always the title's
+// text width + 34px of icon column and padding, and the title renders in Inter 600 at 19.6px — not the
+// 14px body size the old flat estimate implied, which is most of why 98px clipped every title.
+const BOARD_LINK_TITLE_FONT = '600 19.6px Inter, -apple-system, BlinkMacSystemFont, sans-serif'
+const BOARD_LINK_INLINE_FONT = '400 15px Inter, -apple-system, BlinkMacSystemFont, sans-serif'
+const BOARD_LINK_CHROME_W = 34 // icon column + L/R padding around the title
+const DEFER_BOARD_LINK_MAX_W = 420 // Long Notion titles wrap in the live frame too — don't outgrow it
+const boardLinkWidthCache = new Map<string, number>() // Same titles recur across frames and re-renders
+let textMetricsCtx: CanvasRenderingContext2D | null = null // One 2D context for all measurements
+
+/**
+ * Width a deferred page-link frame needs for its title.
+ * `DEFER_BOARD_LINK_W` alone is "icon + open pill" and says nothing about the text, so **every** page
+ * link deferred to 98px: at any zoom the title wrapped to one word per line and clipped, which read as
+ * "frames aren't showing when I zoom out". These frames never hug (no `resizeDimensions`) and a board
+ * opened at fit-zoom never mounts one, so the estimate is the only size they will ever get — it has to
+ * be right, not merely stable. Canvas `measureText` keeps it off the DOM (no layout, no reflow).
+ */
+function deferredBoardLinkWidth(title: string, variant: 'title' | 'inline'): number {
+  const key = `${variant}:${title}`
+  const cached = boardLinkWidthCache.get(key)
+  if (cached != null) return cached
+  let text = 0
+  if (typeof document !== 'undefined') {
+    if (!textMetricsCtx) textMetricsCtx = document.createElement('canvas').getContext('2d')
+    if (textMetricsCtx) {
+      textMetricsCtx.font = variant === 'title' ? BOARD_LINK_TITLE_FONT : BOARD_LINK_INLINE_FONT
+      text = textMetricsCtx.measureText(title).width
+    }
+  }
+  // SSR / no canvas: mean advance width per character at each size
+  if (!text) text = title.length * (variant === 'title' ? 10.5 : 8)
+  // Canvas may still be on a fallback face when this runs (Inter is a webfont), and every fallback here
+  // is narrower, so a raw measurement came out ~7% short and clipped the last character of every title.
+  // Erring wide is free — the shell only has to hold the text until the real frame replaces it.
+  const width = Math.min(
+    DEFER_BOARD_LINK_MAX_W,
+    Math.max(DEFER_BOARD_LINK_W, Math.ceil(text * 1.08 + BOARD_LINK_CHROME_W))
+  )
+  boardLinkWidthCache.set(key, width)
+  return width
 }
 
 function estimateDeferredBoxFromHtml(html: string | undefined | null): DeferredFrameBox {
@@ -247,7 +297,15 @@ function estimateDeferredBoxFromHtml(html: string | undefined | null): DeferredF
     }
   }
   if (kind === 'boardLink') {
-    return { width: DEFER_BOARD_LINK_W, height: DEFER_EMPTY_H, hasText: false, barCount: 0, kind }
+    // The title is in the HTML, so measure it instead of assuming one width for every page link.
+    const preview = parseBoardLinkPreview(html)
+    return {
+      width: preview?.title ? deferredBoardLinkWidth(preview.title, preview.variant) : DEFER_BOARD_LINK_W,
+      height: DEFER_EMPTY_H,
+      hasText: false,
+      barCount: 0,
+      kind,
+    }
   }
   if (kind === 'text') {
     const lines = Math.max(barCount, 1)

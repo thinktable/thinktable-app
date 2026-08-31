@@ -1,13 +1,28 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-29T14:08:59Z`
-- Source: local `supabase/migrations/` + remote `list_migrations` (thinkable) + `.temp` service versions
+- Snapped at: `2026-08-31T17:33:48Z`
+- Source: local `supabase/migrations/` + remote applied tops (thinkable) + `.temp` service versions
 - Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
-- CLI: `supabase` `2.116.0` (marker via `migration new`)
+- CLI: `supabase` `2.90.0` (marker via `migration new`; newer CLI available)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260831173348_notion_db_row_warm_show_more_per_frame.sql`.
+- Notion DB **show-more** pages 50 rows per click on a **per-frame** unlock (`metadata.dbVisibleRowCap` / `data-db-visible-row-cap`); Preview starts at 12, Expanded seeds that frame to 50; duplicates clear the cap so copies stay independent (shared react-query cache still slices per frame).
+- Live table mounts only after a **row click** on the static preview (`engaged` + `initialActiveRowId`); frame select alone stays on `NotionDbStaticPreview` (move/resize/menu/show-more). The clicked row is the sole hydrated row; others stay `StaticCell`.
+- Table rows menu labels: Preview / Expanded. In-table search/filter/sort chrome removed; blue header syncs to Notion title.
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: DB table lazy layouts / column windowing / cold frames
+
+- No DDL. Marker `20260829201500_db_table_lazy_layouts_column_windowing_cold_frames.sql`.
+- Notion DB tables: render only the selected layout; window columns against the viewport; hydrate one row on hover; keep live table mounted across pan/drag.
+- Cold frames replay the live frame's own sanitized DOM; live editors mount on interaction, not proximity.
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Notion DB focus-gated static preview + boards multi-select
 
 - No DDL. Marker `20260829140859_notion_db_focus_gated_static_preview_boards_multi_select.sql`.
 - Notion DB frames are **focus-gated, not zoom-gated**: full live table only while the host frame is RF-selected. `ChatPanelNode` publishes `selected` to `lib/frame-panel-selected.ts` (node id + message id) and `databaseBlock` NodeViews subscribe — never inferred from `isEditable` / DOM attrs (those stayed true after deselect).
@@ -512,11 +527,8 @@
   - `ai_context_snapshots` — reusable context packs
   - `ai_action_log` — future Edit/Plan undo via edit-past-chat
 - App: sidebar Ask streaming (`/api/ai/*`), drag chat blocks onto board, edit-to-rewind, snapshots, `lib/ai/*` mode/skill/agent stubs
-`, storage `v1.68.1`
-- CLI: `supabase` `2.90.0` (marker via `migration new`)
-- Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
-## This save
+## Prior: Phone boards nav tap sticky tunnel
 
 - No DDL. Marker `20260820105152_phone_boards_nav_tap_sticky_tunnel.sql`.
 - Phone boards nav: scrim below top bar (hamburger toggles close); tap opens board + closes; hold reorders; hover styles only on hover devices; ghost-click reopen guard.

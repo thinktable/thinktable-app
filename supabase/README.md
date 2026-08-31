@@ -25,6 +25,8 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260831173348_notion_db_row_warm_show_more_per_frame` — Notion DB row-click warm + per-frame show-more (50/page); Preview/Expanded; duplicate caps independent
+- `20260829201500_db_table_lazy_layouts_column_windowing_cold_frames` — Lazy layouts + column windowing + cold DOM snapshots; live DB stays mounted on pan
 - `20260829140859_notion_db_focus_gated_static_preview_boards_multi_select` — Notion DB live table only while frame-selected + always-compact static preview + nav-freeze watchdog; boards nav multi-select with bulk share/move/delete
 - `20260827174930_slash_commands_media_board_font_phone_menu` — Slash `/` menu + media blocks + board font; phone keyboard-safe slash menu placement/scroll
 - `20260826170715_brand_mark_board_fill_theme_strokes` — Brand mark board-fill disc + border; theme-aware default strokes (map chat toggle + chat sidebar)

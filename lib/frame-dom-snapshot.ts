@@ -8,11 +8,12 @@
 // selectable/searchable and crisp at any zoom (a bitmap would be resolution-bound on a board that
 // zooms continuously).
 //
-// Databases are deliberately excluded — see `snapshotEligible`.
+// Notion DB frames are snapshotted only while idle (static preview inside TipTap) — never while the
+// interactive live table is up. See `snapshotEligible`.
 
 const STORE_PREFIX = 'thinktable-frame-dom-'
-const MAX_ENTRY_CHARS = 48_000 // One pathological frame must not evict the whole board
-const MAX_STORE_CHARS = 800_000 // Rough localStorage budget per board
+const MAX_ENTRY_CHARS = 250_000 // Idle always-expanded tables are wider than text frames
+const MAX_STORE_CHARS = 1_200_000 // Rough localStorage budget per board
 
 type SnapshotEntry = {
   h: string // Hash of the source content — stale captures are never shown
@@ -25,6 +26,26 @@ type SnapshotStore = Record<string, SnapshotEntry>
 const memory = new Map<string, SnapshotStore>()
 const dirty = new Set<string>()
 let flushHandle: ReturnType<typeof setTimeout> | null = null
+// Bumped on every successful capture/invalidate so `coldReady` subscribers re-read without a prop change.
+let storeEpoch = 0
+const storeListeners = new Set<() => void>()
+
+function bumpStoreEpoch() {
+  storeEpoch += 1
+  for (const listener of storeListeners) listener()
+}
+
+/** Subscribe to snapshot store writes — used so `coldReady` flips true right after first idle capture. */
+export function subscribeFrameSnapshots(onStoreChange: () => void): () => void {
+  storeListeners.add(onStoreChange)
+  return () => {
+    storeListeners.delete(onStoreChange)
+  }
+}
+
+export function getFrameSnapshotEpoch(): number {
+  return storeEpoch
+}
 
 /** Cheap non-cryptographic content hash (djb2) — only needs to detect edits. */
 function hashContent(content: string): string {
@@ -33,13 +54,38 @@ function hashContent(content: string): string {
   return (h >>> 0).toString(36) + ':' + content.length.toString(36)
 }
 
+export type FrameSnapshotKeyOpts = {
+  /** Idle DB expand mode — compact vs always-expanded are different cold images. */
+  dbExpand?: 'compact' | 'expanded' | null
+}
+
+/** True when TipTap HTML is a Notion databaseBlock frame (attr-only atom). */
+export function contentHasDatabaseBlock(content: string | undefined | null): boolean {
+  return !!content && /data-type=["']databaseBlock["']/i.test(content)
+}
+
 /** Stable per-frame key. Prompt and response bodies are separate editors in one frame. */
 export function frameSnapshotKey(
   messageId: string | undefined,
-  section?: string | null
+  section?: string | null,
+  opts?: FrameSnapshotKeyOpts
 ): string | null {
   if (!messageId) return null
-  return `${messageId}:${section || 'main'}`
+  const base = `${messageId}:${section || 'main'}`
+  if (opts?.dbExpand === 'compact' || opts?.dbExpand === 'expanded') {
+    // `db2` busts captures taken before idle cells matched live `min-h-[28px]` row chrome.
+    return `${base}:db2:${opts.dbExpand}`
+  }
+  return base
+}
+
+/** Resolve the DB expand slot for snapshot keys from frame metadata + HTML. */
+export function dbExpandSnapshotSlot(
+  content: string | undefined | null,
+  dbAlwaysExpanded?: boolean
+): 'compact' | 'expanded' | null {
+  if (!contentHasDatabaseBlock(content)) return null
+  return dbAlwaysExpanded ? 'expanded' : 'compact'
 }
 
 function storeKey(conversationId: string): string {
@@ -99,13 +145,13 @@ function scheduleFlush(): void {
 }
 
 /**
- * False for frames whose cold appearance must NOT be their last live appearance.
- * A selected Notion database shows the full interactive table; replaying that snapshot while the
- * frame is unselected would re-show full tables on deselect — the exact regression that
- * `NotionDbStaticPreview` + the focus-gated live slot exist to prevent.
+ * Idle paint only. A selected interactive DB (`data-tt-db-live`) must never be stored — replaying it
+ * while unselected is the "full tables on deselect" regression. Static idle (title + preview +
+ * connections) *is* the cold image we want, including for future connection NodeViews.
  */
 export function snapshotEligible(root: HTMLElement): boolean {
-  return !root.querySelector('[data-type="databaseBlock"], .tt-notion-db')
+  if (root.querySelector('[data-tt-db-live="true"]')) return false
+  return true
 }
 
 /**
@@ -136,6 +182,8 @@ function sanitizedOuterHtml(root: HTMLElement): string {
   clone.querySelectorAll('.tt-block-highlight').forEach((n) =>
     n.classList.remove('tt-block-highlight')
   )
+  // Column-window probes are absolute IO bars — useless (and misleading) when replayed cold.
+  clone.querySelectorAll('[data-col-index]').forEach((n) => n.remove())
   clone.removeAttribute('contenteditable')
   // Keep `.ProseMirror-trailingBreak` — empty paragraphs collapse without it.
   return clone.outerHTML
@@ -165,6 +213,7 @@ export function captureFrameSnapshot(opts: {
   delete store[key] // Re-insert so insertion order tracks recency for eviction
   store[key] = { h, m: markup }
   dirty.add(conversationId)
+  bumpStoreEpoch()
   scheduleFlush()
 }
 
@@ -187,5 +236,6 @@ export function invalidateFrameSnapshot(conversationId: string | undefined, key:
   if (!store[key]) return
   delete store[key]
   dirty.add(conversationId)
+  bumpStoreEpoch()
   scheduleFlush()
 }

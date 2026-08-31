@@ -659,31 +659,6 @@ function BoardFlowInner({
     [paneSize.width, paneSize.height]
   )
 
-  // [TEMP DIAG] Render-storm detector: names which RF value flips each render when a loop occurs. REMOVE AFTER.
-  const __renderTimesRef = useRef<number[]>([]) // Sliding window of recent render timestamps (ms)
-  const __lastTrackedRef = useRef<{ n: unknown; nl: number; e: unknown; el: number; vm: string } | null>(null) // Previous render's tracked values
-  const __lastWarnRef = useRef(0) // Throttle warnings so we log once per storm, not 1000x
-  useEffect(() => {
-    const now = Date.now() // Timestamp this render
-    const w = __renderTimesRef.current // Window of render times
-    w.push(now) // Record this render
-    while (w.length && now - w[0] > 1000) w.shift() // Keep only the last 1s of renders
-    // Snapshot the RF-related values React points at (<ReactFlow>): array identities, lengths, viewport/view keys
-    const cur = { n: nodes, nl: nodes.length, e: edges, el: edges.length, vm: viewMode }
-    const prev = __lastTrackedRef.current // What they were last render
-    __lastTrackedRef.current = cur // Advance for next comparison
-    // A storm = >40 renders within 1s (well past normal); warn at most every 2s with the changed keys
-    if (w.length > 40 && now - __lastWarnRef.current > 2000 && prev) {
-      __lastWarnRef.current = now // Throttle
-      const changed: string[] = [] // Which tracked values differ from last render
-      if (prev.n !== cur.n) changed.push(`nodes(ref) len ${prev.nl}->${cur.nl}`) // New nodes array each render = setNodes loop
-      if (prev.e !== cur.e) changed.push(`edges(ref) len ${prev.el}->${cur.el}`) // New edges array each render = setEdges loop
-      if (prev.vm !== cur.vm) changed.push(`viewMode ${prev.vm}->${cur.vm}`) // View mode thrash
-      // Emit a single high-signal line naming the culprit (or telling us it's an untracked state)
-      console.error('[LOOP-DIAG] render storm', w.length, '/1s; changed since last render:', changed.length ? changed.join(', ') : 'NONE of {nodes,edges,viewMode} — culprit is another state')
-    }
-  }) // No dep array on purpose: runs after every render to measure render frequency
-
   // Free-only nav UI — Linear toggle removed; coerce any 'linear' preference to canvas
   const setViewMode = (mode: 'linear' | 'canvas') => {
     const next = mode === 'linear' ? 'canvas' : mode
@@ -1044,25 +1019,32 @@ function BoardFlowInner({
     [reactFlowInstance]
   )
 
-  const frameMountSelectionKeyRef = useRef('') // Selection/fadeIn cannot change mid-drag — reuse the key
+  const frameMountSelectionKeyRef = useRef('') // fadeIn cannot change mid-drag — reuse the key
   const frameMountSelectionKey = useMemo(() => {
     if (isFrameDragging()) return frameMountSelectionKeyRef.current
+    // Selection is not in this key: it no longer feeds the mount set, and keeping it here would hand
+    // `shouldMountContent` a new identity on every click and re-render every frame for nothing.
     frameMountSelectionKeyRef.current = nodes
       .filter((n) => n.type === 'chatPanel')
       .map((n) => {
         const meta = (n.data as ChatPanelNodeData | undefined)?.promptMessage?.metadata as
           | Record<string, unknown>
           | undefined
-        return `${n.id}:${n.selected ? 1 : 0}:${meta?.fadeIn === true ? 1 : 0}`
+        return `${n.id}:${meta?.fadeIn === true ? 1 : 0}`
       })
       .join('|')
     return frameMountSelectionKeyRef.current
   }, [nodes])
+  // Selection is deliberately **not** a reason to mount an editor. Selecting is how you move, resize,
+  // connect, style or bulk-edit a frame, none of which need ProseMirror, and paying a mount for it made
+  // marquee and select-all cost one editor per frame. Editors arrive on real editing intent instead:
+  // `onPointerEnter` / `onPointerDownCapture` in `ChatPanelNode` call `warmFrameContentMount`, so the
+  // frame under the cursor is live before any click lands and block chrome still appears on hover.
+  // `fadeIn` stays because a just-created frame must be ready for the keystroke that follows.
   const alwaysMountFrameIds = useMemo(() => {
     const ids = new Set<string>()
     for (const n of nodes) {
       if (n.type !== 'chatPanel') continue
-      if (n.selected) ids.add(n.id)
       const meta = (n.data as ChatPanelNodeData | undefined)?.promptMessage?.metadata as
         | Record<string, unknown>
         | undefined
@@ -3211,8 +3193,31 @@ function BoardFlowInner({
     })
   }, [savedCanvasNodes, setNodes])
 
+  // Signature of the last thread-load pass, so the body below runs on real changes only
+  const savedEdgeLoadSigRef = useRef<string>('')
+
   // Load saved edges from database when nodes are available
   useEffect(() => {
+    // This effect only ever *adds* missing threads, but `nodes`/`edges` change identity on every pan,
+    // zoom and drag tick, so it used to redo the whole scan (handle geometry + a log per thread) just
+    // to conclude nothing was missing — measured at 806ms of the ~2.6s spent on one zoom gesture.
+    // Re-run only when the thread list, the message→frame mapping, or the thread count actually moves.
+    const sig = [
+      savedEdges?.length ?? 0,
+      edges.length,
+      lineStyle,
+      (savedEdges ?? []).map((e) => `${e.source_message_id}>${e.target_message_id}`).join('|'),
+      nodes
+        .map((n) => {
+          const messageId = n.data?.promptMessage?.id
+          return messageId ? `${n.id}~${messageId}` : ''
+        })
+        .filter(Boolean)
+        .join('|'),
+    ].join('#')
+    if (sig === savedEdgeLoadSigRef.current) return
+    savedEdgeLoadSigRef.current = sig
+
     if (!savedEdges || savedEdges.length === 0) {
       console.log('🔄 BoardFlow: No saved edges to load', { savedEdgesLength: savedEdges?.length || 0 })
       return
@@ -3910,6 +3915,20 @@ function BoardFlowInner({
 
   // Track node position changes in Canvas mode to update stored positions
   const handleNodesChange = useCallback((changes: any[]) => {
+    // RF re-measures on mount/unmount of frame content, and a cold→live swap or a fractional zoom
+    // leaves sub-pixel deltas. Those arrived as real `dimensions` changes and each one re-rendered
+    // BoardFlow: a single pan logged 192x51 → 192x51 twice and still cost 115ms. Anything under half
+    // a pixel cannot move a frame, so it never reaches node state. First measurement (no width yet)
+    // and interactive resizes are always kept.
+    changes = changes.filter((c) => {
+      if (c?.type !== 'dimensions' || c.resizing || !c.dimensions) return true
+      const prev = nodesRef.current.find((n) => n.id === c.id)
+      const prevW = typeof prev?.width === 'number' ? prev.width : null
+      const prevH = typeof prev?.height === 'number' ? prev.height : null
+      if (prevW === null || prevH === null) return true
+      return Math.abs(prevW - c.dimensions.width) >= 0.5 || Math.abs(prevH - c.dimensions.height) >= 0.5
+    })
+    if (changes.length === 0) return
     const midDragPositionOnly =
       changes.length > 0 &&
       changes.every((c) => c.type === 'position' && c.dragging === true) &&
@@ -5176,7 +5195,15 @@ function BoardFlowInner({
     if (isFrameDragging()) return // Heights don’t change while moving a frame; skip per-node layout reads
 
     // Use setTimeout to ensure DOM is fully rendered
-    const timeoutId = setTimeout(() => {
+    let timeoutId: ReturnType<typeof setTimeout>
+    const run = () => {
+      // `nodes` gets a new identity on every pan/zoom tick, so without this the 150ms debounce lands
+      // mid-gesture and pays a querySelector + getBoundingClientRect for all 33 frames (~58ms of forced
+      // layout per zoom). Heights are viewport-independent, so re-arm and measure once the board settles.
+      if (isBoardNavigating()) {
+        timeoutId = setTimeout(run, 150)
+        return
+      }
       const reactFlowElement = document.querySelector('.react-flow')
       if (!reactFlowElement) return
 
@@ -5193,7 +5220,8 @@ function BoardFlowInner({
           nodeHeightsRef.current.set(node.id, actualHeight)
         }
       })
-    }, 150) // Delay to ensure DOM is ready
+    }
+    timeoutId = setTimeout(run, 150) // Delay to ensure DOM is ready
 
     return () => clearTimeout(timeoutId)
   }, [nodes, reactFlowInstance, frameMountRecomputeKey])
@@ -5365,6 +5393,40 @@ function BoardFlowInner({
     if (!(viewMode === 'linear' || viewMode === 'canvas') || isDrawing) return
     if (viewMode === 'canvas' && embedded) return // Embed keeps RF-only wheel
 
+    // Wheel bursts have no gesture end, so begin+debounced-end runs per tick: `begin` no-ops while
+    // already navigating (and cancels the pending release), so the freeze holds for the burst and
+    // lifts ~140ms after the last tick. Without this, every freeze keyed on `isBoardNavigating()`
+    // was dead for trackpad pan/zoom — only RF's own d3 gestures ever set it — so a selected frame
+    // re-rendered its chrome on every 1/8 zoom step. Measured on a 40-tick wheel zoom with one frame
+    // selected: 698ms blocking, 246 DOM mutations, 105 nodes inserted.
+    // A wheel burst also needs `onMoveEnd`'s settle, and nothing else provides it: the custom pan/zoom
+    // path calls setViewport, which fires no RF move event at all. Without this the near-frame set is
+    // never recomputed for a wheel gesture, and worse, the `simplifyLowZoom` effect *drops* its update
+    // when it sees the navigating flag (it cannot re-run — its dep already moved), so a wheel zoom past
+    // 40% left every frame a deferred title stub clipped to the 98×32 empty hug until something else
+    // bumped the key. Fires once, ~40ms after the freeze lifts, so it never lands mid-gesture.
+    let settleTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleWheelSettle = () => {
+      if (settleTimer) clearTimeout(settleTimer)
+      settleTimer = setTimeout(() => {
+        settleTimer = null
+        const zoom = reactFlowInstance?.getViewport().zoom
+        if (typeof zoom !== 'number') return
+        const shouldSimplify = !embedded && zoom < 0.4
+        if (shouldSimplify !== simplifyLowZoomRef.current) {
+          simplifyLowZoomRef.current = shouldSimplify
+          setSimplifyLowZoom(shouldSimplify)
+        }
+        setFrameMountRecomputeKey((k) => k + 1) // Refresh the near set for the viewport we landed on
+      }, 180)
+    }
+
+    const markWheelNavigating = (zoom: number) => {
+      beginBoardNavigating(zoom)
+      endBoardNavigating(140)
+      scheduleWheelSettle()
+    }
+
     const handleWheel = (e: WheelEvent) => {
       // Check if we're over the React Flow canvas
       const target = e.target as HTMLElement
@@ -5468,6 +5530,7 @@ function BoardFlowInner({
         e.stopPropagation()
         if (!reactFlowInstance) return
         const viewport = reactFlowInstance.getViewport()
+        markWheelNavigating(viewport.zoom)
         reactFlowInstance.setViewport({
           x: viewport.x - e.deltaX,
           y: viewport.y - e.deltaY,
@@ -5493,6 +5556,7 @@ function BoardFlowInner({
           -e.deltaY * (e.deltaMode === 1 ? 0.05 : e.deltaMode ? 1 : 0.002) * factor
         const nextZoom = clampBoardZoom(viewport.zoom * Math.pow(2, pinchDelta))
         if (nextZoom === viewport.zoom) return
+        markWheelNavigating(viewport.zoom)
         reactFlowInstance.setViewport(
           viewportKeepingPanePoint(
             e.clientX - rect.left,
@@ -5511,6 +5575,7 @@ function BoardFlowInner({
       e.stopPropagation()
 
       const viewport = reactFlowInstance.getViewport()
+      markWheelNavigating(viewport.zoom)
       // Pan the viewport based on scroll delta
       reactFlowInstance.setViewport({
         x: viewport.x - e.deltaX,
@@ -5524,6 +5589,7 @@ function BoardFlowInner({
 
     return () => {
       document.removeEventListener('wheel', handleWheel, { capture: true })
+      if (settleTimer) clearTimeout(settleTimer) // Don't settle into an unmounted board
     }
   }, [isScrollMode, viewMode, reactFlowInstance, getBottomScrollLimit, checkIfAtBottom, chronologicalPanels, focusedPanelIndex, centerPanelAbovePrompt, boardRotation, isDrawing, embedded])
 

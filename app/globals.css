@@ -2096,12 +2096,19 @@ span[data-added="true"] {
     }
   }
   /* TipTap `.prose table th/td` draws a full box on every cell — wipe that so DB
-     tables have no outer perimeter (Notion-like: internal dividers only). */
+     tables have no outer perimeter (Notion-like: internal dividers only).
+     Cold replay keeps a real `.ProseMirror` inside `[data-tt-cold-frame]`, so the same
+     selectors apply; also pin margin/font-size or `.prose table { margin:1.25em; font-size:0.875rem }`
+     still leaks through and makes idle/snapshot row rhythm diverge from warm. */
   .ProseMirror .tt-notion-db table,
   .ProseMirror .tt-notion-db th,
   .ProseMirror .tt-notion-db td {
     border: none !important;
     background-color: transparent;
+  }
+  .ProseMirror .tt-notion-db table {
+    margin: 0 !important;
+    font-size: inherit !important;
   }
   .ProseMirror .tt-notion-db tr:nth-child(even) {
     background-color: transparent; /* Override prose zebra striping */
@@ -2119,7 +2126,7 @@ span[data-added="true"] {
   }
   .ProseMirror .tt-notion-db th,
   .ProseMirror .tt-notion-db td {
-    padding: 0.25rem 0.5rem; /* Compact — override prose 0.75rem */
+    padding: 0.25rem 0.5rem !important; /* Compact — override prose 0.75rem */
     overflow: hidden; /* Cutoff unwrapped text at the cell edge */
     vertical-align: middle;
   }
