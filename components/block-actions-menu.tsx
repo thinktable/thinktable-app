@@ -72,6 +72,7 @@ import type { NotionSyncMode } from '@/lib/blocks' // Live vs Manual sync
 import { Button } from '@/components/ui/button' // Row buttons
 import { cn } from '@/lib/utils' // Class merge
 import { applyMenuPlacement, watchMenuSafeRect } from '@/lib/menu-placement' // Stay in-window, miss top bar / chat / selection
+import { COMPACT_PREVIEW_ROWS, NOTION_DB_CLIENT_ROW_CAP } from '@/lib/notion/database' // Table rows floor + show-all ceiling
 import { LegoBrickIcon } from './lego-brick-icon' // Frame-group lock: two bricks, top one stud back
 import Shape from '@/components/shapes/Shape' // Mini silhouette previews in the Shape flyout
 import {
@@ -190,11 +191,12 @@ export type BlockActionId =
   | 'setNotionSync' // Live Sync vs Manual
   | 'removeNotionConnection' // Unlink Notion from this frame
   | 'convertLayout' // Frame menu → Card view / Table view (Notion DB)
-  | 'setDbExpand' // Frame menu → Expanded vs Preview (Notion DB)
+  | 'setDbRows' // Frame menu → Table rows setter (shown / all / reset)
   | 'open' // Open linked board / Notion page (DB row ⋮⋮, boardLink)
 
 export type DbConvertLayoutId = 'card' | 'table' // Convert layout flyout picks
-export type DbExpandModeId = 'selected' | 'always' // Expand-on-select vs permanently expanded
+/** Row-setter commit: exact count, all loaded (or client cap), or compact default. */
+export type DbRowsSetterValue = number | 'all' | 'reset'
 
 export type BlockActionPayload = {
   blockType?: BlockTypeId // Present when action === 'turnInto'
@@ -208,7 +210,7 @@ export type BlockActionPayload = {
   borderWeightCommit?: boolean // true = undo snapshot + DB save (slider release)
   notionSync?: NotionSyncMode // Present when action === 'setNotionSync'
   convertLayout?: DbConvertLayoutId // Present when action === 'convertLayout'
-  dbExpand?: DbExpandModeId // Present when action === 'setDbExpand'
+  dbRows?: DbRowsSetterValue // Present when action === 'setDbRows'
 }
 
 /** AI Autofill rows in the Property pane (stubs until wired). */
@@ -259,10 +261,10 @@ export type BlockActionsMenuProps = {
    */
   convertLayoutMode?: DbConvertLayoutId | null
   /**
-   * Current row-expand policy on this Notion DB frame.
+   * Current Table rows setter values on this Notion DB frame.
    * null/undefined = hide Table rows (not a DB frame).
    */
-  dbExpandMode?: DbExpandModeId | null
+  dbRowSetter?: { shown: number; total: number; hasMore?: boolean } | null
   /** Show Open (DB row / page) at the top of the block menu. */
   showOpen?: boolean
   /** Override the gray context label under search (e.g. "Page" for DB rows). */
@@ -342,7 +344,7 @@ type RowDef =
       shortcut?: string
       icon: React.ReactNode
       danger?: boolean
-      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape' | 'frameColor' | 'connections' | 'convertLayout' | 'dbExpand'
+      submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape' | 'frameColor' | 'connections' | 'convertLayout' | 'dbRows'
       hidden?: boolean
       beta?: boolean
     }
@@ -488,7 +490,7 @@ export function BlockActionsMenu({
   notionConnected = false,
   notionSync = 'live',
   convertLayoutMode = null,
-  dbExpandMode = null,
+  dbRowSetter = null,
   showOpen = false,
   menuHeader,
   variant = 'default',
@@ -510,11 +512,13 @@ export function BlockActionsMenu({
     | 'frameColor'
     | 'connections'
     | 'convertLayout'
-    | 'dbExpand'
+    | 'dbRows'
     | null
   >(null) // Flyout
   const inputRef = useRef<HTMLInputElement>(null) // Autofocus search
   const propertySearchRef = useRef<HTMLInputElement>(null) // Focus when Property search opens
+  const rowsDraftRef = useRef<HTMLInputElement>(null) // Table rows shown-count field
+  const [rowsDraft, setRowsDraft] = useState('') // Editable shown rows while the setter flyout is open
   const rootRef = useRef<HTMLDivElement>(null) // Position flyout
   const connectionsRowRef = useRef<HTMLButtonElement>(null) // Align Connections picker to that row
   const colorRowRef = useRef<HTMLButtonElement>(null) // Align frame Color flyout to Color row
@@ -527,6 +531,18 @@ export function BlockActionsMenu({
     if (typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches) return
     inputRef.current?.focus() // Desktop: caret in Search actions for quick filter
   }, [])
+
+  // Seed shown-rows draft once when the Table rows flyout opens (don't reset mid-edit)
+  const rowsSeededRef = useRef(false)
+  useEffect(() => {
+    if (openSubmenu !== 'dbRows') {
+      rowsSeededRef.current = false
+      return
+    }
+    if (!dbRowSetter || rowsSeededRef.current) return
+    setRowsDraft(String(dbRowSetter.shown))
+    rowsSeededRef.current = true
+  }, [openSubmenu, dbRowSetter])
 
   // Reset to Format when the Turn into flyout closes so reopen starts compact
   useEffect(() => {
@@ -689,11 +705,11 @@ export function BlockActionsMenu({
       },
       {
         kind: 'action',
-        id: 'setDbExpand',
+        id: 'setDbRows',
         label: 'Table rows',
         icon: <Rows3 className="h-4 w-4" />,
-        submenu: 'dbExpand', // Expanded / Preview
-        hidden: !dbExpandMode, // Notion DB frames only
+        submenu: 'dbRows', // Shown / total setter + Show all / Reset
+        hidden: !dbRowSetter, // Notion DB frames only
       },
       {
         kind: 'action',
@@ -783,7 +799,7 @@ export function BlockActionsMenu({
                 .includes(q)
             )))
     )
-  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape, boardLocked, framesLockedTogether, canLockFramesTogether, notionConnected, convertLayoutMode, dbExpandMode, showOpen])
+  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape, boardLocked, framesLockedTogether, canLockFramesTogether, notionConnected, convertLayoutMode, dbRowSetter, showOpen])
 
   // When searching, also surface matching Turn into types as flat picks
   const turnIntoMatches = useMemo(() => {
@@ -1001,7 +1017,7 @@ export function BlockActionsMenu({
                 else if (row.submenu === 'frameShape') setOpenSubmenu('frameShape')
                 else if (row.submenu === 'frameColor') setOpenSubmenu('frameColor')
                 else if (row.submenu === 'convertLayout') setOpenSubmenu('convertLayout')
-                else if (row.submenu === 'dbExpand') setOpenSubmenu('dbExpand')
+                else if (row.submenu === 'dbRows') setOpenSubmenu('dbRows')
                 else if (row.submenu === 'connections') return // Click-only picker
                 else setOpenSubmenu(null)
               }}
@@ -1024,8 +1040,8 @@ export function BlockActionsMenu({
                   setOpenSubmenu((s) => (s === 'convertLayout' ? null : 'convertLayout'))
                   return
                 }
-                if (row.submenu === 'dbExpand') {
-                  setOpenSubmenu((s) => (s === 'dbExpand' ? null : 'dbExpand'))
+                if (row.submenu === 'dbRows') {
+                  setOpenSubmenu((s) => (s === 'dbRows' ? null : 'dbRows'))
                   return
                 }
                 if (row.submenu === 'connections') {
@@ -1448,40 +1464,86 @@ export function BlockActionsMenu({
         </div>
       )}
 
-      {/* Table rows — Preview / Expanded (Notion database frames) */}
-      {openSubmenu === 'dbExpand' && dbExpandMode && (
+      {/* Table rows — shown / total setter (Notion database frames) */}
+      {openSubmenu === 'dbRows' && dbRowSetter && (
         <div
           data-tt-menu-flyout="main"
           className="absolute z-[1001] min-w-[210px] tt-menu-surface rounded-lg shadow-lg border border-gray-200 dark:border-[#2f2f2f] p-1"
-          onMouseEnter={() => setOpenSubmenu('dbExpand')}
+          onMouseEnter={() => setOpenSubmenu('dbRows')}
         >
           <div className="px-2 py-1.5 text-[11px] text-gray-400">Rows</div>
-          {(
-            [
-              { id: 'selected' as const, label: 'Preview', icon: Rows3 },
-              { id: 'always' as const, label: 'Expanded', icon: Table2 },
-            ]
-          ).map(({ id: mode, label, icon: Icon }) => (
-            <Button
-              key={mode}
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                if (dbExpandMode !== mode) onAction('setDbExpand', { dbExpand: mode })
-                onClose()
+          <div
+            className="flex items-center gap-1.5 px-2 py-1.5"
+            onPointerDown={(e) => e.stopPropagation()} // Keep RF / menu dismiss from eating the field
+          >
+            <input
+              ref={rowsDraftRef}
+              type="text"
+              inputMode="numeric"
+              aria-label="Shown rows"
+              value={rowsDraft}
+              onChange={(e) => {
+                // Digits only while typing — clamp on commit
+                setRowsDraft(e.target.value.replace(/[^\d]/g, ''))
               }}
-              className={cn(
-                'justify-start text-sm h-8 px-2 font-normal w-full',
-                dbExpandMode === mode && 'bg-blue-50 dark:bg-blue-950/40'
-              )}
-            >
-              <Icon className="h-4 w-4 mr-2 text-gray-500" />
-              <span className="flex-1 text-left">{label}</span>
-              {dbExpandMode === mode && <Check className="h-3.5 w-3.5 text-gray-500" />}
-            </Button>
-          ))}
+              onBlur={() => {
+                const max =
+                  dbRowSetter.hasMore
+                    ? NOTION_DB_CLIENT_ROW_CAP
+                    : Math.max(1, dbRowSetter.total)
+                const parsed = parseInt(rowsDraft, 10)
+                const next = Number.isFinite(parsed)
+                  ? Math.min(max, Math.max(1, parsed))
+                  : dbRowSetter.shown
+                setRowsDraft(String(next))
+                if (next !== dbRowSetter.shown) onAction('setDbRows', { dbRows: next })
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  ;(e.target as HTMLInputElement).blur() // Commit via onBlur
+                }
+              }}
+              className="w-14 h-7 rounded-md border border-gray-200 dark:border-[#3a3a3a] bg-white dark:bg-[#1a1a1a] px-2 text-sm tabular-nums text-gray-900 dark:text-gray-100 outline-none focus:border-blue-400"
+            />
+            <span className="text-sm text-gray-400" aria-hidden="true">
+              /
+            </span>
+            <span className="text-sm tabular-nums text-gray-500 dark:text-gray-400">
+              {dbRowSetter.total}
+              {dbRowSetter.hasMore ? '+' : ''}
+            </span>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              const max =
+                dbRowSetter.hasMore
+                  ? NOTION_DB_CLIENT_ROW_CAP
+                  : Math.max(1, dbRowSetter.total)
+              setRowsDraft(String(max))
+              onAction('setDbRows', { dbRows: 'all' })
+            }}
+            className="justify-start text-sm h-8 px-2 font-normal w-full"
+          >
+            <span className="flex-1 text-left">Show all</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              setRowsDraft(String(COMPACT_PREVIEW_ROWS))
+              onAction('setDbRows', { dbRows: 'reset' })
+            }}
+            className="justify-start text-sm h-8 px-2 font-normal w-full"
+          >
+            <span className="flex-1 text-left">Reset</span>
+          </Button>
         </div>
       )}
 

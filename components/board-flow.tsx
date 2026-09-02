@@ -48,6 +48,11 @@ import {
   resolveNotionDatabaseIdFromFrame,
 } from '@/lib/notion/convert-db-layout' // Convert layout → Card / Table detection
 import {
+  COMPACT_PREVIEW_ROWS,
+  NOTION_DB_CLIENT_ROW_CAP,
+  type NotionDatabaseTable,
+} from '@/lib/notion/database' // Table rows setter floors / ceilings
+import {
   FRAME_SHAPE_DEFAULT_SIZE,
   FRAME_SHAPE_MIN_SIZE,
   FRAME_SHAPE_NONE,
@@ -7769,13 +7774,40 @@ function BoardFlowInner({
             void handleConvertLayout(payload.convertLayout)
           }
           break
-        case 'setDbExpand': {
-          // The frame owns this metadata (it already persists frameUnlocked / frameTextWrap), so
-          // broadcast the choice and let ChatPanelNode write it — one writer, same as frame lock.
-          if (!payload?.dbExpand || !rightClickedNode) break
+        case 'setDbRows': {
+          // Frame owns dbVisibleRowCap — broadcast and let ChatPanelNode persist (same as lock).
+          if (payload?.dbRows == null || !rightClickedNode) break
+          const content = String(rightClickedNode.data?.promptMessage?.content || '')
+          const meta =
+            (rightClickedNode.data?.promptMessage?.metadata as Record<string, unknown> | undefined) ||
+            {}
+          const messageId =
+            typeof rightClickedNode.data?.promptMessage?.id === 'string'
+              ? (rightClickedNode.data.promptMessage.id as string)
+              : null
+          let cap: number
+          if (payload.dbRows === 'reset') {
+            cap = COMPACT_PREVIEW_ROWS // Compact idle floor
+          } else if (payload.dbRows === 'all') {
+            const dbId = resolveNotionDatabaseIdFromFrame(content, meta)
+            const table = dbId
+              ? queryClient.getQueryData<NotionDatabaseTable>(['notion-database', dbId])
+              : undefined
+            // Known complete set → loaded length; still paging → client hard cap (fetch covers it).
+            cap =
+              table && !table.rowsHasMore
+                ? Math.max(1, table.rows.length)
+                : NOTION_DB_CLIENT_ROW_CAP
+          } else {
+            cap = Math.max(1, Math.floor(payload.dbRows))
+          }
           window.dispatchEvent(
-            new CustomEvent('tt-set-db-expand', {
-              detail: { nodeIds: [rightClickedNode.id], always: payload.dbExpand === 'always' },
+            new CustomEvent('tt-set-db-visible-row-cap', {
+              detail: {
+                nodeIds: [rightClickedNode.id],
+                messageIds: messageId ? [messageId] : [],
+                cap,
+              },
             })
           )
           break
@@ -7812,6 +7844,7 @@ function BoardFlowInner({
       nodes,
       rightClickedNode,
       addChildNode,
+      queryClient,
     ]
   )
 
@@ -10476,18 +10509,40 @@ function BoardFlowInner({
             if (isNotionDatabaseTableFrame(content, meta)) return 'table' as const // Table → offer Card
             return null
           })()}
-          dbExpandMode={(() => {
+          dbRowSetter={(() => {
             const content = String(rightClickedNode.data?.promptMessage?.content || '')
             const meta =
               (rightClickedNode.data?.promptMessage?.metadata as
                 | Record<string, unknown>
                 | undefined) || {}
-            // Card view has no rows to expand — table frames only.
+            // Card view has no row setter — table frames only.
             if (!isNotionDatabaseTableFrame(content, meta)) return null
-            return meta.dbAlwaysExpanded === true ? ('always' as const) : ('selected' as const)
+            const dbId = resolveNotionDatabaseIdFromFrame(content, meta)
+            const table = dbId
+              ? queryClient.getQueryData<NotionDatabaseTable>(['notion-database', dbId])
+              : undefined
+            const loaded = table?.rows.length ?? 0
+            const hasMore = !!table?.rowsHasMore
+            // Prefer live DOM attr (show-more is optimistic); fall back to saved metadata.
+            let shown =
+              typeof meta.dbVisibleRowCap === 'number' && meta.dbVisibleRowCap > 0
+                ? meta.dbVisibleRowCap
+                : meta.dbAlwaysExpanded === true
+                  ? 50
+                  : COMPACT_PREVIEW_ROWS
+            if (typeof document !== 'undefined') {
+              const live = document
+                .querySelector(
+                  `.react-flow__node[data-id="${CSS.escape(rightClickedNode.id)}"] [data-db-visible-row-cap]`
+                )
+                ?.getAttribute('data-db-visible-row-cap')
+              const n = live ? parseInt(live, 10) : NaN
+              if (Number.isFinite(n) && n > 0) shown = n
+            }
+            const total = Math.max(loaded, shown, 1) // Known loaded (or at least current shown)
+            return { shown, total, hasMore }
           })()}
-          canLockFramesTogether={
-            nodes.filter((n) => n.selected && n.type === 'chatPanel').length >= 2
+          canLockFramesTogether={            nodes.filter((n) => n.selected && n.type === 'chatPanel').length >= 2
           }
           framesLockedTogether={(() => {
             const selected = nodes.filter((n) => n.selected && n.type === 'chatPanel')

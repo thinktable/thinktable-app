@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260902161220_db_table_rows_setter` — Frame menu Table rows setter (shown/total, Show all, Reset); replaces Preview / Expanded
 - `20260902155842_db_show_more_less_preview_full_width` — `+# rows — show more / show less`; idle preview full width / all view-visible columns
 - `20260902151646_db_row_warm_inline_caret_no_semantic_zoom` — Inline DB row warm + caret at click; switch rows without nav; remove semantic zoom; keep DB TipTap live mid-nav; retain I-bar after warm
 - `20260831173348_notion_db_row_warm_show_more_per_frame` — Notion DB row-click warm + per-frame show-more (50/page); Preview/Expanded; duplicate caps independent

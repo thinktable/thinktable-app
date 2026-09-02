@@ -518,6 +518,7 @@ import { NestedBoardPreview, prefetchBoardEmbed } from './nested-board-preview' 
 import { unwrapNestedFramesHtml } from '@/lib/tiptap/unwrap-nested-frames' // Flatten legacy nest wrappers
 import { applyTurnInto, bodyHtmlWithoutBoardTitle } from '@/lib/blocks/turn-into' // Page promote + strip title from board body
 import { migrateSoleDatabaseBlockToBoardLink, ensureNotionMapFrameIsBoardLink, isSoleDatabaseBlockContent, isSoleBoardLinkContent, repairBoardFrameToSoleLink, restoreWipedDatabaseBlockHtml } from '@/lib/notion/migrate-frame' // Notion DB map frames → boardLink; repair polluted board frames; heal wiped tables
+import { COMPACT_PREVIEW_ROWS } from '@/lib/notion/database' // Table rows Reset floor / snapshot split
 
 interface Message {
   id: string
@@ -4932,24 +4933,8 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
     return () => window.removeEventListener('tt-toggle-frame-lock', onTopBar)
   }, [id, toggleFrameLock])
 
-  // Frame menu → Table rows: Always expanded vs Expand when selected. The menus live outside this
-  // node (board right-click, block ⋮⋮), so they broadcast and the owning frame persists — same shape
-  // as `tt-toggle-frame-lock`, which keeps one writer for frame metadata.
-  useEffect(() => {
-    const onSetDbExpand = (ev: Event) => {
-      const detail = (ev as CustomEvent<{ nodeIds?: string[]; always?: boolean }>).detail
-      if (!detail?.nodeIds?.includes(id)) return // Not this frame
-      const next = !!detail.always
-      const rowCap = next ? 50 : 12 // Expanded seeds one page; Preview returns to the compact slice
-      setDbAlwaysExpanded(next)
-      setDbVisibleRowCap(rowCap)
-      void persistFrameMeta({ dbAlwaysExpanded: next, dbVisibleRowCap: rowCap })
-    }
-    window.addEventListener('tt-set-db-expand', onSetDbExpand)
-    return () => window.removeEventListener('tt-set-db-expand', onSetDbExpand)
-  }, [id, persistFrameMeta])
-
-  // Notion DB "+N more" — per frame message only (duplicate frames must not share this).
+  // Frame menu / footer → Table rows depth. Menus live outside this node, so they broadcast and
+  // the owning frame persists — one writer for frame metadata (same as `tt-toggle-frame-lock`).
   useEffect(() => {
     const onSetDbRowCap = (ev: Event) => {
       const detail = (ev as CustomEvent<{ nodeIds?: string[]; messageIds?: string[]; cap?: number }>).detail
@@ -4958,8 +4943,11 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
       if (!forNode && !forMsg) return
       const cap = detail?.cap
       if (typeof cap !== 'number' || !Number.isFinite(cap) || cap < 1) return
-      setDbVisibleRowCap(cap)
-      void persistFrameMeta({ dbVisibleRowCap: cap })
+      const next = Math.floor(cap)
+      const always = next > COMPACT_PREVIEW_ROWS // Snapshot slot: past compact floor = expanded
+      setDbVisibleRowCap(next)
+      setDbAlwaysExpanded(always)
+      void persistFrameMeta({ dbVisibleRowCap: next, dbAlwaysExpanded: always })
     }
     window.addEventListener('tt-set-db-visible-row-cap', onSetDbRowCap)
     return () => window.removeEventListener('tt-set-db-visible-row-cap', onSetDbRowCap)

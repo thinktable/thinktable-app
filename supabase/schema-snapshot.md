@@ -1,13 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-09-02T15:58:43Z`
+- Snapped at: `2026-09-02T16:12:25Z`
 - Source: local `supabase/migrations/` + remote applied tops (thinkable) + `.temp` service versions
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 - CLI: `supabase` `2.90.0` (marker via `migration new`; newer CLI available)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260902161220_db_table_rows_setter.sql`.
+- Frame menu **Table rows** is a row setter: editable shown/total, **Show all**, **Reset** (replaces Preview / Expanded).
+- Still persists `metadata.dbVisibleRowCap`; `dbAlwaysExpanded` derived when cap > 12 for cold snapshot slots.
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: DB show more/less + full-width preview
 
 - No DDL. Marker `20260902155842_db_show_more_less_preview_full_width.sql`.
 - Notion DB footer: `+# rows — show more / show less` (two options; show more 12→50 then +50; show less −50→12; muted when unavailable).

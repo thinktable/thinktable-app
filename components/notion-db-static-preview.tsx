@@ -9,6 +9,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Check, Hash, List, Loader2, Type } from 'lucide-react'
 import {
   isNotionPropertyEditable,
+  COMPACT_PREVIEW_ROWS,
   NOTION_DB_CLIENT_ROW_CAP,
   NOTION_DB_CLIENT_ROW_PAGE,
   type NotionDatabaseTable,
@@ -32,8 +33,8 @@ import { useNotionDbCellSave } from '@/lib/notion/use-notion-db-cell-save'
 import { cn } from '@/lib/utils'
 
 const ROW_GUTTER = 20
-/** Idle preview slice before the first "show more" click. */
-export const COMPACT_PREVIEW_ROWS = 12
+/** Re-export for callers that imported the idle floor from this module. */
+export { COMPACT_PREVIEW_ROWS } from '@/lib/notion/database'
 
 /** Remaining-row count for the footer. Prefer a stable page size while the server still has more —
  *  do not advertise the full shared-cache remainder (another copy's fetch would change it). */

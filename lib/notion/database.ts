@@ -41,6 +41,9 @@ export const NOTION_DB_CLIENT_ROW_PAGE = 50
 /** Hard ceiling for rows kept in the browser for one DB (virtualization ≠ free memory). */
 export const NOTION_DB_CLIENT_ROW_CAP = 200
 
+/** Idle / Reset Table-rows floor before the first show-more unlock. */
+export const COMPACT_PREVIEW_ROWS = 12
+
 export type FetchNotionDatabaseOptions = {
   /** Cap rows returned; omit to fetch all (convert-layout / server paths). */
   rowLimit?: number
