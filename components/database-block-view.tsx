@@ -237,6 +237,17 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
     persistVisibleRowCap(next)
   }, [effectiveRowCap, persistVisibleRowCap])
 
+  const onShowLessRows = useCallback(() => {
+    // 100 → 50 → 12 (compact). Never go below the idle preview slice.
+    if (effectiveRowCap <= COMPACT_PREVIEW_ROWS) return
+    const next =
+      effectiveRowCap <= NOTION_DB_CLIENT_ROW_PAGE
+        ? COMPACT_PREVIEW_ROWS
+        : Math.max(COMPACT_PREVIEW_ROWS, effectiveRowCap - NOTION_DB_CLIENT_ROW_PAGE)
+    if (next === effectiveRowCap) return
+    persistVisibleRowCap(next)
+  }, [effectiveRowCap, persistVisibleRowCap])
+
   // Cover the current unlock (menu Expanded seed, reload, or show-more) without waiting for a click.
   useEffect(() => {
     ensureRowsCached(visibleRowCap)
@@ -315,6 +326,15 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
       })
     }
   }, [frameSelected, frameDragging, navigating])
+
+  // Show more/less changes painted height — nudge hug so the frame follows the new slice.
+  useEffect(() => {
+    const el = boxRef.current
+    if (!el) return
+    requestAnimationFrame(() => {
+      el.dispatchEvent(new CustomEvent('tt-db-content-resize', { bubbles: true }))
+    })
+  }, [effectiveRowCap])
 
   useEffect(() => {
     const attrTitle = (node.attrs.title as string) || 'Untitled database'
@@ -426,6 +446,7 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
               rowCap={effectiveRowCap}
               completePaint
               onShowMore={onShowMoreRows}
+              onShowLess={onShowLessRows}
               onRowEngage={canRowEngage ? engageRow : undefined}
               warmRowId={warmRowId}
               warmColIndex={warmColIndex}

@@ -55,7 +55,7 @@ import {
 } from '@/lib/notion/database-view'
 import {
   COMPACT_PREVIEW_ROWS,
-  formatShowMoreLabel,
+  DbRowsRevealFooter,
 } from '@/components/notion-db-static-preview'
 import {
   buildFlatTableItems,
@@ -99,6 +99,8 @@ type NotionDatabaseTableViewProps = {
   /** How many filtered rows to paint; parent pages 12 → 50 → 100… via onShowMore. */
   rowCap?: number
   onShowMore?: () => void
+  /** Collapse one page toward the compact preview. */
+  onShowLess?: () => void
   /** Row clicked on static preview — hydrate this row as soon as the live table mounts. */
   initialActiveRowId?: string | null
   /** Column from the static row click — auto I-bar that cell on live mount. */
@@ -133,6 +135,7 @@ export function NotionDatabaseTableView({
   interactive = true,
   rowCap,
   onShowMore,
+  onShowLess,
   initialActiveRowId = null,
   initialArmColumnIndex = null,
 }: NotionDatabaseTableViewProps) {
@@ -774,6 +777,10 @@ export function NotionDatabaseTableView({
     onShowMore?.()
   }, [onShowMore])
 
+  const handleShowLess = useCallback(() => {
+    onShowLess?.()
+  }, [onShowLess])
+
   if (loading) {
     return (
       <div
@@ -1087,22 +1094,20 @@ export function NotionDatabaseTableView({
         </div>
       </div>
       {filteredRows.length > displayRows.length ||
-      (!!data.rowsHasMore && displayRows.length < NOTION_DB_CLIENT_ROW_CAP) ? (
-        <button
-          type="button"
-          className="nodrag nopan w-full shrink-0 px-3 py-1.5 text-left text-[11px] text-gray-400 hover:text-blue-600 border-t border-gray-100"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-            handleShowMore()
-          }}
-        >
-          {formatShowMoreLabel(
-            Math.max(0, filteredRows.length - displayRows.length),
-            !!data.rowsHasMore
-          )}
-        </button>
+      (!!data.rowsHasMore && displayRows.length < NOTION_DB_CLIENT_ROW_CAP) ||
+      effectiveRowCap > COMPACT_PREVIEW_ROWS ? (
+        <DbRowsRevealFooter
+          className="shrink-0 py-1.5 border-t border-gray-100"
+          hiddenLoaded={Math.max(0, filteredRows.length - displayRows.length)}
+          rowsHasMore={!!data.rowsHasMore}
+          canShowMore={
+            filteredRows.length > displayRows.length ||
+            (!!data.rowsHasMore && displayRows.length < NOTION_DB_CLIENT_ROW_CAP)
+          }
+          canShowLess={effectiveRowCap > COMPACT_PREVIEW_ROWS}
+          onShowMore={handleShowMore}
+          onShowLess={handleShowLess}
+        />
       ) : null}
       <CardConvertBringDialog
         open={!!bringDialogRowId}

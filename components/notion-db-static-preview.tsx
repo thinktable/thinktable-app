@@ -35,12 +35,72 @@ const ROW_GUTTER = 20
 /** Idle preview slice before the first "show more" click. */
 export const COMPACT_PREVIEW_ROWS = 12
 
-/** Footer copy for paged reveal (50 rows per click). Use a stable page size when the server still
- *  has more — do not advertise the full shared-cache remainder (another copy's fetch would change it). */
-export function formatShowMoreLabel(hiddenLoaded: number, rowsHasMore: boolean): string {
-  if (rowsHasMore) return `+${NOTION_DB_CLIENT_ROW_PAGE} more — click to show more`
-  if (hiddenLoaded > 0) return `+${hiddenLoaded} more — click to show more`
-  return `click to show more`
+/** Remaining-row count for the footer. Prefer a stable page size while the server still has more —
+ *  do not advertise the full shared-cache remainder (another copy's fetch would change it). */
+export function remainingRowsCount(hiddenLoaded: number, rowsHasMore: boolean): number {
+  if (rowsHasMore) return NOTION_DB_CLIENT_ROW_PAGE // Next page size, not sibling-cache leftovers
+  return Math.max(0, hiddenLoaded) // Loaded but still capped on this frame
+}
+
+/** Dual-action footer: `+# rows — show more / show less`. */
+export function DbRowsRevealFooter({
+  hiddenLoaded,
+  rowsHasMore,
+  canShowMore,
+  canShowLess,
+  onShowMore,
+  onShowLess,
+  className,
+}: {
+  hiddenLoaded: number
+  rowsHasMore: boolean
+  canShowMore: boolean
+  canShowLess: boolean
+  onShowMore?: () => void
+  onShowLess?: () => void
+  className?: string
+}) {
+  const remaining = remainingRowsCount(hiddenLoaded, rowsHasMore) // Count shown before the em dash
+  return (
+    <div
+      className={cn(
+        'nodrag nopan pointer-events-auto px-3 py-1 text-[11px] text-gray-400 text-left w-full',
+        className
+      )}
+      onPointerDown={(e) => e.stopPropagation()} // Keep RF from starting a frame drag
+    >
+      {remaining > 0 ? `+${remaining} rows — ` : null}
+      <button
+        type="button"
+        className={cn(
+          'hover:text-blue-600 disabled:hover:text-gray-400 disabled:opacity-40 disabled:cursor-default'
+        )}
+        disabled={!canShowMore || !onShowMore}
+        onClick={(e) => {
+          e.stopPropagation()
+          e.preventDefault()
+          if (canShowMore) onShowMore?.()
+        }}
+      >
+        show more
+      </button>
+      <span aria-hidden="true"> / </span>
+      <button
+        type="button"
+        className={cn(
+          'hover:text-blue-600 disabled:hover:text-gray-400 disabled:opacity-40 disabled:cursor-default'
+        )}
+        disabled={!canShowLess || !onShowLess}
+        onClick={(e) => {
+          e.stopPropagation()
+          e.preventDefault()
+          if (canShowLess) onShowLess?.()
+        }}
+      >
+        show less
+      </button>
+    </div>
+  )
 }
 
 function PropertyTypeIcon({ type }: { type: string }) {
@@ -65,7 +125,8 @@ export function NotionDbStaticPreview({
   rowCap,
   /** Reveal the next page of rows — parent owns the cap. */
   onShowMore,
-  /** Frame already selected: row click warms the live table for that row only. */
+  /** Collapse one page toward the compact preview — parent owns the cap. */
+  onShowLess,
   /** Frame already selected: row click warms that row (and can switch to another while warm). */
   onRowEngage,
   warmRowId = null,
@@ -86,6 +147,8 @@ export function NotionDbStaticPreview({
   completePaint?: boolean
   rowCap?: number
   onShowMore?: () => void
+  /** Collapse one page toward the compact preview — parent owns the cap. */
+  onShowLess?: () => void
   /** Row + column + caret from static preview — seeds warm row + I-bar. */
   onRowEngage?: (
     rowId: string,
@@ -136,7 +199,8 @@ export function NotionDbStaticPreview({
     () => visibleProperties(data?.properties ?? [], settings),
     [data?.properties, settings]
   )
-  const visibleCols = useMemo(() => columns.slice(0, compact ? 8 : 16), [columns, compact])
+  // All view-visible columns — never hard-slice (that cut off properties past col 8/16).
+  const visibleCols = columns
   // Hooks cannot sit behind `completePaint` — call the windowing hook always, ignore it when complete.
   const { colRange, columnProbes } = useVisibleColumnRange(visibleCols, settings)
   const colStart = completePaint ? 0 : colRange ? Math.max(0, colRange.start) : 0
@@ -202,9 +266,11 @@ export function NotionDbStaticPreview({
   const tablePixelWidth = visibleCols.reduce((sum, prop) => sum + columnWidthPx(prop, settings), 0)
   const vLines = settings.layoutOptions.showVerticalLines
   const hiddenLoaded = Math.max(0, data.rows.length - rows.length)
-  // Reveal more only while under the client cap (Expanded at CAP with server leftovers hides this).
-  const showMoreFooter =
+  // Show-more while under the client cap; show-less once past the compact preview.
+  const canShowMore =
     hiddenLoaded > 0 || (!!data.rowsHasMore && rows.length < NOTION_DB_CLIENT_ROW_CAP)
+  const canShowLess = effectiveCap > COMPACT_PREVIEW_ROWS
+  const showRevealFooter = canShowMore || canShowLess
   // Still window when painting a large expanded slice; small caps paint in one tbody.
   const useChunkedRows = !completePaint && effectiveCap > COMPACT_PREVIEW_ROWS
 
@@ -331,7 +397,7 @@ export function NotionDbStaticPreview({
         frameSelected && 'nodrag',
         className
       )}
-      style={{ minWidth: minWidth ?? Math.min(tablePixelWidth + ROW_GUTTER, 720), minHeight }}
+      style={{ minWidth: minWidth ?? tablePixelWidth + ROW_GUTTER, minHeight }}
       aria-hidden={warmRowId ? undefined : true}
       data-tt-db-static
       data-tt-db-row-warm={warmRowId ? 'true' : undefined}
@@ -377,19 +443,15 @@ export function NotionDbStaticPreview({
           )}
         </table>
       </div>
-      {showMoreFooter ? (
-        <button
-          type="button"
-          className="nodrag nopan pointer-events-auto px-3 py-1 text-[11px] text-gray-400 hover:text-blue-600 text-left w-full"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-            onShowMore?.()
-          }}
-        >
-          {formatShowMoreLabel(hiddenLoaded, !!data.rowsHasMore)}
-        </button>
+      {showRevealFooter ? (
+        <DbRowsRevealFooter
+          hiddenLoaded={hiddenLoaded}
+          rowsHasMore={!!data.rowsHasMore}
+          canShowMore={canShowMore}
+          canShowLess={canShowLess}
+          onShowMore={onShowMore}
+          onShowLess={onShowLess}
+        />
       ) : null}
     </div>
   )

@@ -1,13 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-09-02T15:16:56Z`
+- Snapped at: `2026-09-02T15:58:43Z`
 - Source: local `supabase/migrations/` + remote applied tops (thinkable) + `.temp` service versions
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 - CLI: `supabase` `2.90.0` (marker via `migration new`; newer CLI available)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260902155842_db_show_more_less_preview_full_width.sql`.
+- Notion DB footer: `+# rows — show more / show less` (two options; show more 12→50 then +50; show less −50→12; muted when unavailable).
+- Idle table preview hugs full table width with all view-visible columns (removed 720px minWidth cap and 8/16 column hard-slice).
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: DB row warm inline caret / no semantic zoom
 
 - No DDL. Marker `20260902151646_db_row_warm_inline_caret_no_semantic_zoom.sql`.
 - Notion DB row warm stays on `NotionDbStaticPreview`: click warms one `DbTableRow` with I-bar at the cold-click caret index; clicking another cold row switches warm target (no nav required).
