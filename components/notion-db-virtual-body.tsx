@@ -732,14 +732,15 @@ function EditableCell({
   )
 }
 
-function RowInsertBar({ onAdd, edge }: { onAdd: () => void; edge: 'top' | 'bottom' }) {
+export function RowInsertBar({ onAdd, edge }: { onAdd: () => void; edge: 'top' | 'bottom' }) {
   return (
     <button
       type="button"
       data-tt-db-insert
       className={cn(
         'group/insert absolute left-0 z-[6] h-3 w-5 cursor-pointer select-none',
-        'opacity-0 group-hover/gutter:opacity-100',
+        // Same reveal as the ⋮⋮ — row hover or gutter hover (cold + warm).
+        'opacity-0 group-hover/row:opacity-100 group-hover/gutter:opacity-100',
         edge === 'top' ? 'top-0' : 'bottom-0'
       )}
       title="Add row"
@@ -763,7 +764,9 @@ function RowInsertBar({ onAdd, edge }: { onAdd: () => void; edge: 'top' | 'botto
   )
 }
 
-const RowHandle = memo(function RowHandle({
+/** Row ⋮⋮ — drag to board / open page menu. Exported so cold static rows can show it on hover
+ *  without mounting editors (warm/hydrate). */
+export const RowHandle = memo(function RowHandle({
   row,
   selected,
   onSelect,
@@ -772,6 +775,7 @@ const RowHandle = memo(function RowHandle({
   onDuplicate,
   onConvertLayout,
   dragPayload,
+  onMenuOpenChange,
 }: {
   row: NotionDbRow
   selected: boolean
@@ -781,12 +785,18 @@ const RowHandle = memo(function RowHandle({
   onDuplicate: () => void
   onConvertLayout?: (layout: DbConvertLayoutId, rowId: string) => void
   dragPayload: NotionRowDragPayload
+  /** So parents that mount this only on hover can keep it while the portal menu is open. */
+  onMenuOpenChange?: (open: boolean) => void
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
   const draggedRef = useRef(false)
 
   const closeMenu = useCallback(() => setMenu(null), [])
+
+  useEffect(() => {
+    onMenuOpenChange?.(!!menu)
+  }, [menu, onMenuOpenChange])
 
   useEffect(() => {
     if (!menu) return
@@ -915,12 +925,13 @@ type DbTableRowProps = {
   onConvertLayout?: (layout: DbConvertLayoutId, rowId: string) => void
   rowBackground: string | undefined
   /**
-   * Row owns editors + gutter chrome only while it is the one being used. An idle row renders
-   * `StaticCell`s, which is what makes an expanded table cost what the static preview costs: the
-   * gutter alone is a `RowHandle` (own state + a *document* mousedown listener) plus two
-   * `RowInsertBar` buttons, so 200 idle rows meant 200 document listeners firing on every click.
+   * Row owns editors + insert bars only while hydrated. Handle can still paint on hover without
+   * hydrate (`showHandle`) so cold static rows get ⋮⋮ without mounting every cell editor.
+   * Never mount handle+insert on all idle rows — 200× RowInsertBar was the old cost cliff.
    */
   hydrated: boolean
+  /** Paint ⋮⋮ without editors (cold hover). Defaults to `hydrated`. */
+  showHandle?: boolean
   onHover: (id: string | null) => void
   onActivate: (id: string) => void
   /** On-screen column band; columns outside it collapse into one spanned spacer cell per side. */
@@ -955,6 +966,7 @@ export const DbTableRow = memo(function DbTableRow({
   onConvertLayout,
   rowBackground,
   hydrated,
+  showHandle,
   onHover,
   onActivate,
   colRange,
@@ -966,6 +978,8 @@ export const DbTableRow = memo(function DbTableRow({
   // one per column.
   const colStart = colRange ? Math.max(0, colRange.start) : 0
   const colEnd = colRange ? Math.min(columns.length - 1, colRange.end) : columns.length - 1
+  // Handle + insert bars without editors: hover/selected cold rows. Editors stay hydrate-only.
+  const paintHandle = showHandle ?? hydrated
   return (
     <tr
       className={cn(
@@ -1001,7 +1015,7 @@ export const DbTableRow = memo(function DbTableRow({
               !settings.layoutOptions.wrapAllContent && 'tt-db-cell-nowrap whitespace-nowrap'
             )}
           >
-            {colIndex === 0 && hydrated ? (
+            {colIndex === 0 && paintHandle ? (
               <div
                 data-tt-db-gutter
                 className="group/gutter absolute -left-5 top-0 bottom-0 z-[2] w-5"
@@ -1024,8 +1038,12 @@ export const DbTableRow = memo(function DbTableRow({
                     }}
                   />
                 </div>
-                <RowInsertBar edge="top" onAdd={() => onCreateRow(insertBeforeAfterId)} />
-                <RowInsertBar edge="bottom" onAdd={() => onCreateRow(row.id)} />
+                {paintHandle ? (
+                  <>
+                    <RowInsertBar edge="top" onAdd={() => onCreateRow(insertBeforeAfterId)} />
+                    <RowInsertBar edge="bottom" onAdd={() => onCreateRow(row.id)} />
+                  </>
+                ) : null}
               </div>
             ) : null}
             <div

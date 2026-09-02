@@ -4,8 +4,8 @@
 // Same shared react-query cache as the live table — no second Notion fetch.
 // Read-only DOM (no virtualizer, editors, or row menus) so pan/zoom stays cheap.
 
-import { useCallback, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useCallback, useMemo, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Hash, List, Loader2, Type } from 'lucide-react'
 import {
   isNotionPropertyEditable,
@@ -13,6 +13,7 @@ import {
   NOTION_DB_CLIENT_ROW_CAP,
   NOTION_DB_CLIENT_ROW_PAGE,
   type NotionDatabaseTable,
+  type NotionDbCell,
   type NotionDbRow,
 } from '@/lib/notion/database'
 import {
@@ -26,6 +27,8 @@ import {
   CellDisplay,
   ChunkedRowGroups,
   DbTableRow,
+  RowHandle,
+  RowInsertBar,
   caretIndexFromColdClick,
   useVisibleColumnRange,
 } from '@/components/notion-db-virtual-body'
@@ -170,6 +173,7 @@ export function NotionDbStaticPreview({
     () => ['notion-database', notionDatabaseId] as const,
     [notionDatabaseId]
   )
+  const queryClient = useQueryClient()
   const { data, isPending } = useQuery({
     queryKey: tableQueryKey,
     queryFn: async (): Promise<NotionDatabaseTable> => {
@@ -213,6 +217,60 @@ export function NotionDbStaticPreview({
   const showColumnProbes = !completePaint
   const { onSave, savingKey } = useNotionDbCellSave(notionDatabaseId, data?.properties)
   const [, setActiveRowId] = useState<string | null>(warmRowId)
+  // One cold-row handle at a time — avoid N RowHandle mounts on idle expanded tables.
+  // Keep mounted while its portal menu is open (pointer leaves the row into the menu).
+  const [hoverRowId, setHoverRowId] = useState<string | null>(null)
+  const [menuRowId, setMenuRowId] = useState<string | null>(null)
+  const coldHandleRowId = hoverRowId ?? menuRowId
+  const onColdMenuOpenChange = useCallback((rowId: string, open: boolean) => {
+    setMenuRowId(open ? rowId : null)
+  }, [])
+  const rowBusyRef = useRef(false)
+  /** POST a Notion page and splice it into the shared react-query cache (cold + warm chrome). */
+  const createRow = useCallback(
+    async (afterId: string | null) => {
+      if (rowBusyRef.current) return
+      rowBusyRef.current = true
+      try {
+        const res = await fetch(`/api/notion/database/${encodeURIComponent(notionDatabaseId)}`, {
+          method: 'POST',
+        })
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error((json as { error?: string }).error || 'Failed to add row')
+        const row = (json as { row: NotionDbRow }).row
+        const props =
+          queryClient.getQueryData<NotionDatabaseTable>(tableQueryKey)?.properties ?? []
+        const cells: Record<string, NotionDbCell> = { ...row.cells }
+        for (const prop of props) {
+          if (!cells[prop.name]) {
+            cells[prop.name] =
+              prop.type === 'checkbox'
+                ? { type: 'checkbox', checked: false }
+                : prop.type === 'multi_select' || prop.type === 'select' || prop.type === 'status'
+                  ? { type: prop.type, tags: [], text: '' }
+                  : { type: prop.type, text: '' }
+          }
+        }
+        const fullRow: NotionDbRow = { ...row, cells }
+        queryClient.setQueryData<NotionDatabaseTable>(tableQueryKey, (prev) => {
+          if (!prev) return prev
+          const next = [...prev.rows]
+          if (afterId == null) next.unshift(fullRow)
+          else {
+            const i = next.findIndex((r) => r.id === afterId)
+            if (i >= 0) next.splice(i + 1, 0, fullRow)
+            else next.push(fullRow)
+          }
+          return { ...prev, rows: next }
+        })
+      } catch (e) {
+        console.error('Add row failed:', e)
+      } finally {
+        rowBusyRef.current = false
+      }
+    },
+    [notionDatabaseId, queryClient, tableQueryKey]
+  )
   const armColumnIndex = useMemo(() => {
     if (warmColIndex == null || !warmRowId) return null
     const prop = visibleCols[warmColIndex]
@@ -275,14 +333,16 @@ export function NotionDbStaticPreview({
   // Still window when painting a large expanded slice; small caps paint in one tbody.
   const useChunkedRows = !completePaint && effectiveCap > COMPACT_PREVIEW_ROWS
 
-  const renderRow = (row: (typeof rows)[number]) => {
+  const renderRow = (row: (typeof rows)[number], rowIndex: number) => {
+    // Top insert line places after the previous painted row (null = above first).
+    const insertBeforeAfterId = rowIndex > 0 ? rows[rowIndex - 1]!.id : null
     if (warmRowId === row.id) {
       return (
         <DbTableRow
           key={`${row.id}:${warmEpoch}`}
           row={row}
           depth={0}
-          insertBeforeAfterId={null}
+          insertBeforeAfterId={insertBeforeAfterId}
           columns={visibleCols}
           settings={settings}
           selected
@@ -299,10 +359,10 @@ export function NotionDbStaticPreview({
           onSave={onSave}
           onDelete={() => {}}
           onOpen={openRow}
-          onCreateRow={() => {}}
+          onCreateRow={(afterId) => void createRow(afterId)}
           rowBackground={rowBgFn(row)}
           hydrated
-          onHover={() => {}}
+          onHover={setHoverRowId}
           onActivate={setActiveRowId}
           colRange={colRangeBand}
           armColumnIndex={armColumnIndex}
@@ -310,17 +370,25 @@ export function NotionDbStaticPreview({
         />
       )
     }
+    // Cold row: ⋮⋮ + add-row lines on hover (no cell editors). One gutter mount at a time.
+    const showColdHandle = !!onRowEngage && coldHandleRowId === row.id
     return (
     <tr
       key={row.id}
       className={cn(
-        'border-b border-gray-100',
+        'group/row border-b border-gray-100',
         // Row hit-target only while the host wants engage — keeps unselected/pan drag free.
         onRowEngage && 'nodrag nopan pointer-events-auto cursor-text hover:bg-[#fafafa]'
       )}
+      onPointerEnter={onRowEngage ? () => setHoverRowId(row.id) : undefined}
+      onPointerLeave={onRowEngage ? () => setHoverRowId(null) : undefined}
       onPointerDown={
         onRowEngage
           ? (e) => {
+              // Gutter/handle/insert own their gesture — don't warm the row for chrome clicks.
+              if ((e.target as HTMLElement).closest?.('[data-tt-db-gutter], [data-tt-db-insert]')) {
+                return
+              }
               // preventDefault suppresses the trailing click that would focus TipTap and unplace the I-bar.
               e.preventDefault()
               e.stopPropagation()
@@ -370,10 +438,39 @@ export function NotionDbStaticPreview({
             style={{ width: colW, maxWidth: colW, minWidth: 0 }}
             className={cn(
               // Same box as live `DbTableRow` + `StaticCell` so idle TipTap (and its snapshot) match warm.
-              'relative px-2 py-1 align-middle min-w-0 text-[13px] overflow-hidden whitespace-nowrap',
+              // First cell overflow-visible so cold ⋮⋮ can sit in the left gutter.
+              'relative px-2 py-1 align-middle min-w-0 text-[13px] whitespace-nowrap',
+              colIndex === 0 ? 'overflow-visible' : 'overflow-hidden',
               vLines && colIndex < visibleCols.length - 1 && 'border-r border-gray-200'
             )}
           >
+            {colIndex === 0 && showColdHandle ? (
+              <div
+                data-tt-db-gutter
+                className="group/gutter absolute -left-5 top-0 bottom-0 z-[2] w-5 pointer-events-auto"
+              >
+                <div className="absolute left-0 top-1/2 -translate-y-1/2">
+                  <RowHandle
+                    row={row}
+                    selected={false}
+                    onSelect={() => {}}
+                    onDelete={() => {}}
+                    onOpen={() => openRow(row)}
+                    onDuplicate={() => void createRow(row.id)}
+                    onMenuOpenChange={(open) => onColdMenuOpenChange(row.id, open)}
+                    dragPayload={{
+                      source: 'notion-db-row',
+                      notionDatabaseId,
+                      row,
+                      properties: data.properties,
+                      databaseTitle: data.title || fallbackTitle || 'Untitled database',
+                    }}
+                  />
+                </div>
+                <RowInsertBar edge="top" onAdd={() => void createRow(insertBeforeAfterId)} />
+                <RowInsertBar edge="bottom" onAdd={() => void createRow(row.id)} />
+              </div>
+            ) : null}
             <div className="min-h-[28px] w-full min-w-0 max-w-full overflow-hidden">
               <CellDisplay
                 prop={prop}
@@ -433,13 +530,15 @@ export function NotionDbStaticPreview({
           </thead>
           {completePaint || !useChunkedRows ? (
             // Small caps / snapshot paint: every visible row in one tbody.
-            <tbody>{rows.map(renderRow)}</tbody>
+            <tbody>{rows.map((row, i) => renderRow(row, i))}</tbody>
           ) : (
             // Larger paged slices window like the live table.
             <ChunkedRowGroups
               count={rows.length}
               colSpan={visibleCols.length}
-              renderRange={(start, end) => rows.slice(start, end).map(renderRow)}
+              renderRange={(start, end) =>
+                rows.slice(start, end).map((row, i) => renderRow(row, start + i))
+              }
             />
           )}
         </table>

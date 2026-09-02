@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260902180605_db_cold_row_hover_handle_insert` — Cold DB row ⋮⋮ + add-row hairlines on hover without click-warm
 - `20260902161220_db_table_rows_setter` — Frame menu Table rows setter (shown/total, Show all, Reset); replaces Preview / Expanded
 - `20260902155842_db_show_more_less_preview_full_width` — `+# rows — show more / show less`; idle preview full width / all view-visible columns
 - `20260902151646_db_row_warm_inline_caret_no_semantic_zoom` — Inline DB row warm + caret at click; switch rows without nav; remove semantic zoom; keep DB TipTap live mid-nav; retain I-bar after warm
