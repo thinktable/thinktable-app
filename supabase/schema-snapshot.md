@@ -1,13 +1,21 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-08-31T17:33:48Z`
+- Snapped at: `2026-09-02T15:16:56Z`
 - Source: local `supabase/migrations/` + remote applied tops (thinkable) + `.temp` service versions
-- Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
+- Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 - CLI: `supabase` `2.90.0` (marker via `migration new`; newer CLI available)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260902151646_db_row_warm_inline_caret_no_semantic_zoom.sql`.
+- Notion DB row warm stays on `NotionDbStaticPreview`: click warms one `DbTableRow` with I-bar at the cold-click caret index; clicking another cold row switches warm target (no nav required).
+- Removed **semantic zoom** (`simplifyLowZoom` / `<40%`); TipTap near-mounts at every zoom. Already-live frames stay live through nav; DB frames always promote TipTap on near so tables paint mid-gesture.
+- Cold→warm focus handoff: suppress trailing TipTap click / brief blur-ignore so the cell I-bar is not unplaced after engage.
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Notion DB row-click warm + per-frame show-more
 
 - No DDL. Marker `20260831173348_notion_db_row_warm_show_more_per_frame.sql`.
 - Notion DB **show-more** pages 50 rows per click on a **per-frame** unlock (`metadata.dbVisibleRowCap` / `data-db-visible-row-cap`); Preview starts at 12, Expanded seeds that frame to 50; duplicates clear the cap so copies stay independent (shared react-query cache still slices per frame).

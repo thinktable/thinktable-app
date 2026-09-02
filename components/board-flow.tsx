@@ -612,21 +612,6 @@ function BoardFlowInner({
   const [focusedPanelIndex, setFocusedPanelIndex] = useState<number | null>(null) // Currently focused panel index in linear mode
   const [frameMountRecomputeKey, setFrameMountRecomputeKey] = useState(0) // Viewport defer: refresh near-frame set after pan
   const [paneSize, setPaneSize] = useState({ width: 1200, height: 800 }) // RF pane — flow bounds for mount prefetch
-  const [simplifyLowZoom, setSimplifyLowZoom] = useState(false) // <40%: cached previews, not hundreds of live editors
-  const simplifyLowZoomRef = useRef(false) // Only cross-threshold updates may re-render BoardFlow
-  // Zoom also crosses 40% without a gesture: Free nav % presets, Fit, boardLink jumps, minimap clicks
-  // all call setViewport, which fires neither onMove nor onMoveEnd. Zooming in that way used to leave
-  // the latch true, so every frame stayed a deferred shell (title clipped to the 98×32 empty-frame
-  // hug, no live editor) until the user happened to pan. Selector returns a *boolean*, so BoardFlow
-  // re-renders on threshold crossings only — not on every zoom tick.
-  const lowZoomFromStore = useStore((s) => !embedded && s.transform[2] < 0.4)
-  useEffect(() => {
-    if (lowZoomFromStore === simplifyLowZoomRef.current) return
-    if (isBoardNavigating()) return // Mid-gesture: onMove latches, onMoveEnd settles — no mount storm mid-pinch
-    simplifyLowZoomRef.current = lowZoomFromStore
-    setSimplifyLowZoom(lowZoomFromStore)
-    setFrameMountRecomputeKey((k) => k + 1) // Near set is zoom-dependent (pad scales with zoom)
-  }, [lowZoomFromStore])
   // Pan is already infinite (RF default translateExtent). Grow zoom limits + soft fit world with content.
   const [zoomRange, setZoomRange] = useState<BoardZoomRange>(BOARD_ZOOM_DEFAULT)
   const zoomRangeRef = useRef(zoomRange)
@@ -5401,22 +5386,12 @@ function BoardFlowInner({
     // selected: 698ms blocking, 246 DOM mutations, 105 nodes inserted.
     // A wheel burst also needs `onMoveEnd`'s settle, and nothing else provides it: the custom pan/zoom
     // path calls setViewport, which fires no RF move event at all. Without this the near-frame set is
-    // never recomputed for a wheel gesture, and worse, the `simplifyLowZoom` effect *drops* its update
-    // when it sees the navigating flag (it cannot re-run — its dep already moved), so a wheel zoom past
-    // 40% left every frame a deferred title stub clipped to the 98×32 empty hug until something else
-    // bumped the key. Fires once, ~40ms after the freeze lifts, so it never lands mid-gesture.
+    // never recomputed for a wheel gesture. Fires once, ~40ms after the freeze lifts.
     let settleTimer: ReturnType<typeof setTimeout> | null = null
     const scheduleWheelSettle = () => {
       if (settleTimer) clearTimeout(settleTimer)
       settleTimer = setTimeout(() => {
         settleTimer = null
-        const zoom = reactFlowInstance?.getViewport().zoom
-        if (typeof zoom !== 'number') return
-        const shouldSimplify = !embedded && zoom < 0.4
-        if (shouldSimplify !== simplifyLowZoomRef.current) {
-          simplifyLowZoomRef.current = shouldSimplify
-          setSimplifyLowZoom(shouldSimplify)
-        }
         setFrameMountRecomputeKey((k) => k + 1) // Refresh the near set for the viewport we landed on
       }, 180)
     }
@@ -9234,7 +9209,6 @@ function BoardFlowInner({
       boardRotation={boardRotation}
       conversationId={conversationId}
       alwaysMountIds={alwaysMountFrameIds}
-      simplifyContent={simplifyLowZoom}
       recomputeKey={frameMountRecomputeKey}
     >
     <div
@@ -9783,9 +9757,6 @@ function BoardFlowInner({
           } else if (embedded) {
             instance.fitView({ padding: 0.15, minZoom: 0.2, maxZoom: 1.5 }) // One-shot frame in preview
           }
-          const shouldSimplify = !embedded && currentViewport.zoom < 0.4
-          simplifyLowZoomRef.current = shouldSimplify
-          setSimplifyLowZoom(shouldSimplify)
           setReactFlowInstance(instance)
           if (embedded) setEmbedFlowReady(true) // Host can drop loading veil once messages also resolve
         }}
@@ -9818,19 +9789,12 @@ function BoardFlowInner({
           // One-finger pan wasn’t covered by pinch-only freeze — fast pan over DB OOMed Safari
           beginBoardNavigating(viewport.zoom)
         }}
-        onMoveEnd={(_event, viewport) => {
+        onMoveEnd={(_event, _viewport) => {
           endBoardNavigating()
-          const shouldSimplify = !embedded && viewport.zoom < 0.4
-          simplifyLowZoomRef.current = shouldSimplify
-          setSimplifyLowZoom(shouldSimplify) // Crossing back in restores live editors in batches
           setFrameMountRecomputeKey((k) => k + 1) // Mount/unmount deferred TipTap after pan settles
         }}
         onMove={(event, viewport) => {
           touchBoardNavigating() // Keep the freeze alive — begin only fires on onMoveStart
-          if (!embedded && viewport.zoom < 0.4 && !simplifyLowZoomRef.current) {
-            simplifyLowZoomRef.current = true
-            setSimplifyLowZoom(true) // One threshold transition; stay simplified through the gesture
-          }
           // At a zoom extreme while gesturing → unlock further zoom so the board stays infinite in scale
           if (!embedded) {
             const nextZoom = expandZoomRange(zoomRangeRef.current, { liveZoom: viewport.zoom })

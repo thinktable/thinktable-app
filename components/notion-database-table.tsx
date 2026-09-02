@@ -101,6 +101,8 @@ type NotionDatabaseTableViewProps = {
   onShowMore?: () => void
   /** Row clicked on static preview — hydrate this row as soon as the live table mounts. */
   initialActiveRowId?: string | null
+  /** Column from the static row click — auto I-bar that cell on live mount. */
+  initialArmColumnIndex?: number | null
 }
 
 /** Column-type icon for property headers. */
@@ -132,6 +134,7 @@ export function NotionDatabaseTableView({
   rowCap,
   onShowMore,
   initialActiveRowId = null,
+  initialArmColumnIndex = null,
 }: NotionDatabaseTableViewProps) {
   const queryClient = useQueryClient()
   const boardLink = useBoardLinkActions() // Fallback when props missing
@@ -890,6 +893,7 @@ export function NotionDatabaseTableView({
           virtualize={virtualizeRows}
           colRange={colRange}
           initialActiveRowId={initialActiveRowId}
+          initialArmColumnIndex={initialArmColumnIndex}
         />
       </table>
     </div>

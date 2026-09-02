@@ -84,7 +84,6 @@ export function FrameViewportMountProvider({
   boardRotation,
   conversationId,
   alwaysMountIds,
-  simplifyContent = false,
   recomputeKey = 0,
 }: {
   children: ReactNode
@@ -103,15 +102,12 @@ export function FrameViewportMountProvider({
   boardRotation: number
   conversationId?: string
   alwaysMountIds: Set<string>
-  simplifyContent?: boolean
   recomputeKey?: number
 }) {
   const nearRef = useRef<Set<string>>(new Set())
   const warmRef = useRef<Set<string>>(new Set())
-  // Live set trails the near set, and is the *only* mount throttle — a pan revealing frames and a
-  // return from low zoom both drain through it. Mounting everything a gesture revealed in one commit
-  // was the whole hitch: a TipTap mount costs ~40ms, so 15 frames blocked 66/149/67/58ms (two
-  // throttles used to stack, hence the 149). Staged, each commit is one frame's worth of work.
+  // Live set trails the near set — the only mount throttle. Mounting everything a gesture revealed
+  // in one commit blocked ~149ms; staged at 1/rAF, each commit is one frame's worth of work.
   const liveRef = useRef<Set<string>>(new Set())
   const pendingRef = useRef<string[]>([]) // Near, awaiting promotion
   const promoteRafRef = useRef<number | null>(null)
@@ -122,8 +118,6 @@ export function FrameViewportMountProvider({
   deferEnabledRef.current = deferEnabled
   const alwaysMountRef = useRef(alwaysMountIds)
   alwaysMountRef.current = alwaysMountIds
-  const simplifyRef = useRef(simplifyContent)
-  simplifyRef.current = simplifyContent
 
   const listenersRef = useRef(new Map<string, Set<() => void>>())
   const lastReasonRef = useRef(new Map<string, FrameMountReason>())
@@ -132,7 +126,6 @@ export function FrameViewportMountProvider({
     if (!deferEnabledRef.current || !nodeId) return 'always'
     if (alwaysMountRef.current.has(nodeId)) return 'always'
     if (warmRef.current.has(nodeId)) return 'warm'
-    if (simplifyRef.current) return false
     return liveRef.current.has(nodeId) ? 'near' : false
   }, [])
 
@@ -171,7 +164,7 @@ export function FrameViewportMountProvider({
   // Props are not part of the store, so a change in them has to be announced explicitly.
   useEffect(() => {
     notifyReasonChanges()
-  }, [deferEnabled, alwaysMountIds, simplifyContent, notifyReasonChanges])
+  }, [deferEnabled, alwaysMountIds, notifyReasonChanges])
   const nodesRef = useRef(nodes)
   nodesRef.current = nodes
   const getViewportRef = useRef(getViewport)
@@ -322,23 +315,6 @@ export function FrameViewportMountProvider({
       if (raf) cancelAnimationFrame(raf)
     }
   }, [deferEnabled, storeApi, syncNearViewport])
-
-  // Low zoom keeps frames as cached lightweight previews. Entering it drops the live set so that
-  // zooming back in re-promotes through the same staged throttle a pan uses — restoring in one
-  // commit caused the same FPS cliff as live RF culling.
-  useEffect(() => {
-    if (simplifyContent) {
-      if (promoteRafRef.current !== null) {
-        cancelAnimationFrame(promoteRafRef.current)
-        promoteRafRef.current = null
-      }
-      liveRef.current = new Set()
-      pendingRef.current = []
-      notifyReasonChanges()
-      return
-    }
-    commitNear(new Set(nearRef.current)) // Live set is empty here, so every near frame queues
-  }, [simplifyContent, commitNear, notifyReasonChanges])
 
   const warmMount = useCallback(
     (nodeId: string | undefined) => {

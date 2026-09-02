@@ -18,7 +18,6 @@ import { NodeViewWrapper, type NodeViewProps } from '@tiptap/react'
 import { Table2 } from 'lucide-react'
 import { BoardOpenMenu } from '@/components/board-open-menu'
 import { NotionMarkIcon } from '@/components/notion-mark-icon'
-import { NotionDatabaseTableView } from '@/components/notion-database-table'
 import {
   COMPACT_PREVIEW_ROWS,
   NotionDbStaticPreview,
@@ -116,16 +115,40 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
   // Live table waits for a *row* click (not frame select). Reset on deselect.
   const [engaged, setEngaged] = useState(false)
   const [engageRowId, setEngageRowId] = useState<string | null>(null)
+  const [engageColIndex, setEngageColIndex] = useState<number | null>(null)
+  const [engageCaretIndex, setEngageCaretIndex] = useState<number | null>(null)
+  // Remount armed editor when switching row/col so autoEdit + caret re-apply.
+  const [engageEpoch, setEngageEpoch] = useState(0)
   useEffect(() => {
     if (!frameSelected) {
       setEngaged(false)
       setEngageRowId(null)
+      setEngageColIndex(null)
+      setEngageCaretIndex(null)
     }
   }, [frameSelected])
-  const engageRow = useCallback((rowId: string) => {
-    setEngageRowId(rowId)
-    setEngaged(true)
-  }, [])
+  // Row warm is static-only — drop on nav so editors do not stay live under pan.
+  useEffect(() => {
+    if (!navigating || !engaged) return
+    setEngaged(false)
+    setEngageRowId(null)
+    setEngageColIndex(null)
+    setEngageCaretIndex(null)
+  }, [navigating, engaged])
+  const engageRow = useCallback(
+    (
+      rowId: string,
+      colIndex: number,
+      detail: { clientX: number; clientY: number; caretIndex: number }
+    ) => {
+      setEngageRowId(rowId)
+      setEngageColIndex(colIndex)
+      setEngageCaretIndex(detail.caretIndex)
+      setEngageEpoch((n) => n + 1)
+      setEngaged(true)
+    },
+    []
+  )
   // Per host *frame* (message metadata → data-db-visible-row-cap). Never key off notionDatabaseId —
   // duplicate frames share that id and must still page independently.
   const [visibleRowCap, setVisibleRowCap] = useState(COMPACT_PREVIEW_ROWS)
@@ -219,54 +242,14 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
     ensureRowsCached(visibleRowCap)
   }, [visibleRowCap, ensureRowsCached])
 
-  // Frame select is for move/resize/menu — not edit intent. Live table mounts only after a row
-  // click (`engaged`); that row is seeded as the sole hydrated row. Show-more stays on static.
-  const showLiveTable = !!notionDatabaseId && frameSelected && engaged
-  // Row engage only while selected and still static (selecting press must not warm — RF selects after).
-  const canRowEngage = frameSelected && !engaged && !frameDragging
+  // Frame select is for move/resize/menu — not edit intent. Row click warms that row inside the
+  // static preview only (no full live-table swap). Show-more stays on static.
+  const warmRowId = engaged ? engageRowId : null
+  const warmColIndex = engaged ? engageColIndex : null
+  const warmCaretIndex = engaged ? engageCaretIndex : null
+  // Allow switching rows while warm — previously `!engaged` forced a nav to clear first.
+  const canRowEngage = frameSelected && !frameDragging && !navigating
   const freezeToLastBox = (frameDragging || navigating) && !!lastBox
-
-  // A nav notification must not re-render the live table. `navigating` feeds only the *static* path
-  // (freeze box + idle-compact hug), yet subscribing to it re-rendered this NodeView at every gesture
-  // start and end, and re-rendering the table subtree cost **370ms across 2 long tasks per gesture**
-  // even after the unmount/remount swap was removed. Holding the element in a memo lets React reuse
-  // it and skip the subtree; exhaustive-deps polices the dependency list.
-  const liveTable = useMemo(
-    () => (
-      <NotionDatabaseTableView
-        notionDatabaseId={notionDatabaseId || ''}
-        fallbackTitle={title}
-        viewSettingsJson={viewSettingsJson}
-        onViewSettingsChange={(json) => updateAttributes({ viewSettings: json })}
-        conversationId={hostConversationId}
-        hostMessageId={hostMessageId}
-        frameSelected={frameSelected}
-        frameDragging={false}
-        frameFreeResize={frameFreeResize}
-        frameClipHeight={frameClipHeight}
-        frameClipPreview={frameClipPreview}
-        interactive
-        rowCap={effectiveRowCap}
-        onShowMore={onShowMoreRows}
-        initialActiveRowId={engageRowId}
-      />
-    ),
-    [
-      notionDatabaseId,
-      title,
-      viewSettingsJson,
-      hostConversationId,
-      hostMessageId,
-      frameSelected,
-      frameFreeResize,
-      frameClipHeight,
-      frameClipPreview,
-      updateAttributes,
-      effectiveRowCap,
-      onShowMoreRows,
-      engageRowId,
-    ]
-  )
 
   useEffect(() => {
     const dom = editor?.view?.dom as HTMLElement | undefined
@@ -306,7 +289,7 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
   }, [editor])
 
   useEffect(() => {
-    if (!showLiveTable) return
+    if (!engaged) return
     const el = boxRef.current
     if (!el) return
     const snap = () => {
@@ -319,7 +302,7 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
     const ro = new ResizeObserver(snap)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [showLiveTable, title, frameSelected])
+  }, [engaged, title, frameSelected])
 
   // Idle compact: clear freeze box + nudge hug so the frame shrinks to ~12 rows
   useEffect(() => {
@@ -369,7 +352,7 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
       )}
       data-notion-database-id={notionDatabaseId || undefined}
       data-frame-free-resize={frameFreeResize ? 'true' : undefined}
-      data-tt-db-live={showLiveTable ? 'true' : undefined}
+      data-tt-db-row-warm={warmRowId ? 'true' : undefined}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
     >
@@ -434,27 +417,24 @@ export function DatabaseBlockView({ node, updateAttributes, editor }: NodeViewPr
 
       {notionDatabaseId ? (
         <div ref={boxRef} className="min-w-0">
-          {showLiveTable ? (
-            liveTable
-          ) : (
-            <NotionDbStaticPreview
+          <NotionDbStaticPreview
               notionDatabaseId={notionDatabaseId}
               fallbackTitle={title}
               viewSettingsJson={viewSettingsJson}
               frameSelected={frameSelected}
-              // Preview starts at ~12; Expanded seeds to 50. Cap is owned here so idle and live
-              // stay in sync when the user pages with "click to show more".
               compact={effectiveRowCap <= COMPACT_PREVIEW_ROWS}
               rowCap={effectiveRowCap}
-              // Idle TipTap paint is what gets snapshotted for cold replay — windowing would store
-              // spacer stubs and cold frames would miss columns/rows.
               completePaint
               onShowMore={onShowMoreRows}
               onRowEngage={canRowEngage ? engageRow : undefined}
+              warmRowId={warmRowId}
+              warmColIndex={warmColIndex}
+              warmCaretIndex={warmCaretIndex}
+              warmEpoch={engageEpoch}
+              conversationId={hostConversationId}
               minWidth={freezeToLastBox ? lastBox?.w : undefined}
               minHeight={freezeToLastBox ? lastBox?.h : undefined}
             />
-          )}
         </div>
       ) : null}
     </NodeViewWrapper>

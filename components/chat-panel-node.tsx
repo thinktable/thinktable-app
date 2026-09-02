@@ -1835,6 +1835,11 @@ function TipTapContentLive({
       selectOnlyClickRef.current = false
       return
     }
+    // DB table / cell inputs own the gesture — don't steal focus after a row warm.
+    const t = e.target as HTMLElement | null
+    if (t?.closest?.('.tt-notion-db, .tt-database-block, input, textarea, select, [data-tt-db-row-warm]')) {
+      return
+    }
     e.stopPropagation()
     if (editor.isDestroyed) return
     // Sync in this tap — setTimeout(0) broke iOS: first tap focused nothing, second placed I-bar
@@ -2031,7 +2036,10 @@ function TipTapContent(
   // Host computes coldReady once; re-deriving it here could disagree with `contentDeferred` and size
   // the frame as if live while this renders cold.
   const mountReason = useFrameContentMountReason(liveProps.hostNodeId)
-  const mountContent = mountReason !== false && !(mountReason === 'near' && coldReady)
+  // DB frames always promote on near — TipTapContentDeferred cannot paint a databaseBlock.
+  const isDbFrame = hasDatabaseBlockHtml(liveProps.content || '')
+  const mountContent =
+    mountReason !== false && !(mountReason === 'near' && coldReady && !isDbFrame)
   // RF mounts nodes as they cross the viewport edge. A first TipTap mount costs 100–300ms
   // (editor + NodeViews), so frames appearing mid-pan used to hitch the gesture — measured
   // p95 120ms / p99 306ms panning a 33-frame board vs 9ms/18ms when the visible set held still.
@@ -2040,7 +2048,7 @@ function TipTapContent(
     isBoardNavigating,
     () => false
   )
-  const everLiveRef = useRef(false) // Already-live frames must stay live — unmounting mid-pan flashes
+  const everLiveRef = useRef(false) // Already-live frames stay live — unmounting mid-pan remounts DB NodeViews
   const wantLive =
     mountImmediately ||
     liveProps.isPanelSelected ||
@@ -2049,8 +2057,9 @@ function TipTapContent(
     mountContent
   // Deferring a *first* mount through a gesture is only acceptable when a snapshot can stand in.
   // Without one there is no twin path anymore (it drifted and does not generalize), so mount TipTap
-  // even mid-gesture — once, to capture idle paint — then stay cold thereafter.
-  const canRenderCold = !!liveProps.enableBlockHandles && !liveProps.isFlashcard
+  // even mid-gesture — once, to capture idle paint — then stay cold on later proximity.
+  // DB frames and already-live frames mount / stay live mid-nav so tables are not blank until stop.
+  const canRenderCold = !!liveProps.enableBlockHandles && !liveProps.isFlashcard && !isDbFrame
   const shouldMountLive =
     wantLive && (!navigating || everLiveRef.current || !canRenderCold || !coldReady)
   useEffect(() => {
@@ -3398,7 +3407,11 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
       ) !== null,
     [conversationId, promptMessage?.id, promptContent, dbAlwaysExpanded, snapshotEpoch]
   )
-  const mountContent = mountReason !== false && !(mountReason === 'near' && coldReady)
+  // Notion DB frames have no cold twin without a TipTap idle paint — proximity must mount TipTap
+  // even when a snapshot exists, or they stay blank until hover / nav stop.
+  const isDbFrame = hasDatabaseBlockHtml(promptContent || '')
+  const mountContent =
+    mountReason !== false && !(mountReason === 'near' && coldReady && !isDbFrame)
   const contentDeferred =
     isBlock &&
     !isFlashcard &&

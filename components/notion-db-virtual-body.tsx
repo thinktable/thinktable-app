@@ -42,6 +42,77 @@ const ROW_GUTTER = 20
 // Viewport-windowing granularity for expanded tables. Matches the static preview's 12-row slice, so
 // an on-screen chunk costs about what the unselected preview costs.
 const ROW_CHUNK = 12
+
+/** Map a click's clientX to a caret index inside a single-line text input. */
+function caretIndexAtClientX(input: HTMLInputElement, clientX: number): number {
+  const text = input.value
+  if (!text) return 0
+  const style = window.getComputedStyle(input)
+  const ctx = document.createElement('canvas').getContext('2d')
+  if (!ctx) return text.length
+  ctx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`.trim()
+  const padL = parseFloat(style.paddingLeft) || 0
+  const target = clientX - input.getBoundingClientRect().left - padL + (input.scrollLeft || 0)
+  if (target <= 0) return 0
+  let lo = 0
+  let hi = text.length
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (ctx.measureText(text.slice(0, mid)).width <= target) lo = mid
+    else hi = mid - 1
+  }
+  return lo
+}
+
+/**
+ * Caret index in `value` from a click on the cold cell paint (not the later input).
+ * Uses caretRangeFromPoint so board zoom / cell padding match what the user clicked.
+ */
+export function caretIndexFromColdClick(
+  clientX: number,
+  clientY: number,
+  root: Element,
+  value: string
+): number {
+  if (!value) return 0
+  const doc = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
+  }
+  let node: Node | null = null
+  let offset = 0
+  if (typeof doc.caretRangeFromPoint === 'function') {
+    const range = doc.caretRangeFromPoint(clientX, clientY)
+    if (range && root.contains(range.startContainer)) {
+      node = range.startContainer
+      offset = range.startOffset
+    }
+  } else if (typeof doc.caretPositionFromPoint === 'function') {
+    const pos = doc.caretPositionFromPoint(clientX, clientY)
+    if (pos && root.contains(pos.offsetNode)) {
+      node = pos.offsetNode
+      offset = pos.offset
+    }
+  }
+  if (!node) {
+    // Fallback: ratio across the root box (zoom-safe via getBoundingClientRect).
+    const rect = root.getBoundingClientRect()
+    const t = rect.width > 0 ? (clientX - rect.left) / rect.width : 1
+    return Math.max(0, Math.min(value.length, Math.round(t * value.length)))
+  }
+  // Absolute offset among text nodes under root, then clamp to the editable value length
+  // (cold paint may show "Empty" or an icon + title — don't overshoot the real string).
+  let abs = 0
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let n: Node | null = walk.nextNode()
+  while (n) {
+    const len = (n.textContent || '').length
+    if (n === node) return Math.max(0, Math.min(value.length, abs + offset))
+    abs += len
+    n = walk.nextNode()
+  }
+  return Math.max(0, Math.min(value.length, abs))
+}
 // Screen-px band kept mounted to each side of the window, so a column is already there when a pan
 // brings it in.
 const COL_BAND_PX = 400
@@ -242,6 +313,8 @@ function TextCellEditor({
   pageId,
   onSave,
   saving,
+  autoEdit = false,
+  caretIndex = null,
 }: {
   prop: NotionDbProperty
   cell?: NotionDbCell
@@ -249,18 +322,60 @@ function TextCellEditor({
   pageId: string
   onSave: SaveFn
   saving: boolean
+  /** Static → live row engage: open input + caret on first paint. */
+  autoEdit?: boolean
+  /** Character offset from the cold-cell click (preferred over guessing from screen X). */
+  caretIndex?: number | null
 }) {
-  const [editing, setEditing] = useState(false)
+  const [editing, setEditing] = useState(autoEdit)
   const [draft, setDraft] = useState(cell?.text || '')
   const inputRef = useRef<HTMLInputElement>(null)
+  const caretIndexRef = useRef(caretIndex)
+  caretIndexRef.current = caretIndex
+  const pendingClickXRef = useRef<number | null>(null)
+  // Warm handoff: TipTap/container click often steals focus right after we place the I-bar.
+  const ignoreBlurUntilRef = useRef(autoEdit ? performance.now() + 400 : 0)
 
   useEffect(() => {
     if (!editing) setDraft(cell?.text || '')
   }, [cell?.text, editing])
 
+  const placeCaret = useCallback(() => {
+    const input = inputRef.current
+    if (!input) return
+    input.focus({ preventScroll: true })
+    if (input.type === 'text' || input.type === 'url' || input.type === 'email' || input.type === 'tel') {
+      const fromCold = caretIndexRef.current
+      const fromClick = pendingClickXRef.current
+      pendingClickXRef.current = null
+      let idx =
+        typeof fromCold === 'number' && Number.isFinite(fromCold)
+          ? fromCold
+          : typeof fromClick === 'number'
+            ? caretIndexAtClientX(input, fromClick)
+            : input.value.length
+      idx = Math.max(0, Math.min(input.value.length, idx))
+      try {
+        input.setSelectionRange(idx, idx)
+      } catch {
+        // number/date inputs reject setSelectionRange in some browsers
+      }
+    }
+  }, [])
+
   useEffect(() => {
-    if (editing) inputRef.current?.focus()
-  }, [editing])
+    if (!editing) return
+    if (autoEdit) ignoreBlurUntilRef.current = performance.now() + 400
+    // Double rAF: wait for layout after cold→warm swap, then beat the trailing click's focus steal.
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => placeCaret())
+    })
+    return () => {
+      cancelAnimationFrame(raf1)
+      if (raf2) cancelAnimationFrame(raf2)
+    }
+  }, [editing, autoEdit, placeCaret])
 
   const commit = async () => {
     setEditing(false)
@@ -294,6 +409,8 @@ function TextCellEditor({
         )}
         onClick={(e) => {
           e.stopPropagation()
+          pendingClickXRef.current = e.clientX
+          caretIndexRef.current = null
           setEditing(true)
         }}
         disabled={saving}
@@ -311,7 +428,14 @@ function TextCellEditor({
       value={draft}
       disabled={saving}
       onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => void commit()}
+      onBlur={() => {
+        // Trailing click after cold→warm often focuses TipTap and blurs us — keep the I-bar.
+        if (performance.now() < ignoreBlurUntilRef.current) {
+          requestAnimationFrame(() => placeCaret())
+          return
+        }
+        void commit()
+      }}
       onKeyDown={(e) => {
         e.stopPropagation()
         if (e.key === 'Enter') {
@@ -530,6 +654,8 @@ function EditableCell({
   pageId,
   onSave,
   saving,
+  startArmed = false,
+  caretIndex = null,
 }: {
   prop: NotionDbProperty
   cell?: NotionDbCell
@@ -537,8 +663,12 @@ function EditableCell({
   pageId: string
   onSave: SaveFn
   saving: boolean
+  /** Row engage from static preview — skip display-only click before edit. */
+  startArmed?: boolean
+  /** Cold-click caret offset for TextCellEditor. */
+  caretIndex?: number | null
 }) {
-  const [armed, setArmed] = useState(false)
+  const [armed, setArmed] = useState(startArmed)
 
   if (!armed) {
     const interactive = isNotionPropertyEditable(prop.type)
@@ -596,6 +726,8 @@ function EditableCell({
       pageId={pageId}
       onSave={onSave}
       saving={saving}
+      autoEdit={startArmed}
+      caretIndex={startArmed ? caretIndex : null}
     />
   )
 }
@@ -793,6 +925,10 @@ type DbTableRowProps = {
   onActivate: (id: string) => void
   /** On-screen column band; columns outside it collapse into one spanned spacer cell per side. */
   colRange: ColumnRange
+  /** Column to auto-arm after static → live row engage (that row only). */
+  armColumnIndex?: number | null
+  /** Caret offset from the cold-cell click. */
+  armCaretIndex?: number | null
 }
 
 export const DbTableRow = memo(function DbTableRow({
@@ -822,6 +958,8 @@ export const DbTableRow = memo(function DbTableRow({
   onHover,
   onActivate,
   colRange,
+  armColumnIndex = null,
+  armCaretIndex = null,
 }: DbTableRowProps) {
   // `tableLayout: 'fixed'` means the header row alone decides column widths, so a spanned spacer here
   // cannot shift alignment — the skipped columns keep their exact geometry with one element instead of
@@ -832,7 +970,9 @@ export const DbTableRow = memo(function DbTableRow({
     <tr
       className={cn(
         'group/row relative hover:bg-[#fafafa]',
-        selected && 'bg-blue-50/50 ring-1 ring-inset ring-blue-200'
+        selected && 'bg-blue-50/50 ring-1 ring-inset ring-blue-200',
+        // Static preview host is pointer-events-none; warm row must receive the caret + edits.
+        armColumnIndex != null && 'nodrag nopan pointer-events-auto'
       )}
       style={{ background: selected ? undefined : rowBackground }}
       onClick={() => onSelect(row.id)}
@@ -847,6 +987,7 @@ export const DbTableRow = memo(function DbTableRow({
       ) : null}
       {columns.slice(colStart, colEnd + 1).map((prop, i) => {
         const colIndex = colStart + i
+        const startArmed = hydrated && armColumnIndex === colIndex
         const colW = columnWidthPx(prop, settings)
         return (
           <td
@@ -934,6 +1075,8 @@ export const DbTableRow = memo(function DbTableRow({
                         pageId={row.id}
                         onSave={onSave}
                         saving={savingKey === `${row.id}:${prop.name}`}
+                        startArmed={startArmed}
+                        caretIndex={startArmed ? armCaretIndex : null}
                       />
                     ) : (
                       <StaticCell
@@ -954,6 +1097,8 @@ export const DbTableRow = memo(function DbTableRow({
                   pageId={row.id}
                   onSave={onSave}
                   saving={savingKey === `${row.id}:${prop.name}`}
+                  startArmed={startArmed}
+                  caretIndex={startArmed ? armCaretIndex : null}
                 />
               ) : (
                 <StaticCell
@@ -1004,6 +1149,8 @@ type VirtualizedTableBodyProps = {
   colRange: ColumnRange
   /** Seed hydration from a static-preview row click. */
   initialActiveRowId?: string | null
+  /** Column clicked on static preview — auto I-bar that cell on first live paint. */
+  initialArmColumnIndex?: number | null
 }
 
 export function VirtualizedTableBody({
@@ -1032,6 +1179,7 @@ export function VirtualizedTableBody({
   virtualize = true,
   colRange,
   initialActiveRowId = null,
+  initialArmColumnIndex = null,
 }: VirtualizedTableBodyProps) {
   const rowCount = flatItems.length
   const useCap = virtualize && rowCount > DB_TABLE_VIRTUALIZE_MIN
@@ -1044,6 +1192,18 @@ export function VirtualizedTableBody({
     if (initialActiveRowId) setActiveRowId(initialActiveRowId)
   }, [initialActiveRowId])
   const hydratedRowId = hoverRowId ?? activeRowId
+  // If the engaged column is read-only, arm the first editable visible column instead.
+  const armColumnIndex = useMemo(() => {
+    if (initialArmColumnIndex == null || !initialActiveRowId) return null
+    const prop = columns[initialArmColumnIndex]
+    if (prop && isNotionPropertyEditable(prop.type)) return initialArmColumnIndex
+    const start = colRange?.start ?? 0
+    const end = colRange?.end ?? columns.length - 1
+    for (let i = start; i <= end; i++) {
+      if (isNotionPropertyEditable(columns[i]?.type)) return i
+    }
+    return initialArmColumnIndex
+  }, [initialArmColumnIndex, initialActiveRowId, columns, colRange])
   const virtualizer = useVirtualizer({
     count: flatItems.length,
     getScrollElement: () => scrollParentRef.current,
@@ -1141,6 +1301,9 @@ export function VirtualizedTableBody({
         onHover={setHoverRowId}
         onActivate={setActiveRowId}
         colRange={colRange}
+        armColumnIndex={
+          item.row.id === initialActiveRowId ? armColumnIndex : null
+        }
       />
     )
   }

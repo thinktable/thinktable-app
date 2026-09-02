@@ -4,16 +4,31 @@
 // Same shared react-query cache as the live table — no second Notion fetch.
 // Read-only DOM (no virtualizer, editors, or row menus) so pan/zoom stays cheap.
 
-import { useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Check, Hash, List, Loader2, Type } from 'lucide-react'
 import {
+  isNotionPropertyEditable,
   NOTION_DB_CLIENT_ROW_CAP,
   NOTION_DB_CLIENT_ROW_PAGE,
   type NotionDatabaseTable,
+  type NotionDbRow,
 } from '@/lib/notion/database'
-import { columnWidthPx, normalizeViewSettings, parseViewSettings, visibleProperties } from '@/lib/notion/database-view'
-import { CellDisplay, ChunkedRowGroups, useVisibleColumnRange } from '@/components/notion-db-virtual-body'
+import {
+  columnWidthPx,
+  normalizeViewSettings,
+  parseViewSettings,
+  rowBackground,
+  visibleProperties,
+} from '@/lib/notion/database-view'
+import {
+  CellDisplay,
+  ChunkedRowGroups,
+  DbTableRow,
+  caretIndexFromColdClick,
+  useVisibleColumnRange,
+} from '@/components/notion-db-virtual-body'
+import { useNotionDbCellSave } from '@/lib/notion/use-notion-db-cell-save'
 import { cn } from '@/lib/utils'
 
 const ROW_GUTTER = 20
@@ -51,7 +66,13 @@ export function NotionDbStaticPreview({
   /** Reveal the next page of rows — parent owns the cap. */
   onShowMore,
   /** Frame already selected: row click warms the live table for that row only. */
+  /** Frame already selected: row click warms that row (and can switch to another while warm). */
   onRowEngage,
+  warmRowId = null,
+  warmColIndex = null,
+  warmCaretIndex = null,
+  warmEpoch = 0,
+  conversationId = null,
   minWidth,
   minHeight,
 }: {
@@ -65,8 +86,19 @@ export function NotionDbStaticPreview({
   completePaint?: boolean
   rowCap?: number
   onShowMore?: () => void
-  onRowEngage?: (rowId: string) => void
-  /** Preserve last live box so swap does not hug-collapse mid-pan. */
+  /** Row + column + caret from static preview — seeds warm row + I-bar. */
+  onRowEngage?: (
+    rowId: string,
+    colIndex: number,
+    detail: { clientX: number; clientY: number; caretIndex: number }
+  ) => void
+  warmRowId?: string | null
+  warmColIndex?: number | null
+  /** Character offset from the cold-cell click. */
+  warmCaretIndex?: number | null
+  /** Bumps when engage retargets so the armed editor remounts. */
+  warmEpoch?: number
+  conversationId?: string | null
   minWidth?: number
   minHeight?: number
 }) {
@@ -114,6 +146,26 @@ export function NotionDbStaticPreview({
       ? Math.min(visibleCols.length - 1, colRange.end)
       : visibleCols.length - 1
   const showColumnProbes = !completePaint
+  const { onSave, savingKey } = useNotionDbCellSave(notionDatabaseId, data?.properties)
+  const [, setActiveRowId] = useState<string | null>(warmRowId)
+  const armColumnIndex = useMemo(() => {
+    if (warmColIndex == null || !warmRowId) return null
+    const prop = visibleCols[warmColIndex]
+    if (prop && isNotionPropertyEditable(prop.type)) return warmColIndex
+    for (let i = colStart; i <= colEnd; i++) {
+      if (isNotionPropertyEditable(visibleCols[i]?.type)) return i
+    }
+    return warmColIndex
+  }, [warmColIndex, warmRowId, visibleCols, colStart, colEnd])
+  const colRangeBand = useMemo(() => ({ start: colStart, end: colEnd }), [colStart, colEnd])
+  const openRow = useCallback((row: NotionDbRow) => {
+    const url = row.url || `https://www.notion.so/${String(row.id).replace(/-/g, '')}`
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }, [])
+  const rowBgFn = useCallback(
+    (row: NotionDbRow) => rowBackground(row, settings.conditionalColors),
+    [settings.conditionalColors]
+  )
 
   if (isPending && !data) {
     return (
@@ -156,7 +208,42 @@ export function NotionDbStaticPreview({
   // Still window when painting a large expanded slice; small caps paint in one tbody.
   const useChunkedRows = !completePaint && effectiveCap > COMPACT_PREVIEW_ROWS
 
-  const renderRow = (row: (typeof rows)[number]) => (
+  const renderRow = (row: (typeof rows)[number]) => {
+    if (warmRowId === row.id) {
+      return (
+        <DbTableRow
+          key={`${row.id}:${warmEpoch}`}
+          row={row}
+          depth={0}
+          insertBeforeAfterId={null}
+          columns={visibleCols}
+          settings={settings}
+          selected
+          savingKey={savingKey}
+          vLines={vLines}
+          notionDatabaseId={notionDatabaseId}
+          databaseTitle={data.title || fallbackTitle || 'Untitled database'}
+          properties={data.properties}
+          conversationId={conversationId}
+          childrenOf={new Map()}
+          expandedParents={new Set()}
+          onSelect={() => {}}
+          onToggleExpand={() => {}}
+          onSave={onSave}
+          onDelete={() => {}}
+          onOpen={openRow}
+          onCreateRow={() => {}}
+          rowBackground={rowBgFn(row)}
+          hydrated
+          onHover={() => {}}
+          onActivate={setActiveRowId}
+          colRange={colRangeBand}
+          armColumnIndex={armColumnIndex}
+          armCaretIndex={warmCaretIndex}
+        />
+      )
+    }
+    return (
     <tr
       key={row.id}
       className={cn(
@@ -167,17 +254,39 @@ export function NotionDbStaticPreview({
       onPointerDown={
         onRowEngage
           ? (e) => {
+              // preventDefault suppresses the trailing click that would focus TipTap and unplace the I-bar.
+              e.preventDefault()
               e.stopPropagation()
-              onRowEngage(row.id)
+              const td = (e.target as HTMLElement).closest('td')
+              let colIndex = colStart
+              if (td?.parentElement) {
+                const cells = Array.from(td.parentElement.children).filter(
+                  (c) => c.tagName === 'TD' && !(c as HTMLElement).getAttribute('aria-hidden')
+                )
+                const ti = cells.indexOf(td as HTMLTableCellElement)
+                if (ti >= 0) colIndex = colStart + ti
+              }
+              const prop = visibleCols[colIndex]
+              const value = (prop && row.cells[prop.name]?.text) || ''
+              // Prefer the text span (skips title-column emoji) so caret index matches the input value.
+              const root =
+                (td?.querySelector('span.min-w-0.truncate') as HTMLElement | null) ||
+                td ||
+                (e.currentTarget as HTMLElement)
+              const caretIndex = caretIndexFromColdClick(e.clientX, e.clientY, root, value)
+              onRowEngage(row.id, colIndex, {
+                clientX: e.clientX,
+                clientY: e.clientY,
+                caretIndex,
+              })
             }
           : undefined
       }
       onClick={
         onRowEngage
           ? (e) => {
-              e.stopPropagation()
               e.preventDefault()
-              onRowEngage(row.id)
+              e.stopPropagation()
             }
           : undefined
       }
@@ -212,7 +321,8 @@ export function NotionDbStaticPreview({
         <td colSpan={visibleCols.length - 1 - colEnd} style={{ padding: 0, border: 'none' }} aria-hidden />
       ) : null}
     </tr>
-  )
+    )
+  }
 
   return (
     <div
@@ -222,8 +332,9 @@ export function NotionDbStaticPreview({
         className
       )}
       style={{ minWidth: minWidth ?? Math.min(tablePixelWidth + ROW_GUTTER, 720), minHeight }}
-      aria-hidden
+      aria-hidden={warmRowId ? undefined : true}
       data-tt-db-static
+      data-tt-db-row-warm={warmRowId ? 'true' : undefined}
     >
       <div className="relative overflow-hidden" style={{ paddingLeft: ROW_GUTTER }}>
         {showColumnProbes ? columnProbes : null}

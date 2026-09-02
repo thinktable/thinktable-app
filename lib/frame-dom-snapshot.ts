@@ -150,7 +150,7 @@ function scheduleFlush(): void {
  * connections) *is* the cold image we want, including for future connection NodeViews.
  */
 export function snapshotEligible(root: HTMLElement): boolean {
-  if (root.querySelector('[data-tt-db-live="true"]')) return false
+  if (root.querySelector('[data-tt-db-live="true"], [data-tt-db-row-warm="true"]')) return false
   return true
 }
 
