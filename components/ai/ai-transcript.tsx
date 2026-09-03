@@ -1,145 +1,88 @@
 'use client'
 
-// Transcript of AI turns — each turn drags onto the board as a frame (contents = TipTap blocks)
-import { useState } from 'react' // Local edit state
-import type { AiMessage, AiChatBlockDragPayload } from '@/lib/ai/types' // Types
-import { AI_CHAT_BLOCK_MIME } from '@/lib/ai/types' // MIME
-import { markdownToTipTapHtml } from '@/lib/ai/markdown-to-tiptap' // Lists/paragraphs → TipTap blocks
-import { cn } from '@/lib/utils' // cn
-import { GripVertical, Loader2 } from 'lucide-react' // Icons
+// Transcript of AI turns — each turn is a frame-like box (select → blue adjust + threads)
+
+import { useCallback, useEffect, useState } from 'react'
+import type { AiMessage } from '@/lib/ai/types'
+import type { AiChatBoardLink } from '@/lib/ai/chat-board-links'
+import { AiChatTurn } from '@/components/ai/ai-chat-turn'
 
 interface AiTranscriptProps {
   messages: AiMessage[] // Turns
   streamingId?: string | null // Assistant id currently streaming
-  onEditUserMessage: (messageId: string, content: string) => Promise<void> // Cursor-style edit
+  conversationId?: string // Board id for ⋮⋮ → frame drops
+  onEditUserMessage: (messageId: string, content: string) => Promise<void> // Legacy regenerate path (unused by TipTap soft-save)
+  onMessagePatch?: (messageId: string, message: AiMessage) => void // Optimistic local merge after soft-save
 }
 
 export function AiTranscript({
   messages,
   streamingId,
-  onEditUserMessage,
+  conversationId,
+  onMessagePatch,
 }: AiTranscriptProps) {
-  const [editingId, setEditingId] = useState<string | null>(null) // Inline edit target
-  const [draft, setDraft] = useState('') // Edit draft
-  const [busyId, setBusyId] = useState<string | null>(null) // Per-row busy
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  const startEdit = (m: AiMessage) => {
-    if (m.role !== 'user') return // Only user turns
-    setEditingId(m.id) // Enter edit
-    setDraft(m.content) // Seed draft
-  }
-
-  const commitEdit = async () => {
-    if (!editingId) return // Guard
-    const id = editingId // Capture
-    const text = draft.trim() // Normalize
-    if (!text) return // Require content
-    setBusyId(id) // Busy
-    try {
-      await onEditUserMessage(id, text) // Truncate + regenerate
-      setEditingId(null) // Exit
-    } finally {
-      setBusyId(null) // Clear
+  // Click outside any turn → deselect
+  useEffect(() => {
+    const onDown = (event: PointerEvent) => {
+      const t = event.target as HTMLElement
+      if (t.closest('[data-ai-turn]')) return
+      if (t.closest('.block-actions-menu')) return
+      setSelectedId(null)
     }
-  }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [])
 
-  const onDragStart = (event: React.DragEvent, m: AiMessage) => {
-    const plain = m.content || '' // Plain / markdown body
-    // Prefer stored TipTap HTML; else convert markdown so bullets become listItem blocks
-    const stored = typeof m.metadata?.html === 'string' ? (m.metadata.html as string) : ''
-    const html = stored.trim() ? stored : markdownToTipTapHtml(plain)
-    const payload: AiChatBlockDragPayload = {
-      source: 'ai-chat-block', // Discriminator
-      messageId: m.id, // Origin
-      plain, // Text (for snapshot / composer context)
-      html, // TipTap HTML — frame holds these blocks
-      role: m.role, // Provenance: only assistant text is AI-written
-    }
-    event.dataTransfer.setData(AI_CHAT_BLOCK_MIME, JSON.stringify(payload)) // Primary MIME
-    // Intentionally no text/plain — avoids pasting full text into the composer on drop
-    event.dataTransfer.effectAllowed = 'copy' // Copy to page or attach as context
-  }
+  const softSave = useCallback(
+    async (
+      messageId: string,
+      patch: { content: string; html: string; metadata?: Record<string, unknown> }
+    ) => {
+      const res = await fetch(`/api/ai/messages/${messageId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...patch, soft: true }),
+      })
+      if (!res.ok) {
+        console.error('Soft-save failed', await res.text())
+        return
+      }
+      const data = await res.json()
+      if (data.message && onMessagePatch) onMessagePatch(messageId, data.message as AiMessage)
+    },
+    [onMessagePatch]
+  )
 
-  if (messages.length === 0) return null // Empty handled by parent
+  const onLinksChange = useCallback(
+    (messageId: string, links: AiChatBoardLink[]) => {
+      const m = messages.find((x) => x.id === messageId)
+      if (!m || !onMessagePatch) return
+      onMessagePatch(messageId, {
+        ...m,
+        metadata: { ...(m.metadata || {}), boardLinks: links },
+      })
+    },
+    [messages, onMessagePatch]
+  )
+
+  if (messages.length === 0) return null
 
   return (
     <div className="flex flex-col gap-3 w-full max-w-[320px] mx-auto">
-      {messages.map((m) => {
-        const isUser = m.role === 'user' // Role
-        const isStreaming = m.id === streamingId || m.status === 'streaming' // Stream flag
-        return (
-          <div
-            key={m.id}
-            data-ai-turn={m.id} // Prompt-bar jump target
-            className={cn(
-              'group relative rounded-lg border border-transparent px-2 py-2',
-              'hover:border-black/10 dark:hover:border-white/10 hover:bg-black/[0.02] dark:hover:bg-white/[0.03]',
-              isUser ? 'bg-black/[0.03] dark:bg-white/[0.04]' : ''
-            )}
-          >
-            <div className="flex items-start gap-1.5">
-              <button
-                type="button"
-                draggable
-                onDragStart={(e) => onDragStart(e, m)}
-                className="mt-0.5 flex-shrink-0 w-5 h-5 flex items-center justify-center rounded text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 cursor-grab active:cursor-grabbing"
-                title="Drag onto board as a frame, or onto the input as context"
-                aria-label="Drag chat turn as frame"
-              >
-                <GripVertical className="h-3.5 w-3.5" />
-              </button>
-
-              <div className="min-w-0 flex-1">
-                <div className="text-[10px] uppercase tracking-wide text-gray-400 mb-1">
-                  {isUser ? 'You' : 'Thinktable'}
-                  {isStreaming && (
-                    <Loader2 className="inline ml-1 h-3 w-3 animate-spin" />
-                  )}
-                </div>
-
-                {editingId === m.id ? (
-                  <div className="flex flex-col gap-2">
-                    <textarea
-                      value={draft}
-                      onChange={(e) => setDraft(e.target.value)}
-                      className="w-full min-h-[72px] text-sm rounded-md border border-black/10 dark:border-white/10 bg-white dark:bg-[#1a1a1a] px-2 py-1.5 resize-y"
-                      autoFocus
-                    />
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        disabled={busyId === m.id || !draft.trim()}
-                        onClick={() => void commitEdit()}
-                        className="text-xs font-medium px-2 py-1 rounded-md bg-[#2383e2] text-white disabled:opacity-50"
-                      >
-                        Save & regenerate
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setEditingId(null)}
-                        className="text-xs px-2 py-1 rounded-md text-gray-600 dark:text-gray-300 hover:bg-black/[0.04]"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div
-                    className={cn(
-                      'text-sm whitespace-pre-wrap break-words text-gray-900 dark:text-gray-100',
-                      isUser && 'cursor-text'
-                    )}
-                    onDoubleClick={() => startEdit(m)}
-                    title={isUser ? 'Double-click to edit and regenerate' : undefined}
-                  >
-                    {m.content || (isStreaming ? '…' : '')}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )
-      })}
+      {messages.map((m) => (
+        <AiChatTurn
+          key={m.id}
+          message={m}
+          selected={selectedId === m.id}
+          streaming={m.id === streamingId || m.status === 'streaming'}
+          conversationId={conversationId}
+          onSelect={setSelectedId}
+          onSoftSave={softSave}
+          onLinksChange={onLinksChange}
+        />
+      ))}
     </div>
   )
 }

@@ -7,12 +7,14 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { createPortal } from 'react-dom'
 import type { Editor } from '@tiptap/react'
 import { GripVertical } from 'lucide-react' // ⋮⋮ grip; between-block add is a short centered hairline
-import { useReactFlow, useStore } from 'reactflow' // screenToFlowPosition when extracting a line onto the map; useStore = live zoom to keep grips screen-constant
+import { useReactFlow, useStore } from 'reactflow' // Nested RF for chat stubs; board extract prefers context instance
+import { useReactFlowContext } from '@/components/react-flow-context' // Real board screenToFlowPosition from chat
 import { navigationZoom } from '@/lib/board-navigating' // Freeze grip scale mid-pinch
 import { useQueryClient } from '@tanstack/react-query' // Refresh panels after extract-to-card
 import { createClient } from '@/lib/supabase/client' // Persist a new map card from a dragged line
 import { isBlockContentEmpty, newBlockMetadata } from '@/lib/blocks' // Canonical isBlock metadata + empty check
 import { bodyHtmlWithoutBoardTitle } from '@/lib/blocks/turn-into' // Title line ≠ board body block
+import { markHtmlWithAiOrigin } from '@/lib/ai/wrap-ai-html' // Assistant chat → board keeps AI provenance
 import { cn } from '@/lib/utils'
 import { screenToLocal } from '@/lib/dom-transform' // Rotation-safe screen→local (frame rotate)
 import {
@@ -33,6 +35,7 @@ import {
   isHandleBlockType,
   jsonForEditorRange,
   moveEditorBlockToPos,
+  moveEditorBlocksToPos,
   refineListBlockType,
   registerHostEditor,
   setEditorBlockHighlight,
@@ -94,6 +97,16 @@ type TipTapBlockHandlesProps = {
   frameScale?: number
   /** Blue adjust L gutter width in flow px — local ⋮⋮ left = this / frameScale so it fits after CSS scale */
   handleGutterFlow?: number
+  /**
+   * Chat turns (no RF frame drag): ⋮⋮ always moves the block — arm on press, never hand the
+   * gesture to the host turn’s HTML5 drag. Drop onto the board **copies** into a new frame
+   * (same as dragging the whole chat turn).
+   */
+  blockDragFromGrip?: boolean
+  /** Chat turn role — assistant drops get aiOrigin marks when extracting to the board. */
+  chatMessageRole?: 'user' | 'assistant' | 'system' | 'tool'
+  /** Chat turn id — stamped on the new board frame as aiMessageId. */
+  chatMessageId?: string
 }
 
 /** Measure grip Y from the top property-icon row (one block for the whole list). */
@@ -416,9 +429,13 @@ function layoutForBlock(
   }
 }
 
-/** Host **frame** that owns this editor (full width hover target — RF node DOM). */
+/** Host **frame** that owns this editor (full width hover target — RF node or chat turn). */
 function frameForEditor(dom: HTMLElement): HTMLElement {
-  return (dom.closest('.react-flow__node') as HTMLElement | null) ?? dom.parentElement ?? dom
+  return (
+    (dom.closest('[data-tt-host-id], [data-ai-turn], .react-flow__node') as HTMLElement | null) ??
+    dom.parentElement ??
+    dom
+  )
 }
 
 export function TipTapBlockHandles({
@@ -437,8 +454,12 @@ export function TipTapBlockHandles({
   contentPadLeft = 0, // Match host contentFit pad so ⋮⋮ centers in the blue-box gutter
   frameScale = 1, // Locked resize CSS scale — force re-measure (RO ignores transform)
   handleGutterFlow = 0, // Host adjustChromeX — inverse-scale local left so ⋮⋮ fits the blue gutter
+  blockDragFromGrip = false, // Chat: ⋮⋮ = block drag only (arm on press)
+  chatMessageRole,
+  chatMessageId,
 }: TipTapBlockHandlesProps) {
-  const { screenToFlowPosition } = useReactFlow() // Drop-on-page → flow coords for a new frame
+  const { screenToFlowPosition } = useReactFlow() // Nested / host RF
+  const { reactFlowInstance } = useReactFlowContext() // Board instance (chat nested RF is wrong for drops)
   // ⋮⋮ only while selected — skip zoom store ticks when idle; freeze mid-pinch via navigationZoom
   const rfZoom = useStore((s) => {
     if (!isPanelSelected) return 1
@@ -614,16 +635,14 @@ export function TipTapBlockHandles({
     const frame = frameForEditor(dom)
 
     const resolveFromPoint = (clientX: number, clientY: number, target: EventTarget | null) => {
-      if (menu || connectionsMenu || draggingRef.current) return // Keep handle on the open-menu / in-drag block
+      // In-flight block drag keeps the source grip; menu open still allows hover so other
+      // ⋮⋮ appear for Shift/⌘ multi-select.
+      if (draggingRef.current) return
       const el = target as HTMLElement | null
-      // Pointer on grip / gutter / add-line / menu — keep current hover (CSS shows add lines)
-      if (
-        el?.closest?.(
-          '[data-tt-block-handle], [data-tt-gutter-hover], [data-tt-insert-line], .block-actions-menu'
-        )
-      ) {
-        return
-      }
+      // Stay on the open actions menu chrome
+      if (el?.closest?.('.block-actions-menu')) return
+      // Stay while on this grip / insert hit (don't clear mid-click)
+      if (el?.closest?.('[data-tt-block-handle], [data-tt-insert-line]')) return
       // Rotate/lock/wrap lives under the node but outside content — never treat as content hover
       if (el?.closest?.('[data-frame-chrome]')) {
         setHover(null)
@@ -684,7 +703,7 @@ export function TipTapBlockHandles({
     }
 
     const onLeave = (event: MouseEvent) => {
-      if (menu || connectionsMenu || draggingRef.current) return
+      if (draggingRef.current) return
       const related = event.relatedTarget as HTMLElement | null
       if (
         related?.closest?.(
@@ -707,7 +726,7 @@ export function TipTapBlockHandles({
       frame.removeEventListener('mousemove', onMove)
       frame.removeEventListener('mouseleave', onLeave)
     }
-  }, [editor, enabled, menu, connectionsMenu, isPanelSelected, notionConnected])
+  }, [editor, enabled, isPanelSelected, notionConnected])
 
   // Keep a handle beside the block that owns the caret (cursor placed → handle stays without hover).
   // Also re-measure on TipTap transactions / RO so grips stay glued after typing / zoom.
@@ -956,7 +975,13 @@ export function TipTapBlockHandles({
         gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
         return
       }
+      // Modifier+click is multi-select (onClick) — don't arm-on-press or start a drag
+      if (e.shiftKey || e.metaKey || e.ctrlKey) {
+        gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
+        return
+      }
       // Property ⋮⋮: arm on press so drag works in one gesture (icon drag does not need a prior click).
+      // Chat (`blockDragFromGrip`): same for every block — ⋮⋮ never starts host-frame drag.
       let dragBlock = block
       if (asPropertyHeader && !propertyHeaderArmedRef.current) {
         const props = collectPropertyBlocks(editor, { emptyOnly: true })
@@ -969,7 +994,7 @@ export function TipTapBlockHandles({
         dragBlock = propertyHeaderBlock(editor)?.block ?? props[0]
       } else if (
         !asPropertyHeader &&
-        block.typeName === 'propertyBlock' &&
+        (blockDragFromGrip || block.typeName === 'propertyBlock') &&
         !isBlockArmed(block)
       ) {
         const fresh = findEditorBlockAtPos(editor, block.from) ?? block
@@ -979,28 +1004,43 @@ export function TipTapBlockHandles({
       }
       const armedForDrag = asPropertyHeader
         ? propertyHeaderArmedRef.current
-        : isBlockArmed(dragBlock)
+        : isBlockArmed(dragBlock) || blockDragFromGrip // Chat always treats press as block drag
       if (!armedForDrag) {
         gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
         return // No stopPropagation — RF may drag the frame
       }
-      e.stopPropagation() // Armed block drag — never start RF frame drag from ⋮⋮
-      // Modifier+click is a multi-select gesture (handled in onClick) — don't start a drag
-      if (e.shiftKey || e.metaKey || e.ctrlKey) {
-        gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false }
-        return
-      }
+      e.preventDefault() // Kill HTML5 drag from a draggable chat-turn ancestor
+      e.stopPropagation() // Armed block drag — never start RF / turn frame drag from ⋮⋮
       gripPointerRef.current = { x: e.clientX, y: e.clientY, dragged: false } // Baseline for click vs drag
       setMenu(null) // Dismiss actions while dragging the armed block
       setConnectionsMenu(null)
       const sourceHostId = hostNodeId // Frame this block currently lives in
-      const sourceFrom = dragBlock.from // Snapshot — docs shift after delete
-      const sourceTo = dragBlock.to
+      // Multi-select: drag moves every armed block; else just the grip’s block
+      const sel = selectionRef.current
+      const dragBlocks =
+        sel.length > 1 && sel.some((b) => b.from === dragBlock.from)
+          ? [...sel].sort((a, b) => a.from - b.from)
+          : [dragBlock]
+      const sourceFrom = dragBlocks[0].from // First block (ghost / wash span start)
+      const sourceTo = dragBlocks[dragBlocks.length - 1].to // Last block end (contiguous wash approx)
       const propertyCellDrag =
-        !asPropertyHeader && isSingleVisiblePropertyCell(editor, dragBlock) // ⋮⋮ on one body property row
-      const ghostText = editor.state.doc.textBetween(sourceFrom, sourceTo, ' ').trim() || ' ' // Preview label
+        dragBlocks.length === 1 &&
+        !asPropertyHeader &&
+        isSingleVisiblePropertyCell(editor, dragBlock) // ⋮⋮ on one body property row
+      const ghostText =
+        dragBlocks
+          .map((b) => editor.state.doc.textBetween(b.from, b.to, ' ').trim())
+          .filter(Boolean)
+          .join(' · ') || ' '
       const ghostWidth = Math.max(80, Math.min(360, ghostText.length * 8)) // Approximate line width
-      setEditorBlockHighlight(editor, { from: sourceFrom, to: sourceTo }) // Keep blue wash while dragging
+      if (dragBlocks.length > 1) {
+        setEditorBlockHighlightRanges(
+          editor,
+          dragBlocks.map((b) => ({ from: b.from, to: b.to }))
+        )
+      } else {
+        setEditorBlockHighlight(editor, { from: sourceFrom, to: sourceTo }) // Keep blue wash while dragging
+      }
 
       const onMove = (ev: PointerEvent) => {
         const start = gripPointerRef.current
@@ -1041,8 +1081,11 @@ export function TipTapBlockHandles({
           setDropLine(null)
           return
         }
-        // Hide the line if it would insert the block back into itself
-        if (hit.hostNodeId === sourceHostId && dropTarget.insertPos >= sourceFrom && dropTarget.insertPos <= sourceTo) {
+        // Hide the line if it would insert any dragged block into itself
+        if (
+          hit.hostNodeId === sourceHostId &&
+          dragBlocks.some((b) => dropTarget.insertPos >= b.from && dropTarget.insertPos <= b.to)
+        ) {
           setDropLine(null)
           return
         }
@@ -1061,7 +1104,8 @@ export function TipTapBlockHandles({
         if (editor.isDestroyed) return
 
         const hit = findHostEditorAtPoint(ev.clientX, ev.clientY)
-        const payload = jsonForEditorRange(editor, sourceFrom, sourceTo)
+        // Payload = all dragged blocks in doc order
+        const payload = dragBlocks.flatMap((b) => jsonForEditorRange(editor, b.from, b.to))
         if (payload.length === 0) {
           clearBlockSelection()
           return
@@ -1074,7 +1118,7 @@ export function TipTapBlockHandles({
             moveEditorBlockToPos(editor, sourceFrom, sourceTo, insertPos)
           } else {
             const dropTarget = findContentBlockDropTarget(hit.editor, ev.clientY)
-            if (dropTarget) moveEditorBlockToPos(editor, sourceFrom, sourceTo, dropTarget.insertPos) // Reorder in this frame
+            if (dropTarget) moveEditorBlocksToPos(editor, dragBlocks, dropTarget.insertPos) // Reorder selection
           }
           clearBlockSelection()
           return
@@ -1096,23 +1140,46 @@ export function TipTapBlockHandles({
               $ins.parent.type.name === 'bulletList' ||
               $ins.parent.type.name === 'orderedList' ||
               $ins.parent.type.name === 'taskList'
-            if (!inList) toInsert = wrapJsonForInsert(editor, block, payload) // Doc-level needs a list wrapper
+            if (!inList) toInsert = wrapJsonForInsert(editor, dragBlock, payload) // Doc-level needs a list wrapper
           } catch {
-            toInsert = wrapJsonForInsert(editor, block, payload)
+            toInsert = wrapJsonForInsert(editor, dragBlock, payload)
           }
           const inserted = hit.editor.chain().focus().insertContentAt(insertPos, toInsert).run()
-          if (inserted) deleteEditorBlockRange(editor, sourceFrom, sourceTo) // Leave source frame
+          // Board ⋮⋮ = move; chat ⋮⋮ = copy (same as dragging the whole turn onto the board)
+          if (inserted && !blockDragFromGrip) {
+            for (const b of [...dragBlocks].sort((a, b) => b.from - a.from)) {
+              deleteEditorBlockRange(editor, b.from, b.to)
+            }
+          }
           clearBlockSelection()
           return
         }
 
-        // Drop on empty **page** → new **frame** with this block’s HTML
-        if (!conversationId) {
+        // Drop on empty **page** / board → new **frame** with this block’s HTML
+        // Chat: only when the pointer is over the board pane (not the chat column)
+        if (blockDragFromGrip) {
+          const under = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
+          const overBoard =
+            !!under?.closest?.('.react-flow') &&
+            !under.closest('[data-chat-sidebar], [data-ai-turn], [data-chat-map-dock]')
+          if (!overBoard || !conversationId) {
+            clearBlockSelection()
+            return
+          }
+        } else if (!conversationId) {
           clearBlockSelection()
           return
         }
-        const html = htmlForEditorRange(editor, sourceFrom, sourceTo)
-        const flow = screenToFlowPosition({ x: ev.clientX, y: ev.clientY })
+        const rawHtml = dragBlocks.map((b) => htmlForEditorRange(editor, b.from, b.to)).join('')
+        const html =
+          blockDragFromGrip && chatMessageRole === 'assistant'
+            ? markHtmlWithAiOrigin(rawHtml)
+            : rawHtml
+        // Chat nested RF has no board transform — use the real board instance
+        const flow =
+          blockDragFromGrip && reactFlowInstance
+            ? reactFlowInstance.screenToFlowPosition({ x: ev.clientX, y: ev.clientY })
+            : screenToFlowPosition({ x: ev.clientX, y: ev.clientY })
         try {
           const supabase = createClient()
           const { data: { user } } = await supabase.auth.getUser()
@@ -1124,10 +1191,17 @@ export function TipTapBlockHandles({
             conversation_id: conversationId,
             user_id: user.id,
             role: 'user',
-            content: html, // This block becomes the new frame body
+            content: html, // These blocks become the new frame body
             metadata: newBlockMetadata({
               position: { x: flow.x, y: flow.y }, // Drop point
               fadeIn: true,
+              ...(blockDragFromGrip
+                ? {
+                    fromAiChat: true,
+                    hasAiOrigin: chatMessageRole === 'assistant',
+                    aiMessageId: chatMessageId,
+                  }
+                : {}),
             }),
           })
           if (error) {
@@ -1135,7 +1209,12 @@ export function TipTapBlockHandles({
             clearBlockSelection()
             return
           }
-          deleteEditorBlockRange(editor, sourceFrom, sourceTo) // Remove from source after persist
+          // Board ⋮⋮ extract = move; chat ⋮⋮ → board = copy (same as dragging the whole turn)
+          if (!blockDragFromGrip) {
+            for (const b of [...dragBlocks].sort((a, b) => b.from - a.from)) {
+              deleteEditorBlockRange(editor, b.from, b.to)
+            }
+          }
           await queryClient.invalidateQueries({ queryKey: ['messages-for-panels', conversationId] })
           await queryClient.refetchQueries({ queryKey: ['messages-for-panels', conversationId] })
         } catch (err) {
@@ -1158,7 +1237,11 @@ export function TipTapBlockHandles({
       hover,
       isBlockArmed,
       isPanelSelected,
+      blockDragFromGrip,
+      chatMessageId,
+      chatMessageRole,
       queryClient,
+      reactFlowInstance,
       screenToFlowPosition,
     ]
   )
@@ -1397,6 +1480,8 @@ export function TipTapBlockHandles({
         const anchor = anchorRef.current ?? block
         applySelection(collectBlocksBetween(anchor, block)) // All blocks in between (same frame)
         if (!anchorRef.current) anchorRef.current = block
+        setMenu(null) // Multi-select — dismiss single-block actions menu
+        setConnectionsMenu(null)
         return
       }
       if (e.metaKey || e.ctrlKey) {
@@ -1404,6 +1489,8 @@ export function TipTapBlockHandles({
         const exists = cur.some((b) => b.from === block.from)
         applySelection(exists ? cur.filter((b) => b.from !== block.from) : [...cur, block]) // Toggle
         anchorRef.current = block
+        setMenu(null)
+        setConnectionsMenu(null)
         return
       }
       // Plain click on a block that's part of a multi-selection → group actions menu (keep wash)
@@ -1465,7 +1552,8 @@ export function TipTapBlockHandles({
   // Unselected frames never paint ⋮⋮ (hover / caret / AI pending) — only when the blue adjust box is up
   if (!isPanelSelected) return null
 
-  // Grips render for every selected block (persistent wash) + the hovered/caret/menu block.
+  // Grips render for every selected block (persistent wash) + the hovered/caret/menu block
+  // (hover still updates while one block is armed — so other ⋮⋮ appear for multi-select).
   // Phone: no hover — paint a ⋮⋮ for every block while the frame is selected.
   const container = gripLayoutRoot(editor)
   // `rfZoom` / handleGutterFlow / frameScale / layoutTick in render deps so grips remeasure
@@ -1714,6 +1802,7 @@ export function TipTapBlockHandles({
               role="button"
               tabIndex={0}
               data-tt-block-handle
+              data-tt-block-armed={armed ? 'true' : undefined} // Chat HTML5 turn-drag skips only armed grips
               data-ai-pending-handle={aiPending ? 'true' : undefined}
               className={cn(
                 'absolute left-0 z-[2] w-5 h-6 flex items-center justify-center rounded',

@@ -37,8 +37,11 @@ export function findHostEditorAtPoint(
     if (!(el instanceof HTMLElement)) continue
     if (el.closest('[data-tt-block-drag-ghost], [data-tt-drop-line]')) continue // Ignore drag overlays
     if (el.closest('[data-tt-frame-drop-overlay]')) continue // Ignore stack drop chrome
-    const node = el.closest('.react-flow__node') as HTMLElement | null
-    const id = node?.getAttribute('data-id')
+    // Board frames use RF `.react-flow__node[data-id]`; chat turns use `[data-tt-host-id]`
+    const hostEl = el.closest('[data-tt-host-id], .react-flow__node') as HTMLElement | null
+    if (!hostEl) continue
+    const id =
+      hostEl.getAttribute('data-tt-host-id') || hostEl.getAttribute('data-id') || ''
     if (!id || id === skipHostNodeId) continue
     const editor = editorForHostNode(id)
     if (editor) return { hostNodeId: id, editor }
@@ -649,6 +652,39 @@ export function moveEditorBlockToPos(editor: Editor, from: number, to: number, i
     // keep unwrapped
   }
   return editor.chain().focus().deleteRange({ from, to }).insertContentAt(mapped, payload).run()
+}
+
+/** Move one or more selected blocks to insertPos (doc order preserved). */
+export function moveEditorBlocksToPos(
+  editor: Editor,
+  blocks: EditorBlockRef[],
+  insertPos: number
+): boolean {
+  if (blocks.length === 0) return false
+  const sorted = [...blocks].sort((a, b) => a.from - b.from)
+  if (sorted.length === 1) {
+    return moveEditorBlockToPos(editor, sorted[0].from, sorted[0].to, insertPos)
+  }
+  for (const b of sorted) {
+    if (insertPos > b.from && insertPos < b.to) return false // Inside a selected block
+  }
+  const parts: JSONContent[] = []
+  for (const b of sorted) {
+    const json = jsonForEditorRange(editor, b.from, b.to)
+    parts.push(...json)
+  }
+  if (parts.length === 0) return false
+  // Delete high→low so earlier ranges stay valid, then insert at mapped pos
+  let mapped = insertPos
+  for (const b of sorted) {
+    if (b.to <= insertPos) mapped -= b.to - b.from
+  }
+  let chain = editor.chain().focus()
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const b = sorted[i]
+    chain = chain.deleteRange({ from: b.from, to: b.to })
+  }
+  return chain.insertContentAt(Math.max(0, mapped), parts).run()
 }
 
 /** Delete a content-block range; leave an empty paragraph if the doc would be empty. */

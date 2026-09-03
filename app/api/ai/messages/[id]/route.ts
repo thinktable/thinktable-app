@@ -1,4 +1,6 @@
-// PATCH /api/ai/messages/[id] — edit a past user turn: truncate later turns, undo actions, prepare regenerate
+// PATCH /api/ai/messages/[id]
+// - soft: true → update content/html/metadata in place (TipTap save, board-link threads)
+// - default → edit a past user turn: truncate later turns, undo actions, prepare regenerate
 import { createClient } from '@/lib/supabase/server' // Auth
 import { undoAiAction, type AiAction } from '@/lib/ai/actions' // Undo stub
 import { NextRequest, NextResponse } from 'next/server' // Types
@@ -15,8 +17,7 @@ export async function PATCH(
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) // 401
 
   const body = await request.json().catch(() => ({})) // Body
-  const content = typeof body.content === 'string' ? body.content.trim() : '' // New text
-  if (!content) return NextResponse.json({ error: 'Missing content' }, { status: 400 }) // Require
+  const soft = body.soft === true // TipTap / metadata-only save
 
   const { data: message } = await supabase // Load target
     .from('ai_messages') // Messages
@@ -26,6 +27,41 @@ export async function PATCH(
     .maybeSingle() // One
 
   if (!message) return NextResponse.json({ error: 'Not found' }, { status: 404 }) // Missing
+
+  // Soft save: any role; keep later turns; merge metadata (html, boardLinks, …)
+  if (soft) {
+    const content =
+      typeof body.content === 'string' ? body.content : (message.content as string) // Keep if omitted
+    const html = typeof body.html === 'string' ? body.html : undefined
+    const metaIn =
+      body.metadata && typeof body.metadata === 'object'
+        ? (body.metadata as Record<string, unknown>)
+        : null
+    const metadata = {
+      ...((message.metadata as Record<string, unknown>) || {}),
+      ...(metaIn || {}),
+      ...(html !== undefined ? { html } : {}),
+    }
+    const { data: updated, error } = await supabase
+      .from('ai_messages')
+      .update({
+        content,
+        parts: [{ type: 'text', text: content }],
+        metadata,
+      })
+      .eq('id', messageId)
+      .eq('user_id', user.id)
+      .select()
+      .single()
+    if (error || !updated) {
+      return NextResponse.json({ error: error?.message || 'Update failed' }, { status: 500 })
+    }
+    return NextResponse.json({ message: updated, soft: true })
+  }
+
+  const content = typeof body.content === 'string' ? body.content.trim() : '' // New text
+  if (!content) return NextResponse.json({ error: 'Missing content' }, { status: 400 }) // Require
+
   if (message.role !== 'user') {
     return NextResponse.json({ error: 'Only user messages can be edited' }, { status: 400 }) // Guard
   }

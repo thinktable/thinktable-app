@@ -499,6 +499,11 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     [thread?.id, conversationId, attachedSnapshots]
   )
 
+  /** TipTap soft-save / board-link merge — replace one turn in local state. */
+  const handleMessagePatch = useCallback((messageId: string, message: AiMessage) => {
+    setMessages((prev) => prev.map((m) => (m.id === messageId ? message : m)))
+  }, [])
+
   const handleSaveSnapshot = useCallback(
     async (message: AiMessage) => {
       let frames: Array<{ id: string; text: string }> = []
@@ -755,7 +760,9 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                       <AiTranscript
                         messages={messages}
                         streamingId={streamingId}
+                        conversationId={conversationId}
                         onEditUserMessage={handleEditUserMessage}
+                        onMessagePatch={handleMessagePatch}
                       />
                     ) : null}
                   </ChatLoadStage>
@@ -1008,7 +1015,9 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
               <AiTranscript
                 messages={messages}
                 streamingId={streamingId}
+                conversationId={conversationId}
                 onEditUserMessage={handleEditUserMessage}
+                onMessagePatch={handleMessagePatch}
               />
             )}
             </ChatLoadStage>

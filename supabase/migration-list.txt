@@ -1,9 +1,9 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-09-02T18:06:09Z
+# snapped_at=2026-09-03T19:03:37Z
 # postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
-# local_marker=20260902180605_db_cold_row_hover_handle_insert (no DDL)
+# local_marker=20260903190337_ai_chat_turns_frame_like (no DDL)
 # Remote applied (via Supabase MCP / Management API on thinkable):
 # 20251124231547 create_saas_schema
 # 20251124231600 fix_function_security
@@ -154,3 +154,8 @@
 20260826170715_brand_mark_board_fill_theme_strokes.sql
 20260827174930_slash_commands_media_board_font_phone_menu.sql
 20260829140859_notion_db_focus_gated_static_preview_boards_multi_select.sql
+20260903190337_ai_chat_turns_frame_like.sql
+20260902151646_db_row_warm_inline_caret_no_semantic_zoom.sql
+20260902155842_db_show_more_less_preview_full_width.sql
+20260902161220_db_table_rows_setter.sql
+20260902180605_db_cold_row_hover_handle_insert.sql
