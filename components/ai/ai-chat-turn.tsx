@@ -28,12 +28,18 @@ import {
   type AiChatBoardLink,
   type ChatTurnSide,
   chatThreadPath,
+  chatThreadSeamCrossYs,
   nearestFrameSide,
   newChatBoardLinkId,
   readChatBoardLinks,
   sideAnchor,
   withChatBoardLinks,
 } from '@/lib/ai/chat-board-links'
+import {
+  chatSidebarSeamX,
+  clearChatSeamGaps,
+  publishChatSeamGaps,
+} from '@/lib/ai/chat-sidebar-seam'
 
 const SIDES: ChatTurnSide[] = ['left', 'right', 'top', 'bottom']
 
@@ -259,11 +265,14 @@ export function AiChatTurn({
     doc.addEventListener('pointercancel', onUp)
   }
 
-  // Thread overlay geometry when this turn is selected
+  // Thread overlay geometry when this turn is selected (+ punch sidebar seam gaps)
   const [threadPaths, setThreadPaths] = useState<string[]>([])
+  const seamSourceId = `turn-${message.id}` // Settled threads for this turn
+  const rubberSourceId = `rubber-${message.id}` // In-progress connect rubber band
   useEffect(() => {
     if (!selected || links.length === 0) {
       setThreadPaths([])
+      clearChatSeamGaps(seamSourceId) // No visible threads → restore solid seam
       return
     }
     const paint = () => {
@@ -271,6 +280,8 @@ export function AiChatTurn({
       if (!turn) return
       const turnRect = turn.getBoundingClientRect()
       const paths: string[] = []
+      const seamYs: number[] = []
+      const seamX = chatSidebarSeamX() // Left edge of chat column (client X)
       for (const link of links) {
         const nodes = reactFlowInstance?.getNodes() || []
         const n = nodes.find(
@@ -287,8 +298,12 @@ export function AiChatTurn({
         const a = sideAnchor(turnRect, link.turnSide)
         const b = sideAnchor(nodeEl.getBoundingClientRect(), link.frameSide)
         paths.push(chatThreadPath(a, b, link.turnSide, link.frameSide))
+        if (seamX != null) {
+          seamYs.push(...chatThreadSeamCrossYs(a, b, link.turnSide, link.frameSide, seamX))
+        }
       }
       setThreadPaths(paths)
+      publishChatSeamGaps(seamSourceId, seamYs) // Gap divider where strokes cross
     }
     paint()
     const root = document.querySelector('.react-flow__viewport')
@@ -307,8 +322,25 @@ export function AiChatTurn({
       root?.removeEventListener('transitionend', paint)
       scroller?.removeEventListener('scroll', paint)
       clearInterval(id)
+      clearChatSeamGaps(seamSourceId)
     }
-  }, [selected, links, reactFlowInstance])
+  }, [selected, links, reactFlowInstance, seamSourceId])
+
+  // Rubber-band also punches the seam while dragging a new thread
+  useEffect(() => {
+    if (!rubber) {
+      clearChatSeamGaps(rubberSourceId)
+      return
+    }
+    const seamX = chatSidebarSeamX()
+    if (seamX == null) {
+      clearChatSeamGaps(rubberSourceId)
+      return
+    }
+    const ys = chatThreadSeamCrossYs(rubber.from, rubber.to, rubber.side, 'left', seamX)
+    publishChatSeamGaps(rubberSourceId, ys)
+    return () => clearChatSeamGaps(rubberSourceId)
+  }, [rubber, rubberSourceId])
 
   const hostId = `ai-turn-${message.id}` // TipTapBlockHandles register + findHostEditorAtPoint
 

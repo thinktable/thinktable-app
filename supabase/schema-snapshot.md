@@ -1,13 +1,19 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-09-03T19:03:37Z`
+- Snapped at: `2026-09-03T19:16:44Z`
 - Source: local `supabase/migrations/` + remote applied tops (thinkable) + `.temp` service versions
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 - CLI: `supabase` `2.90.0` (marker via `migration new`; newer CLI available)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260903191644_chat_sidebar_seam_thread_gaps.sql`.
+- Chat sidebar left seam (`ChatSidebarSeam`) punches gaps where chat↔board threads (and rubber-band) cross; `chatThreadSeamCrossYs` + `publishChatSeamGaps`.
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: AI chat turns frame-like
 
 - No DDL. Marker `20260903190337_ai_chat_turns_frame_like.sql`.
 - AI chat turns are frame-like: click → blue adjust + edge connection points; TipTap + ⋮⋮ (arm on press, shift multi-select); drag turn or blocks onto the board as frames (copy); `boardLinks` threads show on select (pip when not); soft-save `PATCH { soft: true }`.

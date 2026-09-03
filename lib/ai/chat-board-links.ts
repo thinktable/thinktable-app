@@ -76,15 +76,17 @@ export function nearestFrameSide(
   return best
 }
 
-/** Smooth cubic path between two screen points (Miro-ish). */
-export function chatThreadPath(
-  a: { x: number; y: number },
-  b: { x: number; y: number },
+type Pt = { x: number; y: number } // Screen / client point
+
+/** Cubic control points for a chat↔board thread (same geometry as the SVG stroke). */
+export function chatThreadControls(
+  a: Pt,
+  b: Pt,
   fromSide: ChatTurnSide,
   toSide: ChatTurnSide
-): string {
-  const dx = Math.max(40, Math.abs(b.x - a.x) * 0.45)
-  const dy = Math.max(40, Math.abs(b.y - a.y) * 0.45)
+): { c1: Pt; c2: Pt } {
+  const dx = Math.max(40, Math.abs(b.x - a.x) * 0.45) // Horizontal pull toward exit/entry
+  const dy = Math.max(40, Math.abs(b.y - a.y) * 0.45) // Vertical pull for top/bottom sides
   const c1 =
     fromSide === 'left'
       ? { x: a.x - dx, y: a.y }
@@ -101,5 +103,58 @@ export function chatThreadPath(
         : toSide === 'top'
           ? { x: b.x, y: b.y - dy }
           : { x: b.x, y: b.y + dy }
+  return { c1, c2 }
+}
+
+/** Point on a cubic at t ∈ [0,1]. */
+function cubicAt(p0: Pt, c1: Pt, c2: Pt, p1: Pt, t: number): Pt {
+  const u = 1 - t // Complement for Bernstein basis
+  return {
+    x: u * u * u * p0.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * p1.x,
+    y: u * u * u * p0.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * p1.y,
+  }
+}
+
+/** Smooth cubic path between two screen points (Miro-ish). */
+export function chatThreadPath(
+  a: Pt,
+  b: Pt,
+  fromSide: ChatTurnSide,
+  toSide: ChatTurnSide
+): string {
+  const { c1, c2 } = chatThreadControls(a, b, fromSide, toSide) // Shared with seam crossing
   return `M ${a.x} ${a.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${b.x} ${b.y}`
+}
+
+/**
+ * Client-Y where a chat↔board cubic crosses a vertical seam (sidebar left edge).
+ * Samples the curve; returns every crossing (usually 0–1).
+ */
+export function chatThreadSeamCrossYs(
+  a: Pt,
+  b: Pt,
+  fromSide: ChatTurnSide,
+  toSide: ChatTurnSide,
+  seamX: number
+): number[] {
+  const { c1, c2 } = chatThreadControls(a, b, fromSide, toSide)
+  const ys: number[] = []
+  const steps = 48 // Dense enough for a gentle cubic across ~360px
+  let prev = cubicAt(a, c1, c2, b, 0)
+  for (let i = 1; i <= steps; i++) {
+    const p = cubicAt(a, c1, c2, b, i / steps)
+    const d0 = prev.x - seamX
+    const d1 = p.x - seamX
+    // Crossing (or landing on) the vertical seam between samples
+    if (d0 === 0) {
+      ys.push(prev.y)
+    } else if (d0 * d1 < 0) {
+      const u = d0 / (d0 - d1) // Linear interpolate within the segment
+      ys.push(prev.y + u * (p.y - prev.y))
+    } else if (d1 === 0 && i === steps) {
+      ys.push(p.y) // Endpoint sits on the seam
+    }
+    prev = p
+  }
+  return ys
 }

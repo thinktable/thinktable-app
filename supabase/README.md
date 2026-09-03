@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260903191644_chat_sidebar_seam_thread_gaps` — Chat sidebar left seam gaps where chat↔board threads cross
 - `20260903190337_ai_chat_turns_frame_like` — AI chat turns as frames (select chrome, TipTap ⋮⋮, board drop, boardLinks)
 - `20260902180605_db_cold_row_hover_handle_insert` — Cold DB row ⋮⋮ + add-row hairlines on hover without click-warm
 - `20260902161220_db_table_rows_setter` — Frame menu Table rows setter (shown/total, Show all, Reset); replaces Preview / Expanded

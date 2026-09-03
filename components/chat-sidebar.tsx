@@ -36,6 +36,10 @@ import { htmlToPlain } from '@/lib/ai/context-pack' // Plain excerpts for snapsh
 import { createClient } from '@/lib/supabase/client' // Snapshot frame load
 import { cn } from '@/lib/utils' // cn
 import {
+  CHAT_SEAM_GAP_HALF,
+  subscribeChatSeamGaps,
+} from '@/lib/ai/chat-sidebar-seam' // Punch gaps where chat↔board threads cross
+import {
   ArrowDown,
   ChevronsRight,
   MessageSquarePlus,
@@ -52,6 +56,72 @@ function persistActiveThreadId(threadId: string | null) {
   if (typeof window === 'undefined') return // No storage on server
   if (threadId) localStorage.setItem(TT_CHAT_THREAD_ID_KEY, threadId) // Remember thread
   else localStorage.removeItem(TT_CHAT_THREAD_ID_KEY) // New chat / cleared
+}
+
+/**
+ * Left-edge divider for the chat column — solid by default, with transparent
+ * holes where chat↔board threads (or a rubber-band) cross the seam.
+ */
+function ChatSidebarSeam() {
+  const ref = useRef<HTMLDivElement>(null)
+  const [maskImage, setMaskImage] = useState<string | undefined>(undefined)
+
+  useEffect(() => {
+    const apply = (clientYs: number[]) => {
+      const el = ref.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const h = rect.height
+      if (h <= 0 || clientYs.length === 0) {
+        setMaskImage(undefined) // Full solid line
+        return
+      }
+      // Local Y ranges (px from top of the seam), sorted + merged
+      const half = CHAT_SEAM_GAP_HALF
+      const ranges = clientYs
+        .map((y) => ({
+          top: Math.max(0, y - rect.top - half),
+          bottom: Math.min(h, y - rect.top + half),
+        }))
+        .filter((r) => r.bottom > r.top)
+        .sort((a, b) => a.top - b.top)
+      if (ranges.length === 0) {
+        setMaskImage(undefined)
+        return
+      }
+      const merged: Array<{ top: number; bottom: number }> = []
+      for (const r of ranges) {
+        const last = merged[merged.length - 1]
+        if (last && r.top <= last.bottom) {
+          last.bottom = Math.max(last.bottom, r.bottom)
+        } else {
+          merged.push({ ...r })
+        }
+      }
+      // Mask: black = visible divider, transparent = gap for the blue thread
+      const stops: string[] = ['#000 0']
+      for (const g of merged) {
+        stops.push(`#000 ${g.top}px`, `transparent ${g.top}px`, `transparent ${g.bottom}px`, `#000 ${g.bottom}px`)
+      }
+      stops.push('#000 100%')
+      setMaskImage(`linear-gradient(to bottom, ${stops.join(', ')})`)
+    }
+    return subscribeChatSeamGaps(apply)
+  }, [])
+
+  return (
+    <div
+      ref={ref}
+      aria-hidden
+      data-chat-sidebar-seam
+      className="pointer-events-none absolute inset-y-0 left-0 z-30 w-px bg-black/10 dark:bg-white/10"
+      style={
+        maskImage
+          ? { WebkitMaskImage: maskImage, maskImage, WebkitMaskSize: '100% 100%', maskSize: '100% 100%' }
+          : undefined
+      }
+    />
+  )
 }
 
 export function ChatSidebar({ conversationId }: ChatSidebarProps) {
@@ -866,12 +936,13 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
       <aside
         data-chat-sidebar
         className={cn(
-          'relative h-full flex flex-col', // relative so ticks pin to this column (site height)
-          'bg-gray-50 dark:bg-[#0f0f0f]',
-          'border-l border-black/10 dark:border-white/10'
+          'relative h-full flex flex-col', // relative so ticks + seam pin to this column
+          'bg-gray-50 dark:bg-[#0f0f0f]'
+          // Left edge is ChatSidebarSeam (gapped where threads cross) — not CSS border-l
         )}
         style={{ width: CHAT_SIDEBAR_WIDTH }}
       >
+        <ChatSidebarSeam />
         {customizeOpen ? (
           <CustomizeAgentPanel
             open={customizeOpen}
