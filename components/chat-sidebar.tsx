@@ -8,11 +8,7 @@ import {
   CHAT_SIDEBAR_WIDTH,
   TT_CHAT_THREAD_ID_KEY,
 } from './sidebar-context' // Open state + logo + thread persist key
-import {
-  ThinktableBrandMark,
-  PersonalizeAiModal,
-  AI_STAR_COLOR_OPEN,
-} from './personalize-ai-modal' // Brand + open-chat sparkle color
+import { ThinktableBrandMark, PersonalizeAiModal } from './personalize-ai-modal' // Brand
 import { AiThreadPicker, type AiThreadFilter } from './ai/ai-thread-picker' // History
 import { AiTranscript } from './ai/ai-transcript' // Turns
 import { CustomizeAgentPanel } from './ai/customize-agent-panel' // Brand → customize agent
@@ -1079,13 +1075,8 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                   title="Customize Thinktable AI"
                   aria-label="Customize Thinktable AI"
                 >
-                  {/* Open chat: keep sparkles visible in light blue */}
-                  <ThinktableBrandMark
-                    drawingUrl={logoDrawing}
-                    size={28}
-                    showAiStar
-                    aiStarColor={AI_STAR_COLOR_OPEN}
-                  />
+                  {/* Open chat: sparkles on (same light blue as map toggle) */}
+                  <ThinktableBrandMark drawingUrl={logoDrawing} size={28} showAiStar />
                 </button>
                 <div className="flex-1 min-w-0 overflow-hidden bg-transparent">
                   <AiThreadPicker
@@ -1180,13 +1171,8 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                 title="Customize Thinktable AI"
                 aria-label="Customize Thinktable AI"
               >
-                {/* Open chat: keep sparkles visible in light blue */}
-                <ThinktableBrandMark
-                  drawingUrl={logoDrawing}
-                  size={28}
-                  showAiStar
-                  aiStarColor={AI_STAR_COLOR_OPEN}
-                />
+                {/* Open chat: sparkles on (same light blue as map toggle) */}
+                <ThinktableBrandMark drawingUrl={logoDrawing} size={28} showAiStar />
               </button>
             )}
             <div className="min-w-0 flex-1 overflow-hidden">
@@ -1252,13 +1238,8 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                     title="Customize Thinktable AI"
                     aria-label="Customize Thinktable AI"
                   >
-                    {/* Open chat empty state: sparkles stay on, light blue */}
-                    <ThinktableBrandMark
-                      drawingUrl={logoDrawing}
-                      size={52}
-                      showAiStar
-                      aiStarColor={AI_STAR_COLOR_OPEN}
-                    />
+                    {/* Open chat empty state: sparkles on (same light blue as map toggle) */}
+                    <ThinktableBrandMark drawingUrl={logoDrawing} size={52} showAiStar />
                   </button>
                   <button
                     type="button"

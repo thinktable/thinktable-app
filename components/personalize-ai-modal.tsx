@@ -26,11 +26,8 @@ const TT_TOPPER_STORAGE_KEY_LEGACY = 'thinktable-ai-topper'
 /** Logo circle fill — matches public/thinktable-logo.svg .cls-1 */
 export const LOGO_CIRCLE_COLOR = '#a2a7af'
 
-/** AI sparkles — brand blue on the closed-chat map toggle */
-export const AI_STAR_COLOR = '#3b83f6'
-
-/** AI sparkles — open-chat light blue (prompt wash family, a bit less pale) */
-export const AI_STAR_COLOR_OPEN = '#b5daf3'
+/** AI sparkles fill — light blue (prompt-wash family) on every logo that shows stars */
+export const AI_STAR_COLOR = '#b5daf3'
 
 /** Stroke color for custom marks (white cutout look) */
 const DRAW_WHITE = '#ffffff'
@@ -133,10 +130,8 @@ type ThinktableBrandMarkProps = {
   className?: string
   /** Board fill + theme strokes (default); brand = legacy grey disc for personalize canvas */
   discVariant?: 'brand' | 'board'
-  /** AI sparkles badge — on for map toggle + open chat logos; off on customize-agent icon */
+  /** AI sparkles badge — on for map toggle + chat logos; off on customize-agent icon */
   showAiStar?: boolean
-  /** Sparkle fill — brand blue when closed; light blue when chat is open */
-  aiStarColor?: string
 }
 
 /**
@@ -150,7 +145,6 @@ export function ThinktableBrandMark({
   className,
   discVariant = 'board',
   showAiStar = true,
-  aiStarColor = AI_STAR_COLOR,
 }: ThinktableBrandMarkProps) {
   const badgeSize = Math.max(14, Math.round(size * 0.34)) // Scales with logo
   const onBoard = discVariant === 'board'
@@ -189,7 +183,7 @@ export function ThinktableBrandMark({
         )}
       </div>
 
-      {/* AI stars — top-right; light blue in open chat, brand blue on map toggle */}
+      {/* AI stars — top-right; same light blue on map toggle + open chat */}
       {showAiStar ? (
       <svg
         viewBox="0 0 24 24"
@@ -199,7 +193,7 @@ export function ThinktableBrandMark({
           height: badgeSize,
           top: -Math.round(badgeSize * 0.15),
           right: -Math.round(badgeSize * 0.15),
-          color: aiStarColor,
+          color: AI_STAR_COLOR,
           filter: 'drop-shadow(0 0 0.6px #fff) drop-shadow(0 0 0.6px #fff) drop-shadow(0 0 0.6px #fff)',
         }}
         fill="none"

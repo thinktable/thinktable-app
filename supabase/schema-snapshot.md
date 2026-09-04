@@ -1,13 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-09-04T04:54:07Z`
+- Snapped at: `2026-09-04T05:06:05Z`
 - Source: local `supabase/migrations/` + remote applied tops (thinkable) + `.temp` service versions
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 - CLI: `supabase` `2.90.0` (marker via `migration new`; newer CLI available)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260904050604_unify_ai_star_light_blue_lock_frames_icon.sql`.
+- AI sparkles use light blue `#b5daf3` on every logo that shows stars (map toggle + open chat); customize-agent icon still omits stars.
+- Toolbar lock-frames glyph (`LegoBrickIcon`) switches to `group frames icon 1.svg` so it stays readable at h-4.
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Chat fork and Revert text
 
 - No DDL. Marker `20260904045406_ai_chat_fork_and_revert_text.sql`.
 - Thread picker **GitFork** → `POST /api/ai/threads/[id]/fork` opens **Copy of …** with the same turns.

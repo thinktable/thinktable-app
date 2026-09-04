@@ -25,6 +25,8 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260904050604_unify_ai_star_light_blue_lock_frames_icon` — Unify AI sparkle `#b5daf3`; lock-frames toolbar icon 1
+- `20260904045406_ai_chat_fork_and_revert_text` — Thread fork (Copy of …) + chat Revert text silos
 - `20260904043128_chat_link_cue_click_opens_turn` — Board chat-link cue click opens linked turn; drag still starts thread
 - `20260904041502_chat_link_cues_survive_sidebar_close` — Board chat-link cues survive desktop chat close; thread clip under chrome
 - `20260904034627_chat_turn_selection_persist_and_link_cue_scale` — Chat turn selection/scroll persist across remount; smaller chat-link cue line
