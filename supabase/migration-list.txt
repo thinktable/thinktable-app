@@ -1,9 +1,9 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-09-04T05:06:05Z
+# snapped_at=2026-09-04T05:19:48Z
 # postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
-# local_marker=20260904050604_unify_ai_star_light_blue_lock_frames_icon (no DDL)
+# local_marker=20260904051948_chat_turn_multiselect_and_chat_to_chat_threads (no DDL)
 # Remote applied (via Supabase MCP / Management API on thinkable):
 # 20251124231547 create_saas_schema
 # 20251124231600 fix_function_security
@@ -166,3 +166,4 @@
 20260904043128_chat_link_cue_click_opens_turn.sql
 20260904045406_ai_chat_fork_and_revert_text.sql
 20260904050604_unify_ai_star_light_blue_lock_frames_icon.sql
+20260904051948_chat_turn_multiselect_and_chat_to_chat_threads.sql

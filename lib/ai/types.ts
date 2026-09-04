@@ -48,12 +48,35 @@ export interface AiContextSnapshot { // Row shape for ai_context_snapshots
 /** DnD MIME for dragging a chat turn onto the page as a frame. */
 export const AI_CHAT_BLOCK_MIME = 'application/tt-ai-chat-block' // Custom MIME
 
-export interface AiChatBlockDragPayload { // Serialized drag data
-  source: 'ai-chat-block' // Discriminator
+/** One turn in a chat→board / chat→composer drag. */
+export interface AiChatBlockDragItem {
   messageId: string // Origin turn
   plain: string // Plain text
   html: string // TipTap-ready HTML
   role?: 'user' | 'assistant' | 'system' | 'tool' // So page drop only marks AI responses
+}
+
+export interface AiChatBlockDragPayload { // Serialized drag data
+  source: 'ai-chat-block' // Discriminator
+  messageId: string // Primary (grabbed) turn — backward compat
+  plain: string // Primary plain
+  html: string // Primary html
+  role?: 'user' | 'assistant' | 'system' | 'tool' // Primary role
+  /** All selected turns when multi-dragging (transcript order). Omit / length 1 = single. */
+  items?: AiChatBlockDragItem[]
+}
+
+/** Normalize payload to one or more items (supports legacy single-only drops). */
+export function aiChatDragItems(payload: AiChatBlockDragPayload): AiChatBlockDragItem[] {
+  if (payload.items && payload.items.length > 0) return payload.items
+  return [
+    {
+      messageId: payload.messageId,
+      plain: payload.plain,
+      html: payload.html,
+      role: payload.role,
+    },
+  ]
 }
 
 /** SSE event shapes for /api/ai/chat streaming. */

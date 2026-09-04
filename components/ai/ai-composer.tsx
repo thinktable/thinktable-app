@@ -34,7 +34,7 @@ import type {
   AiMessage,
   AiThread,
 } from '@/lib/ai/types'
-import { AI_CHAT_BLOCK_MIME } from '@/lib/ai/types'
+import { AI_CHAT_BLOCK_MIME, aiChatDragItems } from '@/lib/ai/types'
 import { consumeAiSse } from '@/lib/ai/stream'
 import {
   detachCaptureFromChat,
@@ -510,7 +510,16 @@ export function AiComposer({
     if (!payload || payload.source !== 'ai-chat-block' || !payload.messageId) return
     setAttaching(true)
     try {
-      await onAttachChatBlock(payload)
+      // Multi-select drag drops every selected turn as context
+      for (const item of aiChatDragItems(payload)) {
+        await onAttachChatBlock({
+          source: 'ai-chat-block',
+          messageId: item.messageId,
+          plain: item.plain,
+          html: item.html,
+          role: item.role,
+        })
+      }
     } finally {
       setAttaching(false)
     }

@@ -112,21 +112,22 @@ export function ConnectionIndicator({
       prevActive = null
     }
 
+    // Match RF calcAutoPan: near left/top → +panBy (reveal that side); near right/bottom → −
     const autoPan = () => {
       if (!autoPanOnConnect) return
       const inset = 35
       const speed = 20
       const x =
         (connectionPosition.x < inset
-          ? -1
+          ? 1
           : connectionPosition.x > containerBounds.width - inset
-            ? 1
+            ? -1
             : 0) * speed
       const y =
         (connectionPosition.y < inset
-          ? -1
+          ? 1
           : connectionPosition.y > containerBounds.height - inset
-            ? 1
+            ? -1
             : 0) * speed
       if (x || y) panBy({ x, y })
       autoPanId = requestAnimationFrame(autoPan)

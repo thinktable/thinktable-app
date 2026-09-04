@@ -16,7 +16,7 @@ import { createPortal } from 'react-dom'
 import { useEditor, EditorContent, type Editor } from '@tiptap/react'
 import { ReactFlowProvider } from 'reactflow'
 import { GripVertical, Loader2 } from 'lucide-react'
-import type { AiMessage, AiChatBlockDragPayload } from '@/lib/ai/types'
+import type { AiMessage, AiChatBlockDragPayload, AiChatBlockDragItem } from '@/lib/ai/types'
 import { AI_CHAT_BLOCK_MIME } from '@/lib/ai/types'
 import { markdownToTipTapHtml } from '@/lib/ai/markdown-to-tiptap'
 import { createPanelExtensions } from '@/lib/tiptap/extensions'
@@ -46,6 +46,8 @@ import {
   chatThreadPath,
   chatThreadSeamCrossYs,
   flowSideAnchor,
+  isChatToBoardLink,
+  isChatToChatLink,
   nearestFrameSide,
   newChatBoardLinkId,
   readChatBoardLinks,
@@ -79,20 +81,41 @@ const LINK_LOGO_PATH =
 
 const SIDES: ChatTurnSide[] = ['left', 'right', 'top', 'bottom']
 
+type InboundChatLink = { sourceId: string; link: AiChatBoardLink } // Peer stored the thread
+
 type AiChatTurnProps = {
   message: AiMessage
   selected: boolean
+  /** How many chat frames are selected in this thread (frame menu / multi chrome). */
+  selectedCount?: number
+  /** All selected turn ids — avoids double-painting chat↔chat when both ends selected. */
+  selectedIds?: string[]
   streaming?: boolean
   /** True while any turn in the thread is streaming — greys resend/regenerate. */
   chatBusy?: boolean
   conversationId?: string // Board id — ⋮⋮ drop onto map creates a frame
-  onSelect: (id: string) => void
+  /** Outbound or inbound thread — show brand grip when unselected. */
+  hasThreadLinks?: boolean
+  /** Chat↔chat links stored on other turns that target this one. */
+  inboundChatLinks?: InboundChatLink[]
+  /** Pack multi-selection into one drag payload (transcript order). */
+  buildDragItems?: (primary: AiChatBlockDragItem) => AiChatBlockDragItem[]
+  onSelect: (id: string, opts?: { additive?: boolean }) => void
   onSoftSave: (messageId: string, patch: { content: string; html: string; metadata?: Record<string, unknown> }) => Promise<void>
   onLinksChange: (messageId: string, links: AiChatBoardLink[]) => void
   /** Prompt frame — truncate later turns and send the current text again. */
   onResendPrompt?: (messageId: string, content: string) => void
   /** Response frame — drop this + later turns and re-run from the preceding prompt. */
   onRegenerateResponse?: (messageId: string) => void
+}
+
+/** Shift / Cmd / Ctrl — same additive keys as board frame multi-select. */
+function isAdditiveSelectEvent(event: {
+  shiftKey?: boolean
+  metaKey?: boolean
+  ctrlKey?: boolean
+}): boolean {
+  return !!(event.shiftKey || event.metaKey || event.ctrlKey)
 }
 
 /** Indicator placement — centered on the frame edge (no outset; chat has no resize chrome). */
@@ -106,9 +129,14 @@ function indicatorStyle(side: ChatTurnSide): CSSProperties {
 export function AiChatTurn({
   message,
   selected,
+  selectedCount = 1,
+  selectedIds = [],
   streaming,
   chatBusy,
   conversationId,
+  hasThreadLinks = false,
+  inboundChatLinks = [],
+  buildDragItems,
   onSelect,
   onSoftSave,
   onLinksChange,
@@ -126,6 +154,8 @@ export function AiChatTurn({
   const userEditedRef = useRef(false) // True after the first TipTap edit on this mount
   const { reactFlowInstance } = useReactFlowContext()
   const links = readChatBoardLinks(message.metadata)
+  const showLinkedGrip = hasThreadLinks || links.length > 0 // Brand cue when threaded
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
   const [rubber, setRubber] = useState<{
     from: { x: number; y: number }
     to: { x: number; y: number }
@@ -355,7 +385,7 @@ export function AiChatTurn({
       event.stopPropagation()
       const t = event.target as HTMLElement
       if (t.closest('[data-tt-block-handle]') || t.closest('[data-tt-chat-indicator]')) return
-      if (!selected) onSelect(message.id)
+      if (!selected) onSelect(message.id) // Exclusive — menu applies to this frame
       setFrameMenu({ x: event.clientX, y: event.clientY })
     },
     [message.id, onSelect, selected]
@@ -403,12 +433,22 @@ export function AiChatTurn({
       }
       const plain = editor?.getText() || message.content || ''
       const html = editor?.getHTML() || seedHtml
-      const payload: AiChatBlockDragPayload = {
-        source: 'ai-chat-block',
+      const primary: AiChatBlockDragItem = {
         messageId: message.id,
         plain,
         html,
         role: message.role,
+      }
+      // Multi-select: dragging one selected turn carries every selected turn
+      const items =
+        selected && buildDragItems ? buildDragItems(primary) : [primary]
+      const payload: AiChatBlockDragPayload = {
+        source: 'ai-chat-block',
+        messageId: primary.messageId,
+        plain: primary.plain,
+        html: primary.html,
+        role: primary.role,
+        ...(items.length > 1 ? { items } : null),
       }
       event.dataTransfer.setData(AI_CHAT_BLOCK_MIME, JSON.stringify(payload))
       event.dataTransfer.effectAllowed = 'copy'
@@ -428,11 +468,33 @@ export function AiChatTurn({
         pointerEvents: 'none',
         zIndex: '-1',
       })
+      // Badge when carrying multiple selected chat frames
+      if (items.length > 1) {
+        const badge = document.createElement('div')
+        Object.assign(badge.style, {
+          position: 'absolute',
+          top: '6px',
+          right: '6px',
+          minWidth: '20px',
+          height: '20px',
+          padding: '0 6px',
+          borderRadius: '999px',
+          background: '#3b82f6',
+          color: '#fff',
+          fontSize: '11px',
+          fontWeight: '600',
+          lineHeight: '20px',
+          textAlign: 'center',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+        })
+        badge.textContent = String(items.length)
+        ghost.appendChild(badge)
+      }
       document.body.appendChild(ghost)
       event.dataTransfer.setDragImage(ghost, event.clientX - rect.left, event.clientY - rect.top)
       requestAnimationFrame(() => ghost.remove())
     },
-    [selected, editor, message, seedHtml]
+    [selected, editor, message, seedHtml, buildDragItems]
   )
 
   const onTurnPointerDown = (event: React.PointerEvent) => {
@@ -445,9 +507,11 @@ export function AiChatTurn({
     ) {
       return
     }
-    if (!selected) {
+    const additive = isAdditiveSelectEvent(event)
+    // Plain click on already-selected: keep selection (edit / chrome); additive still bumps
+    if (!selected || additive) {
       event.stopPropagation()
-      onSelect(message.id)
+      onSelect(message.id, { additive })
     }
   }
 
@@ -471,8 +535,37 @@ export function AiChatTurn({
       doc.removeEventListener('pointerup', onUp)
       doc.removeEventListener('pointercancel', onUp)
       setRubber(null)
-      // Hit a board frame under the pointer
       const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
+
+      // Chat↔chat: drop on another transcript turn
+      const turnEl = el?.closest('[data-ai-turn]') as HTMLElement | null
+      if (turnEl) {
+        const targetTurnId = turnEl.getAttribute('data-ai-turn') || ''
+        if (!targetTurnId || targetTurnId === message.id) return // No self-thread
+        const targetRect = turnEl.getBoundingClientRect()
+        const frameSide = nearestFrameSide(targetRect, ev.clientX, ev.clientY)
+        const next: AiChatBoardLink = {
+          id: newChatBoardLinkId(),
+          frameMessageId: '', // Chat target — not a board frame
+          targetTurnId,
+          turnSide: side,
+          frameSide,
+        }
+        // Replace prior link to the same turn if one exists
+        const merged = [
+          ...links.filter((l) => !(isChatToChatLink(l) && l.targetTurnId === targetTurnId)),
+          next,
+        ]
+        onLinksChange(message.id, merged)
+        void onSoftSave(message.id, {
+          content: editor?.getText() || message.content,
+          html: editor?.getHTML() || seedHtml,
+          metadata: withChatBoardLinks(message.metadata, merged),
+        })
+        return
+      }
+
+      // Chat↔board: hit a board frame under the pointer
       const nodeEl = el?.closest('.react-flow__node-chatPanel') as HTMLElement | null
       if (!nodeEl) return
       const frameMessageId =
@@ -501,7 +594,10 @@ export function AiChatTurn({
         frameSide,
       }
       // Replace link to the same frame if one exists
-      const merged = [...links.filter((l) => l.frameMessageId !== resolvedId), next]
+      const merged = [
+        ...links.filter((l) => !(isChatToBoardLink(l) && l.frameMessageId === resolvedId)),
+        next,
+      ]
       onLinksChange(message.id, merged)
       void onSoftSave(message.id, {
         content: editor?.getText() || message.content,
@@ -518,8 +614,23 @@ export function AiChatTurn({
   // Thread overlay: fixed SVG must track chat scroll without React setState lag
   const linksRef = useRef(links) // Latest links for paint without effect churn
   linksRef.current = links // Keep paint closure fresh across soft-saves
-  const linksKey = links.map((l) => `${l.id}:${l.frameMessageId}:${l.turnSide}:${l.frameSide}`).join('|') // Stable effect dep
-  const showThreadOverlay = selected && links.length > 0 // Mount empty SVG; fill imperatively
+  const inboundRef = useRef(inboundChatLinks)
+  inboundRef.current = inboundChatLinks
+  const selectedIdSetRef = useRef(selectedIdSet)
+  selectedIdSetRef.current = selectedIdSet
+  const linksKey = [
+    ...links.map(
+      (l) =>
+        `${l.id}:${l.frameMessageId}:${l.targetTurnId || ''}:${l.turnSide}:${l.frameSide}`
+    ),
+    ...inboundChatLinks.map(
+      (i) =>
+        `in:${i.sourceId}:${i.link.id}:${i.link.turnSide}:${i.link.frameSide}`
+    ),
+  ].join('|') // Stable effect dep
+  // Paint when selected and we have outbound links or inbound chat↔chat to draw
+  const showThreadOverlay =
+    selected && (links.length > 0 || inboundChatLinks.length > 0)
   const seamSourceId = `turn-${message.id}` // Settled threads for this turn
   const rubberSourceId = `rubber-${message.id}` // In-progress connect rubber band
   // Body (overlap when board free) + under-chrome (phone dock / desktop sidebar)
@@ -639,6 +750,8 @@ export function AiChatTurn({
         clientToThreadSvgSpace(p, underSvg?.parentElement ?? null)
       const turnRect = turn.getBoundingClientRect()
       const currentLinks = linksRef.current
+      const inbound = inboundRef.current
+      const selectedPeers = selectedIdSetRef.current
       const overlapPaths: { d: string; clipLeftOfSeam?: boolean }[] = []
       const overlapStubs: { x: number; y: number }[] = []
       const underPaths: { d: string; clipLeftOfSeam?: boolean }[] = []
@@ -647,7 +760,37 @@ export function AiChatTurn({
       const seamX = chatSidebarSeamX()
       const nodes = reactFlowInstance?.getNodes() || []
       const desktopSidebar = !!chatSidebarColumnRect()
+
+      /** Paint one chat↔chat cubic inside the sidebar (no board seam clip). */
+      const paintChatToChat = (
+        aClient: { x: number; y: number },
+        bClient: { x: number; y: number },
+        fromSide: ChatTurnSide,
+        toSide: ChatTurnSide
+      ) => {
+        overlapPaths.push({
+          d: chatThreadPath(aClient, bClient, fromSide, toSide),
+        })
+      }
+
+      // Outbound links from this turn
       for (const link of currentLinks) {
+        if (isChatToChatLink(link) && link.targetTurnId) {
+          // Source paints outbound; inbound handler skips when source is selected
+          const targetEl = document.querySelector(
+            `[data-ai-turn="${CSS.escape(link.targetTurnId)}"]`
+          ) as HTMLElement | null
+          if (!targetEl) continue
+          const aClient = sideAnchor(turnRect, link.turnSide)
+          const bClient = sideAnchor(
+            targetEl.getBoundingClientRect(),
+            link.frameSide
+          )
+          paintChatToChat(aClient, bClient, link.turnSide, link.frameSide)
+          continue
+        }
+
+        if (!isChatToBoardLink(link)) continue
         const n = nodes.find(
           (x) =>
             x.id === link.frameMessageId ||
@@ -735,6 +878,19 @@ export function AiChatTurn({
           seamYs.push(clipped.stub.y)
         }
       }
+
+      // Inbound chat↔chat when source is not selected (source paints when it is)
+      for (const { sourceId, link } of inbound) {
+        if (selectedPeers.has(sourceId)) continue
+        const sourceEl = document.querySelector(
+          `[data-ai-turn="${CSS.escape(sourceId)}"]`
+        ) as HTMLElement | null
+        if (!sourceEl) continue
+        const aClient = sideAnchor(sourceEl.getBoundingClientRect(), link.turnSide)
+        const bClient = sideAnchor(turnRect, link.frameSide)
+        paintChatToChat(aClient, bClient, link.turnSide, link.frameSide)
+      }
+
       syncLeftOfSeamClip(overlapSvg, desktopSidebar ? seamX : null)
       syncSvgChildren(overlapSvg, overlapPaths, overlapStubs)
       if (underSvg) syncSvgChildren(underSvg, underPaths, [])
@@ -743,7 +899,7 @@ export function AiChatTurn({
         publishChatFrameThreadVisible(seamSourceId, visibleBoardCues)
       }
     },
-    [reactFlowInstance, seamSourceId]
+    [reactFlowInstance, seamSourceId, message.id]
   )
 
   // Board-side logo visibility is published inside paintThreads (respects clip stubs).
@@ -874,17 +1030,17 @@ export function AiChatTurn({
             onClick={(e) => {
               e.stopPropagation()
               if (frameGripDraggedRef.current) return // Drag used the grip — stay unselected
-              onSelect(message.id) // Click only → select turn (blue ring + ⋮⋮)
+              onSelect(message.id, { additive: isAdditiveSelectEvent(e) })
             }}
             className={cn(
               'absolute left-0.5 top-1 z-20 flex h-5 items-center justify-center rounded',
-              links.length > 0 ? 'w-auto min-w-5 px-0.5' : 'w-5', // Logo needs line+dot width
-              links.length > 0
+              showLinkedGrip ? 'w-auto min-w-5 px-0.5' : 'w-5', // Logo needs line+dot width
+              showLinkedGrip
                 ? null // Blue mark — no gray icon tint
                 : 'text-gray-400 hover:text-gray-700 dark:hover:text-gray-200',
               'cursor-grab active:cursor-grabbing',
               // Linked mark stays visible; unlinked grip: hover devices hide until turn hover
-              links.length > 0
+              showLinkedGrip
                 ? 'opacity-100'
                 : cn(
                     'opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:pointer-events-none',
@@ -895,7 +1051,7 @@ export function AiChatTurn({
             title="Drag onto board as a frame, or onto the input as context"
             aria-label="Drag chat turn as frame"
           >
-            {links.length > 0 ? (
+            {showLinkedGrip ? (
               // Prior visual size (w=8); height matches aspect so meet doesn't letterbox above the stroke
               <span className="pointer-events-none flex flex-row items-start" aria-hidden>
                 <svg
@@ -978,7 +1134,7 @@ export function AiChatTurn({
             showFrameShape
             menuHeader="Frame"
             showAddChild={false}
-            selectedCount={1}
+            selectedCount={Math.max(1, selectedCount)}
             canUngroup={false}
             canRevertText={canRevertFrame}
             showRevertText

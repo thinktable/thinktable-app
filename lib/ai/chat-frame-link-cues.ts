@@ -6,6 +6,7 @@
 
 import { useEffect, useState } from 'react'
 import {
+  isChatToBoardLink,
   readChatBoardLinks,
   type ChatTurnSide,
 } from '@/lib/ai/chat-board-links'
@@ -88,7 +89,7 @@ export function syncChatFrameLinkCuesFromMessages(
   for (const m of messages) {
     const sourceId = `turn-${m.id}` // Same id AiChatTurn uses for thread overlays
     next.add(sourceId)
-    const links = readChatBoardLinks(m.metadata)
+    const links = readChatBoardLinks(m.metadata).filter(isChatToBoardLink) // Board cues only
     const cues =
       links.length === 0
         ? []

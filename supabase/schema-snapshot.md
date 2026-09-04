@@ -1,13 +1,21 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-09-04T05:06:05Z`
+- Snapped at: `2026-09-04T05:19:48Z`
 - Source: local `supabase/migrations/` + remote applied tops (thinkable) + `.temp` service versions
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 - CLI: `supabase` `2.90.0` (marker via `migration new`; newer CLI available)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260904051948_chat_turn_multiselect_and_chat_to_chat_threads.sql`.
+- Chat turn **multi-select** (Shift/Cmd/Ctrl, same as board frames) persists across phone dock ↔ desktop remounts.
+- Chat↔chat **threads** via `boardLinks.targetTurnId`; multi-selected turns drag together onto the board/composer.
+- Thread connect **auto-pan** signs match RF `calcAutoPan` (near left/top → +, near right/bottom → −).
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Unify AI sparkle light blue and lock-frames icon
 
 - No DDL. Marker `20260904050604_unify_ai_star_light_blue_lock_frames_icon.sql`.
 - AI sparkles use light blue `#b5daf3` on every logo that shows stars (map toggle + open chat); customize-agent icon still omits stars.

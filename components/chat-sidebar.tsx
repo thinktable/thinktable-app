@@ -250,9 +250,11 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     const threadId = activeThreadIdRef.current
     const pick = getChatTurnSelected()
     if (!threadId || !pick || pick.threadId !== threadId) return false
+    const messageId = pick.anchorId || pick.messageIds[0]
+    if (!messageId) return false
     const root = getTranscriptScroller()
     const el = document.querySelector(
-      `[data-ai-turn="${CSS.escape(pick.messageId)}"]`
+      `[data-ai-turn="${CSS.escape(messageId)}"]`
     ) as HTMLElement | null
     if (!root || !el) return false
     // Align turn top to scroller top — same math as prompt-bar jump

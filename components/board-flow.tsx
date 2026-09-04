@@ -103,7 +103,7 @@ import {
 import { beginFrameDragging, endFrameDragging, isFrameDragging } from '@/lib/frame-dragging' // Skip O(n) work mid-drag on large boards
 import { takeBoardCapture } from '@/lib/captures' // Board-menu Capture view
 import { htmlToPlain } from '@/lib/ai/context-pack' // Frame hover previews from content
-import { AI_CHAT_BLOCK_MIME, type AiChatBlockDragPayload } from '@/lib/ai/types' // Drag chat turn onto page
+import { AI_CHAT_BLOCK_MIME, aiChatDragItems, type AiChatBlockDragPayload } from '@/lib/ai/types' // Drag chat turn onto page
 import {
   NOTION_ROW_DRAG_MIME,
   type NotionRowDragPayload,
@@ -9059,7 +9059,7 @@ function BoardFlowInner({
       }
     }
 
-    // AI chat turn → new frame; contents are TipTap blocks (lists = listItem grips)
+    // AI chat turn(s) → new frame(s); contents are TipTap blocks (lists = listItem grips)
     const aiRaw = event.dataTransfer.getData(AI_CHAT_BLOCK_MIME)
     if (aiRaw) {
       let payload: AiChatBlockDragPayload | null = null
@@ -9068,34 +9068,38 @@ function BoardFlowInner({
       } catch {
         payload = null
       }
-      if (payload?.source === 'ai-chat-block' && (payload.html || payload.plain)) {
+      if (payload?.source === 'ai-chat-block' && (payload.html || payload.plain || payload.items?.length)) {
         try {
           const supabase = createClient()
           const { data: { user } } = await supabase.auth.getUser()
           if (!user || !conversationId) return
+          const items = aiChatDragItems(payload).filter((it) => it.html || it.plain)
+          if (items.length === 0) return
           takeSnapshot()
-          // Prefer TipTap HTML; markdown plain → proper blocks (never one giant paragraph)
-          const rawContent = payload.html?.trim()
-            ? payload.html
-            : markdownToTipTapHtml(payload.plain || '')
-          // Only assistant (AI) response text gets persistent AI-origin marks — not user prompts
-          const content =
-            payload.role === 'assistant' ? markHtmlWithAiOrigin(rawContent) : rawContent
-          const { error } = await supabase
-            .from('messages')
-            .insert({
+          const STACK_GAP = 24 // Vertical offset between multi-dropped frames
+          const rows = items.map((item, i) => {
+            // Prefer TipTap HTML; markdown plain → proper blocks (never one giant paragraph)
+            const rawContent = item.html?.trim()
+              ? item.html
+              : markdownToTipTapHtml(item.plain || '')
+            // Only assistant (AI) response text gets persistent AI-origin marks — not user prompts
+            const content =
+              item.role === 'assistant' ? markHtmlWithAiOrigin(rawContent) : rawContent
+            return {
               conversation_id: conversationId,
               user_id: user.id,
-              role: 'user',
+              role: 'user' as const,
               content,
               metadata: newBlockMetadata({
-                position,
+                position: { x: position.x, y: position.y + i * STACK_GAP },
                 fadeIn: true,
                 fromAiChat: true,
-                hasAiOrigin: payload.role === 'assistant',
-                aiMessageId: payload.messageId,
+                hasAiOrigin: item.role === 'assistant',
+                aiMessageId: item.messageId,
               }),
-            })
+            }
+          })
+          const { error } = await supabase.from('messages').insert(rows)
           if (error) {
             console.error('Failed to place AI chat turn as frame:', error)
             return

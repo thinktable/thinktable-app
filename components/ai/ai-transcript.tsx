@@ -2,13 +2,16 @@
 
 // Transcript of AI turns — each turn is a frame-like box (select → blue adjust + threads)
 
-import { useCallback, useEffect } from 'react'
-import type { AiMessage } from '@/lib/ai/types'
+import { useCallback, useEffect, useMemo } from 'react'
+import type { AiMessage, AiChatBlockDragItem } from '@/lib/ai/types'
+import { markdownToTipTapHtml } from '@/lib/ai/markdown-to-tiptap'
 import type { AiChatBoardLink } from '@/lib/ai/chat-board-links'
+import { isChatToChatLink, readChatBoardLinks } from '@/lib/ai/chat-board-links'
 import {
   clearChatTurnSelected,
-  setChatTurnSelected,
-  useChatTurnSelected,
+  pruneChatTurnSelected,
+  selectChatTurn,
+  useChatTurnSelectedIds,
 } from '@/lib/ai/chat-turn-selected'
 import { AiChatTurn } from '@/components/ai/ai-chat-turn'
 
@@ -31,15 +34,45 @@ export function AiTranscript({
   onRegenerateResponse,
   onMessagePatch,
 }: AiTranscriptProps) {
-  // Module store — phone dock ↔ desktop column remounts keep the same pick
-  const selectedId = useChatTurnSelected(threadId)
+  // Module store — phone dock ↔ desktop column remounts keep the same picks
+  const selectedIds = useChatTurnSelectedIds(threadId)
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
 
-  // Stale pick (truncated / other chat) → clear so chrome does not orphan
+  // Inbound chat↔chat links keyed by target turn (sources store the link)
+  const inboundByTarget = useMemo(() => {
+    const map = new Map<string, Array<{ sourceId: string; link: AiChatBoardLink }>>()
+    for (const m of messages) {
+      for (const link of readChatBoardLinks(m.metadata)) {
+        if (!isChatToChatLink(link) || !link.targetTurnId) continue
+        const list = map.get(link.targetTurnId) || []
+        list.push({ sourceId: m.id, link })
+        map.set(link.targetTurnId, list)
+      }
+    }
+    return map
+  }, [messages])
+
+  // Which turns show the linked brand grip (outbound or inbound)
+  const linkedTurnIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const m of messages) {
+      const links = readChatBoardLinks(m.metadata)
+      if (links.length === 0) continue
+      ids.add(m.id)
+      for (const l of links) {
+        if (l.targetTurnId) ids.add(l.targetTurnId)
+      }
+    }
+    return ids
+  }, [messages])
+
+  // Stale picks (truncate / other chat) → prune so chrome does not orphan
   useEffect(() => {
-    if (!selectedId) return
-    if (messages.some((m) => m.id === selectedId)) return
-    clearChatTurnSelected(threadId)
-  }, [messages, selectedId, threadId])
+    if (selectedIds.length === 0) return
+    const valid = new Set(messages.map((m) => m.id))
+    if (selectedIds.every((id) => valid.has(id))) return
+    pruneChatTurnSelected(threadId, valid)
+  }, [messages, selectedIds, threadId])
 
   // Click outside any turn → deselect (board chat-link cues select a turn themselves)
   useEffect(() => {
@@ -55,11 +88,37 @@ export function AiTranscript({
   }, [threadId])
 
   const onSelect = useCallback(
-    (id: string) => {
+    (id: string, opts?: { additive?: boolean }) => {
       if (!threadId) return // No thread yet — ignore
-      setChatTurnSelected(threadId, id)
+      selectChatTurn(threadId, id, opts)
     },
     [threadId]
+  )
+
+  /**
+   * Multi-drag: when the grabbed turn is part of a multi-selection, pack every
+   * selected turn in transcript order (primary uses live editor html/plain).
+   */
+  const buildDragItems = useCallback(
+    (primary: AiChatBlockDragItem): AiChatBlockDragItem[] => {
+      if (selectedIds.length <= 1 || !selectedSet.has(primary.messageId)) {
+        return [primary]
+      }
+      return messages
+        .filter((m) => selectedSet.has(m.id))
+        .map((m) => {
+          if (m.id === primary.messageId) return primary // Prefer live TipTap from grabbed turn
+          const stored =
+            typeof m.metadata?.html === 'string' ? (m.metadata.html as string) : ''
+          return {
+            messageId: m.id,
+            plain: m.content || '',
+            html: stored.trim() ? stored : markdownToTipTapHtml(m.content || ''),
+            role: m.role,
+          }
+        })
+    },
+    [messages, selectedIds.length, selectedSet]
   )
 
   const softSave = useCallback(
@@ -102,11 +161,16 @@ export function AiTranscript({
         <AiChatTurn
           key={m.id}
           message={m}
-          selected={selectedId === m.id}
+          selected={selectedSet.has(m.id)}
+          selectedCount={selectedIds.length}
+          selectedIds={selectedIds}
           streaming={m.id === streamingId || m.status === 'streaming'}
           chatBusy={!!streamingId}
           conversationId={conversationId}
+          hasThreadLinks={linkedTurnIds.has(m.id)}
+          inboundChatLinks={inboundByTarget.get(m.id) || EMPTY_INBOUND}
           onSelect={onSelect}
+          buildDragItems={buildDragItems}
           onSoftSave={softSave}
           onLinksChange={onLinksChange}
           onResendPrompt={(id, content) => {
@@ -120,3 +184,5 @@ export function AiTranscript({
     </div>
   )
 }
+
+const EMPTY_INBOUND: Array<{ sourceId: string; link: AiChatBoardLink }> = []

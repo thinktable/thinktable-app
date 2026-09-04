@@ -2,29 +2,44 @@
 
 export type ChatTurnSide = 'left' | 'right' | 'top' | 'bottom'
 
-/** One thread from an AI chat turn to a board frame. */
+/**
+ * One thread from an AI chat turn to a board frame **or** another chat turn.
+ * Board target: `frameMessageId` set, no `targetTurnId`.
+ * Chat target: `targetTurnId` set (`frameMessageId` may be "").
+ */
 export type AiChatBoardLink = {
   id: string // Stable link id
-  frameMessageId: string // Board messages.id (frame)
-  turnSide: ChatTurnSide // Connection point on the chat turn
-  frameSide: ChatTurnSide // Connection point on the board frame
+  frameMessageId: string // Board messages.id (frame) — empty when chat↔chat
+  targetTurnId?: string // ai_messages.id when threading to another chat turn
+  turnSide: ChatTurnSide // Connection point on the source chat turn
+  frameSide: ChatTurnSide // Connection point on the board frame / target turn
 }
 
 const META_KEY = 'boardLinks' // ai_messages.metadata.boardLinks
+
+/** True when this link ends on another chat turn (not a board frame). */
+export function isChatToChatLink(link: AiChatBoardLink): boolean {
+  return typeof link.targetTurnId === 'string' && link.targetTurnId.length > 0
+}
+
+/** True when this link ends on a board frame. */
+export function isChatToBoardLink(link: AiChatBoardLink): boolean {
+  return !isChatToChatLink(link) && !!link.frameMessageId
+}
 
 /** Read links from a message metadata bag. */
 export function readChatBoardLinks(meta: Record<string, unknown> | null | undefined): AiChatBoardLink[] {
   const raw = meta?.[META_KEY]
   if (!Array.isArray(raw)) return []
-  return raw.filter(
-    (x): x is AiChatBoardLink =>
-      !!x &&
-      typeof x === 'object' &&
-      typeof (x as AiChatBoardLink).id === 'string' &&
-      typeof (x as AiChatBoardLink).frameMessageId === 'string' &&
-      typeof (x as AiChatBoardLink).turnSide === 'string' &&
-      typeof (x as AiChatBoardLink).frameSide === 'string'
-  )
+  return raw.filter((x): x is AiChatBoardLink => {
+    if (!x || typeof x !== 'object') return false
+    const l = x as AiChatBoardLink
+    if (typeof l.id !== 'string') return false
+    if (typeof l.turnSide !== 'string' || typeof l.frameSide !== 'string') return false
+    const toChat = typeof l.targetTurnId === 'string' && l.targetTurnId.length > 0
+    const toBoard = typeof l.frameMessageId === 'string' && l.frameMessageId.length > 0
+    return toChat || toBoard // Must target chat turn or board frame
+  })
 }
 
 /** Merge links into metadata (immutable). */
