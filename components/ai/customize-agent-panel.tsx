@@ -179,7 +179,7 @@ export function CustomizeAgentPanel({
           title="Personalize icon"
           aria-label="Personalize agent icon"
         >
-          <ThinktableBrandMark drawingUrl={iconUrl} size={40} />
+          <ThinktableBrandMark drawingUrl={iconUrl} size={40} showAiStar={false} />
         </button>
         <input
           type="text"

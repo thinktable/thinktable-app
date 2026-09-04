@@ -36,16 +36,19 @@ import {
   sideAnchor,
   withChatBoardLinks,
 } from '@/lib/ai/chat-board-links'
-import { clipChatThread, clientToThreadSvgSpace } from '@/lib/ai/chat-thread-clip'
+import {
+  clipChatThread,
+  clientToThreadSvgSpace,
+  chatSidebarColumnEl,
+  chatSidebarColumnRect,
+} from '@/lib/ai/chat-thread-clip'
 import {
   chatSidebarSeamX,
   clearChatSeamGaps,
   publishChatSeamGaps,
 } from '@/lib/ai/chat-sidebar-seam'
 import {
-  clearChatFrameLinkCues,
   clearChatFrameThreadVisible,
-  publishChatFrameLinkCues,
   publishChatFrameThreadVisible,
 } from '@/lib/ai/chat-frame-link-cues'
 
@@ -298,7 +301,7 @@ export function AiChatTurn({
   const showThreadOverlay = selected && links.length > 0 // Mount empty SVG; fill imperatively
   const seamSourceId = `turn-${message.id}` // Settled threads for this turn
   const rubberSourceId = `rubber-${message.id}` // In-progress connect rubber band
-  // Body (overlap when board free) + under-dock (phone only — board behind map dock)
+  // Body (overlap when board free) + under-chrome (phone dock / desktop sidebar)
   const threadSvgRef = useRef<SVGSVGElement | null>(null)
   const threadUnderSvgRef = useRef<SVGSVGElement | null>(null)
   const [underHostEl, setUnderHostEl] = useState<HTMLElement | null>(null)
@@ -308,28 +311,30 @@ export function AiChatTurn({
       return
     }
     const sync = () => {
-      // Phone dock only: under-layer lives on the board root beneath z-45 cards.
-      // Desktop stubs clip on the body SVG (left of seam) — do not paint inside the sidebar.
       const dock = document.querySelector('[data-chat-map-dock]')
       const root = document.querySelector('[data-board-root]') as HTMLElement | null
-      setUnderHostEl(dock && root ? root : null)
+      if (dock && root) {
+        setUnderHostEl(root) // Phone: stroke under the map dock cards
+        return
+      }
+      setUnderHostEl(chatSidebarColumnEl()) // Desktop: stroke under the sidebar column
     }
     sync()
     const id = window.setInterval(sync, 400)
     return () => clearInterval(id)
   }, [showThreadOverlay])
 
-  /** Keep a map-side clipPath (x < seam) in sync for stubbed desktop strokes. */
-  const syncMapClip = (svg: SVGSVGElement, seamX: number | null) => {
+  /** Clip scrolled-away desktop strokes to the map left of the sidebar seam only. */
+  const syncLeftOfSeamClip = (svg: SVGSVGElement, seamX: number | null) => {
     let defs = svg.querySelector('defs')
     if (!defs) {
       defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs')
       svg.insertBefore(defs, svg.firstChild)
     }
-    let cp = svg.querySelector('#tt-thread-map-clip') as SVGClipPathElement | null
+    let cp = svg.querySelector('#tt-thread-left-of-seam') as SVGClipPathElement | null
     if (!cp) {
       cp = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath')
-      cp.setAttribute('id', 'tt-thread-map-clip')
+      cp.setAttribute('id', 'tt-thread-left-of-seam')
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
       rect.setAttribute('x', '0')
       rect.setAttribute('y', '0')
@@ -338,15 +343,14 @@ export function AiChatTurn({
     }
     const rect = cp.querySelector('rect')
     if (!rect) return
-    const w = seamX != null && seamX > 0 ? seamX : 0
-    rect.setAttribute('width', String(w))
+    rect.setAttribute('width', String(seamX != null && seamX > 0 ? seamX : 0))
     rect.setAttribute('height', String(Math.max(window.innerHeight, 1)))
   }
 
   /** Sync path + stub children on one SVG root. */
   const syncSvgChildren = (
     svg: SVGSVGElement,
-    paths: { d: string; clipToMap?: boolean }[],
+    paths: { d: string; clipLeftOfSeam?: boolean }[],
     stubs: { x: number; y: number }[]
   ) => {
     let pathCount = 0
@@ -390,8 +394,11 @@ export function AiChatTurn({
       const el = pathEls[i]
       if (!el) continue
       el.setAttribute('d', paths[i].d)
-      if (paths[i].clipToMap) el.setAttribute('clip-path', 'url(#tt-thread-map-clip)')
-      else el.removeAttribute('clip-path')
+      if (paths[i].clipLeftOfSeam) {
+        el.setAttribute('clip-path', 'url(#tt-thread-left-of-seam)')
+      } else {
+        el.removeAttribute('clip-path')
+      }
     }
     const circleEls = svg.querySelectorAll('circle')
     for (let i = 0; i < stubs.length; i++) {
@@ -411,16 +418,14 @@ export function AiChatTurn({
         clientToThreadSvgSpace(p, underSvg?.parentElement ?? null)
       const turnRect = turn.getBoundingClientRect()
       const currentLinks = linksRef.current
-      const overlapPaths: { d: string; clipToMap?: boolean }[] = []
+      const overlapPaths: { d: string; clipLeftOfSeam?: boolean }[] = []
       const overlapStubs: { x: number; y: number }[] = []
-      const underPaths: { d: string; clipToMap?: boolean }[] = []
+      const underPaths: { d: string; clipLeftOfSeam?: boolean }[] = []
       const visibleBoardCues: { frameMessageId: string; side: ChatTurnSide }[] = []
       const seamYs: number[] = []
-      const seamX = chatSidebarSeamX() // Always need seam for desktop map clip
+      const seamX = chatSidebarSeamX()
       const nodes = reactFlowInstance?.getNodes() || []
-      // Desktop column (not phone dock): stubbed strokes stay left of the seam
-      const clipStubToMap =
-        !!document.querySelector('[data-chat-sidebar]:not([data-chat-map-dock])')
+      const desktopSidebar = !!chatSidebarColumnRect()
       for (const link of currentLinks) {
         const n = nodes.find(
           (x) =>
@@ -454,7 +459,7 @@ export function AiChatTurn({
         if (!bClient) continue
         const clipped = clipChatThread(aClient, bClient, link.turnSide, link.frameSide)
         if (clipped.boardCovered && underSvg) {
-          // Phone: board behind dock — stroke under cards, ends at side stub
+          // Board behind/past chat — stroke under chrome, ends at side stub (phone + desktop)
           if (clipped.stub) {
             underPaths.push({
               d: chatThreadPath(
@@ -464,6 +469,13 @@ export function AiChatTurn({
                 clipped.stub.side
               ),
             })
+            // Map-side tip left of the seam so the thread doesn’t vanish under the column
+            if (desktopSidebar) {
+              overlapPaths.push({
+                d: chatThreadPath(bClient, clipped.stub, link.frameSide, clipped.stub.side),
+                clipLeftOfSeam: true,
+              })
+            }
             overlapStubs.push({ x: clipped.stub.x, y: clipped.stub.y })
           } else if (clipped.path) {
             underPaths.push({
@@ -471,10 +483,9 @@ export function AiChatTurn({
             })
           }
         } else if (clipped.stub && !clipped.reachesChat) {
-          // Stubbed (board covered on desktop, or turn scrolled away) — meet the grey dot;
-          // on desktop clip so the stroke never paints over the sidebar column.
+          // Turn scrolled away — meet the grey dot; desktop keeps stroke left of the seam
           const d = chatThreadPath(bClient, clipped.stub, link.frameSide, clipped.stub.side)
-          overlapPaths.push({ d, clipToMap: clipStubToMap })
+          overlapPaths.push({ d, clipLeftOfSeam: desktopSidebar })
           overlapStubs.push({ x: clipped.stub.x, y: clipped.stub.y })
         } else if (clipped.path) {
           // Board free + turn visible — stroke may overlap chat to reach the turn
@@ -503,7 +514,7 @@ export function AiChatTurn({
           seamYs.push(clipped.stub.y)
         }
       }
-      syncMapClip(overlapSvg, clipStubToMap ? seamX : null)
+      syncLeftOfSeamClip(overlapSvg, desktopSidebar ? seamX : null)
       syncSvgChildren(overlapSvg, overlapPaths, overlapStubs)
       if (underSvg) syncSvgChildren(underSvg, underPaths, [])
       if (!opts?.skipPublish) {
@@ -514,24 +525,9 @@ export function AiChatTurn({
     [reactFlowInstance, seamSourceId]
   )
 
-  // Keep board frames aware of linked sides whenever this turn is mounted
-  useEffect(() => {
-    if (links.length === 0) {
-      clearChatFrameLinkCues(seamSourceId)
-      return
-    }
-    publishChatFrameLinkCues(
-      seamSourceId,
-      links.map((l) => ({ frameMessageId: l.frameMessageId, side: l.frameSide }))
-    )
-    return () => {
-      clearChatFrameLinkCues(seamSourceId)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- linksKey stands in for links
-  }, [linksKey, seamSourceId])
-
   // Board-side logo visibility is published inside paintThreads (respects clip stubs).
-  // Clear on deselect / unmount so logos return when the overlay is gone.
+  // Link cues themselves are synced from ChatSidebar (survive desktop chat close).
+  // Clear thread-visible marks on deselect / unmount so logos return when the overlay is gone.
   useEffect(() => {
     if (!showThreadOverlay) {
       clearChatFrameThreadVisible(seamSourceId)
@@ -763,7 +759,11 @@ export function AiChatTurn({
           <svg
             ref={threadUnderSvgRef}
             data-tt-thread-under-dock="true"
-            className="pointer-events-none absolute inset-0 z-[40]" // Under phone dock (z-45)
+            className={
+              underHostEl.hasAttribute('data-board-root')
+                ? 'pointer-events-none absolute inset-0 z-[40]' // Under phone dock (z-45)
+                : 'pointer-events-none absolute inset-0 z-0' // Under desktop sidebar chrome
+            }
             width="100%"
             height="100%"
           />,

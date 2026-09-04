@@ -26,8 +26,8 @@ const TT_TOPPER_STORAGE_KEY_LEGACY = 'thinktable-ai-topper'
 /** Logo circle fill — matches public/thinktable-logo.svg .cls-1 */
 export const LOGO_CIRCLE_COLOR = '#a2a7af'
 
-/** AI sparkles badge fill — yellow accent on brand mark */
-const AI_STAR_COLOR = '#f5c518'
+/** AI sparkles badge fill — brand blue on the logo disc */
+const AI_STAR_COLOR = '#3b83f6'
 
 /** Stroke color for custom marks (white cutout look) */
 const DRAW_WHITE = '#ffffff'
@@ -130,18 +130,21 @@ type ThinktableBrandMarkProps = {
   className?: string
   /** Board fill + theme strokes (default); brand = legacy grey disc for personalize canvas */
   discVariant?: 'brand' | 'board'
+  /** AI sparkles badge — on for the closed-chat map toggle; off inside open chat chrome */
+  showAiStar?: boolean
 }
 
 /**
  * Brand mark — default hand-drawn T + table-dot, or a saved circle PNG.
  * Solid circle behind the mark so any transparency still reads as the logo disc.
- * AI sparkles badge sits top-left with a white border (outside the disc clip).
+ * AI sparkles badge sits top-right with a white border (outside the disc clip).
  */
 export function ThinktableBrandMark({
   drawingUrl = null,
   size = 56,
   className,
   discVariant = 'board',
+  showAiStar = true,
 }: ThinktableBrandMarkProps) {
   const badgeSize = Math.max(14, Math.round(size * 0.34)) // Scales with logo
   const onBoard = discVariant === 'board'
@@ -180,7 +183,8 @@ export function ThinktableBrandMark({
         )}
       </div>
 
-      {/* AI stars — top-left; main + top spark only (no bottom), soft yellow + white outline */}
+      {/* AI stars — top-right cue for closed-chat map toggle only */}
+      {showAiStar ? (
       <svg
         viewBox="0 0 24 24"
         className="absolute pointer-events-none"
@@ -188,7 +192,7 @@ export function ThinktableBrandMark({
           width: badgeSize,
           height: badgeSize,
           top: -Math.round(badgeSize * 0.15),
-          left: -Math.round(badgeSize * 0.15),
+          right: -Math.round(badgeSize * 0.15),
           color: AI_STAR_COLOR,
           filter: 'drop-shadow(0 0 0.6px #fff) drop-shadow(0 0 0.6px #fff) drop-shadow(0 0 0.6px #fff)',
         }}
@@ -207,6 +211,7 @@ export function ThinktableBrandMark({
         <path d="M20 2v4" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
         <path d="M22 4h-4" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
       </svg>
+      ) : null}
     </div>
   )
 }

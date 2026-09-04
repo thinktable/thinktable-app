@@ -1,10 +1,15 @@
 // Board-frame connection-point cues for chat↔board threads.
-// Linked sides are known whenever a chat turn with boardLinks is mounted.
-// The logo replaces the blue simulator only while connection indicators
-// normally show AND the chat↔board thread stroke is not drawn.
+// Linked sides come from ai_messages.metadata.boardLinks (synced from ChatSidebar
+// whenever the active thread’s messages are in memory — including while chat is closed).
+// The logo sits beside the blue simulator while connection indicators normally show
+// AND the chat↔board thread stroke is not drawn.
 
 import { useEffect, useState } from 'react'
-import type { ChatTurnSide } from '@/lib/ai/chat-board-links'
+import {
+  readChatBoardLinks,
+  type ChatTurnSide,
+} from '@/lib/ai/chat-board-links'
+import type { AiMessage } from '@/lib/ai/types'
 
 /** One published endpoint: board frame message id + which side the thread meets. */
 export type ChatFrameLinkCue = {
@@ -14,7 +19,7 @@ export type ChatFrameLinkCue = {
 
 type Listener = () => void // Cue maps changed
 
-const linkSources = new Map<string, ChatFrameLinkCue[]>() // Mounted turns → linked endpoints
+const linkSources = new Map<string, ChatFrameLinkCue[]>() // Thread turns → linked endpoints
 const visibleSources = new Map<string, ChatFrameLinkCue[]>() // Selected turns → painted thread ends
 const listeners = new Set<Listener>()
 
@@ -57,10 +62,51 @@ export function publishChatFrameLinkCues(sourceId: string, cues: ChatFrameLinkCu
   if (setSource(linkSources, sourceId, cues)) notify()
 }
 
-/** Drop one chat turn’s link cues (unmount). */
+/** Drop one chat turn’s link cues. */
 export function clearChatFrameLinkCues(sourceId: string) {
   if (!linkSources.has(sourceId)) return
   linkSources.delete(sourceId)
+  notify()
+}
+
+/**
+ * Rebuild link cues from the active thread’s messages.
+ * Keeps board simulators marked while chat UI is closed (desktop unmounts the transcript).
+ * Pass `previousSourceIds` from the last sync so deleted / previous-thread turns clear.
+ */
+export function syncChatFrameLinkCuesFromMessages(
+  messages: AiMessage[],
+  previousSourceIds?: Set<string>
+): Set<string> {
+  const next = new Set<string>()
+  let changed = false
+  for (const m of messages) {
+    const sourceId = `turn-${m.id}` // Same id AiChatTurn uses for thread overlays
+    next.add(sourceId)
+    const links = readChatBoardLinks(m.metadata)
+    const cues =
+      links.length === 0
+        ? []
+        : links.map((l) => ({
+            frameMessageId: l.frameMessageId,
+            side: l.frameSide,
+          }))
+    if (setSource(linkSources, sourceId, cues)) changed = true
+  }
+  if (previousSourceIds) {
+    for (const id of previousSourceIds) {
+      if (next.has(id)) continue
+      if (setSource(linkSources, id, [])) changed = true // Drop turns no longer in transcript
+    }
+  }
+  if (changed) notify()
+  return next
+}
+
+/** Drop every published link-cue source (leave board). */
+export function clearAllChatFrameLinkCues() {
+  if (linkSources.size === 0) return
+  linkSources.clear()
   notify()
 }
 
@@ -89,7 +135,7 @@ export function subscribeChatFrameLinkCues(cb: Listener): () => void {
 }
 
 /**
- * Sides that should show the chat logo on a board frame’s connection indicator:
+ * Sides that should show the chat-connected cue on a board frame’s connection indicator:
  * linked to chat, but the thread stroke is not currently showing.
  */
 export function chatFrameLinkLogoSides(frameMessageId: string | null | undefined): Set<ChatTurnSide> {

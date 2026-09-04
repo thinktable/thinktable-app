@@ -33,6 +33,10 @@ import {
 } from '@/lib/ai/agents' // Personalize → custom agent icon
 import { useAiEditSession, buildFramePendingEdit, buildCreateFramePendingEdit, buildCreateThreadPendingEdit } from '@/lib/ai/edit-session'
 import { htmlToPlain } from '@/lib/ai/context-pack' // Plain excerpts for snapshots
+import {
+  clearAllChatFrameLinkCues,
+  syncChatFrameLinkCuesFromMessages,
+} from '@/lib/ai/chat-frame-link-cues' // Board simulators stay chat-linked while sidebar is closed
 import { createClient } from '@/lib/supabase/client' // Snapshot frame load
 import { cn } from '@/lib/utils' // cn
 import {
@@ -170,6 +174,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   const [showReturnToBottom, setShowReturnToBottom] = useState(false) // Transcript scrolled away from bottom
   const transcriptScrollRef = useRef<HTMLDivElement>(null) // Phone content card or desktop sidebar scroller
   const scrolledOpenThreadRef = useRef<string | null>(null) // Which thread we already pinned to bottom on open
+  const linkCueSourceIdsRef = useRef<Set<string>>(new Set()) // Last synced turn-* cue sources
   /**
    * Transcript scroll memory across phone dock ↔ desktop column remounts.
    * Prefer first-visible turn + offset (stable when window height changes);
@@ -485,6 +490,24 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
       cancelled = true
     }
   }, [thread?.id])
+
+  // Keep board chat-link simulators in sync from loaded messages — even while desktop
+  // chat returns null (transcript unmounted). Do not clear on that UI close.
+  useEffect(() => {
+    linkCueSourceIdsRef.current = syncChatFrameLinkCuesFromMessages(
+      messages,
+      linkCueSourceIdsRef.current
+    )
+  }, [messages])
+
+  // Leaving the board drops stale cues so the next board does not inherit them
+  useEffect(() => {
+    return () => {
+      clearAllChatFrameLinkCues()
+      linkCueSourceIdsRef.current = new Set()
+    }
+  }, [])
+
   useEffect(() => {
     if (!isChatSidebarOpen) return
     let cancelled = false
@@ -1121,7 +1144,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
 
         <div
           data-chat-content-window // Thread stubs attach to transcript column — not the composer
-          className="relative z-10 flex-1 min-h-0 flex flex-col"
+          className="relative z-10 flex-1 min-h-0 flex flex-col bg-gray-50 dark:bg-[#0f0f0f]" // Opaque so under-thread strokes stay behind text
         >
           <div
             ref={transcriptScrollRef}
