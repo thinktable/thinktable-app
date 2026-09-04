@@ -6,6 +6,7 @@ export { useIsNearThreadConnection } from './use-is-near-thread-connection'
 export { forwardConnectStartToHandle } from './forward-connect-start'
 export { startThreadFromIndicator } from './start-thread-from-indicator'
 export { ConnectionIndicator } from './ConnectionIndicator'
+export { ChatLinkConnectionCue } from './ChatLinkConnectionCue'
 export {
   normalizeHandleId,
   isConnectionIndicatorId,

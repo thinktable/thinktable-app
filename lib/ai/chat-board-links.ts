@@ -53,6 +53,22 @@ export function sideAnchor(
   return { x: rect.left + rect.width / 2, y: rect.bottom }
 }
 
+/**
+ * Mid-side of an RF frame box in flow space.
+ * Used when `onlyRenderVisibleElements` has culled the node DOM.
+ */
+export function flowSideAnchor(
+  position: { x: number; y: number }, // Flow origin (absolute when nested)
+  width: number, // Measured / persisted frame width
+  height: number, // Measured / persisted frame height
+  side: ChatTurnSide // Which connection point to use
+): { x: number; y: number } {
+  if (side === 'left') return { x: position.x, y: position.y + height / 2 }
+  if (side === 'right') return { x: position.x + width, y: position.y + height / 2 }
+  if (side === 'top') return { x: position.x + width / 2, y: position.y }
+  return { x: position.x + width / 2, y: position.y + height }
+}
+
 /** Pick the frame side nearest to a client point. */
 export function nearestFrameSide(
   rect: DOMRect,

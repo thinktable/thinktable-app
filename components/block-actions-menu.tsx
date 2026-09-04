@@ -969,6 +969,15 @@ export function BlockActionsMenu({
           ref={inputRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            // Del shortcut on the Delete row — empty search → same as clicking Delete
+            if ((e.key === 'Delete' || e.key === 'Backspace') && query.length === 0) {
+              e.preventDefault()
+              e.stopPropagation()
+              onAction('delete')
+              onClose()
+            }
+          }}
           placeholder="Search actions..."
           className="w-full h-8 px-2 text-sm rounded-md bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#3a3a3a] outline-none text-gray-900 dark:text-gray-100"
         />
@@ -1021,6 +1030,14 @@ export function BlockActionsMenu({
                 else if (row.submenu === 'connections') return // Click-only picker
                 else setOpenSubmenu(null)
               }}
+              // pointerdown: menu root preventDefault on mousedown can suppress click
+              onPointerDown={(e) => {
+                if (e.button !== 0) return // Left button only
+                if (row.submenu) return // Submenus toggle on click / hover
+                e.preventDefault()
+                e.stopPropagation()
+                onAction(row.id) // Handler closes when needed (Delete clears rightClickedNode)
+              }}
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
@@ -1054,7 +1071,7 @@ export function BlockActionsMenu({
                   onClose()
                   return
                 }
-                onAction(row.id)
+                // Non-submenu actions already ran on pointerdown — avoid double-fire
               }}
               className={cn(
                 'h-8 shrink-0 justify-start px-2 text-sm font-normal',

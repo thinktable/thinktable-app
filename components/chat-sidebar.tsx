@@ -63,50 +63,55 @@ function persistActiveThreadId(threadId: string | null) {
  * holes where chat↔board threads (or a rubber-band) cross the seam.
  */
 function ChatSidebarSeam() {
-  const ref = useRef<HTMLDivElement>(null)
-  const [maskImage, setMaskImage] = useState<string | undefined>(undefined)
+  const ref = useRef<HTMLDivElement>(null) // Seam element — mask written imperatively
 
   useEffect(() => {
     const apply = (clientYs: number[]) => {
-      const el = ref.current
-      if (!el) return
-      const rect = el.getBoundingClientRect()
-      const h = rect.height
+      const el = ref.current // Live seam node
+      if (!el) return // Not mounted yet
+      const rect = el.getBoundingClientRect() // Map client Y → local px
+      const h = rect.height // Seam height in px
       if (h <= 0 || clientYs.length === 0) {
-        setMaskImage(undefined) // Full solid line
+        el.style.webkitMaskImage = '' // Full solid line (WebKit)
+        el.style.maskImage = '' // Full solid line
         return
       }
       // Local Y ranges (px from top of the seam), sorted + merged
-      const half = CHAT_SEAM_GAP_HALF
+      const half = CHAT_SEAM_GAP_HALF // Half-gap around each crossing
       const ranges = clientYs
         .map((y) => ({
-          top: Math.max(0, y - rect.top - half),
-          bottom: Math.min(h, y - rect.top + half),
+          top: Math.max(0, y - rect.top - half), // Clamp gap top
+          bottom: Math.min(h, y - rect.top + half), // Clamp gap bottom
         }))
-        .filter((r) => r.bottom > r.top)
-        .sort((a, b) => a.top - b.top)
+        .filter((r) => r.bottom > r.top) // Drop empty ranges
+        .sort((a, b) => a.top - b.top) // Merge requires sorted order
       if (ranges.length === 0) {
-        setMaskImage(undefined)
+        el.style.webkitMaskImage = '' // Nothing visible to punch
+        el.style.maskImage = ''
         return
       }
-      const merged: Array<{ top: number; bottom: number }> = []
+      const merged: Array<{ top: number; bottom: number }> = [] // Coalesce overlaps
       for (const r of ranges) {
-        const last = merged[merged.length - 1]
+        const last = merged[merged.length - 1] // Prior gap
         if (last && r.top <= last.bottom) {
-          last.bottom = Math.max(last.bottom, r.bottom)
+          last.bottom = Math.max(last.bottom, r.bottom) // Expand into overlap
         } else {
-          merged.push({ ...r })
+          merged.push({ ...r }) // New discrete gap
         }
       }
       // Mask: black = visible divider, transparent = gap for the blue thread
-      const stops: string[] = ['#000 0']
+      const stops: string[] = ['#000 0'] // Start solid
       for (const g of merged) {
         stops.push(`#000 ${g.top}px`, `transparent ${g.top}px`, `transparent ${g.bottom}px`, `#000 ${g.bottom}px`)
       }
-      stops.push('#000 100%')
-      setMaskImage(`linear-gradient(to bottom, ${stops.join(', ')})`)
+      stops.push('#000 100%') // End solid
+      const mask = `linear-gradient(to bottom, ${stops.join(', ')})` // CSS mask image
+      el.style.webkitMaskImage = mask // Safari
+      el.style.maskImage = mask // Standard
+      el.style.webkitMaskSize = '100% 100%' // Cover full seam
+      el.style.maskSize = '100% 100%'
     }
-    return subscribeChatSeamGaps(apply)
+    return subscribeChatSeamGaps(apply) // Imperative — no React setState on scroll
   }, [])
 
   return (
@@ -115,11 +120,6 @@ function ChatSidebarSeam() {
       aria-hidden
       data-chat-sidebar-seam
       className="pointer-events-none absolute inset-y-0 left-0 z-30 w-px bg-black/10 dark:bg-white/10"
-      style={
-        maskImage
-          ? { WebkitMaskImage: maskImage, maskImage, WebkitMaskSize: '100% 100%', maskSize: '100% 100%' }
-          : undefined
-      }
     />
   )
 }
@@ -814,6 +814,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
               <>
             {(isChatSidebarOpen && !dockCompact && (hasTranscript || showLoadPlaceholder)) && (
               <div
+                data-chat-content-window // Thread stubs attach here only — not prompt / mid chrome
                 className={cn(
                   'relative rounded-xl min-h-[40px]', // Response box — ticks pin here, not in the composer
                   'bg-white/95 dark:bg-[#202020]/95 backdrop-blur-md',
@@ -936,7 +937,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
       <aside
         data-chat-sidebar
         className={cn(
-          'relative h-full flex flex-col', // relative so ticks + seam pin to this column
+          'relative h-full flex flex-col isolate', // isolate so under-thread SVG stacks under chrome
           'bg-gray-50 dark:bg-[#0f0f0f]'
           // Left edge is ChatSidebarSeam (gapped where threads cross) — not CSS border-l
         )}
@@ -944,16 +945,18 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
       >
         <ChatSidebarSeam />
         {customizeOpen ? (
-          <CustomizeAgentPanel
-            open={customizeOpen}
-            onClose={() => setCustomizeOpen(false)}
-            sharedDrawingUrl={logoDrawing}
-            onRequestPersonalize={openPersonalizeForDraft}
-            iconRevision={agentIconRevision}
-          />
+          <div className="relative z-10 flex-1 min-h-0 flex flex-col">
+            <CustomizeAgentPanel
+              open={customizeOpen}
+              onClose={() => setCustomizeOpen(false)}
+              sharedDrawingUrl={logoDrawing}
+              onRequestPersonalize={openPersonalizeForDraft}
+              iconRevision={agentIconRevision}
+            />
+          </div>
         ) : (
           <>
-        <header className="flex-shrink-0 flex items-center justify-between gap-2 px-3 h-11">
+        <header className="relative z-10 flex-shrink-0 flex items-center justify-between gap-2 px-3 h-11">
           {/* Brand only when transcript exists — empty state already has the big icon */}
           <div className="flex items-center gap-1.5 min-w-0 flex-1">
             {hasTranscript && (
@@ -1005,7 +1008,10 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
           </div>
         </header>
 
-        <div className="relative flex-1 min-h-0 flex flex-col">
+        <div
+          data-chat-content-window // Thread stubs attach to transcript column — not the composer
+          className="relative z-10 flex-1 min-h-0 flex flex-col"
+        >
           <div
             ref={transcriptScrollRef}
             data-ai-transcript-scroll
@@ -1114,7 +1120,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
           <AiPromptBars orientation="vertical" {...promptBarProps} />
         </div>
 
-        <div className="flex-shrink-0 px-3 pb-3 pt-1 pointer-events-auto">
+        <div className="relative z-10 flex-shrink-0 px-3 pb-3 pt-1 pointer-events-auto">
           <div className="rounded-xl overflow-hidden bg-white dark:bg-[#202020] border border-black/10 dark:border-white/10 shadow-sm">
             <div className="px-1 pt-1">{composer}</div>
           </div>

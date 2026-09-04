@@ -1,7 +1,7 @@
 'use client'
 
-// One AI chat turn as a frame-like box: select → blue adjust + connection points;
-// TipTap body with board-style ⋮⋮; drag when selected; threads to board frames.
+// One AI chat turn as a frame-like box: hover → frame drag grip; select → blue
+// adjust + ⋮⋮ block grips (drag body = whole turn); threads to board frames.
 
 import {
   useCallback,
@@ -15,7 +15,7 @@ import {
 import { createPortal } from 'react-dom'
 import { useEditor, EditorContent } from '@tiptap/react'
 import { ReactFlowProvider } from 'reactflow'
-import { Loader2 } from 'lucide-react'
+import { GripVertical, Loader2 } from 'lucide-react'
 import type { AiMessage, AiChatBlockDragPayload } from '@/lib/ai/types'
 import { AI_CHAT_BLOCK_MIME } from '@/lib/ai/types'
 import { markdownToTipTapHtml } from '@/lib/ai/markdown-to-tiptap'
@@ -29,17 +29,34 @@ import {
   type ChatTurnSide,
   chatThreadPath,
   chatThreadSeamCrossYs,
+  flowSideAnchor,
   nearestFrameSide,
   newChatBoardLinkId,
   readChatBoardLinks,
   sideAnchor,
   withChatBoardLinks,
 } from '@/lib/ai/chat-board-links'
+import { clipChatThread, clientToThreadSvgSpace } from '@/lib/ai/chat-thread-clip'
 import {
   chatSidebarSeamX,
   clearChatSeamGaps,
   publishChatSeamGaps,
 } from '@/lib/ai/chat-sidebar-seam'
+import {
+  clearChatFrameLinkCues,
+  clearChatFrameThreadVisible,
+  publishChatFrameLinkCues,
+  publishChatFrameThreadVisible,
+} from '@/lib/ai/chat-frame-link-cues'
+
+/** Grey simulated connection point when a thread stubs on the chat window edge. */
+const STUB_FILL = '#9ca3af' // gray-400 — distinct from live blue indicators
+const STUB_R = 6 // Same visual weight as the 12px chat-turn indicators
+
+/** Brand T stroke from `connection logo 1.svg` — same mark as board ChatLinkConnectionCue. */
+const LINK_LOGO_VIEWBOX = '0 0 306 453'
+const LINK_LOGO_PATH =
+  'M305.69,370.69v81.89c-23.91.07-47.52,1.1-70.92-4.46-53.59-12.87-89.49-54.84-93.95-109.89l.07-261.31H0V0h220.8v325.21c0,17.47,18.28,45.48,37.43,45.48h47.45Z'
 
 const SIDES: ChatTurnSide[] = ['left', 'right', 'top', 'bottom']
 
@@ -142,17 +159,20 @@ export function AiChatTurn({
 
   const startDrag = useCallback(
     (event: React.DragEvent) => {
-      if (!selected) {
+      // Frame grip may drag while unselected; body drag only when selected
+      const t = event.target as HTMLElement
+      const fromFrameGrip = !!t.closest('[data-tt-frame-drag-handle]')
+      if (!selected && !fromFrameGrip) {
         event.preventDefault()
         return
       }
-      // Text / any ⋮⋮ / indicators own their gestures — turn drag is chrome only
-      const t = event.target as HTMLElement
+      // Text / ⋮⋮ / thread indicators own their gestures — turn drag is chrome only
       if (
-        t.closest('.ProseMirror') ||
-        t.closest('[data-tt-block-handle]') ||
-        t.closest('[data-tt-gutter-hover]') ||
-        t.closest('[data-tt-chat-indicator]')
+        !fromFrameGrip &&
+        (t.closest('.ProseMirror') ||
+          t.closest('[data-tt-block-handle]') ||
+          t.closest('[data-tt-gutter-hover]') ||
+          t.closest('[data-tt-chat-indicator]'))
       ) {
         event.preventDefault()
         return
@@ -192,9 +212,15 @@ export function AiChatTurn({
   )
 
   const onTurnPointerDown = (event: React.PointerEvent) => {
-    // Select on press (board-like); don't steal ⋮⋮ / indicator / link clicks
+    // Select on press (board-like); don't steal frame-grip / ⋮⋮ / indicator gestures
     const t = event.target as HTMLElement
-    if (t.closest('[data-tt-block-handle]') || t.closest('[data-tt-chat-indicator]')) return
+    if (
+      t.closest('[data-tt-frame-drag-handle]') ||
+      t.closest('[data-tt-block-handle]') ||
+      t.closest('[data-tt-chat-indicator]')
+    ) {
+      return
+    }
     if (!selected) {
       event.stopPropagation()
       onSelect(message.id)
@@ -265,25 +291,137 @@ export function AiChatTurn({
     doc.addEventListener('pointercancel', onUp)
   }
 
-  // Thread overlay geometry when this turn is selected (+ punch sidebar seam gaps)
-  const [threadPaths, setThreadPaths] = useState<string[]>([])
+  // Thread overlay: fixed SVG must track chat scroll without React setState lag
+  const linksRef = useRef(links) // Latest links for paint without effect churn
+  linksRef.current = links // Keep paint closure fresh across soft-saves
+  const linksKey = links.map((l) => `${l.id}:${l.frameMessageId}:${l.turnSide}:${l.frameSide}`).join('|') // Stable effect dep
+  const showThreadOverlay = selected && links.length > 0 // Mount empty SVG; fill imperatively
   const seamSourceId = `turn-${message.id}` // Settled threads for this turn
   const rubberSourceId = `rubber-${message.id}` // In-progress connect rubber band
+  // Body (overlap when board free) + under-dock (phone only — board behind map dock)
+  const threadSvgRef = useRef<SVGSVGElement | null>(null)
+  const threadUnderSvgRef = useRef<SVGSVGElement | null>(null)
+  const [underHostEl, setUnderHostEl] = useState<HTMLElement | null>(null)
   useEffect(() => {
-    if (!selected || links.length === 0) {
-      setThreadPaths([])
-      clearChatSeamGaps(seamSourceId) // No visible threads → restore solid seam
+    if (!showThreadOverlay) {
+      setUnderHostEl(null)
       return
     }
-    const paint = () => {
+    const sync = () => {
+      // Phone dock only: under-layer lives on the board root beneath z-45 cards.
+      // Desktop stubs clip on the body SVG (left of seam) — do not paint inside the sidebar.
+      const dock = document.querySelector('[data-chat-map-dock]')
+      const root = document.querySelector('[data-board-root]') as HTMLElement | null
+      setUnderHostEl(dock && root ? root : null)
+    }
+    sync()
+    const id = window.setInterval(sync, 400)
+    return () => clearInterval(id)
+  }, [showThreadOverlay])
+
+  /** Keep a map-side clipPath (x < seam) in sync for stubbed desktop strokes. */
+  const syncMapClip = (svg: SVGSVGElement, seamX: number | null) => {
+    let defs = svg.querySelector('defs')
+    if (!defs) {
+      defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs')
+      svg.insertBefore(defs, svg.firstChild)
+    }
+    let cp = svg.querySelector('#tt-thread-map-clip') as SVGClipPathElement | null
+    if (!cp) {
+      cp = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath')
+      cp.setAttribute('id', 'tt-thread-map-clip')
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+      rect.setAttribute('x', '0')
+      rect.setAttribute('y', '0')
+      cp.appendChild(rect)
+      defs.appendChild(cp)
+    }
+    const rect = cp.querySelector('rect')
+    if (!rect) return
+    const w = seamX != null && seamX > 0 ? seamX : 0
+    rect.setAttribute('width', String(w))
+    rect.setAttribute('height', String(Math.max(window.innerHeight, 1)))
+  }
+
+  /** Sync path + stub children on one SVG root. */
+  const syncSvgChildren = (
+    svg: SVGSVGElement,
+    paths: { d: string; clipToMap?: boolean }[],
+    stubs: { x: number; y: number }[]
+  ) => {
+    let pathCount = 0
+    let stubCount = 0
+    for (let i = 0; i < svg.childNodes.length; i++) {
+      const el = svg.childNodes[i] as Element
+      if (el.tagName.toLowerCase() === 'path') pathCount++
+      else if (el.tagName.toLowerCase() === 'circle') stubCount++
+    }
+    while (pathCount < paths.length) {
+      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+      p.setAttribute('stroke', '#3b82f6')
+      p.setAttribute('stroke-width', '2')
+      p.setAttribute('fill', 'none')
+      const firstCircle = svg.querySelector('circle')
+      if (firstCircle) svg.insertBefore(p, firstCircle)
+      else svg.appendChild(p)
+      pathCount++
+    }
+    while (pathCount > paths.length) {
+      const pathsEls = svg.querySelectorAll('path')
+      pathsEls[pathsEls.length - 1]?.remove()
+      pathCount--
+    }
+    while (stubCount < stubs.length) {
+      const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+      c.setAttribute('r', String(STUB_R))
+      c.setAttribute('fill', STUB_FILL)
+      c.setAttribute('stroke', '#fff')
+      c.setAttribute('stroke-width', '1')
+      svg.appendChild(c)
+      stubCount++
+    }
+    while (stubCount > stubs.length) {
+      const circles = svg.querySelectorAll('circle')
+      circles[circles.length - 1]?.remove()
+      stubCount--
+    }
+    const pathEls = svg.querySelectorAll('path')
+    for (let i = 0; i < paths.length; i++) {
+      const el = pathEls[i]
+      if (!el) continue
+      el.setAttribute('d', paths[i].d)
+      if (paths[i].clipToMap) el.setAttribute('clip-path', 'url(#tt-thread-map-clip)')
+      else el.removeAttribute('clip-path')
+    }
+    const circleEls = svg.querySelectorAll('circle')
+    for (let i = 0; i < stubs.length; i++) {
+      circleEls[i]?.setAttribute('cx', String(stubs[i].x))
+      circleEls[i]?.setAttribute('cy', String(stubs[i].y))
+    }
+  }
+
+  /** Write path `d` attrs (+ optional seam/logo publish) from live DOM rects. */
+  const paintThreads = useCallback(
+    (opts?: { skipPublish?: boolean }) => {
       const turn = turnRef.current
-      if (!turn) return
+      const overlapSvg = threadSvgRef.current
+      const underSvg = threadUnderSvgRef.current
+      if (!turn || !overlapSvg) return
+      const toUnder = (p: { x: number; y: number }) =>
+        clientToThreadSvgSpace(p, underSvg?.parentElement ?? null)
       const turnRect = turn.getBoundingClientRect()
-      const paths: string[] = []
+      const currentLinks = linksRef.current
+      const overlapPaths: { d: string; clipToMap?: boolean }[] = []
+      const overlapStubs: { x: number; y: number }[] = []
+      const underPaths: { d: string; clipToMap?: boolean }[] = []
+      const visibleBoardCues: { frameMessageId: string; side: ChatTurnSide }[] = []
       const seamYs: number[] = []
-      const seamX = chatSidebarSeamX() // Left edge of chat column (client X)
-      for (const link of links) {
-        const nodes = reactFlowInstance?.getNodes() || []
+      const seamX = chatSidebarSeamX() // Always need seam for desktop map clip
+      const nodes = reactFlowInstance?.getNodes() || []
+      // Desktop column (not phone dock): stubbed strokes stay left of the seam
+      const clipStubToMap =
+        !!document.querySelector('[data-chat-sidebar]:not([data-chat-map-dock])')
+      for (const link of currentLinks) {
         const n = nodes.find(
           (x) =>
             x.id === link.frameMessageId ||
@@ -294,37 +432,169 @@ export function AiChatTurn({
           : (document.querySelector(
               `.react-flow__node-chatPanel[data-id="${link.frameMessageId}"]`
             ) as HTMLElement | null)
-        if (!nodeEl) continue
-        const a = sideAnchor(turnRect, link.turnSide)
-        const b = sideAnchor(nodeEl.getBoundingClientRect(), link.frameSide)
-        paths.push(chatThreadPath(a, b, link.turnSide, link.frameSide))
-        if (seamX != null) {
-          seamYs.push(...chatThreadSeamCrossYs(a, b, link.turnSide, link.frameSide, seamX))
+        const aClient = sideAnchor(turnRect, link.turnSide)
+        let bClient: { x: number; y: number } | null = null
+        if (nodeEl) {
+          bClient = sideAnchor(nodeEl.getBoundingClientRect(), link.frameSide)
+        } else if (n && reactFlowInstance?.flowToScreenPosition) {
+          const meta = n.data?.promptMessage?.metadata as Record<string, unknown> | undefined
+          const dims = meta?.resizeDimensions as { width?: number; height?: number } | undefined
+          const measured = (n as { measured?: { width?: number; height?: number } }).measured
+          const w = n.width ?? measured?.width ?? dims?.width ?? 0
+          const h = n.height ?? measured?.height ?? dims?.height ?? 0
+          if (w > 0 && h > 0) {
+            const pos = {
+              x: n.positionAbsolute?.x ?? n.position.x,
+              y: n.positionAbsolute?.y ?? n.position.y,
+            }
+            const flow = flowSideAnchor(pos, w, h, link.frameSide)
+            bClient = reactFlowInstance.flowToScreenPosition(flow)
+          }
+        }
+        if (!bClient) continue
+        const clipped = clipChatThread(aClient, bClient, link.turnSide, link.frameSide)
+        if (clipped.boardCovered && underSvg) {
+          // Phone: board behind dock — stroke under cards, ends at side stub
+          if (clipped.stub) {
+            underPaths.push({
+              d: chatThreadPath(
+                toUnder(bClient),
+                toUnder(clipped.stub),
+                link.frameSide,
+                clipped.stub.side
+              ),
+            })
+            overlapStubs.push({ x: clipped.stub.x, y: clipped.stub.y })
+          } else if (clipped.path) {
+            underPaths.push({
+              d: chatThreadPath(toUnder(aClient), toUnder(bClient), link.turnSide, link.frameSide),
+            })
+          }
+        } else if (clipped.stub && !clipped.reachesChat) {
+          // Stubbed (board covered on desktop, or turn scrolled away) — meet the grey dot;
+          // on desktop clip so the stroke never paints over the sidebar column.
+          const d = chatThreadPath(bClient, clipped.stub, link.frameSide, clipped.stub.side)
+          overlapPaths.push({ d, clipToMap: clipStubToMap })
+          overlapStubs.push({ x: clipped.stub.x, y: clipped.stub.y })
+        } else if (clipped.path) {
+          // Board free + turn visible — stroke may overlap chat to reach the turn
+          overlapPaths.push({ d: clipped.path })
+        }
+        if (clipped.reachesBoard) {
+          visibleBoardCues.push({ frameMessageId: link.frameMessageId, side: link.frameSide })
+        }
+        if (!opts?.skipPublish && seamX != null && clipped.path) {
+          if (clipped.stub && !clipped.reachesChat) {
+            seamYs.push(
+              ...chatThreadSeamCrossYs(
+                bClient,
+                clipped.stub,
+                link.frameSide,
+                clipped.stub.side,
+                seamX
+              )
+            )
+          } else {
+            seamYs.push(
+              ...chatThreadSeamCrossYs(aClient, bClient, link.turnSide, link.frameSide, seamX)
+            )
+          }
+        } else if (!opts?.skipPublish && seamX != null && clipped.stub) {
+          seamYs.push(clipped.stub.y)
         }
       }
-      setThreadPaths(paths)
-      publishChatSeamGaps(seamSourceId, seamYs) // Gap divider where strokes cross
+      syncMapClip(overlapSvg, clipStubToMap ? seamX : null)
+      syncSvgChildren(overlapSvg, overlapPaths, overlapStubs)
+      if (underSvg) syncSvgChildren(underSvg, underPaths, [])
+      if (!opts?.skipPublish) {
+        publishChatSeamGaps(seamSourceId, seamYs)
+        publishChatFrameThreadVisible(seamSourceId, visibleBoardCues)
+      }
+    },
+    [reactFlowInstance, seamSourceId]
+  )
+
+  // Keep board frames aware of linked sides whenever this turn is mounted
+  useEffect(() => {
+    if (links.length === 0) {
+      clearChatFrameLinkCues(seamSourceId)
+      return
     }
-    paint()
-    const root = document.querySelector('.react-flow__viewport')
-    const scroller = document.querySelector('[data-ai-transcript-scroll]')
-    const ro = new ResizeObserver(paint)
+    publishChatFrameLinkCues(
+      seamSourceId,
+      links.map((l) => ({ frameMessageId: l.frameMessageId, side: l.frameSide }))
+    )
+    return () => {
+      clearChatFrameLinkCues(seamSourceId)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- linksKey stands in for links
+  }, [linksKey, seamSourceId])
+
+  // Board-side logo visibility is published inside paintThreads (respects clip stubs).
+  // Clear on deselect / unmount so logos return when the overlay is gone.
+  useEffect(() => {
+    if (!showThreadOverlay) {
+      clearChatFrameThreadVisible(seamSourceId)
+      return
+    }
+    return () => {
+      clearChatFrameThreadVisible(seamSourceId)
+    }
+  }, [showThreadOverlay, seamSourceId])
+
+  useEffect(() => {
+    if (!showThreadOverlay) {
+      clearChatSeamGaps(seamSourceId) // No visible threads → restore solid seam
+      return
+    }
+    let raf = 0 // Coalesce bursty events into one paint per frame
+    let navSettle: number | undefined // After viewport stops mutating, flush seam/logo
+    let midNav = false // True while RF transform is actively changing
+    const schedule = (full = false) => {
+      if (raf) return // Already queued for this frame
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        // Mid-nav: geometry only (skip React seam/logo publishes — those lagged + jumped)
+        paintThreads({ skipPublish: midNav && !full })
+      })
+    }
+    const onScrollOrResize = () => schedule(true) // Transcript / window — full publish
+    const onViewportStyle = () => {
+      midNav = true
+      schedule(false) // Geometry only while panning/zooming
+      if (navSettle !== undefined) window.clearTimeout(navSettle)
+      navSettle = window.setTimeout(() => {
+        midNav = false
+        schedule(true) // Flush seam gaps + logo visibility after settle
+      }, 120)
+    }
+    paintThreads() // Immediate first paint (portal may still be null)
+    const boot = requestAnimationFrame(() => paintThreads()) // Retry after SVG portal commits
+    const root = document.querySelector('.react-flow__viewport') as HTMLElement | null // RF camera
+    const scroller = document.querySelector('[data-ai-transcript-scroll]') // Chat transcript
+    const ro = new ResizeObserver(onScrollOrResize) // Turn size / streaming growth
     if (turnRef.current) ro.observe(turnRef.current)
-    window.addEventListener('scroll', paint, true)
-    window.addEventListener('resize', paint)
-    root?.addEventListener('transitionend', paint)
-    scroller?.addEventListener('scroll', paint)
-    const id = window.setInterval(paint, 200) // Catch RF pan/zoom without store sub
+    window.addEventListener('scroll', onScrollOrResize, true)
+    window.addEventListener('resize', onScrollOrResize)
+    scroller?.addEventListener('scroll', onScrollOrResize, { passive: true })
+    root?.addEventListener('transitionend', onScrollOrResize) // Animated fitView / etc.
+    // RF pan/zoom mutates viewport style every frame — remasure in lockstep with the board frame
+    const mo =
+      root && new MutationObserver(onViewportStyle) // Same signal as selection-format-popup nav hide
+    mo?.observe(root!, { attributes: true, attributeFilter: ['style'] })
     return () => {
       ro.disconnect()
-      window.removeEventListener('scroll', paint, true)
-      window.removeEventListener('resize', paint)
-      root?.removeEventListener('transitionend', paint)
-      scroller?.removeEventListener('scroll', paint)
-      clearInterval(id)
+      mo?.disconnect()
+      window.removeEventListener('scroll', onScrollOrResize, true)
+      window.removeEventListener('resize', onScrollOrResize)
+      scroller?.removeEventListener('scroll', onScrollOrResize)
+      root?.removeEventListener('transitionend', onScrollOrResize)
+      if (navSettle !== undefined) window.clearTimeout(navSettle)
+      cancelAnimationFrame(boot)
+      if (raf) cancelAnimationFrame(raf)
       clearChatSeamGaps(seamSourceId)
     }
-  }, [selected, links, reactFlowInstance, seamSourceId])
+  }, [showThreadOverlay, linksKey, paintThreads, seamSourceId, underHostEl])
 
   // Rubber-band also punches the seam while dragging a new thread
   useEffect(() => {
@@ -381,7 +651,57 @@ export function AiChatTurn({
           />
         )}
 
-        {/* Connection indicators — only while selected */}
+        {/* Frame drag grip — unselected only (hover on pointer; always on touch). Selected → ⋮⋮.
+            Threaded turns: same brand line + blue simulator as board ChatLinkConnectionCue. */}
+        {!selected && (
+          <button
+            type="button"
+            data-tt-frame-drag-handle
+            draggable
+            onDragStart={startDrag}
+            className={cn(
+              'absolute left-0.5 top-1 z-20 flex h-5 items-center justify-center rounded',
+              links.length > 0 ? 'w-auto min-w-5 px-0.5' : 'w-5', // Logo needs line+dot width
+              links.length > 0
+                ? null // Blue mark — no gray icon tint
+                : 'text-gray-400 hover:text-gray-700 dark:hover:text-gray-200',
+              'cursor-grab active:cursor-grabbing',
+              // Linked mark stays visible; unlinked grip: hover devices hide until turn hover
+              links.length > 0
+                ? 'opacity-100'
+                : cn(
+                    'opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:pointer-events-none',
+                    '[@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-hover:pointer-events-auto',
+                    'focus-visible:opacity-100 focus-visible:pointer-events-auto'
+                  )
+            )}
+            title="Drag onto board as a frame, or onto the input as context"
+            aria-label="Drag chat turn as frame"
+          >
+            {links.length > 0 ? (
+              // Prior visual size (w=8); height matches aspect so meet doesn't letterbox above the stroke
+              <span className="pointer-events-none flex flex-row items-start" aria-hidden>
+                <svg
+                  viewBox={LINK_LOGO_VIEWBOX}
+                  preserveAspectRatio="xMinYMin meet"
+                  className="shrink-0 block"
+                  style={{ width: 8, height: 8 * (453 / 306), marginRight: 0.5 }}
+                >
+                  <path fill="#3b83f6" d={LINK_LOGO_PATH} />
+                </svg>
+                {/* Top of disc flush with top of T stroke */}
+                <span
+                  className="shrink-0 self-start rounded-full bg-[#3b83f6]"
+                  style={{ width: 5, height: 5 }}
+                />
+              </span>
+            ) : (
+              <GripVertical className="h-3.5 w-3.5 pointer-events-none" />
+            )}
+          </button>
+        )}
+
+        {/* Connection indicators — only while selected (thread chrome, not the drag grip) */}
         {selected &&
           SIDES.map((side) => (
             <div
@@ -395,6 +715,7 @@ export function AiChatTurn({
 
         <ReactFlowProvider>
           <div className="relative w-full overflow-visible min-w-0">
+            {/* Block ⋮⋮ grips — only while the chat frame is selected */}
             {selected && (
               <TipTapBlockHandles
                 editor={editor}
@@ -433,17 +754,29 @@ export function AiChatTurn({
           document.body
         )}
 
-      {/* Settled threads — only while this turn is selected */}
-      {selected &&
-        threadPaths.length > 0 &&
+      {/* Settled threads: overlap (board free) + under-chrome (board behind dock/sidebar) */}
+      {showThreadOverlay &&
         typeof document !== 'undefined' &&
         createPortal(
-          <svg className="pointer-events-none fixed inset-0 z-[90]" width="100%" height="100%">
-            {threadPaths.map((d, i) => (
-              <path key={i} d={d} stroke="#3b82f6" strokeWidth="2" fill="none" />
-            ))}
-          </svg>,
+          <svg
+            ref={threadSvgRef}
+            className="pointer-events-none fixed inset-0 z-[90]"
+            width="100%"
+            height="100%"
+          />,
           document.body
+        )}
+      {showThreadOverlay &&
+        underHostEl &&
+        createPortal(
+          <svg
+            ref={threadUnderSvgRef}
+            data-tt-thread-under-dock="true"
+            className="pointer-events-none absolute inset-0 z-[40]" // Under phone dock (z-45)
+            width="100%"
+            height="100%"
+          />,
+          underHostEl
         )}
     </>
   )

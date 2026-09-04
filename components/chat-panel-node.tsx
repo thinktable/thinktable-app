@@ -9,6 +9,10 @@ import {
   INDICATOR_OUTSET,
   frameScreenChromeScale,
 } from '@/components/threads' // Miro: DOM indicators arm edge connection points; proximity while dragging
+import {
+  useChatFrameLinkLogoSides,
+} from '@/lib/ai/chat-frame-link-cues' // Chat-linked sides → logo line beside simulator
+import { ChatLinkConnectionCue } from '@/components/threads/ChatLinkConnectionCue'
 
 
 import { cn, generateUUID } from '@/lib/utils'
@@ -2603,6 +2607,9 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
     : data.responseMessage
   const conversationId = isProjectBoard ? data.boardId : data.conversationId
   const projectId = isProjectBoard ? data.projectId : undefined
+  // Chat-linked logo sides (thread-hidden) + sides with a painted chat thread
+  const { logoSides: chatLinkLogoSides, threadVisibleSides: chatThreadVisibleSides } =
+    useChatFrameLinkLogoSides(promptMessage?.id)
   // TipTap NodeViews cannot see RF `selected` — publish so databaseBlock collapses on deselect
   useLayoutEffect(() => {
     const keys = [id, promptMessage?.id].filter(Boolean) as string[]
@@ -7211,26 +7218,45 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
           />
         ))}
 
-      {/* Connection indicators — DOM only (not RF Handles); arm the edge connection point */}
+      {/* Connection indicators — DOM only (not RF Handles); arm the edge connection point.
+          Chat-linked sides keep the blue simulator and add the brand line beside it —
+          only while indicators normally show and the chat↔board thread stroke is not drawn. */}
       {showIndicators && (
         <>
-          {(['left', 'right', 'top', 'bottom'] as const).map((side) => (
-            <ConnectionIndicator
-              key={`indicator-${side}`}
-              side={side}
-              className={cn(
-                'nodrag nopan absolute z-[30] rounded-full border border-white bg-blue-500 shadow-sm',
-                isThreadConnecting
-                  ? 'pointer-events-none' // Visual snap target only — don't steal hit from edge Handles
-                  : 'cursor-crosshair hover:bg-blue-600'
-              )}
-              style={{
-                ...connectionIndicatorStyle(side, frameIndicatorOut), // Outside blue edge (scaled outset)
-                width: frameIndicatorSize, // Dot grows/shrinks with frame size
-                height: frameIndicatorSize,
-              }}
-            />
-          ))}
+          {(['left', 'right', 'top', 'bottom'] as const).map((side) => {
+            if (chatThreadVisibleSides.has(side)) return null // Thread stroke owns this end — no simulator
+            const indicatorPlacement = {
+              ...connectionIndicatorStyle(side, frameIndicatorOut), // Outside blue edge (scaled outset)
+            }
+            if (chatLinkLogoSides.has(side)) {
+              return (
+                <ChatLinkConnectionCue
+                  key={`chat-link-cue-${side}`}
+                  side={side}
+                  indicatorStyle={indicatorPlacement}
+                  indicatorSize={frameIndicatorSize}
+                  isThreadConnecting={isThreadConnecting}
+                />
+              )
+            }
+            return (
+              <ConnectionIndicator
+                key={`indicator-${side}`}
+                side={side}
+                className={cn(
+                  'nodrag nopan absolute z-[30] rounded-full border border-white bg-blue-500 shadow-sm',
+                  isThreadConnecting
+                    ? 'pointer-events-none' // Visual snap target only — don't steal hit from edge Handles
+                    : 'cursor-crosshair hover:bg-blue-600'
+                )}
+                style={{
+                  ...indicatorPlacement,
+                  width: frameIndicatorSize, // Dot grows/shrinks with frame size
+                  height: frameIndicatorSize,
+                }}
+              />
+            )
+          })}
         </>
       )}
 

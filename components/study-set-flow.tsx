@@ -4022,11 +4022,11 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
   const handleDeleteNode = useCallback(async () => {
     if (!rightClickedNode || !studySetId) return
 
-    // Get all selected nodes (not just the right-clicked one)
+    // Prefer selection; always include the menu target (selection can race clear)
     const selectedNodes = nodes.filter((n) => n.selected)
-    if (selectedNodes.length === 0) return
-
-    const selectedNodeIds = selectedNodes.map((n) => n.id)
+    const ids = new Set(selectedNodes.map((n) => n.id))
+    if (!ids.has(rightClickedNode.id)) ids.add(rightClickedNode.id)
+    if (ids.size === 0) return
 
     // Close popup
     setRightClickedNode(null)
@@ -4034,7 +4034,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
     nodePopupZoomRef.current = null
 
     // Delete the nodes
-    await deleteNodesByIds(selectedNodeIds)
+    await deleteNodesByIds([...ids])
   }, [rightClickedNode, studySetId, nodes, deleteNodesByIds])
 
   // Handle condense node/panel (collapse response) - condense ALL selected panels

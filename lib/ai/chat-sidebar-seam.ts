@@ -28,6 +28,15 @@ export function publishChatSeamGaps(sourceId: string, clientYs: number[]) {
     if (!sources.has(sourceId)) return
     sources.delete(sourceId)
   } else {
+    const prev = sources.get(sourceId)
+    // Skip notify when Ys are unchanged (avoids React churn on chat↔board paint ticks)
+    if (
+      prev &&
+      prev.length === clientYs.length &&
+      prev.every((y, i) => Math.abs(y - clientYs[i]) < 0.5)
+    ) {
+      return
+    }
     sources.set(sourceId, clientYs)
   }
   notify()

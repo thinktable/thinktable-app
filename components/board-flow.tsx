@@ -3784,8 +3784,8 @@ function BoardFlowInner({
   const deleteNodesByIds = useCallback(async (nodeIdsToDelete: string[]) => {
     if (!conversationId || nodeIdsToDelete.length === 0) return
 
-    // Find the nodes to delete
-    const nodesToDelete = nodes.filter((n) => nodeIdsToDelete.includes(n.id))
+    // Find the nodes to delete (ref — avoid stale closure when menu Delete fires)
+    const nodesToDelete = nodesRef.current.filter((n) => nodeIdsToDelete.includes(n.id))
     if (nodesToDelete.length === 0) return
 
     // Separate freehand nodes from chat panel nodes
@@ -3883,7 +3883,7 @@ function BoardFlowInner({
       setNodes((nds) => [...nds, ...nodesToDelete])
       return false
     }
-  }, [conversationId, nodes, setNodes, queryClient])
+  }, [conversationId, setNodes, queryClient])
 
   // Frames with a sole empty TipTap block ask to be removed when clicked off (deselected)
   useEffect(() => {
@@ -6870,24 +6870,26 @@ function BoardFlowInner({
     }
   }, [rightClickedNode])
 
-  // Handle delete node/panel - delete ALL selected panels (from context menu)
-  const handleDeleteNode = useCallback(async () => {
-    if (!rightClickedNode || !conversationId) return
+  // Handle delete node/panel — same RF remove path as Backspace/Delete key
+  const handleDeleteNode = useCallback(() => {
+    const target = rightClickedNodeRef.current
+    if (!target || !conversationId) return
 
-    // Get all selected nodes (not just the right-clicked one)
-    const selectedNodes = nodes.filter((n) => n.selected)
-    if (selectedNodes.length === 0) return
+    // Prefer live selection; always include the menu target (selection can race clear)
+    const live = nodesRef.current
+    const selectedNodes = live.filter((n) => n.selected)
+    const ids = new Set(selectedNodes.map((n) => n.id))
+    ids.add(target.id)
 
-    const selectedNodeIds = selectedNodes.map((n) => n.id)
-
-    // Close popup
+    // Close popup before RF remove (unmount menu; ref already captured)
+    rightClickedNodeRef.current = null
     setRightClickedNode(null)
     nodeClickPositionRef.current = null
     nodePopupZoomRef.current = null
 
-    // Delete the nodes
-    await deleteNodesByIds(selectedNodeIds)
-  }, [rightClickedNode, conversationId, nodes, deleteNodesByIds])
+    // Identical to keyboard deleteKeyCode → remove changes → DB delete
+    handleNodesChange([...ids].map((id) => ({ type: 'remove', id })))
+  }, [conversationId, handleNodesChange])
 
   // Handle condense node/panel (collapse response) - condense ALL selected panels
   const handleCondenseNode = useCallback(() => {
@@ -7696,7 +7698,7 @@ function BoardFlowInner({
           void handleDuplicateBlocks()
           break
         case 'delete':
-          void handleDeleteNode()
+          handleDeleteNode() // Sync — RF remove path (same as keyboard)
           break
         case 'addChild':
           if (rightClickedNode) {
@@ -9248,8 +9250,8 @@ function BoardFlowInner({
       ref={boardRootRef}
       data-board-root // Phone AI dock portals here (escapes main overflow-hidden)
       data-board-font={boardFont}
-      // absolute inset-0 fills the map column (chrome uses getBoundingClientRect of this box)
-      className="absolute inset-0"
+      // absolute inset-0 fills the map column; isolation so thread z-40 sits under dock z-45
+      className="absolute inset-0 isolate"
       style={{ WebkitTouchCallout: 'none' }} // Prefer our long-press menus over iOS callout
       onDoubleClick={embedded ? undefined : handlePaneDoubleClick}
     >
