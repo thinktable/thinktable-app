@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260904134700_chat_thread_scroll_native_clip` — Chat↔chat threads in transcript scroller (scroll-native); content-window clip; sync board-overlay scroll paint
 - `20260904051948_chat_turn_multiselect_and_chat_to_chat_threads` — Chat turn multi-select + chat↔chat threads; multi-drag; connect auto-pan fix
 - `20260904050604_unify_ai_star_light_blue_lock_frames_icon` — Unify AI sparkle `#b5daf3`; lock-frames toolbar icon 1
 - `20260904045406_ai_chat_fork_and_revert_text` — Thread fork (Copy of …) + chat Revert text silos

@@ -240,6 +240,22 @@ export function boardConnectionBehindChat(boardPt: Pt): boolean {
   return false
 }
 
+/** Client → transcript scroll content coords (SVG inside `[data-ai-transcript-scroll]`). */
+export function clientToTranscriptContent(p: Pt, scroller: HTMLElement | null): Pt {
+  if (!scroller) return p // Fallback: leave as client if host missing
+  const r = scroller.getBoundingClientRect() // Scrollport in viewport
+  return {
+    x: p.x - r.left + scroller.scrollLeft, // Content X (padding box + scroll)
+    y: p.y - r.top + scroller.scrollTop, // Content Y — stable under scroll
+  }
+}
+
+/** Transcript scroller element (desktop column or phone content card). */
+export function transcriptScrollerEl(): HTMLElement | null {
+  if (typeof document === 'undefined') return null
+  return document.querySelector('[data-ai-transcript-scroll]') as HTMLElement | null
+}
+
 /** Client → under-layer SVG host local (board-root under phone dock). */
 export function clientToThreadSvgSpace(p: Pt, host: HTMLElement | null): Pt {
   if (!host) return p

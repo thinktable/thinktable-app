@@ -57,9 +57,14 @@ import {
 import {
   clipChatThread,
   clientToThreadSvgSpace,
+  clientToTranscriptContent,
+  chatChromeRects,
+  chatContentWindowRect,
   chatSidebarColumnEl,
   chatSidebarColumnRect,
+  transcriptScrollerEl,
 } from '@/lib/ai/chat-thread-clip'
+import { startChatThreadEdgeNav } from '@/lib/ai/chat-thread-edge-nav'
 import {
   chatSidebarSeamX,
   clearChatSeamGaps,
@@ -524,13 +529,38 @@ export function AiChatTurn({
     const from = sideAnchor(turn.getBoundingClientRect(), side)
     setRubber({ from, to: { x: event.clientX, y: event.clientY }, side })
     const pointerId = event.pointerId
+    // Latest pointer for edge auto-scroll / board auto-pan (rAF reads this)
+    const ptr = { x: event.clientX, y: event.clientY }
+
+    /** Keep rubber `from` glued to the turn as transcript scroll moves it. */
+    const refreshRubberFrom = () => {
+      const el = turnRef.current
+      if (!el) return
+      const nextFrom = sideAnchor(el.getBoundingClientRect(), side)
+      setRubber((r) => (r ? { ...r, from: nextFrom, to: { x: ptr.x, y: ptr.y } } : null))
+    }
+
+    // Near chat content T/B → scroll transcript; near board edges → pan map
+    const stopEdgeNav = startChatThreadEdgeNav({
+      getPointer: () => ptr,
+      panBoard: (dx, dy) => {
+        const inst = reactFlowInstance
+        if (!inst) return
+        const vp = inst.getViewport()
+        inst.setViewport({ x: vp.x + dx, y: vp.y + dy, zoom: vp.zoom })
+      },
+      onTick: refreshRubberFrom,
+    })
 
     const onMove = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return
+      ptr.x = ev.clientX
+      ptr.y = ev.clientY
       setRubber((r) => (r ? { ...r, to: { x: ev.clientX, y: ev.clientY } } : null))
     }
     const onUp = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return
+      stopEdgeNav()
       doc.removeEventListener('pointermove', onMove)
       doc.removeEventListener('pointerup', onUp)
       doc.removeEventListener('pointercancel', onUp)
@@ -611,7 +641,8 @@ export function AiChatTurn({
     doc.addEventListener('pointercancel', onUp)
   }
 
-  // Thread overlay: fixed SVG must track chat scroll without React setState lag
+  // Thread overlay: chat↔chat SVG lives in the transcript scroller (scroll-native);
+  // chat↔board stays on fixed/under overlays and remasures on scroll.
   const linksRef = useRef(links) // Latest links for paint without effect churn
   linksRef.current = links // Keep paint closure fresh across soft-saves
   const inboundRef = useRef(inboundChatLinks)
@@ -633,13 +664,16 @@ export function AiChatTurn({
     selected && (links.length > 0 || inboundChatLinks.length > 0)
   const seamSourceId = `turn-${message.id}` // Settled threads for this turn
   const rubberSourceId = `rubber-${message.id}` // In-progress connect rubber band
-  // Body (overlap when board free) + under-chrome (phone dock / desktop sidebar)
+  // Body (overlap when board free) + under-chrome + in-scroller (chat↔chat, scroll-native)
   const threadSvgRef = useRef<SVGSVGElement | null>(null)
   const threadUnderSvgRef = useRef<SVGSVGElement | null>(null)
+  const threadScrollSvgRef = useRef<SVGSVGElement | null>(null)
   const [underHostEl, setUnderHostEl] = useState<HTMLElement | null>(null)
+  const [scrollHostEl, setScrollHostEl] = useState<HTMLElement | null>(null)
   useEffect(() => {
     if (!showThreadOverlay) {
       setUnderHostEl(null)
+      setScrollHostEl(null)
       return
     }
     const sync = () => {
@@ -647,22 +681,29 @@ export function AiChatTurn({
       const root = document.querySelector('[data-board-root]') as HTMLElement | null
       if (dock && root) {
         setUnderHostEl(root) // Phone: stroke under the map dock cards
-        return
+      } else {
+        setUnderHostEl(chatSidebarColumnEl()) // Desktop: stroke under the sidebar column
       }
-      setUnderHostEl(chatSidebarColumnEl()) // Desktop: stroke under the sidebar column
+      setScrollHostEl(transcriptScrollerEl()) // Chat↔chat rides the transcript scroller
     }
     sync()
     const id = window.setInterval(sync, 400)
     return () => clearInterval(id)
   }, [showThreadOverlay])
 
-  /** Clip scrolled-away desktop strokes to the map left of the sidebar seam only. */
-  const syncLeftOfSeamClip = (svg: SVGSVGElement, seamX: number | null) => {
-    let defs = svg.querySelector('defs')
+  /** Ensure `<defs>` exists on the fixed thread SVG (clip paths live here). */
+  const ensureThreadDefs = (svg: SVGSVGElement): SVGDefsElement => {
+    let defs = svg.querySelector('defs') // Shared defs for seam + content clips
     if (!defs) {
       defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs')
-      svg.insertBefore(defs, svg.firstChild)
+      svg.insertBefore(defs, svg.firstChild) // Defs before painted paths
     }
+    return defs
+  }
+
+  /** Clip scrolled-away desktop strokes to the map left of the sidebar seam only. */
+  const syncLeftOfSeamClip = (svg: SVGSVGElement, seamX: number | null) => {
+    const defs = ensureThreadDefs(svg) // Host for #tt-thread-left-of-seam
     let cp = svg.querySelector('#tt-thread-left-of-seam') as SVGClipPathElement | null
     if (!cp) {
       cp = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath')
@@ -679,10 +720,55 @@ export function AiChatTurn({
     rect.setAttribute('height', String(Math.max(window.innerHeight, 1)))
   }
 
+  /**
+   * Desktop board↔chat overlap: map left of seam (any Y) ∪ content window.
+   * Lets the stroke reach the board without painting the chat header/prompt.
+   */
+  const syncChatOverlapClip = (svg: SVGSVGElement, seamX: number | null) => {
+    const defs = ensureThreadDefs(svg) // Host for #tt-thread-chat-overlap
+    let cp = svg.querySelector('#tt-thread-chat-overlap') as SVGClipPathElement | null
+    if (!cp) {
+      cp = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath')
+      cp.setAttribute('id', 'tt-thread-chat-overlap')
+      const mapRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+      mapRect.setAttribute('data-tt-overlap-map', 'true') // Left-of-seam band
+      const contentRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+      contentRect.setAttribute('data-tt-overlap-content', 'true') // Transcript window
+      cp.appendChild(mapRect)
+      cp.appendChild(contentRect)
+      defs.appendChild(cp)
+    }
+    const mapRect = cp.querySelector('[data-tt-overlap-map]') as SVGRectElement | null
+    const contentRect = cp.querySelector(
+      '[data-tt-overlap-content]'
+    ) as SVGRectElement | null
+    if (!mapRect || !contentRect) return
+    const h = Math.max(window.innerHeight, 1)
+    // Board free zone — full height left of the sidebar seam
+    mapRect.setAttribute('x', '0')
+    mapRect.setAttribute('y', '0')
+    mapRect.setAttribute('width', String(seamX != null && seamX > 0 ? seamX : 0))
+    mapRect.setAttribute('height', String(h))
+    const win = chatContentWindowRect()
+    if (win) {
+      contentRect.setAttribute('x', String(win.left))
+      contentRect.setAttribute('y', String(win.top))
+      contentRect.setAttribute('width', String(win.width))
+      contentRect.setAttribute('height', String(win.height))
+    } else {
+      contentRect.setAttribute('width', '0')
+      contentRect.setAttribute('height', '0')
+    }
+  }
+
   /** Sync path + stub children on one SVG root. */
   const syncSvgChildren = (
     svg: SVGSVGElement,
-    paths: { d: string; clipLeftOfSeam?: boolean }[],
+    paths: {
+      d: string
+      clipLeftOfSeam?: boolean
+      clipChatOverlap?: boolean
+    }[],
     stubs: { x: number; y: number }[]
   ) => {
     let pathCount = 0
@@ -726,7 +812,10 @@ export function AiChatTurn({
       const el = pathEls[i]
       if (!el) continue
       el.setAttribute('d', paths[i].d)
-      if (paths[i].clipLeftOfSeam) {
+      if (paths[i].clipChatOverlap) {
+        // Board free + turn visible — map ∪ content (no header/prompt in column)
+        el.setAttribute('clip-path', 'url(#tt-thread-chat-overlap)')
+      } else if (paths[i].clipLeftOfSeam) {
         el.setAttribute('clip-path', 'url(#tt-thread-left-of-seam)')
       } else {
         el.removeAttribute('clip-path')
@@ -745,15 +834,25 @@ export function AiChatTurn({
       const turn = turnRef.current
       const overlapSvg = threadSvgRef.current
       const underSvg = threadUnderSvgRef.current
-      if (!turn || !overlapSvg) return
+      const scrollSvg = threadScrollSvgRef.current
+      const scroller = scrollHostEl ?? transcriptScrollerEl()
+      // Need at least one paint target (board overlay and/or in-scroller chat↔chat)
+      if (!turn || (!overlapSvg && !scrollSvg)) return
       const toUnder = (p: { x: number; y: number }) =>
         clientToThreadSvgSpace(p, underSvg?.parentElement ?? null)
+      const toScroll = (p: { x: number; y: number }) =>
+        clientToTranscriptContent(p, scroller) // Content space — scrolls with turns
       const turnRect = turn.getBoundingClientRect()
       const currentLinks = linksRef.current
       const inbound = inboundRef.current
       const selectedPeers = selectedIdSetRef.current
-      const overlapPaths: { d: string; clipLeftOfSeam?: boolean }[] = []
+      const overlapPaths: {
+        d: string
+        clipLeftOfSeam?: boolean
+        clipChatOverlap?: boolean
+      }[] = []
       const overlapStubs: { x: number; y: number }[] = []
+      const scrollPaths: { d: string }[] = [] // Chat↔chat only — native scroll, no clip ids
       const underPaths: { d: string; clipLeftOfSeam?: boolean }[] = []
       const visibleBoardCues: { frameMessageId: string; side: ChatTurnSide }[] = []
       const seamYs: number[] = []
@@ -761,15 +860,17 @@ export function AiChatTurn({
       const nodes = reactFlowInstance?.getNodes() || []
       const desktopSidebar = !!chatSidebarColumnRect()
 
-      /** Paint one chat↔chat cubic inside the sidebar (no board seam clip). */
+      /** Chat↔chat in scroller content coords — compositor scroll keeps strokes stuck. */
       const paintChatToChat = (
         aClient: { x: number; y: number },
         bClient: { x: number; y: number },
         fromSide: ChatTurnSide,
         toSide: ChatTurnSide
       ) => {
-        overlapPaths.push({
-          d: chatThreadPath(aClient, bClient, fromSide, toSide),
+        const a = toScroll(aClient)
+        const b = toScroll(bClient)
+        scrollPaths.push({
+          d: chatThreadPath(a, b, fromSide, toSide),
         })
       }
 
@@ -791,6 +892,7 @@ export function AiChatTurn({
         }
 
         if (!isChatToBoardLink(link)) continue
+        if (!overlapSvg) continue // Board strokes need the fixed/under overlays
         const n = nodes.find(
           (x) =>
             x.id === link.frameMessageId ||
@@ -852,8 +954,11 @@ export function AiChatTurn({
           overlapPaths.push({ d, clipLeftOfSeam: desktopSidebar })
           overlapStubs.push({ x: clipped.stub.x, y: clipped.stub.y })
         } else if (clipped.path) {
-          // Board free + turn visible — stroke may overlap chat to reach the turn
-          overlapPaths.push({ d: clipped.path })
+          // Board free + turn visible — may cross chat; keep off header/prompt on desktop
+          overlapPaths.push({
+            d: clipped.path,
+            clipChatOverlap: desktopSidebar, // Phone board-free may leave the content card
+          })
         }
         if (clipped.reachesBoard) {
           visibleBoardCues.push({ frameMessageId: link.frameMessageId, side: link.frameSide })
@@ -891,15 +996,26 @@ export function AiChatTurn({
         paintChatToChat(aClient, bClient, link.turnSide, link.frameSide)
       }
 
-      syncLeftOfSeamClip(overlapSvg, desktopSidebar ? seamX : null)
-      syncSvgChildren(overlapSvg, overlapPaths, overlapStubs)
+      if (scrollSvg && scroller) {
+        // Size to full scroll content so paths aren’t clipped mid-transcript
+        const w = Math.max(scroller.scrollWidth, scroller.clientWidth, 1)
+        const h = Math.max(scroller.scrollHeight, scroller.clientHeight, 1)
+        scrollSvg.setAttribute('width', String(w))
+        scrollSvg.setAttribute('height', String(h))
+        syncSvgChildren(scrollSvg, scrollPaths, [])
+      }
+      if (overlapSvg) {
+        syncLeftOfSeamClip(overlapSvg, desktopSidebar ? seamX : null)
+        syncChatOverlapClip(overlapSvg, desktopSidebar ? seamX : null) // Board∪content
+        syncSvgChildren(overlapSvg, overlapPaths, overlapStubs)
+      }
       if (underSvg) syncSvgChildren(underSvg, underPaths, [])
       if (!opts?.skipPublish) {
         publishChatSeamGaps(seamSourceId, seamYs)
         publishChatFrameThreadVisible(seamSourceId, visibleBoardCues)
       }
     },
-    [reactFlowInstance, seamSourceId, message.id]
+    [reactFlowInstance, seamSourceId, message.id, scrollHostEl]
   )
 
   // Board-side logo visibility is published inside paintThreads (respects clip stubs).
@@ -920,21 +1036,40 @@ export function AiChatTurn({
       clearChatSeamGaps(seamSourceId) // No visible threads → restore solid seam
       return
     }
-    let raf = 0 // Coalesce bursty events into one paint per frame
+    let raf = 0 // Coalesce bursty non-scroll events into one paint per frame
     let navSettle: number | undefined // After viewport stops mutating, flush seam/logo
+    let scrollSettle: number | undefined // After transcript scroll stops, flush seam/logo
     let midNav = false // True while RF transform is actively changing
+    let midScroll = false // True while the transcript is scrolling
+
+    /** Geometry-only while scrolling/navving — seam/logo React publishes lag strokes. */
+    const paintGeometry = () => {
+      paintThreads({ skipPublish: midNav || midScroll })
+    }
+
     const schedule = (full = false) => {
       if (raf) return // Already queued for this frame
       raf = requestAnimationFrame(() => {
         raf = 0
-        // Mid-nav: geometry only (skip React seam/logo publishes — those lagged + jumped)
-        paintThreads({ skipPublish: midNav && !full })
+        paintThreads({ skipPublish: (midNav || midScroll) && !full })
       })
     }
-    const onScrollOrResize = () => schedule(true) // Transcript / window — full publish
+
+    /** Transcript scroll: paint sync so strokes ride the same frame as the turns. */
+    const onTranscriptScroll = () => {
+      midScroll = true
+      paintGeometry() // Same turn as scroll — no rAF lag behind frames
+      if (scrollSettle !== undefined) window.clearTimeout(scrollSettle)
+      scrollSettle = window.setTimeout(() => {
+        midScroll = false
+        paintThreads() // Flush seam gaps + logo visibility after settle
+      }, 120)
+    }
+
+    const onScrollOrResize = () => schedule(true) // Window resize / non-transcript scroll
     const onViewportStyle = () => {
       midNav = true
-      schedule(false) // Geometry only while panning/zooming
+      schedule(false) // Geometry only while panning/zooming (RF mutates every frame)
       if (navSettle !== undefined) window.clearTimeout(navSettle)
       navSettle = window.setTimeout(() => {
         midNav = false
@@ -947,9 +1082,9 @@ export function AiChatTurn({
     const scroller = document.querySelector('[data-ai-transcript-scroll]') // Chat transcript
     const ro = new ResizeObserver(onScrollOrResize) // Turn size / streaming growth
     if (turnRef.current) ro.observe(turnRef.current)
-    window.addEventListener('scroll', onScrollOrResize, true)
+    // Do not use window capture scroll for transcript — that path was rAF-deferred and lagged
     window.addEventListener('resize', onScrollOrResize)
-    scroller?.addEventListener('scroll', onScrollOrResize, { passive: true })
+    scroller?.addEventListener('scroll', onTranscriptScroll, { passive: true })
     root?.addEventListener('transitionend', onScrollOrResize) // Animated fitView / etc.
     // RF pan/zoom mutates viewport style every frame — remasure in lockstep with the board frame
     const mo =
@@ -958,16 +1093,16 @@ export function AiChatTurn({
     return () => {
       ro.disconnect()
       mo?.disconnect()
-      window.removeEventListener('scroll', onScrollOrResize, true)
       window.removeEventListener('resize', onScrollOrResize)
-      scroller?.removeEventListener('scroll', onScrollOrResize)
+      scroller?.removeEventListener('scroll', onTranscriptScroll)
       root?.removeEventListener('transitionend', onScrollOrResize)
       if (navSettle !== undefined) window.clearTimeout(navSettle)
+      if (scrollSettle !== undefined) window.clearTimeout(scrollSettle)
       cancelAnimationFrame(boot)
       if (raf) cancelAnimationFrame(raf)
       clearChatSeamGaps(seamSourceId)
     }
-  }, [showThreadOverlay, linksKey, paintThreads, seamSourceId, underHostEl])
+  }, [showThreadOverlay, linksKey, paintThreads, seamSourceId, underHostEl, scrollHostEl])
 
   // Rubber-band also punches the seam while dragging a new thread
   useEffect(() => {
@@ -989,6 +1124,31 @@ export function AiChatTurn({
 
   // Always reserve L/R ⋮⋮ column so select only paints the blue ring (no content jump)
   const gutter = BLOCK_HANDLE_GUTTER_W
+
+  // Rubber over chat → paint in transcript scroller (scroll-native); over board → fixed SVG
+  let rubberInScroller: HTMLElement | null = null
+  let rubberScrollFrom: { x: number; y: number } | null = null
+  let rubberScrollTo: { x: number; y: number } | null = null
+  if (rubber) {
+    const ptr = rubber.to // Live pointer (rubber tip)
+    const col = chatSidebarColumnRect() // Desktop header + content + prompt
+    const overChatCol =
+      !!col &&
+      ptr.x >= col.left &&
+      ptr.x <= col.right &&
+      ptr.y >= col.top &&
+      ptr.y <= col.bottom
+    const overChatChrome = chatChromeRects().some(
+      (r) =>
+        ptr.x >= r.left && ptr.x <= r.right && ptr.y >= r.top && ptr.y <= r.bottom
+    )
+    const scroller = transcriptScrollerEl()
+    if (scroller && (overChatCol || overChatChrome)) {
+      rubberInScroller = scroller // Chat↔chat drag — co-layer with turns
+      rubberScrollFrom = clientToTranscriptContent(rubber.from, scroller)
+      rubberScrollTo = clientToTranscriptContent(rubber.to, scroller)
+    }
+  }
 
   return (
     <>
@@ -1147,8 +1307,35 @@ export function AiChatTurn({
           document.body
         )}
 
-      {/* Rubber-band while connecting */}
+      {/* Rubber-band: in-scroller while over chat (no scroll lag); fixed while aiming at board */}
       {rubber &&
+        rubberInScroller &&
+        rubberScrollFrom &&
+        rubberScrollTo &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <svg
+            className="pointer-events-none absolute left-0 top-0 z-[20] overflow-visible"
+            width={Math.max(rubberInScroller.scrollWidth, rubberInScroller.clientWidth, 1)}
+            height={Math.max(rubberInScroller.scrollHeight, rubberInScroller.clientHeight, 1)}
+          >
+            <path
+              d={chatThreadPath(
+                rubberScrollFrom,
+                rubberScrollTo,
+                rubber.side,
+                'left'
+              )}
+              stroke="#3b82f6"
+              strokeWidth="2"
+              fill="none"
+              strokeDasharray="6 4"
+            />
+          </svg>,
+          rubberInScroller
+        )}
+      {rubber &&
+        !rubberInScroller &&
         typeof document !== 'undefined' &&
         createPortal(
           <svg className="pointer-events-none fixed inset-0 z-[200]" width="100%" height="100%">
@@ -1174,6 +1361,20 @@ export function AiChatTurn({
             height="100%"
           />,
           document.body
+        )}
+      {/* Chat↔chat: inside transcript scroller so strokes ride compositor scroll with frames */}
+      {showThreadOverlay &&
+        scrollHostEl &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <svg
+            ref={threadScrollSvgRef}
+            data-tt-thread-scroll="true"
+            className="pointer-events-none absolute left-0 top-0 z-[5] overflow-visible"
+            width="100%"
+            height="100%"
+          />,
+          scrollHostEl
         )}
       {showThreadOverlay &&
         underHostEl &&

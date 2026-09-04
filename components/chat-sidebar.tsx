@@ -1026,7 +1026,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                 <div
                   ref={transcriptScrollRef}
                   data-ai-transcript-scroll
-                  className="max-h-[32vh] overflow-y-auto px-3 py-2 pr-12"
+                  className="relative max-h-[32vh] overflow-y-auto px-3 py-2 pr-12"
                 >
                   <ChatLoadStage phase={loadPhase} placeholder={<AiTranscriptPlaceholder />}>
                     {hasTranscript ? (
@@ -1223,7 +1223,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
           <div
             ref={transcriptScrollRef}
             data-ai-transcript-scroll
-            className="flex-1 min-h-0 overflow-y-auto px-4 py-6 pr-8"
+            className="relative flex-1 min-h-0 overflow-y-auto px-4 py-6 pr-8"
           >
             <ChatLoadStage phase={loadPhase} placeholder={<AiTranscriptPlaceholder />}>
               {!hasTranscript ? (
