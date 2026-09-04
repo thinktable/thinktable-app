@@ -30,6 +30,7 @@ import {
   AlignCenter, // Text align center
   AlignRight, // Text align right
   AlignJustify, // Text align justify
+  RotateCcw, // Revert text to original sent/received
 } from 'lucide-react'
 import { cn } from '@/lib/utils' // Conditional classes for active Hide text row
 import { getMenuSafeRect } from '@/lib/menu-placement' // Same chrome-free lane as action menus
@@ -70,7 +71,20 @@ const TEXT_COLORS = [
 /**
  * Formatting popup — marks, clear-format, and text align live here (moved off the top bar).
  */
-export function SelectionFormatPopup({ editor }: { editor: Editor | null }) {
+export function SelectionFormatPopup({
+  editor,
+  showRevertText = false,
+  canRevertText = false,
+  onRevertText,
+}: {
+  editor: Editor | null
+  /** List Revert text (chat frames; board omits until wired). */
+  showRevertText?: boolean
+  /** True when the host body diverges from the original sent/received text. */
+  canRevertText?: boolean
+  /** Restore the original prompt/response body (closes selection naturally). */
+  onRevertText?: () => void
+}) {
   const [, setTick] = useState(0) // Re-render when marks/align change so active styles stay in sync
   const [openFlyout, setOpenFlyout] = useState<'color' | 'align' | null>(null) // One flyout at a time
   const isHazed = !!editor?.isActive('haze') // Selection already has haze mark
@@ -310,6 +324,29 @@ export function SelectionFormatPopup({ editor }: { editor: Editor | null }) {
           <EyeOff className="h-4 w-4 shrink-0 text-gray-600 dark:text-gray-300" />
           <span>{isHazed ? 'Unhide text' : 'Hide text'}</span>
         </button>
+        {showRevertText ? (
+          <button
+            type="button"
+            className={cn(
+              'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-gray-50 dark:hover:bg-gray-800',
+              !canRevertText && 'pointer-events-none opacity-40'
+            )}
+            tabIndex={-1}
+            disabled={!canRevertText}
+            title={
+              canRevertText
+                ? 'Restore the original sent or received text'
+                : 'No edits to revert'
+            }
+            onClick={() => {
+              if (!canRevertText || !onRevertText) return
+              onRevertText()
+            }}
+          >
+            <RotateCcw className="h-4 w-4 shrink-0 text-gray-600 dark:text-gray-300" />
+            <span>Revert text</span>
+          </button>
+        ) : null}
       </div>
 
       {/* Divider before Skills */}
@@ -532,9 +569,18 @@ function getSelectionVirtualElement(): VirtualElement | null {
 export function SelectionFormatPopupAnchor({
   editor,
   containerRef,
+  showRevertText = false,
+  canRevertText = false,
+  onRevertText,
 }: {
   editor: Editor | null // Active TipTap editor for this panel section
   containerRef: React.RefObject<HTMLDivElement | null> // TipTapContent root (ownership / click tests)
+  /** List Revert text (chat frames). */
+  showRevertText?: boolean
+  /** True when the host body diverges from the original sent/received text. */
+  canRevertText?: boolean
+  /** Restore the original prompt/response body. */
+  onRevertText?: () => void
 }) {
   const [showPopup, setShowPopup] = useState(false) // Whether a valid selection is active
   const [isNavigating, setIsNavigating] = useState(false) // Hide while the board pans/zooms; return when nav stops
@@ -772,7 +818,12 @@ export function SelectionFormatPopupAnchor({
         pointerEvents: isNavigating ? 'none' : 'auto',
       }}
     >
-      <SelectionFormatPopup editor={editor} />
+      <SelectionFormatPopup
+        editor={editor}
+        showRevertText={showRevertText}
+        canRevertText={canRevertText}
+        onRevertText={onRevertText}
+      />
     </div>,
     document.body
   )

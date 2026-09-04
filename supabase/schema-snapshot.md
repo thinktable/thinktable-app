@@ -1,13 +1,21 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-09-04T04:31:41Z`
+- Snapped at: `2026-09-04T04:54:07Z`
 - Source: local `supabase/migrations/` + remote applied tops (thinkable) + `.temp` service versions
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 - CLI: `supabase` `2.90.0` (marker via `migration new`; newer CLI available)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260904045406_ai_chat_fork_and_revert_text.sql`.
+- Thread picker **GitFork** → `POST /api/ai/threads/[id]/fork` opens **Copy of …** with the same turns.
+- Chat **Revert text** siloed by frame / block / selection menus (`lib/ai/chat-revert-text.ts`); soft-save freezes `originalContent` / `originalHtml`.
+- Resend prompt / Regenerate response on chat frame menus; open-chat sparkle uses light blue `#b5daf3`.
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Chat-link cue click opens turn
 
 - No DDL. Marker `20260904043128_chat_link_cue_click_opens_turn.sql`.
 - Board chat-link cue **click** opens chat and selects the linked transcript turn (`requestOpenChatForBoardLink` / `AI_OPEN_CHAT_TURN_EVENT`).

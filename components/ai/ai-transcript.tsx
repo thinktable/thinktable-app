@@ -17,7 +17,8 @@ interface AiTranscriptProps {
   threadId?: string | null // Active thread — keys module selection across remounts
   streamingId?: string | null // Assistant id currently streaming
   conversationId?: string // Board id for ⋮⋮ → frame drops
-  onEditUserMessage: (messageId: string, content: string) => Promise<void> // Legacy regenerate path (unused by TipTap soft-save)
+  onEditUserMessage: (messageId: string, content: string) => Promise<void> // Resend prompt / edit-and-regen
+  onRegenerateResponse?: (assistantMessageId: string) => Promise<void> // Re-run from preceding prompt
   onMessagePatch?: (messageId: string, message: AiMessage) => void // Optimistic local merge after soft-save
 }
 
@@ -26,6 +27,8 @@ export function AiTranscript({
   threadId,
   streamingId,
   conversationId,
+  onEditUserMessage,
+  onRegenerateResponse,
   onMessagePatch,
 }: AiTranscriptProps) {
   // Module store — phone dock ↔ desktop column remounts keep the same pick
@@ -101,10 +104,17 @@ export function AiTranscript({
           message={m}
           selected={selectedId === m.id}
           streaming={m.id === streamingId || m.status === 'streaming'}
+          chatBusy={!!streamingId}
           conversationId={conversationId}
           onSelect={onSelect}
           onSoftSave={softSave}
           onLinksChange={onLinksChange}
+          onResendPrompt={(id, content) => {
+            void onEditUserMessage(id, content)
+          }}
+          onRegenerateResponse={(id) => {
+            void onRegenerateResponse?.(id)
+          }}
         />
       ))}
     </div>

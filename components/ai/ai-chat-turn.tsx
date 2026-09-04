@@ -13,7 +13,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { useEditor, EditorContent } from '@tiptap/react'
+import { useEditor, EditorContent, type Editor } from '@tiptap/react'
 import { ReactFlowProvider } from 'reactflow'
 import { GripVertical, Loader2 } from 'lucide-react'
 import type { AiMessage, AiChatBlockDragPayload } from '@/lib/ai/types'
@@ -21,9 +21,25 @@ import { AI_CHAT_BLOCK_MIME } from '@/lib/ai/types'
 import { markdownToTipTapHtml } from '@/lib/ai/markdown-to-tiptap'
 import { createPanelExtensions } from '@/lib/tiptap/extensions'
 import { TipTapBlockHandles } from '@/components/tiptap-block-handles'
+import {
+  BlockActionsMenu,
+  type BlockActionId,
+  type BlockActionPayload,
+} from '@/components/block-actions-menu'
+import { SelectionFormatPopupAnchor } from '@/components/selection-format-popup'
 import { BLOCK_HANDLE_GUTTER_W } from '@/lib/frame-adjust-box'
 import { useReactFlowContext } from '@/components/react-flow-context'
 import { cn } from '@/lib/utils'
+import {
+  blocksDifferFromOriginal,
+  frameDiffersFromOriginal,
+  revertBlockContents,
+  revertFrameContent,
+  revertSelectionContent,
+  selectionDiffersFromOriginal,
+  softSaveAfterRevert,
+} from '@/lib/ai/chat-revert-text'
+import type { EditorBlockRef } from '@/lib/tiptap/block-selection'
 import {
   type AiChatBoardLink,
   type ChatTurnSide,
@@ -67,10 +83,16 @@ type AiChatTurnProps = {
   message: AiMessage
   selected: boolean
   streaming?: boolean
+  /** True while any turn in the thread is streaming — greys resend/regenerate. */
+  chatBusy?: boolean
   conversationId?: string // Board id — ⋮⋮ drop onto map creates a frame
   onSelect: (id: string) => void
   onSoftSave: (messageId: string, patch: { content: string; html: string; metadata?: Record<string, unknown> }) => Promise<void>
   onLinksChange: (messageId: string, links: AiChatBoardLink[]) => void
+  /** Prompt frame — truncate later turns and send the current text again. */
+  onResendPrompt?: (messageId: string, content: string) => void
+  /** Response frame — drop this + later turns and re-run from the preceding prompt. */
+  onRegenerateResponse?: (messageId: string) => void
 }
 
 /** Indicator placement — centered on the frame edge (no outset; chat has no resize chrome). */
@@ -85,16 +107,23 @@ export function AiChatTurn({
   message,
   selected,
   streaming,
+  chatBusy,
   conversationId,
   onSelect,
   onSoftSave,
   onLinksChange,
+  onResendPrompt,
+  onRegenerateResponse,
 }: AiChatTurnProps) {
   const isUser = message.role === 'user'
   const turnRef = useRef<HTMLDivElement>(null)
+  const editorShellRef = useRef<HTMLDivElement>(null) // Selection popup ownership / click tests
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Grip HTML5 drag must not select; click (no dragstart) still selects the turn
   const frameGripDraggedRef = useRef(false)
+  // Freeze the first sent/received body so Revert text can restore after user edits
+  const baselineRef = useRef<{ content: string; html: string } | null>(null)
+  const userEditedRef = useRef(false) // True after the first TipTap edit on this mount
   const { reactFlowInstance } = useReactFlowContext()
   const links = readChatBoardLinks(message.metadata)
   const [rubber, setRubber] = useState<{
@@ -102,12 +131,53 @@ export function AiChatTurn({
     to: { x: number; y: number }
     side: ChatTurnSide
   } | null>(null)
+  // Frame menu — same BlockActionsMenu as board frame right-click
+  const [frameMenu, setFrameMenu] = useState<{ x: number; y: number } | null>(null)
+  const [canRevertFrame, setCanRevertFrame] = useState(false) // Whole turn ≠ baseline
+  const [canRevertSelection, setCanRevertSelection] = useState(false) // Selection ≠ original range
 
   const seedHtml = useMemo(() => {
     const stored = typeof message.metadata?.html === 'string' ? (message.metadata.html as string) : ''
     if (stored.trim()) return stored
     return markdownToTipTapHtml(message.content || '')
   }, [message.content, message.metadata?.html])
+
+  // Resolve the frozen original (server stamp wins; else local baseline / current seed)
+  const readBaseline = useCallback(() => {
+    const meta = (message.metadata || {}) as Record<string, unknown>
+    if (typeof meta.originalContent === 'string') {
+      const html =
+        typeof meta.originalHtml === 'string'
+          ? (meta.originalHtml as string)
+          : markdownToTipTapHtml(meta.originalContent as string)
+      return { content: meta.originalContent as string, html }
+    }
+    if (baselineRef.current) return baselineRef.current
+    return { content: message.content || '', html: seedHtml }
+  }, [message.content, message.metadata, seedHtml])
+
+  // Refresh frame + selection enablement (block enablement is computed at menu open)
+  const syncCanRevert = useCallback(
+    (ed: Editor | null | undefined) => {
+      if (!ed || ed.isDestroyed || !userEditedRef.current) {
+        setCanRevertFrame(false)
+        setCanRevertSelection(false)
+        return
+      }
+      const base = readBaseline()
+      setCanRevertFrame(frameDiffersFromOriginal(ed, base))
+      setCanRevertSelection(selectionDiffersFromOriginal(ed, base.html))
+    },
+    [readBaseline]
+  )
+
+  // TipTap onUpdate is created once — keep soft-save / revert helpers fresh via refs
+  const syncCanRevertRef = useRef(syncCanRevert)
+  syncCanRevertRef.current = syncCanRevert
+  const onSoftSaveRef = useRef(onSoftSave)
+  onSoftSaveRef.current = onSoftSave
+  const messageRef = useRef(message)
+  messageRef.current = message
 
   const extensions = useMemo(() => createPanelExtensions(''), [])
 
@@ -125,20 +195,53 @@ export function AiChatTurn({
         },
       },
       onUpdate: ({ editor: ed }) => {
+        userEditedRef.current = true // First keystroke arms Revert text
+        syncCanRevertRef.current(ed)
         if (saveTimer.current) clearTimeout(saveTimer.current)
         saveTimer.current = setTimeout(() => {
           const html = ed.getHTML()
           const content = ed.getText()
-          void onSoftSave(message.id, {
+          const m = messageRef.current
+          void onSoftSaveRef.current(m.id, {
             content,
             html,
-            metadata: { ...(message.metadata || {}), html },
+            metadata: { ...(m.metadata || {}), html },
           })
         }, 500)
       },
     },
     [extensions]
   )
+
+  // Keep local baseline while the turn is still streaming / unedited
+  useEffect(() => {
+    const meta = (message.metadata || {}) as Record<string, unknown>
+    if (typeof meta.originalContent === 'string') {
+      baselineRef.current = {
+        content: meta.originalContent as string,
+        html:
+          typeof meta.originalHtml === 'string'
+            ? (meta.originalHtml as string)
+            : markdownToTipTapHtml(meta.originalContent as string),
+      }
+      syncCanRevert(editor)
+      return
+    }
+    if (!userEditedRef.current) {
+      baselineRef.current = { content: message.content || '', html: seedHtml }
+      setCanRevertFrame(false)
+      setCanRevertSelection(false)
+    }
+  }, [message.content, message.metadata, seedHtml, editor, syncCanRevert])
+
+  // Reset per-turn edit tracking when the message identity changes
+  useEffect(() => {
+    userEditedRef.current = false
+    baselineRef.current = null
+    setCanRevertFrame(false)
+    setCanRevertSelection(false)
+    setFrameMenu(null)
+  }, [message.id])
 
   // Sync editable when selection flips
   useEffect(() => {
@@ -152,8 +255,19 @@ export function AiChatTurn({
     const cur = editor.getHTML()
     if (seedHtml && seedHtml !== cur && !editor.isFocused) {
       editor.commands.setContent(seedHtml, { emitUpdate: false })
+      if (!userEditedRef.current) syncCanRevert(editor)
     }
-  }, [editor, seedHtml])
+  }, [editor, seedHtml, syncCanRevert])
+
+  // Selection-scoped enablement tracks caret/range changes (not only onUpdate)
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return
+    const bump = () => syncCanRevert(editor)
+    editor.on('selectionUpdate', bump)
+    return () => {
+      editor.off('selectionUpdate', bump)
+    }
+  }, [editor, syncCanRevert])
 
   useEffect(
     () => () => {
@@ -161,6 +275,110 @@ export function AiChatTurn({
     },
     []
   )
+
+  const persistAfterRevert = useCallback(() => {
+    if (!editor || editor.isDestroyed) return
+    const base = readBaseline()
+    const m = messageRef.current
+    void onSoftSave(m.id, softSaveAfterRevert(editor, base, (m.metadata || {}) as Record<string, unknown>))
+    userEditedRef.current = frameDiffersFromOriginal(editor, base)
+    syncCanRevert(editor)
+  }, [editor, onSoftSave, readBaseline, syncCanRevert])
+
+  /** Frame menu — restore the entire turn. */
+  const revertFrame = useCallback(() => {
+    if (!editor || editor.isDestroyed) return
+    const base = readBaseline()
+    revertFrameContent(editor, base)
+    setFrameMenu(null)
+    persistAfterRevert()
+  }, [editor, persistAfterRevert, readBaseline])
+
+  /** Block menu — restore only the armed block(s). */
+  const canRevertBlocks = useCallback(
+    (blocks: EditorBlockRef[]) => {
+      if (!editor || editor.isDestroyed || !userEditedRef.current) return false
+      return blocksDifferFromOriginal(editor, readBaseline().html, blocks)
+    },
+    [editor, readBaseline]
+  )
+
+  const revertBlocks = useCallback(
+    (blocks: EditorBlockRef[]) => {
+      if (!editor || editor.isDestroyed) return
+      const base = readBaseline()
+      if (!revertBlockContents(editor, base.html, blocks)) return
+      persistAfterRevert()
+    },
+    [editor, persistAfterRevert, readBaseline]
+  )
+
+  /** Text menu — restore only the current selection. */
+  const revertSelection = useCallback(() => {
+    if (!editor || editor.isDestroyed) return
+    const base = readBaseline()
+    if (!revertSelectionContent(editor, base.html)) return
+    persistAfterRevert()
+  }, [editor, persistAfterRevert, readBaseline])
+
+  const handleFrameMenuAction = useCallback(
+    (action: BlockActionId, _payload?: BlockActionPayload) => {
+      if (action === 'revertText') {
+        revertFrame() // Frame silo only
+        return
+      }
+      if (action === 'resendPrompt') {
+        // Prefer live TipTap text so soft edits are what gets resent
+        const text =
+          editor && !editor.isDestroyed
+            ? editor.getText().trim()
+            : (message.content || '').trim()
+        setFrameMenu(null)
+        if (text && onResendPrompt) onResendPrompt(message.id, text)
+        return
+      }
+      if (action === 'regenerateResponse') {
+        setFrameMenu(null)
+        onRegenerateResponse?.(message.id)
+        return
+      }
+      // Same menu chrome as the board; chat-only wiring for now is Revert / resend / regenerate
+      setFrameMenu(null)
+    },
+    [editor, message.content, message.id, onRegenerateResponse, onResendPrompt, revertFrame]
+  )
+
+  const onTurnContextMenu = useCallback(
+    (event: React.MouseEvent) => {
+      // Same as board frame right-click — frame menu (text select uses the format popup)
+      event.preventDefault()
+      event.stopPropagation()
+      const t = event.target as HTMLElement
+      if (t.closest('[data-tt-block-handle]') || t.closest('[data-tt-chat-indicator]')) return
+      if (!selected) onSelect(message.id)
+      setFrameMenu({ x: event.clientX, y: event.clientY })
+    },
+    [message.id, onSelect, selected]
+  )
+
+  // Dismiss frame menu on outside click / Escape
+  useEffect(() => {
+    if (!frameMenu) return
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest?.('.block-actions-menu')) return
+      setFrameMenu(null)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFrameMenu(null)
+    }
+    document.addEventListener('mousedown', onDoc, true)
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDoc, true)
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [frameMenu])
 
   const startDrag = useCallback(
     (event: React.DragEvent) => {
@@ -626,6 +844,7 @@ export function AiChatTurn({
         draggable={selected}
         onDragStart={startDrag}
         onPointerDown={onTurnPointerDown}
+        onContextMenu={onTurnContextMenu}
         className={cn(
           'group relative rounded-lg', // Same radius as drag ghost
           selected ? 'z-10' : 'z-0',
@@ -712,7 +931,7 @@ export function AiChatTurn({
           ))}
 
         <ReactFlowProvider>
-          <div className="relative w-full overflow-visible min-w-0">
+          <div ref={editorShellRef} className="relative w-full overflow-visible min-w-0">
             {/* Block ⋮⋮ grips — only while the chat frame is selected */}
             {selected && (
               <TipTapBlockHandles
@@ -726,15 +945,51 @@ export function AiChatTurn({
                 blockDragFromGrip // ⋮⋮ moves block(s), never the chat turn; drop→board copies a frame
                 chatMessageRole={message.role}
                 chatMessageId={message.id}
+                canRevertBlocks={canRevertBlocks}
+                showRevertText
+                onRevertBlocks={revertBlocks}
               />
             )}
             <EditorContent editor={editor} className="block w-full min-w-0" />
+            {selected && editor ? (
+              <SelectionFormatPopupAnchor
+                editor={editor}
+                containerRef={editorShellRef}
+                showRevertText
+                canRevertText={canRevertSelection}
+                onRevertText={revertSelection}
+              />
+            ) : null}
             {streaming && (
               <Loader2 className="absolute -top-0.5 right-0 h-3 w-3 animate-spin text-gray-400" />
             )}
           </div>
         </ReactFlowProvider>
       </div>
+
+      {/* Frame menu — same BlockActionsMenu as board frame right-click */}
+      {frameMenu &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <BlockActionsMenu
+            positionMode="fixed"
+            x={frameMenu.x}
+            y={frameMenu.y}
+            showFrameShape
+            menuHeader="Frame"
+            showAddChild={false}
+            selectedCount={1}
+            canUngroup={false}
+            canRevertText={canRevertFrame}
+            showRevertText
+            showResendPrompt={isUser}
+            showRegenerateResponse={!isUser}
+            chatRegenBusy={!!chatBusy || !!streaming}
+            onAction={handleFrameMenuAction}
+            onClose={() => setFrameMenu(null)}
+          />,
+          document.body
+        )}
 
       {/* Rubber-band while connecting */}
       {rubber &&

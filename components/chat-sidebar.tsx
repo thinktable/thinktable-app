@@ -8,7 +8,11 @@ import {
   CHAT_SIDEBAR_WIDTH,
   TT_CHAT_THREAD_ID_KEY,
 } from './sidebar-context' // Open state + logo + thread persist key
-import { ThinktableBrandMark, PersonalizeAiModal } from './personalize-ai-modal' // Brand
+import {
+  ThinktableBrandMark,
+  PersonalizeAiModal,
+  AI_STAR_COLOR_OPEN,
+} from './personalize-ai-modal' // Brand + open-chat sparkle color
 import { AiThreadPicker, type AiThreadFilter } from './ai/ai-thread-picker' // History
 import { AiTranscript } from './ai/ai-transcript' // Turns
 import { CustomizeAgentPanel } from './ai/customize-agent-panel' // Brand → customize agent
@@ -680,6 +684,13 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     setMode('ask')
   }, [])
 
+  /** Open a forked copy of the current chat (picker GitFork). */
+  const handleFork = useCallback((t: AiThread) => {
+    setThread(t) // Switch into the duplicate
+    setMode(isSelectableAiMode(t.mode) ? t.mode : 'ask') // Match source mode
+    setRefreshKey((k) => k + 1) // Show the copy in the thread list
+  }, [])
+
   /** Scroll the transcript to a user prompt picked from the compact bars. */
   const handleJumpToMessage = useCallback((messageId: string) => {
     const el = document.querySelector(`[data-ai-turn="${messageId}"]`) // Row stamped in AiTranscript
@@ -700,10 +711,13 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
 
   const handleEditUserMessage = useCallback(
     async (messageId: string, content: string) => {
+      if (streamingId) return // Don't stack a second stream
+      const trimmed = content.trim()
+      if (!trimmed) return
       const res = await fetch(`/api/ai/messages/${messageId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content: trimmed }),
       })
       if (!res.ok) throw new Error(await res.text())
       const data = await res.json()
@@ -716,7 +730,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
       const threadId = (data.threadId as string) || thread?.id
       if (!threadId) return
       await regenerateAfterEdit({
-        message: content,
+        message: trimmed,
         threadId,
         boardId: conversationId,
         snapshotIds: attachedSnapshots.map((s) => s.id),
@@ -725,7 +739,25 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
       })
       setRefreshKey((k) => k + 1)
     },
-    [thread?.id, conversationId, attachedSnapshots]
+    [thread?.id, conversationId, attachedSnapshots, streamingId]
+  )
+
+  /** Response frame menu — drop this turn + later, re-run from the preceding prompt. */
+  const handleRegenerateResponse = useCallback(
+    async (assistantMessageId: string) => {
+      const idx = messages.findIndex((m) => m.id === assistantMessageId)
+      if (idx < 0) return
+      let userMsg: (typeof messages)[number] | null = null
+      for (let i = idx - 1; i >= 0; i--) {
+        if (messages[i].role === 'user') {
+          userMsg = messages[i]
+          break
+        }
+      }
+      if (!userMsg) return
+      await handleEditUserMessage(userMsg.id, userMsg.content || '')
+    },
+    [messages, handleEditUserMessage]
   )
 
   /** TipTap soft-save / board-link merge — replace one turn in local state. */
@@ -1006,6 +1038,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                         streamingId={streamingId}
                         conversationId={conversationId}
                         onEditUserMessage={handleEditUserMessage}
+                        onRegenerateResponse={handleRegenerateResponse}
                         onMessagePatch={handleMessagePatch}
                       />
                     ) : null}
@@ -1042,11 +1075,17 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                 <button
                   type="button"
                   onClick={openCustomize}
-                  className="flex-shrink-0 rounded-full overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 opacity-90 hover:opacity-100 transition-opacity"
+                  className="relative z-10 flex-shrink-0 rounded-full overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 opacity-90 hover:opacity-100 transition-opacity"
                   title="Customize Thinktable AI"
                   aria-label="Customize Thinktable AI"
                 >
-                  <ThinktableBrandMark drawingUrl={logoDrawing} size={28} />
+                  {/* Open chat: keep sparkles visible in light blue */}
+                  <ThinktableBrandMark
+                    drawingUrl={logoDrawing}
+                    size={28}
+                    showAiStar
+                    aiStarColor={AI_STAR_COLOR_OPEN}
+                  />
                 </button>
                 <div className="flex-1 min-w-0 overflow-hidden bg-transparent">
                   <AiThreadPicker
@@ -1059,6 +1098,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                       setMode(isSelectableAiMode(t.mode) ? t.mode : 'ask')
                     }}
                     onNew={handleNew}
+                    onFork={handleFork}
                     refreshKey={refreshKey}
                   />
                 </div>
@@ -1136,11 +1176,17 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
               <button
                 type="button"
                 onClick={openCustomize}
-                className="flex-shrink-0 rounded-full overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 opacity-90 hover:opacity-100 transition-opacity"
+                className="relative z-10 flex-shrink-0 rounded-full overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 opacity-90 hover:opacity-100 transition-opacity"
                 title="Customize Thinktable AI"
                 aria-label="Customize Thinktable AI"
               >
-                <ThinktableBrandMark drawingUrl={logoDrawing} size={28} />
+                {/* Open chat: keep sparkles visible in light blue */}
+                <ThinktableBrandMark
+                  drawingUrl={logoDrawing}
+                  size={28}
+                  showAiStar
+                  aiStarColor={AI_STAR_COLOR_OPEN}
+                />
               </button>
             )}
             <div className="min-w-0 flex-1 overflow-hidden">
@@ -1154,6 +1200,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                   setMode(isSelectableAiMode(t.mode) ? t.mode : 'ask')
                 }}
                 onNew={handleNew}
+                onFork={handleFork}
                 refreshKey={refreshKey}
               />
             </div>
@@ -1201,11 +1248,17 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                   <button
                     type="button"
                     onClick={openCustomize}
-                    className="rounded-full overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                    className="relative z-10 rounded-full overflow-visible focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
                     title="Customize Thinktable AI"
                     aria-label="Customize Thinktable AI"
                   >
-                    <ThinktableBrandMark drawingUrl={logoDrawing} size={52} />
+                    {/* Open chat empty state: sparkles stay on, light blue */}
+                    <ThinktableBrandMark
+                      drawingUrl={logoDrawing}
+                      size={52}
+                      showAiStar
+                      aiStarColor={AI_STAR_COLOR_OPEN}
+                    />
                   </button>
                   <button
                     type="button"
@@ -1268,6 +1321,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                 streamingId={streamingId}
                 conversationId={conversationId}
                 onEditUserMessage={handleEditUserMessage}
+                onRegenerateResponse={handleRegenerateResponse}
                 onMessagePatch={handleMessagePatch}
               />
             )}

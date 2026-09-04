@@ -66,6 +66,7 @@ import {
   Table2,
   AppWindow,
   Rows3,
+  RotateCcw,
 } from 'lucide-react' // Action + Turn into + Property + Connections icons
 import { NotionMarkIcon } from '@/components/notion-mark-icon' // Notion row in Connections
 import type { NotionSyncMode } from '@/lib/blocks' // Live vs Manual sync
@@ -193,6 +194,9 @@ export type BlockActionId =
   | 'convertLayout' // Frame menu → Card view / Table view (Notion DB)
   | 'setDbRows' // Frame menu → Table rows setter (shown / all / reset)
   | 'open' // Open linked board / Notion page (DB row ⋮⋮, boardLink)
+  | 'revertText' // Restore original sent/received text after a user edit
+  | 'resendPrompt' // Chat prompt frame — truncate later turns and send again
+  | 'regenerateResponse' // Chat response frame — re-run from the preceding prompt
 
 export type DbConvertLayoutId = 'card' | 'table' // Convert layout flyout picks
 /** Row-setter commit: exact count, all loaded (or client cap), or compact default. */
@@ -271,6 +275,16 @@ export type BlockActionsMenuProps = {
   menuHeader?: string
   /** Slim Live Sync / Manual / Remove menu (Notion footer ⋮⋮). */
   variant?: 'default' | 'notionConnection'
+  /** List Revert text (chat frames; board omits until wired). */
+  showRevertText?: boolean
+  /** Enable Revert text — true when the body diverges from the original sent/received. */
+  canRevertText?: boolean
+  /** List Resend prompt (chat user/prompt frames only). */
+  showResendPrompt?: boolean
+  /** List Regenerate response (chat assistant frames only). */
+  showRegenerateResponse?: boolean
+  /** Grey resend/regenerate while a turn is already streaming. */
+  chatRegenBusy?: boolean
   lastEditedLabel?: string // Footer metadata
   onAction: (action: BlockActionId, payload?: BlockActionPayload) => void
   onClose: () => void
@@ -344,6 +358,7 @@ type RowDef =
       shortcut?: string
       icon: React.ReactNode
       danger?: boolean
+      disabled?: boolean // Grey out + skip onAction (e.g. Revert with no edits)
       submenu?: 'turnInto' | 'color' | 'listFormat' | 'skills' | 'boardIn' | 'frameShape' | 'frameColor' | 'connections' | 'convertLayout' | 'dbRows'
       hidden?: boolean
       beta?: boolean
@@ -494,6 +509,11 @@ export function BlockActionsMenu({
   showOpen = false,
   menuHeader,
   variant = 'default',
+  showRevertText = false,
+  canRevertText = false,
+  showResendPrompt = false,
+  showRegenerateResponse = false,
+  chatRegenBusy = false,
   lastEditedLabel,
   onAction,
   onClose,
@@ -672,6 +692,30 @@ export function BlockActionsMenu({
         icon: <Trash2 className="h-4 w-4" />,
         danger: true,
       },
+      {
+        kind: 'action',
+        id: 'revertText',
+        label: 'Revert text',
+        icon: <RotateCcw className="h-4 w-4" />,
+        hidden: !showRevertText, // Chat frames list it; board omits until wired
+        disabled: !canRevertText, // Grey until the body diverges from the original
+      },
+      {
+        kind: 'action',
+        id: 'resendPrompt',
+        label: 'Resend prompt',
+        icon: <RefreshCw className="h-4 w-4" />,
+        hidden: !showResendPrompt, // Prompt (user) chat frames only
+        disabled: chatRegenBusy, // Grey while a stream is in flight
+      },
+      {
+        kind: 'action',
+        id: 'regenerateResponse',
+        label: 'Regenerate response',
+        icon: <RefreshCw className="h-4 w-4" />,
+        hidden: !showRegenerateResponse, // Response (assistant) chat frames only
+        disabled: chatRegenBusy, // Grey while a stream is in flight
+      },
       { kind: 'separator' },
       {
         kind: 'action',
@@ -799,7 +843,7 @@ export function BlockActionsMenu({
                 .includes(q)
             )))
     )
-  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape, boardLocked, framesLockedTogether, canLockFramesTogether, notionConnected, convertLayoutMode, dbRowSetter, showOpen])
+  }, [query, isCollapsed, selectedCount, canUngroup, showAddChild, currentBlockType, showFrameShape, boardLocked, framesLockedTogether, canLockFramesTogether, notionConnected, convertLayoutMode, dbRowSetter, showOpen, showRevertText, canRevertText, showResendPrompt, showRegenerateResponse, chatRegenBusy])
 
   // When searching, also surface matching Turn into types as flat picks
   const turnIntoMatches = useMemo(() => {
@@ -1034,6 +1078,7 @@ export function BlockActionsMenu({
               onPointerDown={(e) => {
                 if (e.button !== 0) return // Left button only
                 if (row.submenu) return // Submenus toggle on click / hover
+                if (row.disabled) return // Revert (etc.) greyed out when nothing to restore
                 e.preventDefault()
                 e.stopPropagation()
                 onAction(row.id) // Handler closes when needed (Delete clears rightClickedNode)
@@ -1041,6 +1086,7 @@ export function BlockActionsMenu({
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
+                if (row.disabled) return // Skip greyed-out rows
                 if (row.submenu === 'turnInto') {
                   setOpenSubmenu((s) => (s === 'turnInto' ? null : 'turnInto'))
                   return
@@ -1076,6 +1122,7 @@ export function BlockActionsMenu({
               className={cn(
                 'h-8 shrink-0 justify-start px-2 text-sm font-normal',
                 row.danger && 'text-red-600 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950',
+                row.disabled && 'pointer-events-none opacity-40',
                 (isTurnIntoOpen ||
                   isShapeOpen ||
                   isFrameColorOpen ||

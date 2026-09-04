@@ -106,6 +106,12 @@ type TipTapBlockHandlesProps = {
   chatMessageRole?: 'user' | 'assistant' | 'system' | 'tool'
   /** Chat turn id — stamped on the new board frame as aiMessageId. */
   chatMessageId?: string
+  /** List Revert text in the block menu (chat frames). */
+  showRevertText?: boolean
+  /** Whether the armed block(s) differ from the frozen original (same-index). */
+  canRevertBlocks?: (blocks: EditorBlockRef[]) => boolean
+  /** Restore only the armed block(s) from the frozen original. */
+  onRevertBlocks?: (blocks: EditorBlockRef[]) => void
 }
 
 /** Measure grip Y from the top property-icon row (one block for the whole list). */
@@ -422,6 +428,9 @@ export function TipTapBlockHandles({
   blockDragFromGrip = false, // Chat: ⋮⋮ = block drag only (arm on press)
   chatMessageRole,
   chatMessageId,
+  showRevertText = false,
+  canRevertBlocks,
+  onRevertBlocks,
 }: TipTapBlockHandlesProps) {
   const { screenToFlowPosition } = useReactFlow() // Nested / host RF
   const { reactFlowInstance } = useReactFlowContext() // Board instance (chat nested RF is wrong for drops)
@@ -1332,6 +1341,13 @@ export function TipTapBlockHandles({
         clearBlockSelection()
         return
       }
+      if (action === 'revertText') {
+        // Block menu only — restore the armed block(s), never the whole frame
+        const targets = isMulti ? ordered : [menu.block]
+        onRevertBlocks?.(targets)
+        clearBlockSelection()
+        return
+      }
       if (action === 'convertLayout' && payload?.convertLayout) {
         const databaseId =
           (menu.block.node?.attrs?.notionDatabaseId as string | undefined) ||
@@ -1398,6 +1414,7 @@ export function TipTapBlockHandles({
       conversationId,
       queryClient,
       onPropertyTurnInto,
+      onRevertBlocks,
     ]
   )
 
@@ -1834,6 +1851,14 @@ export function TipTapBlockHandles({
             convertLayoutMode={
               menu.block.typeName === 'databaseBlock' ? ('table' as const) : null
             }
+            canRevertText={
+              !!showRevertText &&
+              !!menu &&
+              !!(canRevertBlocks?.(
+                selectionRef.current.length > 1 ? selectionRef.current : [menu.block]
+              ))
+            }
+            showRevertText={showRevertText}
             onAction={onAction}
             onClose={closeMenu}
           />,

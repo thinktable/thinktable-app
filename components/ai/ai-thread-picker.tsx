@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react' // State
 import type { AiThread } from '@/lib/ai/types' // Thread type
 import { cn } from '@/lib/utils' // className merge
-import { Check, ChevronDown, Filter } from 'lucide-react' // Icons
+import { Check, ChevronDown, Filter, GitFork } from 'lucide-react' // Icons
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,6 +25,7 @@ interface AiThreadPickerProps {
   onFilterChange: (f: AiThreadFilter) => void // Filter setter
   onSelect: (thread: AiThread) => void // Switch thread
   onNew: () => void // Start blank (clears active until first send)
+  onFork: (thread: AiThread) => void // Open a duplicated copy of the current chat
   refreshKey?: number // Bump to refetch
 }
 
@@ -35,10 +36,12 @@ export function AiThreadPicker({
   onFilterChange,
   onSelect,
   onNew,
+  onFork,
   refreshKey = 0,
 }: AiThreadPickerProps) {
   const [threads, setThreads] = useState<AiThread[]>([]) // Listed threads
   const [loading, setLoading] = useState(false) // Fetch flag
+  const [forking, setForking] = useState(false) // Duplicate-in-flight
 
   useEffect(() => {
     let cancelled = false // Unmount guard
@@ -61,6 +64,20 @@ export function AiThreadPicker({
       cancelled = true // Cancel
     }
   }, [filter, boardId, refreshKey]) // Refetch deps
+
+  /** POST fork of the open chat, then hand the copy to the sidebar. */
+  const handleFork = async () => {
+    if (!thread?.id || forking) return // Need a persisted chat to copy
+    setForking(true) // Disable the icon while the API runs
+    try {
+      const res = await fetch(`/api/ai/threads/${thread.id}/fork`, { method: 'POST' }) // Duplicate
+      if (!res.ok) return // Soft fail — leave current chat open
+      const data = await res.json() // Parse
+      if (data.thread) onFork(data.thread as AiThread) // Switch into the copy
+    } finally {
+      setForking(false) // Re-enable
+    }
+  }
 
   return (
     <DropdownMenu>
@@ -112,7 +129,23 @@ export function AiThreadPicker({
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={onNew}>New AI chat</DropdownMenuItem>
+        {/* New blank chat + fork current into a copy, same row */}
+        <div className="flex items-center gap-0.5">
+          <DropdownMenuItem onClick={onNew} className="min-w-0 flex-1">
+            New AI chat
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={!thread?.id || forking} // Empty “New AI chat” has nothing to copy
+            onClick={() => {
+              void handleFork() // Async duplicate; menu closes via item select
+            }}
+            className="h-8 w-8 flex-shrink-0 justify-center p-0"
+            title="Duplicate chat"
+            aria-label="Duplicate chat"
+          >
+            <GitFork className="h-3.5 w-3.5" />
+          </DropdownMenuItem>
+        </div>
         <DropdownMenuSeparator />
         {loading && (
           <div className="px-2 py-1.5 text-xs text-gray-500">Loading…</div>

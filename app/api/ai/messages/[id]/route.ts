@@ -37,10 +37,27 @@ export async function PATCH(
       body.metadata && typeof body.metadata === 'object'
         ? (body.metadata as Record<string, unknown>)
         : null
-    const metadata = {
-      ...((message.metadata as Record<string, unknown>) || {}),
+    const prevMeta = (message.metadata as Record<string, unknown>) || {} // Pre-edit metadata
+    const priorHtml =
+      typeof prevMeta.html === 'string' ? (prevMeta.html as string) : undefined // HTML before this write
+    // Freeze the first sent/received body so Revert text can restore user edits
+    const isFirstFreeze = typeof prevMeta.originalContent !== 'string'
+    const contentUnchanged = content === (message.content as string)
+    const originalContent = isFirstFreeze
+      ? (message.content as string)
+      : (prevMeta.originalContent as string)
+    // Prefer prior HTML; on a metadata-only first freeze, the incoming html is still the original
+    const originalHtml =
+      typeof prevMeta.originalHtml === 'string'
+        ? (prevMeta.originalHtml as string)
+        : priorHtml ??
+          (isFirstFreeze && contentUnchanged && html !== undefined ? html : undefined)
+    const metadata: Record<string, unknown> = {
+      ...prevMeta,
       ...(metaIn || {}),
       ...(html !== undefined ? { html } : {}),
+      originalContent, // Never overwrite once stamped
+      ...(typeof originalHtml === 'string' ? { originalHtml } : {}), // Keep unset until we have HTML
     }
     const { data: updated, error } = await supabase
       .from('ai_messages')
