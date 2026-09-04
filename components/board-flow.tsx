@@ -101,6 +101,10 @@ import {
   touchBoardNavigating,
 } from '@/lib/board-navigating' // Freeze React zoom during pan/pinch
 import { beginFrameDragging, endFrameDragging, isFrameDragging } from '@/lib/frame-dragging' // Skip O(n) work mid-drag on large boards
+import {
+  clearFrameTextEditActive,
+  isFrameTextEditActive,
+} from '@/lib/frame-text-edit' // First-select Delete vs TipTap text edit
 import { takeBoardCapture } from '@/lib/captures' // Board-menu Capture view
 import { htmlToPlain } from '@/lib/ai/context-pack' // Frame hover previews from content
 import { AI_CHAT_BLOCK_MIME, aiChatDragItems, type AiChatBlockDragPayload } from '@/lib/ai/types' // Drag chat turn onto page
@@ -5863,6 +5867,13 @@ function BoardFlowInner({
       }
       setClickedEdge(null)
 
+      // Select frame before caret — blur TipTap so Delete isn't swallowed by nokey
+      clearFrameTextEditActive() // First select → Delete removes frame, not characters
+      const ae = document.activeElement as HTMLElement | null
+      if (ae?.closest?.('.react-flow__node .ProseMirror, .react-flow__node [contenteditable="true"]')) {
+        ae.blur()
+      }
+
       // Kill RF marquee from the hold; select this frame (keep multi if it was already in one)
       rfStore.setState({
         userSelectionActive: false,
@@ -6890,6 +6901,73 @@ function BoardFlowInner({
     // Identical to keyboard deleteKeyCode → remove changes → DB delete
     handleNodesChange([...ids].map((id) => ({ type: 'remove', id })))
   }, [conversationId, handleNodesChange])
+
+  // First-select Delete: menu search / TipTap nokey otherwise swallow Backspace before RF
+  useEffect(() => {
+    if (!canEdit) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Backspace' && event.key !== 'Delete') return
+      if (event.metaKey || event.ctrlKey || event.altKey) return
+
+      const target = event.target as HTMLElement | null
+      if (!target) return
+      // Chat / I-bar capture / board title rename own their keys
+      if (
+        target.closest?.(
+          '[data-chat-sidebar], [data-chat-map-dock], .tt-ibar-capture, [data-board-title-input]'
+        )
+      ) {
+        return
+      }
+
+      const live = nodesRef.current
+      const ids = new Set(
+        live
+          .filter(
+            (n) =>
+              n.selected &&
+              (n.type === 'chatPanel' ||
+                n.type === 'freehand' ||
+                n.type === 'shape' ||
+                n.type === 'blockGroup')
+          )
+          .map((n) => n.id)
+      )
+      const menuTarget = rightClickedNodeRef.current
+      if (menuTarget) ids.add(menuTarget.id)
+      if (ids.size === 0) return
+
+      // Frame menu search: empty → delete frames; typing a filter → keep keys
+      const menuInput = target.closest?.('.block-actions-menu input, .block-actions-menu textarea') as
+        | HTMLInputElement
+        | HTMLTextAreaElement
+        | null
+      if (menuInput) {
+        if (menuInput.value.length > 0) return
+        // Fall through to delete
+      } else if (target.matches?.('input, textarea, select')) {
+        return // Other fields (toolbar search, etc.)
+      } else if (isFrameTextEditActive()) {
+        // User placed a caret (second click / typing) — TipTap owns Backspace/Delete
+        return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+      const removeIds = [...ids]
+      // Defer past this keydown so TipTap/React aren't mid-lifecycle (flushSync warning)
+      queueMicrotask(() => {
+        clearFrameTextEditActive()
+        rightClickedNodeRef.current = null
+        setRightClickedNode(null)
+        nodeClickPositionRef.current = null
+        nodePopupZoomRef.current = null
+        handleNodesChange(removeIds.map((id) => ({ type: 'remove', id })))
+      })
+    }
+    document.addEventListener('keydown', onKeyDown, true) // Capture before TipTap / RF nokey skip
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [canEdit, handleNodesChange])
 
   // Handle condense node/panel (collapse response) - condense ALL selected panels
   const handleCondenseNode = useCallback(() => {
@@ -7963,6 +8041,7 @@ function BoardFlowInner({
       if (isOnSameNode && isFrameDragAreaTarget(event.target)) return
 
       // Background, other frames, or TipTap/chrome on this frame — dismiss
+      rightClickedNodeRef.current = null
       setRightClickedNode(null)
       nodeClickPositionRef.current = null
       nodePopupZoomRef.current = null
@@ -7984,6 +8063,7 @@ function BoardFlowInner({
       // 2. Right-clicking on a different node (not the same node that has the popup)
       // Note: handleNodeContextMenu / openFrameMenuAt will then open or toggle for that node
       if (!isOnPopup && (!isOnAnyNode || !isOnSameNode)) {
+        rightClickedNodeRef.current = null
         setRightClickedNode(null)
         nodeClickPositionRef.current = null
         nodePopupZoomRef.current = null
@@ -9705,6 +9785,12 @@ function BoardFlowInner({
             nodeClickPositionRef.current = null
             nodePopupZoomRef.current = null
           }
+          // Select frame before caret — blur TipTap so first-select Delete isn't eaten by nokey
+          clearFrameTextEditActive() // First select → Delete removes frame
+          const ae = document.activeElement as HTMLElement | null
+          if (ae?.closest?.('.react-flow__node .ProseMirror, .react-flow__node [contenteditable="true"]')) {
+            ae.blur()
+          }
           const additive = event.metaKey || event.ctrlKey || event.shiftKey
           setNodes((nds) =>
             nds.map((n) => {
@@ -10577,6 +10663,7 @@ function BoardFlowInner({
           })()}
           onAction={handleBlockAction}
           onClose={() => {
+            rightClickedNodeRef.current = null
             setRightClickedNode(null)
             nodeClickPositionRef.current = null
             nodePopupZoomRef.current = null

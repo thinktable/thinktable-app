@@ -1005,6 +1005,14 @@ export function BlockActionsMenu({
           e.stopPropagation()
           if (openSubmenu) setOpenSubmenu(null)
           else onClose()
+          return
+        }
+        // Empty search: Delete/Backspace removes the frame (same as the Delete row)
+        if ((e.key === 'Delete' || e.key === 'Backspace') && query.length === 0) {
+          e.preventDefault()
+          e.stopPropagation()
+          onAction('delete')
+          onClose()
         }
       }}
     >

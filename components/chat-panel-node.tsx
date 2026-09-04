@@ -57,6 +57,10 @@ import {
   subscribeFrameSnapshots,
 } from '@/lib/frame-dom-snapshot' // Cold frames replay the live subtree instead of approximating it
 import { setFramePanelSelected } from '@/lib/frame-panel-selected' // DB NodeView: live table only while RF-selected
+import {
+  clearFrameTextEditActive,
+  setFrameTextEditActive,
+} from '@/lib/frame-text-edit' // Select-before-caret: Delete removes frame until caret is placed
 import { readOnThread } from '@/lib/threads/on-thread-frame' // Compact chip layout for frames on threads
 import {
   deleteLinkedBoardForBlock,
@@ -1125,6 +1129,8 @@ function TipTapContentLive({
   // Live frame-selected flag for TipTap DOM handlers (useEditor config is not recreated each render)
   const isPanelSelectedRef = useRef(!!isPanelSelected)
   isPanelSelectedRef.current = !!isPanelSelected
+  const hostNodeIdRef = useRef(hostNodeId) // Stable for editorProps memo (avoid setOptions every render)
+  hostNodeIdRef.current = hostNodeId
   // Same gesture that selects an unselected frame must not place the I-bar
   const selectOnlyClickRef = useRef(false)
   const lastAiForceSyncRef = useRef(0) // Last forceContentSyncKey we allowed while focused
@@ -1192,6 +1198,7 @@ function TipTapContentLive({
           // would kill the native selection gesture, so press+drag could never select text.
           pe.stopPropagation()
           selectOnlyClickRef.current = false
+          if (hostNodeIdRef.current) setFrameTextEditActive(hostNodeIdRef.current) // Selected-frame press → text edit mode
           return false // Browser/PM own caret placement + drag-select
         },
         mousedown: (view: any, event: Event) => {
@@ -1205,6 +1212,7 @@ function TipTapContentLive({
           // (that aborted RF/d3 frame drag on press+move). Only suppress the follow-up I-bar.
           if (!isPanelSelectedRef.current) {
             selectOnlyClickRef.current = true // Suppress I-bar on the matching click
+            clearFrameTextEditActive() // Selecting the frame — not editing yet
             return false
           }
           // DB table / title chrome owns clicks (cells, toolbar) — table nodrag stops RF drag
@@ -1213,7 +1221,7 @@ function TipTapContentLive({
             return false
           }
           selectOnlyClickRef.current = false
-          // Selected frame: keep pointer inside the editor so RF does not start a frame drag.
+          if (hostNodeIdRef.current) setFrameTextEditActive(hostNodeIdRef.current) // Already selected → caret / text select
           // No preventDefault — the browser needs the default mousedown to run a drag-select.
           mouseEvent.stopPropagation()
 
@@ -1440,6 +1448,7 @@ function TipTapContentLive({
     if (editor.isEditable !== next) editor.setEditable(next)
     // Drop any caret / native selection when the frame becomes unselected
     if (!next && editor.view?.dom) {
+      clearFrameTextEditActive() // Deselect → Delete no longer targets this frame's text
       try {
         editor.commands.blur()
         window.getSelection()?.removeAllRanges()
@@ -1469,6 +1478,7 @@ function TipTapContentLive({
       e.preventDefault() // Requires non-passive — stops iOS focus-only first tap
       e.stopPropagation() // RF d3-drag listens for touchstart on the node
       selectOnlyClickRef.current = false
+      if (hostNodeId) setFrameTextEditActive(hostNodeId) // Caret placed → Backspace edits text
       const t = e.touches[0]
       try {
         const hit = editor.view.posAtCoords({ left: t.clientX, top: t.clientY })
@@ -1487,7 +1497,7 @@ function TipTapContentLive({
     }
     dom.addEventListener('touchstart', onTouchStart, { passive: false, capture: true })
     return () => dom.removeEventListener('touchstart', onTouchStart, { capture: true })
-  }, [editor, isPanelSelected, canEdit])
+  }, [editor, isPanelSelected, canEdit, hostNodeId])
 
   // Register editor on mount and cleanup on unmount
   useEffect(() => {
@@ -1794,38 +1804,46 @@ function TipTapContentLive({
       }
       // Sync prop → editor only when the document actually changed
       if (differs) {
-        // emitUpdate:false — programmatic AI eye/discard/save must not fire onUpdate
-        // (that set promptHasChanges and blocked discard from restoring the original)
-        editor.commands.setContent(unwrapNestedFramesHtml(content || '<p></p>'), { emitUpdate: false })
-        // Ensure cursor is visible by focusing if editor is empty
-        if (!content || content.trim() === '' || content === '<p></p>') {
-          // Set cursor position to start to show cursor
-          setTimeout(() => {
-            editor.commands.setTextSelection(0)
-          }, 0)
-        }
-        // Re-apply comment highlights after content is set
-        if (comments.length > 0) {
-          setTimeout(() => {
-            const tr = editor.state.tr
-            comments.forEach((comment) => {
-              try {
-                const { from, to } = comment
-                if (from >= 0 && to <= editor.state.doc.content.size && from < to) {
-                  // Remove all existing highlight marks (including yellow) and apply blue highlight
-                  tr.removeMark(from, to, editor.schema.marks.highlight)
-                  tr.addMark(from, to, editor.schema.marks.highlight.create({ color: '#dbeafe' })) // blue-100 - slightly darker than blue-50
+        // TipTap setContent uses flushSync — defer so we never flush mid-React render/lifecycle
+        const html = unwrapNestedFramesHtml(content || '<p></p>')
+        const shouldFocusEmpty = !content || content.trim() === '' || content === '<p></p>'
+        const commentList = comments
+        queueMicrotask(() => {
+          if (editor.isDestroyed || !editor.view) return
+          // emitUpdate:false — programmatic AI eye/discard/save must not fire onUpdate
+          // (that set promptHasChanges and blocked discard from restoring the original)
+          editor.commands.setContent(html, { emitUpdate: false })
+          // Ensure cursor is visible by focusing if editor is empty
+          if (shouldFocusEmpty) {
+            // Set cursor position to start to show cursor
+            setTimeout(() => {
+              if (!editor.isDestroyed) editor.commands.setTextSelection(0)
+            }, 0)
+          }
+          // Re-apply comment highlights after content is set
+          if (commentList.length > 0) {
+            setTimeout(() => {
+              if (editor.isDestroyed) return
+              const tr = editor.state.tr
+              commentList.forEach((comment) => {
+                try {
+                  const { from, to } = comment
+                  if (from >= 0 && to <= editor.state.doc.content.size && from < to) {
+                    // Remove all existing highlight marks (including yellow) and apply blue highlight
+                    tr.removeMark(from, to, editor.schema.marks.highlight)
+                    tr.addMark(from, to, editor.schema.marks.highlight.create({ color: '#dbeafe' })) // blue-100 - slightly darker than blue-50
+                  }
+                } catch (error) {
+                  console.error('Error applying comment highlight:', error)
                 }
-              } catch (error) {
-                console.error('Error applying comment highlight:', error)
+              })
+              // Dispatch the transaction if there are any changes
+              if (tr.steps.length > 0) {
+                editor.view.dispatch(tr)
               }
-            })
-            // Dispatch the transaction if there are any changes
-            if (tr.steps.length > 0) {
-              editor.view.dispatch(tr)
-            }
-          }, 0)
-        }
+            }, 0)
+          }
+        })
       }
   }, [editor, content, comments, suspendContentSync, forceContentSyncKey])
 
@@ -1838,6 +1856,7 @@ function TipTapContentLive({
     // Same gesture that just selected the frame / armed a nest — no I-bar
     if (selectOnlyClickRef.current) {
       selectOnlyClickRef.current = false
+      clearFrameTextEditActive() // First-select click must not arm text-edit Delete
       return
     }
     // DB table / cell inputs own the gesture — don't steal focus after a row warm.
@@ -1847,6 +1866,7 @@ function TipTapContentLive({
     }
     e.stopPropagation()
     if (editor.isDestroyed) return
+    if (hostNodeId) setFrameTextEditActive(hostNodeId) // Second click → caret; Backspace edits text
     // Sync in this tap — setTimeout(0) broke iOS: first tap focused nothing, second placed I-bar
     try {
       // Always resolve against click coords so empty lines get the caret (not doc start/end)
@@ -1859,7 +1879,7 @@ function TipTapContentLive({
       /* fall through */
     }
     editor.commands.focus()
-  }, [editor, isPanelSelected])
+  }, [editor, isPanelSelected, hostNodeId])
 
   // Extract 'inline' from className if present to apply inline-block display
   const isInline = className?.includes('inline')
@@ -6540,6 +6560,7 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
 
     // TipTap iOS focus() omits preventScroll; pin page + overflow ancestors so edge creates don’t jump
     const focusFrameEditor = (ed: NonNullable<typeof promptEditorRef.current>) => {
+      if (hostNodeId) setFrameTextEditActive(hostNodeId) // I-bar / fadeIn handoff — Backspace edits text
       const sx = window.scrollX // Document scroll (rare on board, but cheap to pin)
       const sy = window.scrollY
       // Board shell uses overflow-auto main — Safari pans that when the caret is near the edge

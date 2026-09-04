@@ -1,13 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-09-04T13:47:00Z`
+- Snapped at: `2026-09-04T14:26:13Z`
 - Source: local `supabase/migrations/` + remote applied tops (thinkable) + `.temp` service versions
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 - CLI: `supabase` `2.90.0` (marker via `migration new`; newer CLI available)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260904142613_frame_delete_first_select.sql`.
+- Frame **Delete/Backspace** on first select removes the frame (`lib/frame-text-edit.ts` — caret not placed yet); after caret click / I-bar handoff TipTap owns the key.
+- Capture-phase delete in `board-flow` deferred via `queueMicrotask`; TipTap `setContent` deferred to avoid `flushSync` mid-render.
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Chat thread scroll-native clip
 
 - No DDL. Marker `20260904134700_chat_thread_scroll_native_clip.sql`.
 - Chat↔chat threads paint **inside** `[data-ai-transcript-scroll]` (content coords) so compositor scroll keeps strokes stuck to turns.

@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260904142613_frame_delete_first_select` — Frame Delete on first select; TipTap setContent flushSync defer; select-before-caret
 - `20260904134700_chat_thread_scroll_native_clip` — Chat↔chat threads in transcript scroller (scroll-native); content-window clip; sync board-overlay scroll paint
 - `20260904051948_chat_turn_multiselect_and_chat_to_chat_threads` — Chat turn multi-select + chat↔chat threads; multi-drag; connect auto-pan fix
 - `20260904050604_unify_ai_star_light_blue_lock_frames_icon` — Unify AI sparkle `#b5daf3`; lock-frames toolbar icon 1
@@ -124,6 +125,4 @@ Earlier foundation:
 2. Create a migration using Supabase CLI or MCP tools
 3. Commit migrations to git
 4. Apply migrations to production
-
-
 
