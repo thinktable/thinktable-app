@@ -40,6 +40,10 @@ import {
   subscribeChatSeamGaps,
 } from '@/lib/ai/chat-sidebar-seam' // Punch gaps where chat↔board threads cross
 import {
+  clearChatTurnSelected,
+  getChatTurnSelected,
+} from '@/lib/ai/chat-turn-selected' // Selected turn survives phone↔sidebar remount
+import {
   ArrowDown,
   ChevronsRight,
   MessageSquarePlus,
@@ -166,8 +170,19 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   const [showReturnToBottom, setShowReturnToBottom] = useState(false) // Transcript scrolled away from bottom
   const transcriptScrollRef = useRef<HTMLDivElement>(null) // Phone content card or desktop sidebar scroller
   const scrolledOpenThreadRef = useRef<string | null>(null) // Which thread we already pinned to bottom on open
-  /** Distance from bottom — survives phone↔desktop remounts on resize */
-  const scrollAnchorRef = useRef<{ threadId: string; fromBottom: number } | null>(null)
+  /**
+   * Transcript scroll memory across phone dock ↔ desktop column remounts.
+   * Prefer first-visible turn + offset (stable when window height changes);
+   * fromBottom is the near-end fallback.
+   */
+  const scrollAnchorRef = useRef<{
+    threadId: string
+    messageId?: string // First visible turn id (optional)
+    offsetTop?: number // That turn’s top relative to the scroller top
+    fromBottom: number // Distance content bottom → viewport bottom
+  } | null>(null)
+  /** Keep re-applying the saved anchor until height settles after a reformat */
+  const pendingScrollRestoreRef = useRef(false)
   const activeThreadIdRef = useRef<string | null>(null) // Latest thread id for scroll capture in listeners
   activeThreadIdRef.current = thread?.id ?? null
 
@@ -194,16 +209,81 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     )
   }, [])
 
-  /** Apply a saved from-bottom offset onto the current scroller. */
-  const restoreTranscriptScroll = useCallback(() => {
-    const anchor = scrollAnchorRef.current
+  /** Snapshot scroll from a connected scroller — never call on a detached node. */
+  const captureTranscriptScroll = useCallback(
+    (root: HTMLElement) => {
+      if (!root.isConnected) return // Detached remount cleanup must not clobber the real anchor
+      const threadId = activeThreadIdRef.current
+      if (!threadId) return
+      const rootRect = root.getBoundingClientRect()
+      let messageId: string | undefined
+      let offsetTop: number | undefined
+      // First turn whose bottom is still below the scroller top = still in view
+      const turns = root.querySelectorAll('[data-ai-turn]')
+      for (let i = 0; i < turns.length; i++) {
+        const el = turns[i] as HTMLElement
+        const rect = el.getBoundingClientRect()
+        if (rect.bottom > rootRect.top + 1) {
+          messageId = el.getAttribute('data-ai-turn') || undefined
+          offsetTop = rect.top - rootRect.top
+          break
+        }
+      }
+      const fromBottom = Math.max(0, root.scrollHeight - root.scrollTop - root.clientHeight)
+      scrollAnchorRef.current = { threadId, messageId, offsetTop, fromBottom }
+      setShowReturnToBottom(fromBottom > 64)
+    },
+    []
+  )
+
+  /** Pin a selected turn into the visible transcript window (instant). */
+  const scrollSelectedTurnIntoView = useCallback((): boolean => {
     const threadId = activeThreadIdRef.current
-    if (!anchor || !threadId || anchor.threadId !== threadId) return
+    const pick = getChatTurnSelected()
+    if (!threadId || !pick || pick.threadId !== threadId) return false
     const root = getTranscriptScroller()
-    if (!root) return
+    const el = document.querySelector(
+      `[data-ai-turn="${CSS.escape(pick.messageId)}"]`
+    ) as HTMLElement | null
+    if (!root || !el) return false
+    // Align turn top to scroller top — same math as prompt-bar jump
+    const delta = el.getBoundingClientRect().top - root.getBoundingClientRect().top
+    root.scrollTop = Math.max(0, root.scrollTop + delta)
+    captureTranscriptScroll(root) // Refresh anchor from the restored view
+    return true
+  }, [getTranscriptScroller, captureTranscriptScroll])
+
+  /** Apply the saved scroll memory onto the current scroller. */
+  const restoreTranscriptScroll = useCallback((): boolean => {
+    const threadId = activeThreadIdRef.current
+    // Selected chat frame wins when present
+    if (scrollSelectedTurnIntoView()) return true
+    const anchor = scrollAnchorRef.current
+    if (!anchor || !threadId || anchor.threadId !== threadId) return false
+    const root = getTranscriptScroller()
+    if (!root) return false
+    // Prefer the turn that was at the top of the window (works across height reformats)
+    if (anchor.messageId != null && anchor.offsetTop != null) {
+      const el = root.querySelector(
+        `[data-ai-turn="${CSS.escape(anchor.messageId)}"]`
+      ) as HTMLElement | null
+      if (el) {
+        const delta =
+          el.getBoundingClientRect().top -
+          root.getBoundingClientRect().top -
+          anchor.offsetTop
+        root.scrollTop = Math.max(0, root.scrollTop + delta)
+        setShowReturnToBottom(
+          root.scrollHeight - root.scrollTop - root.clientHeight > 64
+        )
+        return true
+      }
+    }
+    // Near-end / no turn stamp — keep distance from bottom
     root.scrollTop = Math.max(0, root.scrollHeight - root.clientHeight - anchor.fromBottom)
     setShowReturnToBottom(anchor.fromBottom > 64)
-  }, [getTranscriptScroller])
+    return true
+  }, [getTranscriptScroller, scrollSelectedTurnIntoView])
 
   // Publish whether the chat box (transcript) has messages — Free nav fill depends on it
   useEffect(() => {
@@ -217,7 +297,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     return () => setAiChatHasTranscript(false) // Clear on unmount
   }, [messages.length, threadHydrated, thread?.id, loadedThreadId, setAiChatHasTranscript])
 
-  // Show return-to-bottom only when a chat has turns and the scroller is not at the end
+  // Track scroll while connected; re-apply pending restore as height settles after reformat
   useEffect(() => {
     if (messages.length === 0) {
       setShowReturnToBottom(false) // Empty “New AI chat” — never show
@@ -229,44 +309,72 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
       return
     }
     let raf = 0
-    const update = () => {
-      const gap = root.scrollHeight - root.scrollTop - root.clientHeight
-      const threadId = activeThreadIdRef.current
-      if (threadId) scrollAnchorRef.current = { threadId, fromBottom: Math.max(0, gap) }
-      setShowReturnToBottom(gap > 64) // Past a small threshold → offer jump down
-    }
-    const onScroll = () => {
+    const onScrollOrResize = () => {
       if (raf) return
       raf = requestAnimationFrame(() => {
         raf = 0
-        update()
+        // After phone↔sidebar remount, keep pinning until layout height is real
+        if (pendingScrollRestoreRef.current) {
+          restoreTranscriptScroll()
+          return
+        }
+        captureTranscriptScroll(root)
       })
     }
-    update()
-    root.addEventListener('scroll', onScroll, { passive: true })
-    const ro = new ResizeObserver(onScroll) // Streaming / layout growth
+    // Don't capture from a brand-new scroller at top — that would wipe the restore target
+    if (!pendingScrollRestoreRef.current) captureTranscriptScroll(root)
+    else restoreTranscriptScroll()
+    root.addEventListener('scroll', onScrollOrResize, { passive: true })
+    const ro = new ResizeObserver(onScrollOrResize) // Streaming / layout growth
     ro.observe(root)
     if (root.firstElementChild) ro.observe(root.firstElementChild)
     return () => {
-      // Capture from this node — ref may already point elsewhere mid phone↔desktop swap
-      const threadId = activeThreadIdRef.current
-      if (threadId) {
-        const fromBottom = Math.max(0, root.scrollHeight - root.scrollTop - root.clientHeight)
-        scrollAnchorRef.current = { threadId, fromBottom }
-      }
-      root.removeEventListener('scroll', onScroll)
+      // Never read scrollTop from a detached node — browsers often reset it to 0
+      root.removeEventListener('scroll', onScrollOrResize)
       ro.disconnect()
       if (raf) cancelAnimationFrame(raf)
     }
-  }, [messages.length, streamingId, isMobileMode, isChatSidebarOpen, dockCompact, getTranscriptScroller])
+  }, [
+    messages.length,
+    streamingId,
+    isMobileMode,
+    isChatSidebarOpen,
+    dockCompact,
+    getTranscriptScroller,
+    captureTranscriptScroll,
+    restoreTranscriptScroll,
+  ])
 
-  // Phone↔desktop (or dock compact) remounts a new scroller at top — restore prior offset
+  // Phone↔desktop / dock compact / open state remounts a new scroller — restore prior scroll
+  useLayoutEffect(() => {
+    if (messages.length === 0) return
+    pendingScrollRestoreRef.current = true // Lock capture until height settles after reformat
+    restoreTranscriptScroll()
+    const raf = requestAnimationFrame(() => restoreTranscriptScroll())
+    const t = window.setTimeout(() => {
+      restoreTranscriptScroll()
+      pendingScrollRestoreRef.current = false
+      const root = getTranscriptScroller()
+      if (root) captureTranscriptScroll(root)
+    }, 50)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.clearTimeout(t)
+    }
+  }, [
+    isMobileMode,
+    isChatSidebarOpen,
+    dockCompact,
+    restoreTranscriptScroll,
+    getTranscriptScroller,
+    captureTranscriptScroll,
+  ])
+
+  // When the transcript first paints (or grows onto a fresh scroller), apply any saved anchor once
   useLayoutEffect(() => {
     if (messages.length === 0) return
     restoreTranscriptScroll()
-    const raf = requestAnimationFrame(() => restoreTranscriptScroll())
-    return () => cancelAnimationFrame(raf)
-  }, [isMobileMode, isChatSidebarOpen, dockCompact, messages.length, restoreTranscriptScroll])
+  }, [messages.length, restoreTranscriptScroll])
   // Restore the last active thread once on mount (same chat after reload)
   useEffect(() => {
     if (typeof window === 'undefined') { // SSR guard
@@ -349,6 +457,8 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   useEffect(() => {
     scrolledOpenThreadRef.current = null // New selection must pin to bottom again after load
     scrollAnchorRef.current = null // Don't restore the previous chat's offset
+    pendingScrollRestoreRef.current = false // Don't re-pin a stale layout restore
+    clearChatTurnSelected() // Thread switch / New chat — drop prior turn select
     if (!thread?.id) {
       setMessages([])
       setLoadedThreadId(null) // New chat — nothing to restore
@@ -830,6 +940,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
                     {hasTranscript ? (
                       <AiTranscript
                         messages={messages}
+                        threadId={thread?.id}
                         streamingId={streamingId}
                         conversationId={conversationId}
                         onEditUserMessage={handleEditUserMessage}
@@ -1091,6 +1202,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
             ) : (
               <AiTranscript
                 messages={messages}
+                threadId={thread?.id}
                 streamingId={streamingId}
                 conversationId={conversationId}
                 onEditUserMessage={handleEditUserMessage}

@@ -1,13 +1,21 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-09-04T03:33:09Z`
+- Snapped at: `2026-09-04T03:46:27Z`
 - Source: local `supabase/migrations/` + remote applied tops (thinkable) + `.temp` service versions
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 - CLI: `supabase` `2.90.0` (marker via `migration new`; newer CLI available)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260904034627_chat_turn_selection_persist_and_link_cue_scale.sql`.
+- Chat turn selection + transcript scroll survive phone dock ↔ desktop sidebar remounts (`lib/ai/chat-turn-selected.ts`).
+- Phone/touch TipTap ⋮⋮: same hover/caret/armed rule (no paint-every-block while selected).
+- Board chat-link cue: brand line next to the simulator scaled down (1.35× dot height).
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Chat thread clip stubs under chrome
 
 - No DDL. Marker `20260904033309_chat_thread_clip_stubs_under_chrome.sql`.
 - Chat↔board threads: grey content-window side stubs; phone under-dock stroke; desktop map-side seam clip when the board end is behind chat; board-free strokes may still overlap chat.

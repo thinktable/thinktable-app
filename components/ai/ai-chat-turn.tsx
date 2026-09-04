@@ -642,15 +642,6 @@ export function AiChatTurn({
           ...(selected ? { boxShadow: 'inset 0 0 0 2px #3b82f6' } : null), // Blue ring only when selected
         }}
       >
-        {/* Unselected link indicator */}
-        {!selected && links.length > 0 && (
-          <span
-            className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-blue-500 border-2 border-white dark:border-[#202020]"
-            title={`${links.length} thread${links.length === 1 ? '' : 's'} to board`}
-            aria-label="Has board threads"
-          />
-        )}
-
         {/* Frame drag grip — unselected only (hover on pointer; always on touch). Selected → ⋮⋮.
             Threaded turns: same brand line + blue simulator as board ChatLinkConnectionCue. */}
         {!selected && (

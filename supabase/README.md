@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260904034627_chat_turn_selection_persist_and_link_cue_scale` — Chat turn selection/scroll persist across remount; smaller chat-link cue line
 - `20260904033309_chat_thread_clip_stubs_under_chrome` — Chat↔board thread clip stubs + under-chrome / map-side seam clip
 - `20260903191644_chat_sidebar_seam_thread_gaps` — Chat sidebar left seam gaps where chat↔board threads cross
 - `20260903190337_ai_chat_turns_frame_like` — AI chat turns as frames (select chrome, TipTap ⋮⋮, board drop, boardLinks)

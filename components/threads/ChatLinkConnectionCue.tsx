@@ -73,7 +73,7 @@ export function ChatLinkConnectionCue({
   isThreadConnecting,
 }: ChatLinkConnectionCueProps) {
   const out = outsetFromIndicatorStyle(indicatorStyle, side)
-  const lineH = indicatorSize * 2.15 // Between prior oversized and too-small
+  const lineH = indicatorSize * 1.35 // Stay under the dot so the cue reads as a mark, not a hook
   const lineW = lineH * (306 / 453) * 0.88 // Slightly thinner than natural, not skinny
   const gap = indicatorSize * 0.08 // Tight air between line and dot
 
