@@ -27,6 +27,10 @@ import {
   type AiAttachSkillDetail,
 } from '@/lib/ai/attach-skill'
 import {
+  AI_OPEN_CHAT_TURN_EVENT,
+  type AiOpenChatTurnDetail,
+} from '@/lib/ai/open-chat-turn'
+import {
   loadAgentDrafts,
   saveAgentDrafts,
   WORKSPACE_AGENT_ID,
@@ -257,6 +261,27 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     captureTranscriptScroll(root) // Refresh anchor from the restored view
     return true
   }, [getTranscriptScroller, captureTranscriptScroll])
+
+  // Board chat-link simulator click → open chat and scroll to the linked turn
+  useEffect(() => {
+    const onOpenTurn = (event: Event) => {
+      const detail = (event as CustomEvent<AiOpenChatTurnDetail>).detail
+      if (!detail?.messageId || !detail?.threadId) return
+      setChatSidebarOpen(true) // Selection already set in requestOpenChatTurn
+      pendingScrollRestoreRef.current = true // Prefer selected turn over bottom pin
+      let tries = 0
+      const tick = () => {
+        if (scrollSelectedTurnIntoView() || tries++ > 24) {
+          pendingScrollRestoreRef.current = false
+          return
+        }
+        requestAnimationFrame(tick) // Wait for desktop column / phone dock to mount
+      }
+      requestAnimationFrame(tick)
+    }
+    window.addEventListener(AI_OPEN_CHAT_TURN_EVENT, onOpenTurn)
+    return () => window.removeEventListener(AI_OPEN_CHAT_TURN_EVENT, onOpenTurn)
+  }, [setChatSidebarOpen, scrollSelectedTurnIntoView])
 
   /** Apply the saved scroll memory onto the current scroller. */
   const restoreTranscriptScroll = useCallback((): boolean => {
@@ -496,9 +521,10 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   useEffect(() => {
     linkCueSourceIdsRef.current = syncChatFrameLinkCuesFromMessages(
       messages,
-      linkCueSourceIdsRef.current
+      linkCueSourceIdsRef.current,
+      thread?.id // Arm reverse lookup for board cue → chat turn
     )
-  }, [messages])
+  }, [messages, thread?.id])
 
   // Leaving the board drops stale cues so the next board does not inherit them
   useEffect(() => {
@@ -797,6 +823,12 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     if (scrolledOpenThreadRef.current === thread.id) return // One jump per open
     const root = getTranscriptScroller()
     if (!root) return
+    // Board cue / explicit pick already chose a turn — don't stomp with bottom pin
+    if (getChatTurnSelected()?.threadId === thread.id) {
+      scrollSelectedTurnIntoView()
+      scrolledOpenThreadRef.current = thread.id
+      return
+    }
     const pin = () => {
       root.scrollTop = root.scrollHeight // Instant — opening should land at bottom
       scrollAnchorRef.current = { threadId: thread.id, fromBottom: 0 }
@@ -807,7 +839,14 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
     // Second frame: markdown / images may grow height after first paint
     const raf = requestAnimationFrame(pin)
     return () => cancelAnimationFrame(raf)
-  }, [thread?.id, loadedThreadId, messages.length, loadPhase, getTranscriptScroller])
+  }, [
+    thread?.id,
+    loadedThreadId,
+    messages.length,
+    loadPhase,
+    getTranscriptScroller,
+    scrollSelectedTurnIntoView,
+  ])
 
   if (!isChatSidebarOpen && !isMobileMode) return null // Desktop: unmount when closed; phone: keep dock mounted for same-tap focus
 

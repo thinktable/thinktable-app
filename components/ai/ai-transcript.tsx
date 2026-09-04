@@ -38,12 +38,13 @@ export function AiTranscript({
     clearChatTurnSelected(threadId)
   }, [messages, selectedId, threadId])
 
-  // Click outside any turn → deselect
+  // Click outside any turn → deselect (board chat-link cues select a turn themselves)
   useEffect(() => {
     const onDown = (event: PointerEvent) => {
       const t = event.target as HTMLElement
       if (t.closest('[data-ai-turn]')) return
       if (t.closest('.block-actions-menu')) return
+      if (t.closest('[data-tt-chat-link-cue]')) return // Cue opens/selects — don't clear first
       clearChatTurnSelected(threadId)
     }
     document.addEventListener('pointerdown', onDown, true)

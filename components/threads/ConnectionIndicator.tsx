@@ -2,6 +2,7 @@
 
 import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { addEdge, useNodeId, useStoreApi, type Connection } from 'reactflow'
+import { PANE_CLICK_SLOP_PX } from '@/lib/pane-click-slop'
 
 type Side = 'left' | 'right' | 'top' | 'bottom'
 
@@ -9,6 +10,11 @@ type ConnectionIndicatorProps = {
   side: Side // Which frame-edge connection point this indicator arms
   style?: CSSProperties // Outset placement from the parent
   className?: string
+  /**
+   * When set: press+release within slop calls this (e.g. open linked chat);
+   * drag past slop still starts a thread. When omitted, pointerdown arms connect immediately.
+   */
+  onPlainClick?: () => void
 }
 
 /** Only snap when the free end is this close (screen px) to a connection point — not merely near the frame. */
@@ -34,20 +40,23 @@ type SnapResult = {
  * Outer blue connection **indicator** — plain DOM (not an RF Handle).
  * Pointer-down arms RF's connection gesture from the frame-edge connection **point**
  * so `ThreadConnectionLine` renders and settle uses handle id = side.
+ * Optional `onPlainClick`: click opens that path; drag still creates a thread.
  */
 export function ConnectionIndicator({
   side,
   style,
   className,
+  onPlainClick,
 }: ConnectionIndicatorProps) {
   const store = useStoreApi()
   const nodeId = useNodeId()
 
-  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || !nodeId) return // Left button + must be inside an RF node
-    // Capture-friendly: stop before panel/`pressing` side-effects and RF node d3-drag
-    event.preventDefault() // Don't select/drag the frame; also suppresses mouse* for d3-drag
-    event.stopPropagation()
+  /** Arm RF connection + move/up listeners from a pointer (down or deferred drag). */
+  const beginConnect = (
+    startEvent: { clientX: number; clientY: number; pointerId: number; nativeEvent?: Event },
+    liveMove?: { clientX: number; clientY: number } // Immediate first move after deferred arm
+  ) => {
+    if (!nodeId) return
 
     const {
       domNode,
@@ -69,11 +78,11 @@ export function ConnectionIndicator({
     const handleId = side // Edge connection point id (left/right/top/bottom)
     const handleType = 'source' as const
     const doc = document
-    const pointerId = event.pointerId // Track this pointer only (preventDefault kills mouse*)
+    const pointerId = startEvent.pointerId // Track this pointer only (preventDefault kills mouse*)
 
     let autoPanId = 0
     let autoPanStarted = false
-    let connectionPosition = eventPos(event, containerBounds)
+    let connectionPosition = eventPos(startEvent, containerBounds)
     let isValid = false
     let connection: Connection | null = null
     let prevActive: Element | null = null
@@ -90,7 +99,8 @@ export function ConnectionIndicator({
     })
     // RF types OnConnectStart's event as React MouseEvent/TouchEvent but only forwards it to the
     // consumer, so the native PointerEvent driving this gesture needs a cast through unknown.
-    onConnectStart?.(event.nativeEvent as unknown as ReactMouseEvent, { nodeId, handleId, handleType })
+    const startNative = (startEvent.nativeEvent ?? startEvent) as unknown as ReactMouseEvent
+    onConnectStart?.(startNative, { nodeId, handleId, handleType })
 
     const resetActive = () => {
       prevActive?.classList.remove(
@@ -250,13 +260,87 @@ export function ConnectionIndicator({
     doc.addEventListener('pointermove', onMove)
     doc.addEventListener('pointerup', onUp)
     doc.addEventListener('pointercancel', onUp)
+
+    // Deferred arm: jump the free end to the current pointer (past slop already)
+    if (liveMove) {
+      onMove({
+        pointerId,
+        clientX: liveMove.clientX,
+        clientY: liveMove.clientY,
+      } as PointerEvent)
+    }
+  }
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !nodeId) return // Left button + must be inside an RF node
+    // Capture-friendly: stop before panel/`pressing` side-effects and RF node d3-drag
+    event.preventDefault() // Don't select/drag the frame; also suppresses mouse* for d3-drag
+    event.stopPropagation()
+
+    // No click path — arm connect immediately (normal indicators)
+    if (!onPlainClick) {
+      beginConnect({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        pointerId: event.pointerId,
+        nativeEvent: event.nativeEvent,
+      })
+      return
+    }
+
+    // Click vs drag: wait for slop before arming; release inside slop → onPlainClick
+    const startX = event.clientX
+    const startY = event.clientY
+    const pointerId = event.pointerId
+    const slop2 = PANE_CLICK_SLOP_PX * PANE_CLICK_SLOP_PX
+    const doc = document
+    let armed = false
+
+    const clearPending = () => {
+      doc.removeEventListener('pointermove', onPendingMove)
+      doc.removeEventListener('pointerup', onPendingUp)
+      doc.removeEventListener('pointercancel', onPendingUp)
+    }
+
+    const onPendingMove = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId || armed) return
+      const dx = e.clientX - startX
+      const dy = e.clientY - startY
+      if (dx * dx + dy * dy <= slop2) return
+      armed = true
+      clearPending()
+      beginConnect(
+        {
+          clientX: startX,
+          clientY: startY,
+          pointerId,
+          nativeEvent: event.nativeEvent,
+        },
+        { clientX: e.clientX, clientY: e.clientY }
+      )
+    }
+
+    const onPendingUp = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return
+      clearPending()
+      if (armed) return // Connect gesture owns the pointer now
+      onPlainClick() // Click within slop
+    }
+
+    doc.addEventListener('pointermove', onPendingMove)
+    doc.addEventListener('pointerup', onPendingUp)
+    doc.addEventListener('pointercancel', onPendingUp)
   }
 
   return (
     <div
       role="button"
       tabIndex={-1}
-      aria-label={`Start thread from ${side}`}
+      aria-label={
+        onPlainClick
+          ? `Open linked chat or start thread from ${side}`
+          : `Start thread from ${side}`
+      }
       data-tt-connection-indicator={side}
       className={
         className ??

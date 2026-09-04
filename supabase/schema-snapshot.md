@@ -1,13 +1,21 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-09-04T04:15:13Z`
+- Snapped at: `2026-09-04T04:31:41Z`
 - Source: local `supabase/migrations/` + remote applied tops (thinkable) + `.temp` service versions
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 - CLI: `supabase` `2.90.0` (marker via `migration new`; newer CLI available)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260904043128_chat_link_cue_click_opens_turn.sql`.
+- Board chat-link cue **click** opens chat and selects the linked transcript turn (`requestOpenChatForBoardLink` / `AI_OPEN_CHAT_TURN_EVENT`).
+- **Drag** past click-slop on that cue still starts a board thread (`ConnectionIndicator` `onPlainClick`).
+- Cue brand line uses `connection logo 1.svg` (disc = simulator).
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Chat-link cues survive sidebar close
 
 - No DDL. Marker `20260904041502_chat_link_cues_survive_sidebar_close.sql`.
 - Board chat-link connection cues sync from ChatSidebar `messages` (survive desktop chat close).

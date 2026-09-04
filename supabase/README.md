@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260904043128_chat_link_cue_click_opens_turn` — Board chat-link cue click opens linked turn; drag still starts thread
 - `20260904041502_chat_link_cues_survive_sidebar_close` — Board chat-link cues survive desktop chat close; thread clip under chrome
 - `20260904034627_chat_turn_selection_persist_and_link_cue_scale` — Chat turn selection/scroll persist across remount; smaller chat-link cue line
 - `20260904033309_chat_thread_clip_stubs_under_chrome` — Chat↔board thread clip stubs + under-chrome / map-side seam clip

@@ -1,15 +1,19 @@
 // Chat-linked connection cue: keep the normal blue simulator on the connection
 // point, and place the brand “line” (T stroke from `connection logo 1.svg`)
 // to the left of the dot, top-aligned — same layout on every side.
+// Click opens chat with the linked turn selected; drag still starts a board thread.
 
 import type { CSSProperties } from 'react'
 import { ConnectionIndicator } from '@/components/threads/ConnectionIndicator'
 import { cn } from '@/lib/utils'
+import { requestOpenChatForBoardLink } from '@/lib/ai/open-chat-turn'
+import type { ChatTurnSide } from '@/lib/ai/chat-board-links'
 
-type Side = 'left' | 'right' | 'top' | 'bottom'
+type Side = ChatTurnSide
 
 type ChatLinkConnectionCueProps = {
   side: Side
+  frameMessageId: string // Board messages.id — reverse-lookup the chat turn
   indicatorStyle: CSSProperties // Same outset placement as a normal blue simulator
   indicatorSize: number // Dot diameter (flow px)
   isThreadConnecting: boolean // While connecting, indicators are paint-only
@@ -65,9 +69,11 @@ function stackAnchorStyle(
 /**
  * Blue simulator at the normal connection-point spot + brand line to its left,
  * top-aligned (same relative place on left / right / top / bottom).
+ * Click → open chat / select linked turn; drag past slop → start a thread.
  */
 export function ChatLinkConnectionCue({
   side,
+  frameMessageId,
   indicatorStyle,
   indicatorSize,
   isThreadConnecting,
@@ -99,6 +105,7 @@ export function ChatLinkConnectionCue({
       >
         <ConnectionIndicator
           side={side}
+          onPlainClick={() => requestOpenChatForBoardLink(frameMessageId, side)}
           className={cn(
             'nodrag nopan absolute inset-0 z-[30] rounded-full border border-white bg-blue-500 shadow-sm',
             isThreadConnecting

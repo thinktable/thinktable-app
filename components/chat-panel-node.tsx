@@ -7228,11 +7228,12 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
             const indicatorPlacement = {
               ...connectionIndicatorStyle(side, frameIndicatorOut), // Outside blue edge (scaled outset)
             }
-            if (chatLinkLogoSides.has(side)) {
+            if (chatLinkLogoSides.has(side) && promptMessage?.id) {
               return (
                 <ChatLinkConnectionCue
                   key={`chat-link-cue-${side}`}
                   side={side}
+                  frameMessageId={promptMessage.id} // Reverse-lookup linked chat turn
                   indicatorStyle={indicatorPlacement}
                   indicatorSize={frameIndicatorSize}
                   isThreadConnecting={isThreadConnecting}

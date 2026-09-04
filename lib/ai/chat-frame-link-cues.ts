@@ -22,6 +22,8 @@ type Listener = () => void // Cue maps changed
 const linkSources = new Map<string, ChatFrameLinkCue[]>() // Thread turns → linked endpoints
 const visibleSources = new Map<string, ChatFrameLinkCue[]>() // Selected turns → painted thread ends
 const listeners = new Set<Listener>()
+/** Active ai_threads id for reverse lookup (board cue → chat turn). */
+let cueThreadId: string | null = null
 
 /** Merge sources into frameMessageId → unique sides. */
 function mergedByFrame(map: Map<string, ChatFrameLinkCue[]>): Map<string, Set<ChatTurnSide>> {
@@ -73,11 +75,14 @@ export function clearChatFrameLinkCues(sourceId: string) {
  * Rebuild link cues from the active thread’s messages.
  * Keeps board simulators marked while chat UI is closed (desktop unmounts the transcript).
  * Pass `previousSourceIds` from the last sync so deleted / previous-thread turns clear.
+ * `threadId` arms reverse lookup (board cue click → select that chat turn).
  */
 export function syncChatFrameLinkCuesFromMessages(
   messages: AiMessage[],
-  previousSourceIds?: Set<string>
+  previousSourceIds?: Set<string>,
+  threadId?: string | null
 ): Set<string> {
+  if (threadId !== undefined) cueThreadId = threadId || null // Remember owning thread
   const next = new Set<string>()
   let changed = false
   for (const m of messages) {
@@ -103,10 +108,33 @@ export function syncChatFrameLinkCuesFromMessages(
   return next
 }
 
+/**
+ * Board frame + side → linked chat turn (last matching turn in the synced thread).
+ * Used when clicking a chat-connected simulated connection point.
+ */
+export function resolveChatTurnForBoardLink(
+  frameMessageId: string,
+  side: ChatTurnSide
+): { threadId: string; messageId: string } | null {
+  if (!cueThreadId || !frameMessageId) return null
+  let messageId: string | null = null
+  for (const [sourceId, cues] of linkSources) {
+    if (!cues.some((c) => c.frameMessageId === frameMessageId && c.side === side)) {
+      continue
+    }
+    if (!sourceId.startsWith('turn-')) continue
+    messageId = sourceId.slice('turn-'.length) // Prefer later transcript turns
+  }
+  if (!messageId) return null
+  return { threadId: cueThreadId, messageId }
+}
+
 /** Drop every published link-cue source (leave board). */
 export function clearAllChatFrameLinkCues() {
-  if (linkSources.size === 0) return
+  cueThreadId = null // Drop reverse-lookup thread
+  if (linkSources.size === 0 && visibleSources.size === 0) return
   linkSources.clear()
+  visibleSources.clear()
   notify()
 }
 

@@ -93,6 +93,8 @@ export function AiChatTurn({
   const isUser = message.role === 'user'
   const turnRef = useRef<HTMLDivElement>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Grip HTML5 drag must not select; click (no dragstart) still selects the turn
+  const frameGripDraggedRef = useRef(false)
   const { reactFlowInstance } = useReactFlowContext()
   const links = readChatBoardLinks(message.metadata)
   const [rubber, setRubber] = useState<{
@@ -165,6 +167,7 @@ export function AiChatTurn({
       // Frame grip may drag while unselected; body drag only when selected
       const t = event.target as HTMLElement
       const fromFrameGrip = !!t.closest('[data-tt-frame-drag-handle]')
+      if (fromFrameGrip) frameGripDraggedRef.current = true // Suppress grip click→select
       if (!selected && !fromFrameGrip) {
         event.preventDefault()
         return
@@ -645,7 +648,15 @@ export function AiChatTurn({
             type="button"
             data-tt-frame-drag-handle
             draggable
+            onPointerDown={() => {
+              frameGripDraggedRef.current = false // Fresh press — click may select
+            }}
             onDragStart={startDrag}
+            onClick={(e) => {
+              e.stopPropagation()
+              if (frameGripDraggedRef.current) return // Drag used the grip — stay unselected
+              onSelect(message.id) // Click only → select turn (blue ring + ⋮⋮)
+            }}
             className={cn(
               'absolute left-0.5 top-1 z-20 flex h-5 items-center justify-center rounded',
               links.length > 0 ? 'w-auto min-w-5 px-0.5' : 'w-5', // Logo needs line+dot width
