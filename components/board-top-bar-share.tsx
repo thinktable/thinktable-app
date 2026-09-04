@@ -1,6 +1,6 @@
 'use client'
 
-// Top-bar cluster right of Share: copy link, favorite, More (phone: copy + star live in More)
+// Top-bar cluster right of Share: copy link, favorite, More (shareCompact: copy + star live in More)
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react' // Copy flash + favorite + More search
 import {
@@ -47,7 +47,8 @@ import { createClient } from '@/lib/supabase/client' // Persist favorite; word c
 import { useQueryClient } from '@tanstack/react-query' // Keep Boards list in sync; reuse frame cache
 import { cn } from '@/lib/utils' // Class merge
 import { useReactFlowContext } from './react-flow-context' // Present switches to View mode
-import { useSidebarContext } from './sidebar-context' // Phone hides copy/star into More
+import { useSidebarContext } from './sidebar-context' // Phone layout forces share compact
+import { usePhoneModeMenu } from './phone-mode-menu-context' // shareCompact from toolbar measure (before phoneTools)
 import { NotionConnectMenuItems } from './notion-connect-button' // Connections → Notion (provider wraps share cluster)
 import { useAiEditSession } from '@/lib/ai/edit-session' // AI highlight toggle in More when unpinned
 import { type BoardFontId } from '@/lib/board-font'
@@ -113,7 +114,9 @@ function MenuToggle({ on, className }: { on: boolean; className?: string }) {
 export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
   const queryClient = useQueryClient() // Patch conversations cache after favorite
   const { setEditMenuPillMode, boardFont, setBoardFont } = useReactFlowContext() // Present → View bar; board font
-  const { isMobileMode } = useSidebarContext() // Phone: copy + star collapse into More
+  const { isMobileMode } = useSidebarContext() // Phone chat layout always collapses copy/star
+  const { shareCompact } = usePhoneModeMenu() // Toolbar collapses copy/star before tools leave for the pill
+  const collapseShare = isMobileMode || shareCompact // Hide copy/star into More ahead of phoneTools
   const {
     hasAiContent,
     showAiOrigin,
@@ -322,9 +325,9 @@ export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
 
   return (
       <div className="flex items-center gap-1 flex-shrink-0">
-        {!isMobileMode && (
-          <>
-            {/* Desktop: copy + star sit beside More; phone uses More rows only */}
+        {!collapseShare && (
+          <div data-top-bar-copy-star className="flex items-center gap-1 flex-shrink-0">
+            {/* Desktop: copy + star sit beside More; shareCompact / phone uses More rows only */}
             <Button
               variant="ghost"
               size="sm"
@@ -348,7 +351,7 @@ export function BoardTopBarShare({ conversationId }: BoardTopBarShareProps) {
             >
               <Star className={cn('h-4 w-4', favorited && 'fill-current')} />
             </Button>
-          </>
+          </div>
         )}
         <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
           <DropdownMenuTrigger asChild>

@@ -100,7 +100,7 @@ export function ChatLoadStage({
 /** Fake prompt / response turns while the real transcript fetches. */
 export function AiTranscriptPlaceholder() {
   return (
-    <div className="flex flex-col gap-3 w-full max-w-[320px] mx-auto" role="presentation">
+    <div className="flex flex-col gap-3 w-full" role="presentation">
       <PlaceholderTurn user widths={['72%', '44%']} />
       <PlaceholderTurn user={false} widths={['92%', '78%', '61%']} />
       <PlaceholderTurn user widths={['58%']} />

@@ -3,7 +3,7 @@
 // When the right chat sidebar opens/closes, shrink/grow the map and scale zoom so the same relative content stays framed.
 import { useEffect, useRef } from 'react'
 import type { ReactFlowInstance, Viewport } from 'reactflow'
-import { CHAT_SIDEBAR_WIDTH } from '@/components/sidebar-context'
+import { useSidebarContext } from '@/components/sidebar-context'
 
 /** Apply width-ratio camera transform from a closed-state baseline (no drift). */
 function viewportForOpenWidth(
@@ -28,9 +28,11 @@ export function useChatSidebarViewportAdjust(
   reactFlowInstance: ReactFlowInstance | null, // Active flow instance (null until mounted)
   isChatSidebarOpen: boolean // Right chat column visibility from sidebar context
 ) {
+  const { chatSidebarWidth } = useSidebarContext() // Live column width (drag-resized)
   const prevOpenRef = useRef(isChatSidebarOpen) // Skip initial mount; only react to toggles
   const closedBaselineRef = useRef<Viewport | null>(null) // Exact camera to restore on close
   const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Delayed baseline clear after close
+  const widthAtOpenRef = useRef(chatSidebarWidth) // Sidebar width used for the open camera math
 
   useEffect(() => {
     if (!reactFlowInstance) return // Flow not ready yet
@@ -48,12 +50,13 @@ export function useChatSidebarViewportAdjust(
       if (!closedBaselineRef.current) {
         closedBaselineRef.current = reactFlowInstance.getViewport() // Source of truth for this cycle
       }
+      widthAtOpenRef.current = chatSidebarWidth // Match the column that just opened
     }
 
     let cancelled = false // Abort if effect re-runs before frames fire
     let innerId = 0 // Nested rAF handle for cleanup
 
-    // Double rAF — wait until flex layout has applied the ±CHAT_SIDEBAR_WIDTH width change
+    // Double rAF — wait until flex layout has applied the ±chatSidebarWidth width change
     const outerId = requestAnimationFrame(() => {
       innerId = requestAnimationFrame(() => {
         if (cancelled) return
@@ -69,7 +72,7 @@ export function useChatSidebarViewportAdjust(
           const baseline = closedBaselineRef.current
           if (!baseline) return
           // Pane is already shrunk; closed width is open width + sidebar (exact inverse of close)
-          const closedWidth = width + CHAT_SIDEBAR_WIDTH
+          const closedWidth = width + widthAtOpenRef.current
           const next = viewportForOpenWidth(baseline, closedWidth, width, height)
           reactFlowInstance.setViewport(next, { duration: 200 })
           return
@@ -95,7 +98,7 @@ export function useChatSidebarViewportAdjust(
       cancelAnimationFrame(outerId)
       if (innerId) cancelAnimationFrame(innerId)
     }
-  }, [isChatSidebarOpen, reactFlowInstance])
+  }, [isChatSidebarOpen, reactFlowInstance, chatSidebarWidth])
 
   // Clear pending timer on unmount
   useEffect(() => {

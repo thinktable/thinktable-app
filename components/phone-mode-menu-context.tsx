@@ -8,8 +8,10 @@ type PhoneModeMenuContextValue = {
   setToolsHost: (el: HTMLElement | null) => void // Ref callback from the phone tools row
   undoHost: HTMLElement | null // Portal target to the right of the pill, outside its chrome
   setUndoHost: (el: HTMLElement | null) => void // Ref callback from the sibling undo cluster
-  phoneTools: boolean // True when leftmost icon cluster would overflow into More — tools leave the bar
+  phoneTools: boolean // True when icon-only tools no longer fit after share compact — tools leave for the pill
   setPhoneTools: (next: boolean) => void // Set from the toolbar’s width measure
+  shareCompact: boolean // True when copy/star have left the bar for board More (before phoneTools)
+  setShareCompact: (next: boolean) => void // Set from the toolbar’s width measure
 }
 
 const PhoneModeMenuContext = createContext<PhoneModeMenuContextValue>({
@@ -17,14 +19,17 @@ const PhoneModeMenuContext = createContext<PhoneModeMenuContextValue>({
   setToolsHost: () => {}, // No-op outside the provider
   undoHost: null, // No undo sibling until tools have left the bar
   setUndoHost: () => {}, // No-op outside the provider
-  phoneTools: false, // Desktop: tools stay in the top bar until leftmost would fold
+  phoneTools: false, // Desktop: tools stay in the top bar until icons no longer fit
   setPhoneTools: () => {}, // No-op outside the provider
+  shareCompact: false, // Copy/star stay beside More until the bar needs them collapsed first
+  setShareCompact: () => {}, // No-op outside the provider
 })
 
 export function PhoneModeMenuProvider({ children }: { children: ReactNode }) {
   const [toolsHost, setToolsHostState] = useState<HTMLElement | null>(null) // Live portal node
   const [undoHost, setUndoHostState] = useState<HTMLElement | null>(null) // Sibling of the pill for undo/redo
-  const [phoneTools, setPhoneToolsState] = useState(false) // Toolbar overflow → pill
+  const [phoneTools, setPhoneToolsState] = useState(false) // Toolbar overflow → pill (left-aligned)
+  const [shareCompact, setShareCompactState] = useState(false) // Copy/star → board More before tools leave
 
   const setToolsHost = useCallback((el: HTMLElement | null) => {
     setToolsHostState(el) // Pill row mounts/unmounts the portal target
@@ -42,9 +47,22 @@ export function PhoneModeMenuProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const setShareCompact = useCallback((next: boolean) => {
+    setShareCompactState((prev) => (prev === next ? prev : next)) // Skip identical compact decisions
+  }, [])
+
   const value = useMemo(
-    () => ({ toolsHost, setToolsHost, undoHost, setUndoHost, phoneTools, setPhoneTools }), // Stable object for consumers
-    [toolsHost, setToolsHost, undoHost, setUndoHost, phoneTools, setPhoneTools]
+    () => ({
+      toolsHost,
+      setToolsHost,
+      undoHost,
+      setUndoHost,
+      phoneTools,
+      setPhoneTools,
+      shareCompact,
+      setShareCompact,
+    }),
+    [toolsHost, setToolsHost, undoHost, setUndoHost, phoneTools, setPhoneTools, shareCompact, setShareCompact]
   )
 
   return <PhoneModeMenuContext.Provider value={value}>{children}</PhoneModeMenuContext.Provider>

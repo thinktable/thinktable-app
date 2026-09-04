@@ -62,6 +62,18 @@ export function getMenuSafeRect(): MenuRect {
     if (r.height > 1) top = Math.max(top, r.bottom + PAD) // Sit fully below the bar (toggle + title + tools)
   }
 
+  const menuContext = document.querySelector('[data-edit-menu-context]') as HTMLElement | null // Mode pill + Filter/Sort strip
+  if (menuContext) {
+    const r = menuContext.getBoundingClientRect() // Pill (+ criteria when open)
+    if (r.height > 1) top = Math.max(top, r.bottom + PAD) // Clear mode toggle and chips
+  } else {
+    const filterSortBar = document.querySelector('[data-filter-sort-bar]') as HTMLElement | null
+    if (filterSortBar) {
+      const r = filterSortBar.getBoundingClientRect()
+      if (r.height > 1) top = Math.max(top, r.bottom + PAD)
+    }
+  }
+
   const dock = document.querySelector('[data-chat-map-dock]') as HTMLElement | null // Phone AI composer stack
   if (dock) {
     const r = dock.getBoundingClientRect() // Dock box

@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { EditPanel } from './sticky-prompt-panel'
 import { useReactFlowContext } from './react-flow-context'
 import { PillSelect } from './pill-select'
+import { BoardFilterSortBar } from './board-filter-sort-menu' // Criteria under the mode pill
 import { PhoneModeMenuProvider } from './phone-mode-menu-context' // Phone: mode dropdown + tools in the pill
 import { useSidebarContext } from './sidebar-context' // phoneDockTight: hide tools while landscape keyboard is up
 import { useUserPreference } from '@/lib/hooks/use-user-preferences'
@@ -37,7 +38,6 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
   const [isPromptFadingOut, setIsPromptFadingOut] = useState(false) // Track if prompt box is fading out (for smooth opacity transition)
   const [minimapRight, setMinimapRight] = useState(15) // Track minimap right position to align hover area
   const { setPanelWidth, setIsPromptBoxCentered, editMenuPillMode, setEditMenuPillMode } = useReactFlowContext() // Mode pill + prompt-box layout
-
   // Calculate available width for input - switches between left-aligned and centered based on right gap
   useEffect(() => {
     const calculateMaxWidth = () => {
@@ -220,7 +220,7 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
     }
   }, [])
 
-  // Overlay is full-width; PillSelect self-centers on desktop and left-aligns on phone.
+  // Overlay is full-width; PillSelect centers the segmented control, left-aligns when tools are in the pill.
 
   const pillSelectRef = useRef<HTMLDivElement>(null)
 
@@ -322,17 +322,17 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
         <EditPanel conversationId={conversationId} projectId={projectId} />
       </div>
       
-      {/* Floating pill select — desktop centered; phone left-aligned inside PillSelect */}
+      {/* Floating pill select — centered segmented control; left-aligned when tools are in the pill */}
       <div 
         ref={pillSelectRef}
         data-edit-menu-context
         className={cn(
-          'absolute inset-x-0 z-20 pointer-events-none',
+          'absolute inset-x-0 z-20 pointer-events-none flex flex-col items-stretch',
           phoneDockTight ? 'invisible opacity-0' : 'opacity-100' // Same strip as the Ask row when the keyboard is up
         )}
         aria-hidden={phoneDockTight}
         style={{
-          top: '56px', // Just below the 52px top bar (no show/close pill)
+          top: '56px', // Just below the 52px top bar
         }}
       >
         <PillSelect
@@ -348,6 +348,8 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
             setEditMenuPillMode(value as 'home' | 'insert' | 'draw' | 'view')
           }}
         />
+        {/* Filter/Sort criteria — under the mode pill, no divider */}
+        <BoardFilterSortBar />
       </div>
     </>
     </PhoneModeMenuProvider>

@@ -156,7 +156,7 @@ export function AiTranscript({
   if (messages.length === 0) return null
 
   return (
-    <div className="flex flex-col gap-3 w-full max-w-[320px] mx-auto">
+    <div className="flex flex-col gap-3 w-full">
       {messages.map((m) => (
         <AiChatTurn
           key={m.id}

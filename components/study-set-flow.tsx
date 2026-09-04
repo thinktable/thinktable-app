@@ -46,7 +46,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ChevronDown, ArrowDown, ChevronUp, Trash2 } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
-import { useSidebarContext } from './sidebar-context'
+import { useSidebarContext, PHONE_LAYOUT_MAX_WIDTH } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
 import { ThinktableBrandMark } from './personalize-ai-modal'
 import { LeftVerticalMenu } from './left-vertical-menu'
@@ -1329,7 +1329,7 @@ function StudySetFlowInner({ studySetId }: { studySetId?: string }) {
   // Auto-hide minimap when window shrinks below threshold, auto-show when expanded (if not manually closed while expanded)
   // Also triggers mobile mode for sidebar (sidebar hides, toggle moves to top bar)
   useEffect(() => {
-    const MINIMAP_AUTO_HIDE_THRESHOLD = 900 // Window width threshold to auto-hide minimap
+    const MINIMAP_AUTO_HIDE_THRESHOLD = PHONE_LAYOUT_MAX_WIDTH // Same width as phone / mobile layout
 
     const checkMinimapAutoHide = () => {
       const windowWidth = window.innerWidth

@@ -1,13 +1,12 @@
 'use client'
 
 // Full-height right chat column — Thinktable AI copilot (Ask in sidebar; drag blocks onto page)
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react' // Hooks
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react' // Hooks + seam drag types
 import { createPortal } from 'react-dom' // Phone dock must paint on the map, not inside clipped main
 import {
   useSidebarContext,
-  CHAT_SIDEBAR_WIDTH,
   TT_CHAT_THREAD_ID_KEY,
-} from './sidebar-context' // Open state + logo + thread persist key
+} from './sidebar-context' // Open state + logo + thread persist key + resizable width
 import { ThinktableBrandMark, PersonalizeAiModal } from './personalize-ai-modal' // Brand
 import { AiThreadPicker, type AiThreadFilter } from './ai/ai-thread-picker' // History
 import { AiTranscript } from './ai/ai-transcript' // Turns
@@ -73,13 +72,17 @@ function persistActiveThreadId(threadId: string | null) {
 /**
  * Left-edge divider for the chat column — solid by default, with transparent
  * holes where chat↔board threads (or a rubber-band) cross the seam.
+ * Notion-style: hover tip Close/Resize, click closes, drag resizes min→half window.
  */
 function ChatSidebarSeam() {
-  const ref = useRef<HTMLDivElement>(null) // Seam element — mask written imperatively
+  const { setChatSidebarOpen, chatSidebarWidth, setChatSidebarWidth } = useSidebarContext()
+  const lineRef = useRef<HTMLDivElement>(null) // Painted seam — mask written imperatively
+  const [tipOpen, setTipOpen] = useState(false) // Hover tip beside the handle
+  const dragRef = useRef<{ startX: number; startW: number; moved: boolean } | null>(null)
 
   useEffect(() => {
     const apply = (clientYs: number[]) => {
-      const el = ref.current // Live seam node
+      const el = lineRef.current // Live seam node
       if (!el) return // Not mounted yet
       const rect = el.getBoundingClientRect() // Map client Y → local px
       const h = rect.height // Seam height in px
@@ -126,13 +129,75 @@ function ChatSidebarSeam() {
     return subscribeChatSeamGaps(apply) // Imperative — no React setState on scroll
   }, [])
 
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return // Left button only
+    e.preventDefault()
+    setTipOpen(false) // Hide tip while dragging
+    dragRef.current = { startX: e.clientX, startW: chatSidebarWidth, moved: false }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+
+  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current
+    if (!drag) return
+    const dx = drag.startX - e.clientX // Drag left → wider chat (panel is on the right)
+    if (!drag.moved && Math.abs(dx) < 3) return // Click-slop before resize
+    drag.moved = true
+    setChatSidebarWidth(drag.startW + dx) // Clamp lives in context
+  }
+
+  const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current
+    dragRef.current = null
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      /* already released */
+    }
+    if (drag && !drag.moved) setChatSidebarOpen(false) // Click without drag = Close
+  }
+
+  const mod = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl'
+
   return (
     <div
-      ref={ref}
-      aria-hidden
-      data-chat-sidebar-seam
-      className="pointer-events-none absolute inset-y-0 left-0 z-30 w-px bg-black/10 dark:bg-white/10"
-    />
+      data-chat-sidebar-seam-hit
+      className="absolute inset-y-0 left-0 z-30 w-3 -translate-x-1/2 cursor-col-resize touch-none"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onMouseEnter={() => {
+        if (!dragRef.current) setTipOpen(true)
+      }}
+      onMouseLeave={() => setTipOpen(false)}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize or close chat"
+      tabIndex={-1}
+    >
+      <div
+        ref={lineRef}
+        aria-hidden
+        data-chat-sidebar-seam
+        className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-black/10 dark:bg-white/10"
+      />
+      {tipOpen ? (
+        <div
+          className="pointer-events-none absolute left-0 top-1/2 z-40 -translate-x-full -translate-y-1/2 -ml-2 rounded-md bg-[#2f2f2f] px-2.5 py-1.5 text-[12px] leading-snug text-white shadow-lg whitespace-nowrap"
+          role="tooltip"
+        >
+          <div>
+            <span className="font-semibold">Close</span>
+            <span className="text-white/70"> Click or {mod};</span>
+          </div>
+          <div>
+            <span className="font-semibold">Resize</span>
+            <span className="text-white/70"> Drag</span>
+          </div>
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -140,6 +205,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
   const {
     isChatSidebarOpen,
     setChatSidebarOpen,
+    chatSidebarWidth,
     isMobileMode,
     logoDrawing,
     setLogoDrawing,
@@ -1147,7 +1213,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
           'bg-gray-50 dark:bg-[#0f0f0f]'
           // Left edge is ChatSidebarSeam (gapped where threads cross) — not CSS border-l
         )}
-        style={{ width: CHAT_SIDEBAR_WIDTH }}
+        style={{ width: chatSidebarWidth }}
       >
         <ChatSidebarSeam />
         {customizeOpen ? (

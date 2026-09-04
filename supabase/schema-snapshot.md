@@ -1,13 +1,21 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-09-04T14:26:13Z`
+- Snapped at: `2026-09-04T16:44:23Z`
 - Source: local `supabase/migrations/` + remote applied tops (thinkable) + `.temp` service versions
-- Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
+- Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
 - CLI: `supabase` `2.90.0` (marker via `migration new`; newer CLI available)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260904164423_toolbar_pill_chat_resize.sql`.
+- Toolbar overflow: titles collapse → copy/star into board More (`shareCompact`) → tools into mode pill (`phoneTools`); phone chat layout forces the pill; phone breakpoint `768`.
+- Chat sidebar Notion seam: Close click/⌘; · Resize drag (min 360 → half window); preferred width survives shrink/expand.
+- Chat frames `w-full` inside equal L/R pad; Filter/Sort strip left-aligns to mode select; Sort criteria pill `rounded-full`.
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Frame delete first select
 
 - No DDL. Marker `20260904142613_frame_delete_first_select.sql`.
 - Frame **Delete/Backspace** on first select removes the frame (`lib/frame-text-edit.ts` — caret not placed yet); after caret click / I-bar handoff TipTap owns the key.

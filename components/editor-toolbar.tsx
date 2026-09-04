@@ -78,6 +78,8 @@ import {
   NotionTopBarPin,
 } from './notion-connect-button' // Notion pin left of Share + More → Connections host
 import { AutomationsMenu } from './automations-menu' // Actions-bar Automations list popover
+import { BoardFilterSortTriggers } from './board-filter-sort-menu' // Filter/Sort toggle the under-bar strip
+import { setBoardFilterSortOpen, toggleBoardFilterSort } from '@/lib/board-filter-sort-ui' // Strip open/focus
 import { CapturesMenu } from './captures-menu' // View-bar Capture list popover
 import { ToolbarTitle } from './toolbar-title' // Animated icon-adjacent titles
 import { LayoutAlignGlyph, LayoutForkMenuItems, type LayoutForkAlign } from './layout-fork-icon' // Layout dropdown: forked arrows + align
@@ -152,29 +154,13 @@ function titledToolWidth(label: string) {
   return 16 + 6 + Math.ceil(label.length * 7.5) + 16 // icon + gap-1.5 + glyph estimate + px-2
 }
 
-/** Slash-free cluster immediately right of undo/redo — never fold into More; phone pill instead. */
-function leftmostGroupIds(mode: string): Set<string> {
-  if (mode === 'insert') return new Set(['lock']) // Anchor + Lock frames, then slash, then Tidy up + Thread layout
-  if (mode === 'view') return new Set(['boardStyle']) // Board, then slash, then Capture/Present
-  if (mode === 'draw') return new Set(['drawGroup2', 'drawGroup3']) // Eraser + ink, then slash, then lasso/spaces
-  return new Set() // Actions: Filter cluster may overflow; no protected left cluster
-}
-
-/** Icon-only width of each mode’s furthest-left slash-free cluster. Phone pill uses the widest. */
-const LEFTMOST_ICON_WIDTH: Record<string, number> = {
-  home: 0, // Actions has no protected left cluster after Anchor/Lock moved to Layout
-  insert: 64, // Anchor + Lock frames
-  draw: 28 + 4 + 76, // Eraser + pencil + highlighter
-  view: 40, // Board
-}
-
 /** Phone: mount mode tools in the Actions/Layout/Draw/View pill; desktop: keep them in the top bar. */
 function PhoneModeToolsPortal({
   enabled,
   host,
   children,
 }: {
-  enabled: boolean // phoneTools — leftmost cluster would overflow into More
+  enabled: boolean // phoneTools — icon-only tools no longer fit the top bar
   host: HTMLElement | null // Phone tools row right of the mode dropdown
   children: React.ReactNode // Mode tools (not undo/redo)
 }) {
@@ -201,8 +187,8 @@ function PhoneUndoRedoPortal({
 
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const { canShare, canEdit, role } = useBoardAccess() // Gate share + show view-only chrome
-  const { isChatSidebarOpen, chatChromeReady } = useSidebarContext() // Measure only after chat column is restored
-  const { toolsHost, undoHost, phoneTools, setPhoneTools } = usePhoneModeMenu() // Pill portal + undo sibling + overflow→phone flag
+  const { isChatSidebarOpen, chatChromeReady, isMobileMode } = useSidebarContext() // Measure after chat restore; phone layout forces pill
+  const { toolsHost, undoHost, phoneTools, setPhoneTools, setShareCompact } = usePhoneModeMenu() // Pill + share→More before tools leave
   const { reactFlowInstance, isLocked, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, mapUndo, mapRedo, canMapUndo, canMapRedo, getMapTakeSnapshot, getSetNodes } = useReactFlowContext()
   const queryClientForAi = useQueryClient() // Turn into board list + conversations invalidate
   const previewFocus = usePreviewFocus() // When a nested preview chrome is selected, View styles target that page
@@ -426,7 +412,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const [pencilColor, setPencilColor] = useState<DrawInk>('black') // Freehand ink — remembered per tool, not shared with highlighter
   const [highlighterColor, setHighlighterColor] = useState<DrawInk>('black') // Highlighter ink — independent of freehand so each dropdown keeps its last pick
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set())
-  const [hideUndoMoreSlash, setHideUndoMoreSlash] = useState(false) // Folded + truncated path: drop undo|/|More
+  const [hideUndoMoreSlash, setHideUndoMoreSlash] = useState(false) // True when tools left for the pill — drop orphan undo|/| on the bar
   const [compactEarlyLabels, setCompactEarlyLabels] = useState(false) // Filter/sort/automations/eraser cluster — collapses first
   const compactEarlyLabelsRef = useRef(false) // Hysteresis for the first title-collapse stage
   const [compactLabels, setCompactLabels] = useState(false) // Remaining titles after the early cluster
@@ -435,7 +421,8 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const toolbarLayoutReadyRef = useRef(false) // Same flag for checkVisibility without a stale closure
   const measuredModeRef = useRef<string | null>(null) // Last fitted pill mode — switch is a first-pass like Actions load
   const phoneToolsRef = useRef(false) // Hysteresis for overflow→pill so it doesn’t thrash at the threshold
-  const hiddenItemsRef = useRef<Set<string>>(new Set()) // Last overflow set — restored cluster when items move
+  const shareCompactRef = useRef(false) // Hysteresis for copy/star → More (runs before phoneTools)
+  const hiddenItemsRef = useRef<Set<string>>(new Set()) // Cleared — tools move to the pill instead of More
   const [toolbarAnimate, setToolbarAnimate] = useState(false) // Enable title transitions only after the first correct layout
   const [boardSearch, setBoardSearch] = useState('') // Actions-bar live search over frame title + body
   const [boardSearchOpen, setBoardSearchOpen] = useState(false) // Icon-only until click; then the field slides out
@@ -1114,6 +1101,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   // Close leftover Filter/Capture/… menus when switching Actions / Layout / Draw / View
   useEffect(() => {
     setOpenDropdown(null) // Don’t leave a previous mode’s panel parked over the path
+    setBoardFilterSortOpen(false) // Hide criteria strip when leaving Actions
   }, [editMenuPillMode])
 
   // Track which items should be hidden based on available space (Google Docs style)
@@ -1140,22 +1128,26 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       }
 
       const rightSectionRect = rightSection.getBoundingClientRect()
-      const rightW = rightSectionRect.width // Share / copy / favorite / more / AI
-      const moreMenuWidth = 32 + 8 // Overflow More button (h-7 w-7 + gap) — always reserved so hide/show doesn’t thrash
+      const rightW = rightSectionRect.width // Share / copy / favorite / more / AI (live)
+      const copyStarEl = rightSection.querySelector('[data-top-bar-copy-star]') as HTMLElement | null
+      const COPY_STAR_W = 64 // Two h-7 icons + gaps — used when already collapsed so expand math stays stable
+      const copyStarLive = copyStarEl?.getBoundingClientRect().width ?? 0
+      const rightExpandedW = copyStarLive > 0 ? rightW : rightW + COPY_STAR_W // Simulate copy/star still on the bar
+      const rightCollapsedW = copyStarLive > 0 ? Math.max(0, rightW - copyStarLive) : rightW // Simulate / use share-compact right
       const PATH_GAP = 8 // Air between path glyphs and the centered undo cluster
       const hamEl = leftChrome?.querySelector('[data-nav-logo-trigger]') as HTMLElement | null // Menu icon; path starts after it
       const hamRight = hamEl?.getBoundingClientRect().right ?? toolbarRect.left + 40 // Path origin in viewport px
       const hamW = hamEl?.getBoundingClientRect().width ?? 40 // Menu icon only — leftover left chrome is the path
       const pathBox = leftChrome?.querySelector('[data-board-path]') as HTMLElement | null // Live crumbs + hidden full/min rows
-      const pathFull = pathBox?.querySelector('[data-path-full]') as HTMLElement | null // Hidden full-title row
       const pathMin = pathBox?.querySelector('[data-path-min]') as HTMLElement | null // Hidden icon-minimum row (current icon whole)
-      const naturalPath = pathFull?.scrollWidth || pathBox?.scrollWidth || 0 // Uncapped crumbs; simple titles use the live box
       const minPathW = Math.max(64, pathMin?.scrollWidth || 64) // Cutoff-able path: ancestor icons + current icon, never mid-icon clip
       const barCenter = toolbarRect.left + toolbarRect.width / 2 // True board center
       const barW = toolbarRect.width // Map-column width this pass
-      const leftW = hamW + minPathW // Reserve cutoff path on shrink and expand — live crush delayed More; live extend delayed return
-      const sideInset = Math.max(leftW, rightW) // Symmetric inset so the cluster can sit on the board center
-      const availableWidth = barW - 2 * sideInset - moreMenuWidth - 16 // Max cluster width on the true board center
+      const leftW = hamW + minPathW // Reserve cutoff path on shrink and expand — live crush delayed return; live extend delayed return
+      const sideInset = Math.max(leftW, rightW) // Live inset for title collapse (current share chrome)
+      const availableWidth = barW - 2 * sideInset - 16 // Max cluster width on the true board center (no More fold)
+      const availableExpanded = barW - 2 * Math.max(leftW, rightExpandedW) - 16 // Room if copy/star stay on the bar
+      const availableCollapsed = barW - 2 * Math.max(leftW, rightCollapsedW) - 16 // Room after copy/star → board More
 
       // Icon-only widths (after all titles have condensed)
       const iconGroups = editMenuPillMode === 'insert'
@@ -1259,31 +1251,23 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       compactLabelsRef.current = nextRest
       const itemGroups = nextRest ? iconGroups : nextEarly ? midGroups : fullGroups // Measure the chrome we will actually render
 
-      const leftIds = leftmostGroupIds(editMenuPillMode) // Slash-free cluster right of undo/redo
-      const widestLeftmost = Math.max( // Hungriest left cluster across modes so the pill doesn’t flip on mode change
-        LEFTMOST_ICON_WIDTH.home,
-        LEFTMOST_ICON_WIDTH.insert,
-        LEFTMOST_ICON_WIDTH.draw,
-        LEFTMOST_ICON_WIDTH.view
-      )
-      const keepW = 70 + 8 + widestLeftmost + 8 // Undo/redo + widest left cluster + gaps — below this, phone pill
+      const iconTotal = sumGroups(iconGroups) // After titles collapse, move to the pill instead of folding into More
+      const wasShare = firstPass ? false : shareCompactRef.current // Last copy/star → More decision
       const wasPhone = firstPass ? false : phoneToolsRef.current // Last overflow→pill decision
-      const nextPhone = keepW > availableWidth - (wasPhone ? expandSlop : 0) // Titles already collapsed; left cluster would fold
+      // 1) Collapse board copy/star into More while tools can still stay on the bar
+      const nextShare =
+        isMobileMode ||
+        iconTotal > availableExpanded - (wasShare ? expandSlop : 0)
+      // 2) Only then move tools into the mode pill (never before share compact, except phone chat layout)
+      const nextPhone =
+        isMobileMode ||
+        (nextShare && iconTotal > availableCollapsed - (wasPhone ? expandSlop : 0))
+      shareCompactRef.current = nextShare
       phoneToolsRef.current = nextPhone
+      if (wasShare !== nextShare) setShareCompact(nextShare)
       if (wasPhone !== nextPhone) setPhoneTools(nextPhone) // Skip when unchanged so the pill doesn’t reset
 
-      const newHiddenItems = new Set<string>()
-      if (!nextPhone) {
-        let currentWidth = sumGroups(itemGroups)
-        for (const item of itemGroups) { // Array is right-to-left; hide rightmost first
-      if (item.id === 'undoRedo') continue // Undo/redo never overflow into More; they leave the bar for the pill sibling
-          if (leftIds.has(item.id)) break // Left cluster stays; phone pill takes over instead of More
-          if (currentWidth > availableWidth) {
-            newHiddenItems.add(item.id)
-            currentWidth -= item.width + 8
-          }
-        }
-      }
+      const newHiddenItems = new Set<string>() // Never fold into More — overflow moves to the mode pill
 
       setCompactEarlyLabels((prev) => { // Phone pill uses icon+title from the tools themselves; skip bar collapse
         const next = nextPhone ? true : nextEarly
@@ -1315,20 +1299,13 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         return
       }
       const CLUSTER_PAD = 24 // Glyph/padding slack — titledToolWidth undershoots “Tidy up”/etc. and lets the path run under tools
-      const restoredClusterW =
-        sumGroups(itemGroups.filter((item) => !newHiddenItems.has(item.id))) +
-        (newHiddenItems.size > 0 ? moreMenuWidth : 0) +
-        CLUSTER_PAD // Prefer over-truncate vs overlapping the centered cluster
+      const restoredClusterW = sumGroups(itemGroups) + CLUSTER_PAD // Prefer over-truncate vs overlapping the centered cluster
       const restoredLeft = barCenter - restoredClusterW / 2 // Cap against tools that will paint, not the still-stale live cluster
       // Further-left of live vs planned: chat close unhides/expands titles while liveClusterW is still narrow (path would run under Tidy up)
       const capLeft = Math.min(centeredLeft, restoredLeft)
       const pathMax = Math.max(minPathW, Math.floor(capLeft - PATH_GAP - hamRight)) // Floor so overflow-hidden never clips the current icon
       if (bar) bar.style.setProperty('--tt-path-max', `${pathMax}px`)
-      const truncated = naturalPath > pathMax + 1 // Full titles need more than the centered lane
-      const hideable = itemGroups.filter((item) => item.id !== 'undoRedo') // Undo/redo never fold
-      const allFolded = hideable.length > 0 && hideable.every((item) => newHiddenItems.has(item.id)) // Only undo/redo + More remain
-      const nextHideSlash = allFolded && truncated // Desktop: slash goes when colliding
-      setHideUndoMoreSlash((prev) => (prev === nextHideSlash ? prev : nextHideSlash))
+      setHideUndoMoreSlash((prev) => (prev === false ? prev : false)) // Tools still on the bar — keep undo|/|tools
 
       measuredModeRef.current = editMenuPillMode // This mode is fitted — next switch is a fresh first-pass
       toolbarLayoutReadyRef.current = true
@@ -1370,7 +1347,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       attrObserver?.disconnect()
       window.removeEventListener('resize', checkVisibility)
     }
-  }, [editor, editMenuPillMode, boardSearchOpen, chatChromeReady, isChatSidebarOpen, setPhoneTools]) // Re-run when the map column’s final width is known
+  }, [editor, editMenuPillMode, boardSearchOpen, chatChromeReady, isChatSidebarOpen, isMobileMode, setPhoneTools, setShareCompact]) // Re-run when the map column’s final width is known
 
   useLayoutEffect(() => {
     if (toolbarLayoutReady && !toolbarAnimate) setToolbarAnimate(true) // After first reveal, allow later collapse/expand animation
@@ -1519,60 +1496,32 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
         )}
 
         {/* Filter / Sort / Automations — Actions bar (Notion-style view chrome) */}
-        {editMenuPillMode === 'home' && !isItemHidden('actions') && (
+        {editMenuPillMode === 'home' && (
           <>
-            <div className="flex items-center gap-0.5 flex-shrink-0">
-              <DropdownMenu open={openDropdown === 'boardFilter'} onOpenChange={(open) => handleDropdownOpenChange('boardFilter', open)}>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className={cn(
-                      'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
-                      'transition-[padding,gap] duration-200 ease-out', compactEarlyLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Filter cluster collapses first
-                    )}
-                    title="Filter"
-                  >
-                    <ListFilter className="h-4 w-4 flex-shrink-0" />
-                    <ToolbarTitle show={!compactEarlyLabels}>Filter</ToolbarTitle>
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-48">
-                  <DropdownMenuLabel className="text-xs font-normal text-gray-500">Filter</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <div className="px-2 py-2 text-xs text-gray-400">No filters yet</div>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <DropdownMenu open={openDropdown === 'boardSort'} onOpenChange={(open) => handleDropdownOpenChange('boardSort', open)}>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className={cn(
-                      'h-7 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#1f1f1f] flex-shrink-0 flex items-center',
-                      'transition-[padding,gap] duration-200 ease-out', compactEarlyLabels ? 'px-1.5 gap-0' : 'px-2 gap-1.5' // Filter cluster collapses first
-                    )}
-                    title="Sort"
-                  >
-                    <ArrowUpDown className="h-4 w-4 flex-shrink-0" />
-                    <ToolbarTitle show={!compactEarlyLabels}>Sort</ToolbarTitle>
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent {...TOOLBAR_MENU_PLACEMENT} className="w-48">
-                  <DropdownMenuLabel className="text-xs font-normal text-gray-500">Sort</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <div className="px-2 py-2 text-xs text-gray-400">No sorts yet</div>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <AutomationsMenu
-                open={openDropdown === 'boardAutomations'}
-                onOpenChange={(open) => handleDropdownOpenChange('boardAutomations', open)}
-                conversationId={conversationId}
-                showLabel={!compactEarlyLabels} // Filter cluster titles collapse first
+            <div
+              className={cn(
+                'flex items-center gap-0.5 flex-shrink-0',
+                // Keep Filter/Sort triggers measurable; strip lives under the top bar
+                isItemHidden('actions') && 'absolute w-0 h-0 overflow-hidden opacity-0 pointer-events-none'
+              )}
+            >
+              <BoardFilterSortTriggers
+                showFilterLabel={!compactEarlyLabels}
+                showSortLabel={!compactEarlyLabels}
+                filterTriggerVisible={!isItemHidden('actions')}
+                sortTriggerVisible={!isItemHidden('actions')}
               />
+              {!isItemHidden('actions') && (
+                <AutomationsMenu
+                  open={openDropdown === 'boardAutomations'}
+                  onOpenChange={(open) => handleDropdownOpenChange('boardAutomations', open)}
+                  conversationId={conversationId}
+                  showLabel={!compactEarlyLabels} // Filter cluster titles collapse first
+                />
+              )}
             </div>
             {/* If search is hidden, slash before More menu */}
-            {isItemHidden('search') && hiddenItems.size > 0 && (
+            {!isItemHidden('actions') && isItemHidden('search') && hiddenItems.size > 0 && (
               <span className="flex h-7 items-center text-2xl font-thin text-gray-300 dark:text-gray-500 mx-1 flex-shrink-0 select-none leading-none" aria-hidden>/</span>
             )}
           </>
@@ -3131,11 +3080,11 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 )}
                 {isItemHidden('actions') && (
                   <>
-                    <DropdownMenuItem onClick={() => handleDropdownOpenChange('boardFilter', true)}>
+                    <DropdownMenuItem onClick={() => toggleBoardFilterSort('filter')}>
                       <ListFilter className="h-4 w-4 mr-2" />
                       Filter
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleDropdownOpenChange('boardSort', true)}>
+                    <DropdownMenuItem onClick={() => toggleBoardFilterSort('sort')}>
                       <ArrowUpDown className="h-4 w-4 mr-2" />
                       Sort
                     </DropdownMenuItem>

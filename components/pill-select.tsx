@@ -27,7 +27,7 @@ interface PillSelectProps {
 
 export function PillSelect({ options, value, onChange, className }: PillSelectProps) {
   const [selectedValue, setSelectedValue] = useState(value || options[0]?.value || '')
-  const { setToolsHost, setUndoHost, phoneTools } = usePhoneModeMenu() // Portals; phoneTools from toolbar overflow
+  const { setToolsHost, setUndoHost, phoneTools } = usePhoneModeMenu() // Portals; overflow → pill (left-aligned)
   const selectedLabel = options.find((option) => option.value === selectedValue)?.label ?? options[0]?.label // Trigger text
 
   // Stay in sync when the parent drives mode (toolbar / context)
@@ -46,10 +46,11 @@ export function PillSelect({ options, value, onChange, className }: PillSelectPr
     <div
       className={cn(
         'relative flex items-stretch w-fit pointer-events-auto', // Cluster sizes to dropdown + tools + undo
-        phoneTools ? 'ml-2' : 'mx-auto' // Phone left-aligned; desktop centered on the map column
+        phoneTools ? 'ml-2' : 'mx-auto' // Tools in pill → left-aligned; segmented control stays centered
       )}
     >
       <div
+        data-edit-menu-pill // Mode toggle shell; Filter/Sort aligns to [data-edit-menu-select] inside
         className={cn(
           // Solid soft grey (matches former translucent look over the board, without transparency)
           'relative z-10 flex items-center gap-0.5 px-1 py-1 rounded-full bg-[#f7f8f9] dark:bg-[#1c1c24] shadow-sm', // Both ends rounded; sits above undo so the right cap covers the tucked fill
@@ -62,6 +63,7 @@ export function PillSelect({ options, value, onChange, className }: PillSelectPr
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
+                  data-edit-menu-select // Phone Filter/Sort left-aligns to this mode chip
                   className="inline-flex flex-shrink-0 items-center gap-0.5 px-3 py-1.5 rounded-full bg-white dark:bg-white text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-white dark:hover:bg-white" // Current mode; white chip like desktop selected
                   aria-label="Mode"
                 >
@@ -92,6 +94,7 @@ export function PillSelect({ options, value, onChange, className }: PillSelectPr
               <button
                 key={option.value}
                 type="button"
+                data-edit-menu-select={isSelected ? '' : undefined} // Filter/Sort strip left-aligns to the selected mode chip
                 onClick={() => handleSelect(option.value)}
                 className={cn(
                   'inline-flex items-center px-4 py-1.5 rounded-full text-sm font-medium transition-all duration-200',

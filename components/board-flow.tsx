@@ -91,7 +91,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ArrowDown, GripVertical, MousePointer2, Hand, Plus, Minus } from 'lucide-react'
 import { useReactFlowContext } from './react-flow-context'
-import { useSidebarContext } from './sidebar-context'
+import { useSidebarContext, PHONE_LAYOUT_MAX_WIDTH } from './sidebar-context'
 import { useChatSidebarViewportAdjust } from '@/lib/hooks/use-chat-sidebar-viewport'
 import { setAiSelectedFrames, setAiViewportCenter } from '@/lib/ai/selection-bridge' // Bridge RF selection + viewport → AI context
 import {
@@ -2634,7 +2634,7 @@ function BoardFlowInner({
   // Mobile mode for narrow viewports (phone layout). Do NOT auto-hide minimap here —
   // minimap only auto-hides when phone chat opens (phoneAiOpen / aiDock peek).
   useEffect(() => {
-    const MINIMAP_AUTO_HIDE_THRESHOLD = 900 // Same width as phone / mobile layout
+    const MINIMAP_AUTO_HIDE_THRESHOLD = PHONE_LAYOUT_MAX_WIDTH // Same width as phone / mobile layout
 
     const checkMobileMode = () => {
       const windowWidth = window.innerWidth
