@@ -1,13 +1,20 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-09-05T16:13:11Z`
+- Snapped at: `2026-09-05T16:24:05Z`
 - Source: local `supabase/migrations/` + remote applied tops (thinkable) + `.temp` service versions
 - Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 - CLI: `supabase` `2.90.0` (marker via `migration new`; newer CLI available)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260905162405_connection_sync_top_bar_indicator.sql`.
+- Top-bar **sync icon** left of Connections pin (`ConnectionSyncTopBarIndicator`, `SyncIcon`); blue when any frame has `metadata.notionUpdatesPending`.
+- `useConnectionSyncPending` + `patchBoardMessageMetadata` keep the indicator live without refetch.
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Notion page body live-sync
 
 - No DDL. Marker `20260905161311_notion_page_body_sync_ai_share_compact.sql`.
 - Notion imported **page body** live-sync Thinktable → Notion (`lib/notion/page-sync.ts`, `html-to-blocks.ts`, `useNotionPageBodySync`, `PUT /api/notion/page/[id]/content`); background Notion → Thinktable detect sets `metadata.notionUpdatesPending`.

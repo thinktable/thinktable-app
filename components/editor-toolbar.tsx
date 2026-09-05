@@ -76,7 +76,8 @@ import { BoardTopBarShare } from './board-top-bar-share' // Copy link / favorite
 import {
   NotionConnectProvider,
   NotionTopBarPin,
-} from './notion-connect-button' // Notion pin left of Share + More → Connections host
+  ConnectionSyncTopBarIndicator,
+} from './notion-connect-button' // Sync glyph + Notion pin left of Share
 import { AutomationsMenu } from './automations-menu' // Actions-bar Automations list popover
 import { BoardFilterSortTriggers } from './board-filter-sort-menu' // Filter/Sort toggle the under-bar strip
 import { setBoardFilterSortOpen, toggleBoardFilterSort } from '@/lib/board-filter-sort-ui' // Strip open/focus
@@ -3352,6 +3353,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
                 {role === 'comment' ? 'Can comment' : 'View only'}
               </span>
             )}
+            <ConnectionSyncTopBarIndicator conversationId={conversationId} />
             <NotionTopBarPin />
             <AiOriginTopBarToggle />
             {canShare && conversationId ? (

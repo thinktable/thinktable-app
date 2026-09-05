@@ -18,7 +18,9 @@ import {
 } from './ui/dropdown-menu'
 import { NotionImportModal } from './notion-import-modal'
 import { NotionMarkIcon } from './notion-mark-icon' // Monochrome — matches other top-bar icons
+import { SyncIcon } from './sync-icon' // Unsynced connection updates (left of Connections)
 import { cn } from '@/lib/utils'
+import { useConnectionSyncPending } from '@/lib/notion/use-connection-sync-pending'
 
 /** localStorage — whether the connected Notion mark stays left of Share. */
 const TOPBAR_PIN_KEY = 'thinktable-notion-topbar-pinned'
@@ -350,6 +352,30 @@ export function NotionConnectMenuItems({ filterQuery = '' }: { filterQuery?: str
         )}
       </DropdownMenuSubContent>
     </DropdownMenuSub>
+  )
+}
+
+/**
+ * Top-bar sync glyph — left of the Notion (Connections) pin; blue when updates are pending.
+ */
+export function ConnectionSyncTopBarIndicator({ conversationId }: { conversationId?: string }) {
+  const api = useNotionConnect()
+  const pending = useConnectionSyncPending(conversationId)
+  if (!api?.status?.connected) return null
+
+  return (
+    <span
+      className="h-7 w-7 inline-flex items-center justify-center flex-shrink-0"
+      title={pending ? 'Connection updates available' : 'Connections in sync'}
+      aria-label={pending ? 'Connection updates available' : 'Connections in sync'}
+    >
+      <SyncIcon
+        className={cn(
+          'h-4 w-4',
+          pending ? 'text-[#2383e2]' : 'text-gray-300 dark:text-gray-600'
+        )}
+      />
+    </span>
   )
 }
 

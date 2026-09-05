@@ -531,6 +531,7 @@ import { applyTurnInto, bodyHtmlWithoutBoardTitle } from '@/lib/blocks/turn-into
 import { migrateSoleDatabaseBlockToBoardLink, ensureNotionMapFrameIsBoardLink, isSoleDatabaseBlockContent, isSoleBoardLinkContent, repairBoardFrameToSoleLink, restoreWipedDatabaseBlockHtml } from '@/lib/notion/migrate-frame' // Notion DB map frames → boardLink; repair polluted board frames; heal wiped tables
 import { COMPACT_PREVIEW_ROWS } from '@/lib/notion/database' // Table rows Reset floor / snapshot split
 import { useNotionPageBodySync } from '@/lib/notion/use-notion-page-sync' // Imported page body ↔ Notion
+import { patchBoardMessageMetadata } from '@/lib/notion/connection-sync-pending'
 
 interface Message {
   id: string
@@ -4554,22 +4555,59 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
 
   const handleNotionUpdatesAvailable = useCallback(
     (payload: { lastEditedTime: string }) => {
-      void persistFrameMeta({
+      const patch = {
         notionUpdatesPending: true,
         notionRemoteLastEditedTime: payload.lastEditedTime,
-      })
+      }
+      if (promptMessage?.id && conversationId) {
+        patchBoardMessageMetadata(queryClient, conversationId, promptMessage.id, patch)
+        setNodes((nds) =>
+          nds.map((n) => {
+            if (n.id !== id || !n.data?.promptMessage) return n
+            const pm = n.data.promptMessage as { metadata?: Record<string, unknown> }
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                promptMessage: {
+                  ...pm,
+                  metadata: { ...(pm.metadata || {}), ...patch },
+                },
+              },
+            }
+          })
+        )
+      }
+      void persistFrameMeta(patch)
     },
-    [persistFrameMeta]
+    [persistFrameMeta, promptMessage?.id, conversationId, queryClient, setNodes, id]
   )
 
   const handleNotionLastEditedTime = useCallback(
     (iso: string) => {
-      void persistFrameMeta({
-        notionLastEditedTime: iso,
-        notionUpdatesPending: false,
-      })
+      const patch = { notionLastEditedTime: iso, notionUpdatesPending: false }
+      if (promptMessage?.id && conversationId) {
+        patchBoardMessageMetadata(queryClient, conversationId, promptMessage.id, patch)
+        setNodes((nds) =>
+          nds.map((n) => {
+            if (n.id !== id || !n.data?.promptMessage) return n
+            const pm = n.data.promptMessage as { metadata?: Record<string, unknown> }
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                promptMessage: {
+                  ...pm,
+                  metadata: { ...(pm.metadata || {}), ...patch },
+                },
+              },
+            }
+          })
+        )
+      }
+      void persistFrameMeta(patch)
     },
-    [persistFrameMeta]
+    [persistFrameMeta, promptMessage?.id, conversationId, queryClient, setNodes, id]
   )
 
   const { schedulePush: scheduleNotionPagePush } = useNotionPageBodySync({
