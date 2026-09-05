@@ -1228,7 +1228,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
           </div>
         ) : (
           <>
-        <header className="relative z-10 flex-shrink-0 flex items-center justify-between gap-2 px-3 h-11">
+        <header className="relative z-10 flex-shrink-0 flex items-center justify-between gap-2 px-3 h-[52px]">
           {/* Brand only when transcript exists — empty state already has the big icon */}
           <div className="flex items-center gap-1.5 min-w-0 flex-1">
             {hasTranscript && (
@@ -1293,7 +1293,7 @@ export function ChatSidebar({ conversationId }: ChatSidebarProps) {
           >
             <ChatLoadStage phase={loadPhase} placeholder={<AiTranscriptPlaceholder />}>
               {!hasTranscript ? (
-              <div className="flex flex-col items-start gap-5 max-w-[280px] mx-auto mt-6">
+              <div className="flex flex-col items-start gap-5 w-full min-w-0 mt-6">
                 <div
                   className="flex items-center gap-2.5"
                   onMouseEnter={() => setHoverBrand(true)}

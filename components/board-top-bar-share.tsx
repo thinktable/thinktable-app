@@ -1,6 +1,6 @@
 'use client'
 
-// Top-bar cluster right of Share: copy link, favorite, More (shareCompact: copy + star live in More)
+// Top-bar cluster right of Share: copy link, favorite, More (shareCompact: copy + star + AI sparkles live in More)
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react' // Copy flash + favorite + More search
 import {

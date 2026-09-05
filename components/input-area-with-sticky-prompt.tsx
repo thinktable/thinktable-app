@@ -13,7 +13,7 @@ import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 
 export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conversationId?: string; projectId?: string }) {
-  const { phoneDockTight } = useSidebarContext() // Landscape + keyboard: hide top bar / pill so the Ask row can sit in the strip
+  const { phoneDockTight, chatChromeReady } = useSidebarContext() // Wait for chat column restore before measuring map width
   const [inputHeight, setInputHeight] = useState(52) // Default height
   const [maxWidth, setMaxWidth] = useState(768) // Default max-w-3xl (768px)
   const [isCentered, setIsCentered] = useState(false) // Whether input should be centered
@@ -40,6 +40,8 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
   const { setPanelWidth, setIsPromptBoxCentered, editMenuPillMode, setEditMenuPillMode } = useReactFlowContext() // Mode pill + prompt-box layout
   // Calculate available width for input - switches between left-aligned and centered based on right gap
   useEffect(() => {
+    if (!chatChromeReady) return // Chat column width not final yet — avoid full-width measure then collapse
+
     const calculateMaxWidth = () => {
       // Calculate width using actual map area width to maintain consistent gap
       // This prevents overlap with sidebar on window collapse and maintains same gap as top bar
@@ -161,14 +163,31 @@ export function InputAreaWithStickyPrompt({ conversationId, projectId }: { conve
     if (minimapResizeObserver && minimapElement) {
       minimapResizeObserver.observe(minimapElement)
     }
+
+    // Map column shrinks when chat opens/resizes — recalc prompt width from live pane size
+    const reactFlowElement = document.querySelector('.react-flow') as HTMLElement | null
+    const mapResizeObserver = reactFlowElement
+      ? new ResizeObserver(() => calculateMaxWidth())
+      : null
+    if (mapResizeObserver && reactFlowElement) mapResizeObserver.observe(reactFlowElement)
+
+    const chatColumn = document.querySelector(
+      '[data-chat-sidebar]:not([data-chat-map-dock])'
+    ) as HTMLElement | null
+    const chatResizeObserver = chatColumn
+      ? new ResizeObserver(() => calculateMaxWidth())
+      : null
+    if (chatResizeObserver && chatColumn) chatResizeObserver.observe(chatColumn)
     
     return () => {
       window.removeEventListener('resize', calculateMaxWidth)
       if (sidebarObserver) sidebarObserver.disconnect()
       if (minimapObserver) minimapObserver.disconnect()
       if (minimapResizeObserver) minimapResizeObserver.disconnect()
+      mapResizeObserver?.disconnect()
+      chatResizeObserver?.disconnect()
     }
-  }, [])
+  }, [chatChromeReady, setPanelWidth, setIsPromptBoxCentered])
 
   // Calculate minimap right position for hover area alignment
   useEffect(() => {

@@ -98,6 +98,7 @@ import { useBoardAccess } from '@/lib/share/board-access-context' // Owner-only 
 import { useSidebarContext } from './sidebar-context' // Wait for chat column restore before measuring titles
 import { usePhoneModeMenu } from './phone-mode-menu-context' // Phone pill drill-in portal host
 import { AiOriginTopBarToggle } from './ai-origin-top-bar-toggle' // Sparkles pin left of Share
+import { useAiEditSession } from '@/lib/ai/edit-session' // AI sparkles width in shareCompact measure
 import {
   getAiBlockSelection,
   subscribeAiSelection,
@@ -188,7 +189,8 @@ function PhoneUndoRedoPortal({
 export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
   const { canShare, canEdit, role } = useBoardAccess() // Gate share + show view-only chrome
   const { isChatSidebarOpen, chatChromeReady, isMobileMode } = useSidebarContext() // Measure after chat restore; phone layout forces pill
-  const { toolsHost, undoHost, phoneTools, setPhoneTools, setShareCompact } = usePhoneModeMenu() // Pill + share→More before tools leave
+  const { toolsHost, undoHost, phoneTools, setPhoneTools, setShareCompact } = usePhoneModeMenu() // Pill + share/AI→More before tools leave
+  const { hasAiContent, aiTopBarPinned } = useAiEditSession() // Pinned sparkles fold with shareCompact
   const { reactFlowInstance, isLocked, lineStyle: verticalLineStyle, setLineStyle: setVerticalLineStyle, arrowDirection, setArrowDirection, editMenuPillMode, boardRule: hostBoardRule, setBoardRule: setHostBoardRule, boardStyle: hostBoardStyle, setBoardStyle: setHostBoardStyle, fillColor, setFillColor, borderColor, setBorderColor, borderWeight, setBorderWeight, borderStyle, setBorderStyle, clickedEdge, isDrawing, setIsDrawing, drawTool: contextDrawTool, setDrawTool: setContextDrawTool, mapUndo, mapRedo, canMapUndo, canMapRedo, getMapTakeSnapshot, getSetNodes } = useReactFlowContext()
   const queryClientForAi = useQueryClient() // Turn into board list + conversations invalidate
   const previewFocus = usePreviewFocus() // When a nested preview chrome is selected, View styles target that page
@@ -1132,8 +1134,15 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       const copyStarEl = rightSection.querySelector('[data-top-bar-copy-star]') as HTMLElement | null
       const COPY_STAR_W = 64 // Two h-7 icons + gaps — used when already collapsed so expand math stays stable
       const copyStarLive = copyStarEl?.getBoundingClientRect().width ?? 0
-      const rightExpandedW = copyStarLive > 0 ? rightW : rightW + COPY_STAR_W // Simulate copy/star still on the bar
-      const rightCollapsedW = copyStarLive > 0 ? Math.max(0, rightW - copyStarLive) : rightW // Simulate / use share-compact right
+      const aiOriginEl = rightSection.querySelector('[data-top-bar-ai-origin]') as HTMLElement | null
+      const AI_ORIGIN_W = 40 // Sparkles h-7 + px-1 wrapper — fold into More with copy/star
+      const aiOriginLive = aiOriginEl?.getBoundingClientRect().width ?? 0
+      const aiWouldPinOnBar = hasAiContent && aiTopBarPinned
+      const rightExpandedW =
+        rightW +
+        (copyStarLive > 0 ? 0 : COPY_STAR_W) +
+        (aiWouldPinOnBar && aiOriginLive === 0 ? AI_ORIGIN_W : 0) // Simulate pinned sparkles on expand hysteresis
+      const rightCollapsedW = copyStarLive > 0 ? Math.max(0, rightW - copyStarLive) : rightW // After copy/star → More
       const PATH_GAP = 8 // Air between path glyphs and the centered undo cluster
       const hamEl = leftChrome?.querySelector('[data-nav-logo-trigger]') as HTMLElement | null // Menu icon; path starts after it
       const hamRight = hamEl?.getBoundingClientRect().right ?? toolbarRect.left + 40 // Path origin in viewport px
@@ -1347,7 +1356,7 @@ export function EditorToolbar({ editor, conversationId }: EditorToolbarProps) {
       attrObserver?.disconnect()
       window.removeEventListener('resize', checkVisibility)
     }
-  }, [editor, editMenuPillMode, boardSearchOpen, chatChromeReady, isChatSidebarOpen, isMobileMode, setPhoneTools, setShareCompact]) // Re-run when the map column’s final width is known
+  }, [editor, editMenuPillMode, boardSearchOpen, chatChromeReady, isChatSidebarOpen, isMobileMode, hasAiContent, aiTopBarPinned, setPhoneTools, setShareCompact]) // Re-run when the map column’s final width is known
 
   useLayoutEffect(() => {
     if (toolbarLayoutReady && !toolbarAnimate) setToolbarAnimate(true) // After first reveal, allow later collapse/expand animation

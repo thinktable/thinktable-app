@@ -72,6 +72,7 @@ export function ChatLoadStage({
     <>
       {showPlaceholder && (
         <div
+          className="w-full min-w-0"
           aria-busy="true"
           aria-label="Loading chat"
           style={{
@@ -85,6 +86,7 @@ export function ChatLoadStage({
       )}
       {showContent && (
         <div
+          className="w-full min-w-0"
           style={{
             opacity: phase === 'shown' ? 1 : 0, // in = 0 (first paint); shown = fade in
             transition: `opacity ${CHAT_CONTENT_IN_MS}ms ease-out`,

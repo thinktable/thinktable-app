@@ -52,6 +52,7 @@ import {
   AtSign,
   Search,
   ArrowUpRight,
+  ArrowLeftRight,
   Clock,
   CircleUser,
   MapPin,
@@ -69,7 +70,7 @@ import {
   RotateCcw,
 } from 'lucide-react' // Action + Turn into + Property + Connections icons
 import { NotionMarkIcon } from '@/components/notion-mark-icon' // Notion row in Connections
-import type { NotionSyncMode } from '@/lib/blocks' // Live vs Manual sync
+import type { NotionSyncMode } from '@/lib/blocks' // Live sync when connected
 import { Button } from '@/components/ui/button' // Row buttons
 import { cn } from '@/lib/utils' // Class merge
 import { applyMenuPlacement, watchMenuSafeRect } from '@/lib/menu-placement' // Stay in-window, miss top bar / chat / selection
@@ -896,7 +897,7 @@ export function BlockActionsMenu({
     marginTop: positionMode === 'fixed' ? 0 : '-8px',
   }
 
-  // Slim menu for the Notion connection mark (Live Sync / Manual / Remove)
+  // Slim menu for the Notion connection mark (Live Sync status + Remove)
   if (variant === 'notionConnection') {
     return (
       <div
@@ -916,42 +917,15 @@ export function BlockActionsMenu({
           e.preventDefault()
         }}
       >
-        <Button
-          variant="ghost"
-          size="sm"
+        <div
           className={cn(
-            'justify-start text-sm h-8 px-2 font-normal w-full',
-            notionSync === 'live' && 'bg-blue-50 dark:bg-blue-950/40'
+            'flex items-center text-sm h-8 px-2 w-full bg-blue-50 dark:bg-blue-950/40 rounded-md'
           )}
-          onClick={(e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            onAction('setNotionSync', { notionSync: 'live' })
-            onClose()
-          }}
         >
-          <RefreshCw className="h-4 w-4 mr-2 text-gray-500" />
+          <ArrowLeftRight className="h-4 w-4 mr-2 text-gray-500" />
           <span className="flex-1 text-left">Live Sync</span>
-          {notionSync === 'live' && <Check className="h-3.5 w-3.5 text-gray-500" />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            'justify-start text-sm h-8 px-2 font-normal w-full',
-            notionSync === 'manual' && 'bg-blue-50 dark:bg-blue-950/40'
-          )}
-          onClick={(e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            onAction('setNotionSync', { notionSync: 'manual' })
-            onClose()
-          }}
-        >
-          <Hand className="h-4 w-4 mr-2 text-gray-500" />
-          <span className="flex-1 text-left">Manual</span>
-          {notionSync === 'manual' && <Check className="h-3.5 w-3.5 text-gray-500" />}
-        </Button>
+          <Check className="h-3.5 w-3.5 text-gray-500" />
+        </div>
         <div className="my-1 h-px bg-gray-100 dark:bg-[#2f2f2f] mx-1" />
         <Button
           variant="ghost"

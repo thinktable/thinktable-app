@@ -1,13 +1,22 @@
 # Supabase schema snapshot
 
 - Project: `yhsyhtnnklpkfcpydbst` (thinkable)
-- Snapped at: `2026-09-04T16:44:23Z`
+- Snapped at: `2026-09-05T16:13:11Z`
 - Source: local `supabase/migrations/` + remote applied tops (thinkable) + `.temp` service versions
-- Service versions (from `supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.195.0`, rest `v13.0.5`, storage `v1.68.1`
+- Service versions (from `apps/web/supabase/.temp`): postgres `17.6.1.052`, gotrue `v2.184.0`, rest `v13.0.5`, storage `v1.33.0`
 - CLI: `supabase` `2.90.0` (marker via `migration new`; newer CLI available)
 - Remote applied tops out at `20260811225342_conversations_owner_select_for_insert_returning`
 
 ## This save
+
+- No DDL. Marker `20260905161311_notion_page_body_sync_ai_share_compact.sql`.
+- Notion imported **page body** live-sync Thinktable → Notion (`lib/notion/page-sync.ts`, `html-to-blocks.ts`, `useNotionPageBodySync`, `PUT /api/notion/page/[id]/content`); background Notion → Thinktable detect sets `metadata.notionUpdatesPending`.
+- Connected frames always **Live Sync** — Manual sync mode removed (`normalizeNotionSyncMode`).
+- Pinned **AI sparkles** fold into board More on `shareCompact` (with copy/star); toolbar measure includes `data-top-bar-ai-origin`.
+- Chat header `h-[52px]`; empty-state `w-full min-w-0`; `ChatLoadStage` width; prompt bar waits for `chatChromeReady` + ResizeObserver on map/chat column.
+- Schema unchanged; remote applied still tops out at `20260811225342`.
+
+## Prior: Toolbar pill chat resize
 
 - No DDL. Marker `20260904164423_toolbar_pill_chat_resize.sql`.
 - Toolbar overflow: titles collapse → copy/star into board More (`shareCompact`) → tools into mode pill (`phoneTools`); phone chat layout forces the pill; phone breakpoint `768`.

@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useAiEditSession } from '@/lib/ai/edit-session'
 import { createLongPressController } from '@/lib/long-press'
+import { usePhoneModeMenu } from './phone-mode-menu-context'
+import { useSidebarContext } from './sidebar-context'
 
 export function AiOriginTopBarToggle() {
   const {
@@ -17,6 +19,9 @@ export function AiOriginTopBarToggle() {
     aiTopBarPinned,
     setAiTopBarPinned,
   } = useAiEditSession()
+  const { shareCompact } = usePhoneModeMenu() // Fold into board More with copy/star when the bar is tight
+  const { isMobileMode } = useSidebarContext()
+  const collapseToMore = isMobileMode || shareCompact
   const btnRef = useRef<HTMLButtonElement>(null)
   const longPressRef = useRef<ReturnType<typeof createLongPressController> | null>(null)
 
@@ -48,10 +53,10 @@ export function AiOriginTopBarToggle() {
     }
   }, [setAiTopBarPinned])
 
-  if (!hasAiContent || !aiTopBarPinned) return null
+  if (!hasAiContent || !aiTopBarPinned || collapseToMore) return null
 
   return (
-    <div className="flex items-center px-1 flex-shrink-0">
+    <div data-top-bar-ai-origin className="flex items-center px-1 flex-shrink-0">
       <Button
         ref={btnRef}
         variant="ghost"

@@ -70,6 +70,9 @@ import {
   isBoardBodyMeta,
   readNotionConnection,
   type NotionSyncMode,
+  normalizeNotionSyncMode,
+  isNotionAutoSync,
+  notionPageBodySyncTarget,
 } from '@/lib/blocks' // Block detection + Notion connection
 import {
   readFramePropertyType,
@@ -527,6 +530,7 @@ import { unwrapNestedFramesHtml } from '@/lib/tiptap/unwrap-nested-frames' // Fl
 import { applyTurnInto, bodyHtmlWithoutBoardTitle } from '@/lib/blocks/turn-into' // Page promote + strip title from board body
 import { migrateSoleDatabaseBlockToBoardLink, ensureNotionMapFrameIsBoardLink, isSoleDatabaseBlockContent, isSoleBoardLinkContent, repairBoardFrameToSoleLink, restoreWipedDatabaseBlockHtml } from '@/lib/notion/migrate-frame' // Notion DB map frames → boardLink; repair polluted board frames; heal wiped tables
 import { COMPACT_PREVIEW_ROWS } from '@/lib/notion/database' // Table rows Reset floor / snapshot split
+import { useNotionPageBodySync } from '@/lib/notion/use-notion-page-sync' // Imported page body ↔ Notion
 
 interface Message {
   id: string
@@ -810,11 +814,11 @@ function FrameConnectionsGroup({
             e.preventDefault()
             e.stopPropagation()
             const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-            setMenu({ x: r.left, y: r.bottom }) // Open Live Sync / Manual / Remove
+            setMenu({ x: r.left, y: r.bottom }) // Live Sync status + Remove
           }}
         >
           <NotionMarkIcon
-            className={cn('h-4 w-4', notionSync === 'live' ? 'text-[#2383e2]' : 'text-gray-500')}
+            className={cn('h-4 w-4', isNotionAutoSync(notionSync) ? 'text-[#2383e2]' : 'text-gray-500')}
           />
         </button>
       </div>
@@ -2666,7 +2670,7 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
       delete existing.notionSync
     } else {
       existing.notionConnected = true
-      existing.notionSync = next.sync === 'manual' ? 'manual' : 'live'
+      existing.notionSync = normalizeNotionSyncMode(next.sync)
     }
     setNodes((nds) =>
       nds.map((n) =>
@@ -2731,6 +2735,7 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
   })
   const [promptHasChanges, setPromptHasChanges] = useState(false)
   const [responseHasChanges, setResponseHasChanges] = useState(false)
+  const editorActiveRef = useRef(false) // Skip Notion page pull while the frame editor is focused
   // Single text body: plain-merge legacy prompt + response (no section split).
   // Legacy: sole databaseBlock → boardLink when linkedBoardId exists (pages only).
   // Notion DB frames / board bodies keep the live databaseBlock (row→card must not wipe the table).
@@ -4538,6 +4543,42 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
   const persistFrameMetaRef = useRef(persistFrameMeta) // Stable resize-end persist — don't rebind d3-drag
   persistFrameMetaRef.current = persistFrameMeta // Always the latest saver
 
+  const notionPageSyncTarget = notionPageBodySyncTarget(
+    promptMessage?.metadata as Record<string, unknown> | undefined
+  )
+  const notionLastEditedTime =
+    typeof (promptMessage?.metadata as Record<string, unknown> | undefined)?.notionLastEditedTime ===
+    'string'
+      ? ((promptMessage?.metadata as Record<string, unknown>).notionLastEditedTime as string)
+      : null
+
+  const handleNotionUpdatesAvailable = useCallback(
+    (payload: { lastEditedTime: string }) => {
+      void persistFrameMeta({
+        notionUpdatesPending: true,
+        notionRemoteLastEditedTime: payload.lastEditedTime,
+      })
+    },
+    [persistFrameMeta]
+  )
+
+  const handleNotionLastEditedTime = useCallback(
+    (iso: string) => {
+      void persistFrameMeta({
+        notionLastEditedTime: iso,
+        notionUpdatesPending: false,
+      })
+    },
+    [persistFrameMeta]
+  )
+
+  const { schedulePush: scheduleNotionPagePush } = useNotionPageBodySync({
+    pageId: notionPageSyncTarget?.pageId ?? null,
+    lastEditedTime: notionLastEditedTime,
+    onNotionUpdatesAvailable: handleNotionUpdatesAvailable,
+    onLastEditedTime: handleNotionLastEditedTime,
+  })
+
   // Paint the latest corner-drag sample (one React update per frame, not per touchmove)
   const flushPendingResize = useCallback(() => {
     resizeRafRef.current = null // This rAF has run
@@ -5128,6 +5169,7 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
 
   // Auto-select panel when editor is focused or has a text range (not boardLink NodeSelection)
   const handleEditorActiveChange = useCallback((isActive: boolean) => {
+    editorActiveRef.current = isActive
     if (isActive && !selected) {
       // Editor is active (focused or has selection) but panel is not selected - auto-select it
       // First deselect all other nodes, then select this one
@@ -6367,6 +6409,8 @@ function ChatPanelNodeInner({ data, selected, id, dragging }: NodeProps<PanelNod
 
         if (error) {
           console.error('Error updating prompt:', error)
+        } else {
+          scheduleNotionPagePush(newContent)
         }
       }
     }

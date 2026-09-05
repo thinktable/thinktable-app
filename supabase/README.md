@@ -25,6 +25,7 @@ Latest on thinkable (DDL):
 - `20260810020000_ai_copilot_foundation` — `ai_threads`, `ai_messages`, `ai_context_snapshots`, `ai_action_log`
 
 Latest local marker (no DDL):
+- `20260905161311_notion_page_body_sync_ai_share_compact` — Notion page body live-sync; remove Manual sync; AI sparkles → More on shareCompact; chat/prompt width fixes
 - `20260904164423_toolbar_pill_chat_resize` — Toolbar → mode pill (shareCompact then phoneTools); chat seam resize + preferred width; chat frames side pad; phone 768
 - `20260904142613_frame_delete_first_select` — Frame Delete on first select; TipTap setContent flushSync defer; select-before-caret
 - `20260904134700_chat_thread_scroll_native_clip` — Chat↔chat threads in transcript scroller (scroll-native); content-window clip; sync board-overlay scroll paint

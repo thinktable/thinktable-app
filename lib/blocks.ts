@@ -104,8 +104,36 @@ export function isBlockContentEmpty(content: string | undefined | null): boolean
   return plain.length === 0
 }
 
-/** Notion connection sync mode on a frame (Connections menu). */
-export type NotionSyncMode = 'live' | 'manual'
+/** Notion connection sync — connected frames always live-sync Thinktable → Notion. */
+export type NotionSyncMode = 'live'
+
+/** Coerce stored metadata (legacy `manual` / `two-way` → `live`). */
+export function normalizeNotionSyncMode(_raw?: unknown): NotionSyncMode {
+  return 'live'
+}
+
+/** True when the frame pushes edits to Notion (always when connected). */
+export function isNotionAutoSync(_sync?: NotionSyncMode): boolean {
+  return true
+}
+
+/** True when Thinktable edits should push to the Notion page body. */
+export function shouldPushNotionPage(_sync?: NotionSyncMode): boolean {
+  return true
+}
+
+/** Imported Notion page on a board-body frame — eligible for page-body sync. */
+export function notionPageBodySyncTarget(meta?: Record<string, unknown> | null): {
+  pageId: string
+} | null {
+  if (!meta || !isBoardBodyMeta(meta)) return null
+  const pageId = typeof meta.notionPageId === 'string' ? meta.notionPageId : null
+  if (!pageId) return null
+  if (meta.notionObject === 'database') return null
+  const { connected } = readNotionConnection(meta)
+  if (!connected) return null
+  return { pageId }
+}
 
 /** Read whether this frame is Notion-connected and which sync mode is on. */
 export function readNotionConnection(meta?: Record<string, unknown> | null): {
@@ -114,7 +142,7 @@ export function readNotionConnection(meta?: Record<string, unknown> | null): {
 } {
   if (!meta) return { connected: false, sync: 'live' }
   if (meta.notionConnected === false) return { connected: false, sync: 'live' } // Explicit unlink
-  const sync: NotionSyncMode = meta.notionSync === 'manual' ? 'manual' : 'live'
+  const sync = normalizeNotionSyncMode(meta.notionSync)
   if (meta.notionConnected === true) return { connected: true, sync }
   // Imported Notion frames already have a page/url — treat as connected
   const imported =

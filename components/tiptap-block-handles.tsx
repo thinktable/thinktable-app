@@ -54,7 +54,7 @@ import {
 } from '@/lib/tiptap/property-block-drag' // Property ⋮⋮ → reorder among property cells
 import { setAiBlockSelection } from '@/lib/ai/selection-bridge' // Live block pills in AI composer (⋮⋮ only)
 import { htmlToPlain } from '@/lib/ai/context-pack' // Block hover preview from HTML
-import { type NotionSyncMode } from '@/lib/blocks' // Connections ⋮⋮ → Live Sync / Manual
+import { type NotionSyncMode } from '@/lib/blocks' // Connections ⋮⋮ → Notion mark menu
 import {
   createChildBoardForBlock,
   insertBoardTitleBlock,

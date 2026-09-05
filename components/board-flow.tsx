@@ -127,6 +127,8 @@ import {
   newBlockMetadata,
   persistBlockPlacement,
   readNotionConnection,
+  normalizeNotionSyncMode,
+  type NotionSyncMode,
   ungroupBlocks,
 } from '@/lib/blocks' // blocks, groups (page-body ensure is promote-only — not cold load)
 import { transformHtmlToBlockType } from '@/lib/blocks/turn-into' // Seed empty-frame HTML for I-bar Turn into
@@ -7481,7 +7483,7 @@ function BoardFlowInner({
 
   // Connect / sync-mode / unlink Notion on the focused frame(s)
   const handleNotionConnection = useCallback(
-    async (next: { connected: boolean; sync?: 'live' | 'manual' }) => {
+    async (next: { connected: boolean; sync?: NotionSyncMode }) => {
       const targets = frameActionTargets()
       if (targets.length === 0) return
       takeSnapshot?.()
@@ -7493,7 +7495,7 @@ function BoardFlowInner({
           delete out.notionSync
         } else {
           out.notionConnected = true
-          out.notionSync = next.sync === 'manual' ? 'manual' : 'live'
+          out.notionSync = normalizeNotionSyncMode(next.sync)
         }
         return out
       }
@@ -7843,7 +7845,7 @@ function BoardFlowInner({
         case 'setNotionSync':
           void handleNotionConnection({
             connected: true,
-            sync: payload?.notionSync === 'manual' ? 'manual' : 'live',
+            sync: normalizeNotionSyncMode(payload?.notionSync),
           })
           break
         case 'removeNotionConnection':

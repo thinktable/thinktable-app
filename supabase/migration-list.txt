@@ -1,9 +1,9 @@
 # Remote Supabase migration/version snapshot
 # project_ref=yhsyhtnnklpkfcpydbst
 # project_name=thinkable
-# snapped_at=2026-09-04T16:44:23Z
-# postgres=17.6.1.052 gotrue=v2.195.0 rest=v13.0.5 storage=v1.68.1
-# local_marker=20260904164423_toolbar_pill_chat_resize (no DDL)
+# snapped_at=2026-09-05T16:13:11Z
+# postgres=17.6.1.052 gotrue=v2.184.0 rest=v13.0.5 storage=v1.33.0
+# local_marker=20260905161311_notion_page_body_sync_ai_share_compact (no DDL)
 # Remote applied (via Supabase MCP / Management API on thinkable):
 # 20251124231547 create_saas_schema
 # 20251124231600 fix_function_security
@@ -170,3 +170,4 @@
 20260904134700_chat_thread_scroll_native_clip.sql
 20260904142613_frame_delete_first_select.sql
 20260904164423_toolbar_pill_chat_resize.sql
+20260905161311_notion_page_body_sync_ai_share_compact.sql

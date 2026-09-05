@@ -10,7 +10,7 @@ type PhoneModeMenuContextValue = {
   setUndoHost: (el: HTMLElement | null) => void // Ref callback from the sibling undo cluster
   phoneTools: boolean // True when icon-only tools no longer fit after share compact — tools leave for the pill
   setPhoneTools: (next: boolean) => void // Set from the toolbar’s width measure
-  shareCompact: boolean // True when copy/star have left the bar for board More (before phoneTools)
+  shareCompact: boolean // True when copy/star/AI sparkles have left the bar for board More (before phoneTools)
   setShareCompact: (next: boolean) => void // Set from the toolbar’s width measure
 }
 
